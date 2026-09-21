@@ -6,6 +6,11 @@
 # dotenv files
 .env
 
+# Local publish/run output folders (dotnet publish copies)
+_run/
+_run[0-9]/
+_run[0-9][0-9]/
+
 # User-specific files
 *.rsuser
 *.suo
