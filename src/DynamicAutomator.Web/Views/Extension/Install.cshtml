@@ -1,35 +1,75 @@
 @{
     ViewData["Title"] = "نصب افزونه";
+    var path = ViewBag.ExtensionPath as string ?? "";
+    var ver = ViewBag.Version as string ?? "";
 }
 <div class="card mb-4">
   <div class="card-body">
-    <h4 class="mb-3">نصب افزونه اتوماتور</h4>
+    <h4 class="mb-3">اتصال افزونه</h4>
 
-    <div class="alert alert-warning">
-      <strong>مرورگر داخلی Cursor:</strong> امکان Load unpacked برای افزونه Chrome را ندارد.
-      برای ضبط باید از <strong>Google Chrome</strong> یا <strong>Microsoft Edge</strong> استفاده کنید و همان آدرس پرتال را آنجا باز کنید.
+    <div class="alert alert-info mb-3">
+      دانلود و Unzip لازم نیست. پرتال پوشه را برای کاربر جاری آماده می‌کند.
+      فقط اگر <strong>Developer mode</strong> خاموش باشد آن را روشن کنید و یک‌بار مسیر زیر را Load unpacked کنید.
     </div>
 
-    <p class="text-muted">بدون افزونه، دکمهٔ قرمز REC پایین‌چپ ظاهر نمی‌شود و ضبط/اجرا کار نمی‌کند.</p>
-    <ol class="mb-4">
-      <li class="mb-2">ZIP را دانلود کنید و unzip کنید <em>یا</em> در حالت توسعه مستقیم پوشهٔ پروژه را انتخاب کنید.</li>
-      <li class="mb-2">در <strong>Chrome/Edge</strong> باز کنید: <code>chrome://extensions</code> یا <code>edge://extensions</code></li>
-      <li class="mb-2">Developer mode را روشن کنید → <strong>Load unpacked</strong>.</li>
-      <li class="mb-2">پوشهٔ unzip شده (یا <code>extension</code> پروژه) را انتخاب کنید.</li>
-      <li class="mb-2">بعد از هر به‌روزرسانی کد، روی آیکون <strong>Reload</strong> افزونه کلیک کنید (نسخه باید <code>0.7.3</code> باشد).</li>
-      <li class="mb-2">پرتال را در همان Chrome رفرش کنید → مودال بسته می‌شود و REC قرمز پایین‌چپ ظاهر می‌شود.</li>
-    </ol>
-    @if (ViewBag.IsDev == true && !string.IsNullOrEmpty(ViewBag.ExtensionPath as string))
-    {
-      <div class="alert alert-primary">
-        مسیر توسعه برای Load unpacked:<br /><code>@ViewBag.ExtensionPath</code>
+    <div class="alert alert-primary">
+      <div class="fw-semibold mb-1">مسیر ثابت</div>
+      <code id="da-ext-path" class="user-select-all">@path</code>
+      @if (!string.IsNullOrEmpty(ver))
+      {
+        <div class="small mt-1 text-muted">نسخه: <code>@ver</code></div>
+      }
+      <div class="mt-2 d-flex gap-2 flex-wrap">
+        <button type="button" class="btn btn-sm btn-primary" id="da-copy-path">کپی مسیر</button>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="da-sync-now">همگام‌سازی</button>
       </div>
-    }
+      <div class="small mt-2 text-muted" id="da-sync-status"></div>
+    </div>
+
+    <ol class="mb-4">
+      <li class="mb-2"><code>chrome://extensions</code> یا <code>edge://extensions</code></li>
+      <li class="mb-2"><strong>Developer mode</strong> را روشن کنید (اگر خاموش است).</li>
+      <li class="mb-2"><strong>Load unpacked</strong> → مسیر بالا.</li>
+      <li class="mb-2">پرتال را رفرش کنید. بعد از این، آپدیت خودکار است.</li>
+    </ol>
+
     <div class="d-flex gap-2 flex-wrap">
-      <a class="btn btn-primary" href="/extension/download">دانلود افزونه (ZIP)</a>
       <button type="button" class="btn btn-outline-secondary" data-da-action="check-extension" id="btn-recheck">بررسی مجدد</button>
       <a class="btn btn-label-secondary" asp-controller="Home" asp-action="Index">بازگشت</a>
     </div>
     <p class="mt-3 mb-0" id="da-portal-status"></p>
   </div>
 </div>
+
+@section Scripts {
+<script>
+(function () {
+  const pathEl = document.getElementById("da-ext-path");
+  const status = document.getElementById("da-sync-status");
+  document.getElementById("da-copy-path")?.addEventListener("click", async () => {
+    const t = pathEl?.textContent?.trim() || "";
+    try {
+      await navigator.clipboard.writeText(t);
+      if (status) status.textContent = "مسیر کپی شد.";
+    } catch {
+      if (status) status.textContent = "کپی نشد — مسیر را دستی بردارید.";
+    }
+  });
+  document.getElementById("da-sync-now")?.addEventListener("click", async () => {
+    if (status) status.textContent = "همگام‌سازی...";
+    try {
+      const res = await fetch("/extension/sync", { method: "POST" });
+      const data = await res.json();
+      if (data.ok) {
+        if (pathEl) pathEl.textContent = data.path;
+        status.textContent = "آماده است. افزونه تا چند ثانیه Reload می‌شود.";
+      } else {
+        status.textContent = data.error || "خطا";
+      }
+    } catch (e) {
+      if (status) status.textContent = e.message || "خطا";
+    }
+  });
+})();
+</script>
+}

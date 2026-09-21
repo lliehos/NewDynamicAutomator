@@ -63,6 +63,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 builder.Services.AddAuthorization();
+builder.Services.AddSingleton<DynamicAutomator.Web.Services.ExtensionSyncService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<DynamicAutomator.Web.Services.ExtensionSyncService>());
 
 var app = builder.Build();
 

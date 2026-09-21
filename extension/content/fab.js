@@ -39,6 +39,16 @@
     <button type="button" class="da-fab-btn" id="da-fab-toggle" title="ضبط / اجرا">REC</button>
   `;
   document.documentElement.appendChild(root);
+  // Force physical bottom-left (extension CSS alone may stay cached until Reload).
+  Object.assign(root.style, {
+    position: "fixed",
+    left: "18px",
+    right: "auto",
+    bottom: "18px",
+    top: "auto",
+    zIndex: "2147483647",
+    alignItems: "flex-start"
+  });
 
   const panel = root.querySelector("#da-fab-panel");
   const status = root.querySelector("#da-fab-status");

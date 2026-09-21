@@ -15,6 +15,11 @@
     return "da_local_tasks__" + (user || currentUser());
   }
 
+  function stepCountOf(t) {
+    const fromGraph = t?.graph?.nodes?.filter((n) => n.kind === "step").length;
+    return fromGraph || t?.stepCount || 0;
+  }
+
   function mark() {
     try {
       const version = chrome.runtime.getManifest().version;
@@ -44,22 +49,56 @@
 
   function applyTasks(user, tasks) {
     const u = user || currentUser();
+    const list = Array.isArray(tasks) ? tasks : [];
+    // Never replace a rich local list with an empty/incomplete pull.
     try {
+      const prev = JSON.parse(localStorage.getItem(tasksKey(u)) || "[]");
+      if (list.length === 0 && prev.length > 0) return;
+      const prevSteps = prev.reduce((s, t) => s + stepCountOf(t), 0);
+      const nextSteps = list.reduce((s, t) => s + stepCountOf(t), 0);
+      if (list.length && nextSteps === 0 && prevSteps > 0) {
+        // Incoming metadata-only — keep previous graphs, merge titles/counts.
+        const byId = new Map(prev.map((t) => [String(t.id), t]));
+        for (const t of list) {
+          const old = byId.get(String(t.id));
+          if (old?.graph?.nodes?.length) {
+            byId.set(String(t.id), { ...t, graph: old.graph, stepCount: stepCountOf(old) });
+          } else {
+            byId.set(String(t.id), t);
+          }
+        }
+        const merged = [...byId.values()];
+        localStorage.setItem("da_local_user", u);
+        localStorage.setItem(tasksKey(u), JSON.stringify(merged));
+        window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: u, tasks: merged } }));
+        return;
+      }
       localStorage.setItem("da_local_user", u);
-      localStorage.setItem(tasksKey(u), JSON.stringify(tasks || []));
+      localStorage.setItem(tasksKey(u), JSON.stringify(list));
     } catch {
       /* ignore */
     }
-    window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: u, tasks: tasks || [] } }));
+    window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: u, tasks: list } }));
   }
 
   function pullFromExtension() {
     const user = currentUser();
     chrome.storage.local.set({ localUser: user });
-    chrome.runtime.sendMessage({ type: "getLocalTasks" }).then(() => {
-      chrome.storage.local.get(`localTasks__${user}`).then((data) => {
+    chrome.runtime.sendMessage({ type: "getLocalTasks" }).then((res) => {
+      if (res?.ok && Array.isArray(res.tasks) && res.tasks.length) {
+        applyTasks(user, res.tasks);
+        return;
+      }
+      // Fallback: read storage buckets (current user + legacy)
+      chrome.storage.local.get([`localTasks__${user}`, "localTasks"]).then((data) => {
         const full = data[`localTasks__${user}`];
-        if (Array.isArray(full)) applyTasks(user, full);
+        if (Array.isArray(full) && full.length) {
+          applyTasks(user, full);
+          return;
+        }
+        if (Array.isArray(data.localTasks) && data.localTasks.length) {
+          applyTasks(user, data.localTasks);
+        }
       });
     }).catch(() => {});
   }
@@ -68,7 +107,10 @@
     try {
       const user = currentUser();
       const tasks = JSON.parse(localStorage.getItem(tasksKey(user)) || "[]");
-      chrome.storage.local.remove("localTasks");
+      if (!Array.isArray(tasks) || !tasks.length) return;
+      // Don't push metadata-only over extension graphs.
+      const steps = tasks.reduce((s, t) => s + stepCountOf(t), 0);
+      if (steps === 0 && tasks.some((t) => (t.stepCount || 0) > 0)) return;
       chrome.storage.local.set({ localUser: user, [`localTasks__${user}`]: tasks });
     } catch {
       /* ignore */
@@ -89,8 +131,13 @@
   });
 
   window.addEventListener("da-request-local-tasks", pullFromExtension);
-  window.addEventListener("da-local-tasks", pushPageTasksToExtension);
+  window.addEventListener("da-local-tasks", (ev) => {
+    // Only push when page intentionally wrote tasks (has user+tasks detail from write)
+    const d = ev.detail;
+    if (d && Array.isArray(d.tasks)) pushPageTasksToExtension();
+  });
 
   pullFromExtension();
-  setTimeout(pullFromExtension, 800);
+  setTimeout(pullFromExtension, 500);
+  setTimeout(pullFromExtension, 1500);
 })();

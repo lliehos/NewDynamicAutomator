@@ -30,28 +30,30 @@
 </head>
 <body>
   <div id="da-ext-banner">
-    افزونه اتوماتور نصب نیست.
-    <a href="/Extension/Install">راهنمای نصب</a>
-    یا
-    <a href="/extension/download">دانلود ZIP</a>
+    افزونه متصل نیست — Developer mode را روشن کنید و یک‌بار مسیر ثابت را Load unpacked کنید.
+    <a href="/Extension/Install">راهنما و کپی مسیر</a>
   </div>
   <div id="da-ext-modal" role="dialog" aria-modal="true" aria-labelledby="da-ext-title">
     <div class="da-ext-card">
-      <h2 id="da-ext-title">نصب افزونه لازم است</h2>
-      <p>برای ضبط و پخش باید افزونه روی <strong>Chrome یا Edge</strong> نصب شود. مرورگر داخلی Cursor از افزونه پشتیبانی نمی‌کند.</p>
-      <ol>
-        <li>ZIP را دانلود کنید و از حالت فشرده خارج کنید.</li>
-        <li>در Chrome/Edge: <code>chrome://extensions</code> یا <code>edge://extensions</code></li>
-        <li>Developer mode → Load unpacked → پوشهٔ افزونه.</li>
-        <li>اگر قبلاً نصب بود، روی <strong>Reload</strong> بزنید (نسخه باید <code>0.7.3</code> باشد).</li>
-        <li>همین پرتال را در همان مرورگر رفرش کنید، بعد «بررسی مجدد».</li>
-      </ol>
-      <div class="da-ext-actions">
-        <button type="button" class="btn-da btn-da-primary" id="da-ext-download">دانلود افزونه</button>
-        <button type="button" class="btn-da btn-da-ghost" id="da-ext-guide">راهنمای کامل</button>
-        <button type="button" class="btn-da btn-da-ghost" id="da-ext-recheck">بررسی مجدد</button>
-        <button type="button" class="btn-da btn-da-ghost" id="da-ext-dismiss">انصراف</button>
+      <h2 id="da-ext-title">اتصال افزونه (یک‌بار)</h2>
+      <p>دانلود و Unzip لازم نیست. پرتال افزونه را در پوشهٔ کاربر آماده می‌کند. فقط اگر <strong>Developer mode</strong> خاموش است آن را روشن کنید، بعد یک‌بار Load unpacked.</p>
+      <div class="da-ext-path-box">
+        <div class="da-ext-path-label">مسیر ثابت</div>
+        <code id="da-ext-modal-path">در حال آماده‌سازی...</code>
       </div>
+      <ol>
+        <li><code>chrome://extensions</code> یا <code>edge://extensions</code></li>
+        <li><strong>Developer mode</strong> را روشن کنید (اگر روشن نیست).</li>
+        <li><strong>Load unpacked</strong> → مسیر بالا را انتخاب کنید.</li>
+      </ol>
+      <p class="da-ext-note">از این به بعد با تغییر کد / ری‌استارت پرتال خودش به‌روز می‌شود.</p>
+      <div class="da-ext-actions">
+        <button type="button" class="btn-da btn-da-primary" id="da-ext-copy-path">کپی مسیر</button>
+        <button type="button" class="btn-da btn-da-ghost" id="da-ext-recheck">بررسی مجدد</button>
+        <button type="button" class="btn-da btn-da-ghost" id="da-ext-guide">راهنما</button>
+        <button type="button" class="btn-da btn-da-ghost" id="da-ext-dismiss">بعداً</button>
+      </div>
+      <div class="da-ext-hint" id="da-ext-modal-hint"></div>
     </div>
   </div>
   <div class="layout-wrapper layout-content-navbar">

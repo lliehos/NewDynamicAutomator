@@ -86,8 +86,20 @@
       canModify: true,
       designOrigin: "Manual",
       viewport: { x: 40, y: 40, zoom: 1 },
-      nodes: [{ id: "start", kind: "start", title: "شروع", x: 40, y: 220 }],
-      edges: [],
+      nodes: [
+        { id: "start", kind: "start", title: "شروع", x: 40, y: 220 },
+        {
+          id: "group-1",
+          kind: "group",
+          entityId: 1,
+          title: "گروه خالی",
+          x: 280,
+          y: 80,
+          repeatSourceType: "None",
+          moveLoop: false
+        }
+      ],
+      edges: [{ id: "e-start", from: "start", to: "group-1", kind: "next" }],
       dataSources: []
     };
   }
@@ -102,7 +114,7 @@
       id,
       title,
       designOrigin: "Manual",
-      groupCount: 0,
+      groupCount: 1,
       stepCount: 0,
       createdAt: new Date().toISOString(),
       graph

@@ -25,18 +25,9 @@ async function stopPlay() {
 }
 
 async function listTasks() {
+  // Return full task objects (including graph) so portal localStorage stays complete.
   const tasks = await loadUserTasks();
-  return {
-    ok: true,
-    tasks: tasks.map((t) => ({
-      id: t.id,
-      title: t.title,
-      designOrigin: t.designOrigin || "Manual",
-      groupCount: t.groupCount ?? t.graph?.nodes?.filter((n) => n.kind === "group").length ?? 0,
-      stepCount: t.stepCount ?? t.graph?.nodes?.filter((n) => n.kind === "step").length ?? 0,
-      createdAtUtc: t.createdAt
-    }))
-  };
+  return { ok: true, tasks };
 }
 
 async function startPlay(taskId, tabId, runMode, options) {

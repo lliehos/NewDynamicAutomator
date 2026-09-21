@@ -33,9 +33,10 @@ public class TasksController : Controller
     }
 
     [HttpGet]
-    public IActionResult Editor(int id)
+    public IActionResult Editor(long id)
     {
         // Local-first: graph lives in localStorage; no DB permission check.
+        // IDs are Date.now() (ms) from the extension/local-tasks — must be long, not int.
         ViewBag.TaskId = id;
         ViewBag.CanModify = true;
         ViewBag.LocalMode = true;

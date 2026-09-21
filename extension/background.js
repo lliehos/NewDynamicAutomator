@@ -123,16 +123,28 @@ async function broadcastRecordState() {
 }
 
 async function startRecordSession(message = {}) {
-  // Local-first: no server login required.
+  // V2 FormRecord: Start creates an empty Group; events append Steps to the last Group.
   await checkSession();
   const { playing } = await chrome.storage.local.get("playing");
   if (playing) return { ok: false, error: "هنگام پخش نمی‌توان ضبط کرد." };
 
-  // Always start on a blank tab — the user's address-bar navigation becomes a GoToUrl step.
+  let recordingGroups = [];
+  if (message.newGroup && !message.rerecord) {
+    // Like V2 Pause→Start: another empty group in the same session
+    const prev = await chrome.storage.local.get("recordingGroups");
+    recordingGroups = Array.isArray(prev.recordingGroups) ? prev.recordingGroups.slice() : [];
+  }
+  recordingGroups.push({
+    id: `group-${recordingGroups.length + 1}`,
+    title: message.groupTitle || "گروه ضبط",
+    steps: []
+  });
+
   await chrome.storage.local.set({
     recording: true,
     recordPhase: "recording",
-    draft: [],
+    draft: flattenGroupSteps(recordingGroups),
+    recordingGroups,
     recordTabId: null,
     lastNavUrl: null
   });
@@ -142,11 +154,23 @@ async function startRecordSession(message = {}) {
     await chrome.storage.local.set({ recordTabId: tab.id });
   }
   await broadcastRecordState();
-  return { ok: true, tabId: tab?.id, startUrl: "about:blank" };
+  return { ok: true, tabId: tab?.id, startUrl: "about:blank", groupCount: recordingGroups.length };
+}
+
+function flattenGroupSteps(groups) {
+  return (groups || []).flatMap((g) => g.steps || []);
+}
+
+function countRecordedSteps(groups, draft) {
+  const fromGroups = flattenGroupSteps(groups).length;
+  if (fromGroups) return fromGroups;
+  return Array.isArray(draft) ? draft.length : 0;
 }
 
 async function finishRecord() {
-  const { recording, draft } = await chrome.storage.local.get(["recording", "draft"]);
+  const { recording, draft, recordingGroups } = await chrome.storage.local.get([
+    "recording", "draft", "recordingGroups"
+  ]);
   if (!recording && (await getState()).recordPhase !== "recording") {
     return { ok: false, error: "ضبطی در جریان نیست." };
   }
@@ -155,7 +179,7 @@ async function finishRecord() {
     recordPhase: "review"
   });
   const state = await broadcastRecordState();
-  return { ok: true, count: (draft || []).length, ...state };
+  return { ok: true, count: countRecordedSteps(recordingGroups, draft), ...state };
 }
 
 async function discardRecord() {
@@ -163,6 +187,7 @@ async function discardRecord() {
     recording: false,
     recordPhase: "idle",
     draft: [],
+    recordingGroups: [],
     recordTabId: null,
     lastNavUrl: null
   });
@@ -171,18 +196,20 @@ async function discardRecord() {
 
 async function getState() {
   const data = await chrome.storage.local.get([
-    "recording", "draft", "token", "playing", "recordPhase", "recordTabId", "localUser"
+    "recording", "draft", "recordingGroups", "token", "playing", "recordPhase", "recordTabId", "localUser"
   ]);
   const play = getPlayStatus();
+  const count = countRecordedSteps(data.recordingGroups, data.draft);
   const phase = data.recording
     ? "recording"
-    : (data.recordPhase || ((data.draft || []).length ? "review" : "idle"));
+    : (data.recordPhase || (count ? "review" : "idle"));
   return {
     ok: true,
     recording: !!data.recording,
     recordPhase: phase,
     playing: !!data.playing || !!play.playing,
-    count: (data.draft || []).length,
+    count,
+    groupCount: Array.isArray(data.recordingGroups) ? data.recordingGroups.length : 0,
     signedIn: true,
     localUser: data.localUser || "test",
     recordTabId: data.recordTabId || null,
@@ -224,8 +251,16 @@ async function syncPortalSession() {
 }
 
 async function onRecordedEvent(payload, sender) {
-  const { recording, draft, playing } = await chrome.storage.local.get(["recording", "draft", "playing"]);
+  const { recording, playing, recordingGroups } = await chrome.storage.local.get([
+    "recording", "playing", "recordingGroups"
+  ]);
   if (!recording || playing) return { ok: true, ignored: true };
+
+  // V2: ensure at least one group exists (Start creates empty Group).
+  let groups = Array.isArray(recordingGroups) ? recordingGroups.slice() : [];
+  if (!groups.length) {
+    groups.push({ id: "group-1", title: "گروه ضبط", steps: [] });
+  }
 
   const tabId = sender.tab?.id;
   const frameId = sender.frameId ?? 0;
@@ -241,9 +276,11 @@ async function onRecordedEvent(payload, sender) {
     recordedAt: new Date().toISOString()
   };
 
-  const next = Array.isArray(draft) ? draft.concat(item) : [item];
-  await chrome.storage.local.set({ draft: next });
-  return { ok: true, count: next.length };
+  const last = groups[groups.length - 1];
+  last.steps = (last.steps || []).concat(item);
+  const draft = flattenGroupSteps(groups);
+  await chrome.storage.local.set({ recordingGroups: groups, draft });
+  return { ok: true, count: draft.length, groupCount: groups.length };
 }
 
 async function buildFramePath(tabId, leafFrameId) {
@@ -324,19 +361,28 @@ function describeIframe(childUrl, indexInParent) {
 }
 
 async function saveDraft(payload) {
-  const { draft } = await chrome.storage.local.get("draft");
-  if (!draft || draft.length === 0) return { ok: false, error: "چیزی ضبط نشده." };
+  const { draft, recordingGroups } = await chrome.storage.local.get(["draft", "recordingGroups"]);
+  let groups = Array.isArray(recordingGroups) ? recordingGroups : [];
+  // Legacy flat draft → one group
+  if (!groups.length && Array.isArray(draft) && draft.length) {
+    groups = [{ id: "group-1", title: payload?.groupTitle || "ضبط‌شده", steps: draft }];
+  }
+  // V2: Start always created a Group — allow save of empty group
+  if (!groups.length) {
+    groups = [{ id: "group-1", title: payload?.groupTitle || "گروه خالی", steps: [] }];
+  }
 
   const title = (payload?.newTaskTitle || "").trim() || `ضبط ${new Date().toLocaleString("fa-IR")}`;
-  const id = Date.now();
-  const graph = buildGraphFromDraft(id, title, draft, payload?.groupTitle || "ضبط‌شده");
+  const id = Number(`${Date.now() % 1e9}${Math.floor(Math.random() * 90 + 10)}`);
+  const graph = buildGraphFromRecordingGroups(id, title, groups);
+  const stepCount = flattenGroupSteps(groups).length;
   const tasks = await loadUserTasks();
   tasks.push({
     id,
     title,
     designOrigin: "Recorded",
-    groupCount: 1,
-    stepCount: draft.length,
+    groupCount: groups.length,
+    stepCount,
     createdAt: new Date().toISOString(),
     graph
   });
@@ -345,12 +391,13 @@ async function saveDraft(payload) {
     recording: false,
     recordPhase: "idle",
     draft: [],
+    recordingGroups: [],
     recordTabId: null,
     lastNavUrl: null
   });
   await pushTasksToPortalTabs(tasks);
   await broadcastRecordState();
-  return { ok: true, result: { taskId: id, groupId: 1, stepCount: draft.length } };
+  return { ok: true, result: { taskId: id, groupId: 1, stepCount, groupCount: groups.length } };
 }
 
 async function currentLocalUser() {
@@ -397,46 +444,59 @@ async function pushTasksToPortalTabs(tasks) {
   }
 }
 
-function buildGraphFromDraft(taskId, title, actions, groupTitle) {
-  const groupId = "group-1";
-  const nodes = [
-    { id: "start", kind: "start", title: "شروع", x: 40, y: 220 },
-    {
-      id: groupId,
+/** V2 FormRecord: one graph Group per record Group; Steps only inside their Group. No spare empty group. */
+function buildGraphFromRecordingGroups(taskId, title, groups) {
+  const list = Array.isArray(groups) && groups.length
+    ? groups
+    : [{ id: "group-1", title: "گروه خالی", steps: [] }];
+
+  const nodes = [{ id: "start", kind: "start", title: "شروع", x: 40, y: 220 }];
+  const edges = [];
+  let prevNode = "start";
+  let stepEntity = 0;
+
+  list.forEach((g, gi) => {
+    const gid = g.id || `group-${gi + 1}`;
+    nodes.push({
+      id: gid,
       kind: "group",
-      entityId: 1,
-      title: groupTitle || "ضبط‌شده",
-      x: 280,
+      entityId: gi + 1,
+      title: g.title || `گروه ${gi + 1}`,
+      x: 280 + gi * 280,
       y: 80,
       repeatSourceType: "None",
       moveLoop: false
-    }
-  ];
-  const edges = [{ id: "e-start", from: "start", to: groupId, kind: "next" }];
-  let prev = null;
-  (actions || []).forEach((a, i) => {
-    const sid = `step-${i + 1}`;
-    const isNav = String(a.actionType || "").toLowerCase() === "gotourl";
-    nodes.push({
-      id: sid,
-      kind: "step",
-      entityId: i + 1,
-      title: `${a.actionType || "Click"} ${i + 1}`,
-      groupNodeId: groupId,
-      actionType: a.actionType || "Click",
-      selectorValue: a.elementValue || "",
-      constantValue: isNav ? "" : (a.value || ""),
-      navigateUrl: isNav ? (a.url || a.value || "") : null,
-      framePathJson: JSON.stringify(a.framePath || []),
-      isActive: true,
-      isConditional: false,
-      x: 40,
-      y: i * 90
     });
-    if (prev) edges.push({ id: `e-${i}`, from: prev, to: sid, kind: "next" });
-    else edges.push({ id: `e-c-${i}`, from: groupId, to: sid, kind: "contains" });
-    prev = sid;
+    edges.push({ id: `e-g-${gi}`, from: prevNode, to: gid, kind: "next" });
+    prevNode = gid;
+
+    let prevStep = null;
+    (g.steps || []).forEach((a, i) => {
+      stepEntity += 1;
+      const sid = `${gid}-step-${i + 1}`;
+      const isNav = String(a.actionType || "").toLowerCase() === "gotourl";
+      nodes.push({
+        id: sid,
+        kind: "step",
+        entityId: stepEntity,
+        title: `${a.actionType || "Click"} ${i + 1}`,
+        groupNodeId: gid,
+        actionType: a.actionType || "Click",
+        selectorValue: a.elementValue || "",
+        constantValue: isNav ? "" : (a.value || ""),
+        navigateUrl: isNav ? (a.url || a.value || "") : null,
+        framePathJson: JSON.stringify(a.framePath || []),
+        isActive: true,
+        isConditional: false,
+        x: 40,
+        y: i * 90
+      });
+      if (prevStep) edges.push({ id: `e-${gid}-${i}`, from: prevStep, to: sid, kind: "next" });
+      else edges.push({ id: `e-c-${gid}-${i}`, from: gid, to: sid, kind: "contains" });
+      prevStep = sid;
+    });
   });
+
   return {
     taskId,
     title,
@@ -449,6 +509,12 @@ function buildGraphFromDraft(taskId, title, actions, groupTitle) {
   };
 }
 
+function buildGraphFromDraft(taskId, title, actions, groupTitle) {
+  return buildGraphFromRecordingGroups(taskId, title, [
+    { id: "group-1", title: groupTitle || "ضبط‌شده", steps: actions || [] }
+  ]);
+}
+
 function isTrackableNavUrl(url) {
   if (!url) return false;
   if (url === "about:blank" || url.startsWith("about:")) return false;
@@ -458,12 +524,17 @@ function isTrackableNavUrl(url) {
 }
 
 async function appendNavStep(url, tabId) {
-  const { recording, draft, lastNavUrl, playing } = await chrome.storage.local.get([
-    "recording", "draft", "lastNavUrl", "playing"
+  const { recording, lastNavUrl, playing, recordingGroups } = await chrome.storage.local.get([
+    "recording", "lastNavUrl", "playing", "recordingGroups"
   ]);
   if (!recording || playing) return;
   if (!isTrackableNavUrl(url)) return;
   if (lastNavUrl === url) return;
+
+  let groups = Array.isArray(recordingGroups) ? recordingGroups.slice() : [];
+  if (!groups.length) {
+    groups.push({ id: "group-1", title: "گروه ضبط", steps: [] });
+  }
 
   const item = {
     actionType: "GoToUrl",
@@ -474,8 +545,13 @@ async function appendNavStep(url, tabId) {
     framePath: [],
     recordedAt: new Date().toISOString()
   };
-  const next = Array.isArray(draft) ? draft.concat(item) : [item];
-  await chrome.storage.local.set({ draft: next, lastNavUrl: url });
+  const last = groups[groups.length - 1];
+  last.steps = (last.steps || []).concat(item);
+  await chrome.storage.local.set({
+    recordingGroups: groups,
+    draft: flattenGroupSteps(groups),
+    lastNavUrl: url
+  });
 }
 
 chrome.webNavigation.onCommitted.addListener(async (details) => {
@@ -492,3 +568,48 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (!recording || !recordTabId || tabId !== recordTabId) return;
   await appendNavStep(changeInfo.url, tabId);
 });
+
+/** Dev/local auto-reload: portal syncs files to LocalAppData; we reload when stamp changes. */
+const DEV_POLL_MS = 2500;
+const DEV_STAMP_URLS = [
+  "https://localhost:7201/extension/dev-stamp",
+  "http://localhost:5201/extension/dev-stamp"
+];
+
+async function pollDevReload() {
+  const portal = await portalBase().catch(() => DEFAULT_PORTAL);
+  const urls = [`${portal}/extension/dev-stamp`, ...DEV_STAMP_URLS];
+  const seen = new Set();
+  for (const url of urls) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (!data?.stamp) continue;
+      const { devStamp } = await chrome.storage.local.get("devStamp");
+      if (devStamp && devStamp !== data.stamp) {
+        await chrome.storage.local.set({
+          devStamp: data.stamp,
+          portalBase: new URL(url).origin,
+          installPath: data.path || null
+        });
+        console.info("[DA] extension updated → reload", data.version || "", data.path || "");
+        chrome.runtime.reload();
+        return;
+      }
+      await chrome.storage.local.set({
+        devStamp: data.stamp,
+        portalBase: new URL(url).origin,
+        installPath: data.path || null
+      });
+      return;
+    } catch {
+      /* portal not up yet */
+    }
+  }
+}
+
+pollDevReload();
+setInterval(pollDevReload, DEV_POLL_MS);

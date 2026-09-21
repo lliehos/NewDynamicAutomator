@@ -1,7 +1,11 @@
 (() => {
   const app = document.getElementById("flow-app");
-  const taskId = app.dataset.taskId;
+  // Prefer URL segment: local task ids are Date.now() and may exceed Int32
+  // (older Editor(int) routes would put "0" in data-task-id).
+  const pathSeg = location.pathname.split("/").filter(Boolean).pop() || "";
+  const taskId = /^\d+$/.test(pathSeg) ? pathSeg : (app.dataset.taskId || "");
   const canModify = app.dataset.canModify === "true";
+  if (taskId) app.dataset.taskId = taskId;
   const world = document.getElementById("world");
   const svg = document.getElementById("flow-svg");
   const wrap = document.getElementById("canvas-wrap");
@@ -71,32 +75,39 @@
     return readLocalTasks().find((t) => String(t.id) === String(id));
   }
 
-  async function load() {
-    const local = findLocalTask(taskId);
-    if (local?.graph) {
-      graph = local.graph;
-      graph.taskId = Number(taskId);
-      graph.nodes ||= [];
-      graph.edges ||= [];
-      graph.viewport ||= { x: 40, y: 40, zoom: 1 };
-      graph.dataSources ||= [];
-      graph.canModify = true;
-      graph.designOrigin = local.designOrigin || graph.designOrigin || "Manual";
-      titleEl.textContent = graph.title || local.title || "گردش کار";
-      if (originEl) {
-        const recorded = String(graph.designOrigin || "").toLowerCase() === "recorded";
-        originEl.className = "origin-badge " + (recorded ? "recorded" : "manual");
-        originEl.textContent = recorded ? "ویرایش: از رکورد" : "ویرایش: دستی";
-      }
-      status.textContent = "آماده ویرایش (ذخیره محلی)";
-      renderDataSources();
-      render();
-      return;
+  function applyLocalGraph(local) {
+    graph = structuredClone ? structuredClone(local.graph) : JSON.parse(JSON.stringify(local.graph));
+    graph.taskId = Number(taskId) || taskId;
+    graph.nodes ||= [];
+    graph.edges ||= [];
+    graph.viewport ||= { x: 40, y: 40, zoom: 1 };
+    graph.dataSources ||= [];
+    graph.canModify = true;
+    graph.designOrigin = local.designOrigin || graph.designOrigin || "Manual";
+    titleEl.textContent = graph.title || local.title || "گردش کار";
+    if (originEl) {
+      const recorded = String(graph.designOrigin || "").toLowerCase() === "recorded";
+      originEl.className = "origin-badge " + (recorded ? "recorded" : "manual");
+      originEl.textContent = recorded ? "ویرایش: از رکورد" : "ویرایش: دستی";
     }
+    const steps = graph.nodes.filter((n) => n.kind === "step").length;
+    const groups = graph.nodes.filter((n) => n.kind === "group");
+    status.textContent = steps
+      ? `${steps} مرحله — روی گروه دبل‌کلیک کنید تا مراحل را ببینید`
+      : "آماده ویرایش (ذخیره محلی)";
+    renderDataSources();
+    render();
+    // Open the group that actually has recorded steps (not the spare empty one)
+    if (steps > 0 && !editingGroupId) {
+      const withSteps = groups.find((g) =>
+        graph.nodes.some((n) => n.kind === "step" && n.groupNodeId === g.id));
+      if (withSteps) openGroup(withSteps.id);
+    }
+  }
 
-    // Empty local shell if task id unknown
+  function emptyShell() {
     graph = {
-      taskId: Number(taskId),
+      taskId: Number(taskId) || taskId,
       title: "فرآیند محلی",
       canModify: true,
       designOrigin: "Manual",
@@ -106,10 +117,49 @@
       dataSources: []
     };
     titleEl.textContent = graph.title;
-    status.textContent = "فرآیند محلی جدید";
+    status.textContent = "در حال دریافت از حافظهٔ محلی...";
     renderDataSources();
     render();
   }
+
+  function graphStepCount(g) {
+    return (g?.nodes || []).filter((n) => n.kind === "step").length;
+  }
+
+  async function load() {
+    const local = findLocalTask(taskId);
+    if (local?.graph && graphStepCount(local.graph) > 0) {
+      applyLocalGraph(local);
+      return;
+    }
+    if (local?.graph) {
+      applyLocalGraph(local);
+    } else {
+      emptyShell();
+    }
+    // Ask extension/bridge to sync; listener below will apply richer graph.
+    window.dispatchEvent(new CustomEvent("da-request-local-tasks"));
+  }
+
+  // Portal-bridge may write chrome.storage → localStorage after first paint
+  window.addEventListener("da-local-tasks", (ev) => {
+    const detail = ev.detail;
+    if (detail && detail.user && detail.user !== currentUser()) return;
+    const tasks = (detail && detail.tasks) || (Array.isArray(detail) ? detail : null);
+    const local = tasks
+      ? tasks.find((t) => String(t.id) === String(taskId))
+      : findLocalTask(taskId);
+    if (!local?.graph) return;
+    const incoming = graphStepCount(local.graph);
+    const current = graphStepCount(graph);
+    if (incoming === 0) return;
+    if (current > 0 && current >= incoming && editingGroupId) return;
+    applyLocalGraph(local);
+  });
+  window.dispatchEvent(new CustomEvent("da-request-local-tasks"));
+  [400, 1200, 2500].forEach((ms) => setTimeout(() => {
+    window.dispatchEvent(new CustomEvent("da-request-local-tasks"));
+  }, ms));
 
   async function save() {
     if (!canModify) return;
