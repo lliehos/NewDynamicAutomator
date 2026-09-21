@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Dynamic Automator Recorder",
-  "version": "0.2.0",
+  "version": "0.7.3",
   "description": "ضبط و اجرای فرآیند روی صفحات فریم‌تو‌فریم",
   "permissions": ["storage", "cookies", "scripting", "webNavigation", "tabs", "activeTab"],
   "host_permissions": [
-    "http://localhost:7100/*",
-    "https://localhost:7101/*",
-    "http://localhost:7200/*",
-    "https://localhost:7201/*",
+    "http://localhost/*",
+    "https://localhost/*",
+    "http://127.0.0.1/*",
+    "https://127.0.0.1/*",
     "http://*/*",
     "https://*/*"
   ],
@@ -32,6 +32,17 @@
       "css": ["styles/fab.css"],
       "all_frames": false,
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://localhost/*",
+        "https://localhost/*",
+        "http://127.0.0.1/*",
+        "https://127.0.0.1/*"
+      ],
+      "js": ["content/portal-bridge.js", "content/portal-ui.js"],
+      "run_at": "document_start",
+      "all_frames": false
     }
   ]
 }

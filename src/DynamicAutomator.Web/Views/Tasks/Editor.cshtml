@@ -17,21 +17,42 @@
         <button type="button" class="on" data-view="diagram" id="tab-diagram">نمودار گردش</button>
         <button type="button" data-view="list" id="tab-list">فهرست مراحل</button>
       </div>
-      <button class="btn-flow btn-ghost" type="button" id="btn-group">گروه‌بندی انتخاب</button>
+      <button class="btn-flow btn-ghost" type="button" id="btn-back-group" hidden>بازگشت به نمودار</button>
       <button class="btn-flow btn-ghost" type="button" id="btn-fit">نمایش کامل</button>
       <h1 id="flow-title">گردش کار</h1>
+      <span class="origin-badge" id="flow-origin" title="منبع ساخت فرآیند"></span>
       <span class="status" id="flow-status">بارگذاری...</span>
+      <button class="btn-flow btn-play" type="button" id="btn-play-task" title="اجرای کل فرآیند">▶ اجرا</button>
+      <button class="btn-flow btn-play-soft" type="button" id="btn-play-selection" hidden title="اجرای انتخاب‌شده">▶ انتخاب</button>
       <button class="btn-flow" type="button" id="btn-save">ذخیره</button>
     </div>
     <div class="flow-body">
-      <aside class="flow-palette">
+      <aside class="flow-palette" id="flow-palette">
         <h3>جعبه ابزار</h3>
-        <div class="stencil" draggable="true" data-kind="group">گروه (حلقه)</div>
-        <div class="stencil" draggable="true" data-kind="step">مرحله / اکشن</div>
-        <div class="stencil" draggable="true" data-kind="condition">شرط</div>
-        <p style="font-size:12px;color:#a8aaae;line-height:1.8;margin-top:14px">
-          نتیجه رکورد اینجا دیده می‌شود. چند مرحله را انتخاب کنید و «گروه‌بندی» بزنید، بعد منبع تکرار گروه را در ویژگی‌ها بگذارید.
-        </p>
+        <div id="palette-root">
+          <div class="stencil" draggable="true" data-kind="group">گروه (حلقه)</div>
+          <div class="stencil" draggable="true" data-kind="condition">شرط</div>
+          <p class="palette-hint">مراحل فقط داخل گروه‌اند. روی گروه دبل‌کلیک یا راست‌کلیک → ویرایش مراحل.</p>
+        </div>
+        <div id="palette-group" hidden>
+          <button type="button" class="btn-flow" id="btn-add-step" style="width:100%;margin-bottom:8px">+ افزودن مرحله</button>
+          <p class="palette-hint">منبع تکرار گروه را در ویژگی‌ها تنظیم کنید (None / DataSource / Elements / Loops).</p>
+        </div>
+        <div class="ds-panel" id="ds-panel">
+          <h3>منابع داده</h3>
+          <p class="palette-hint" style="margin-top:0">فایل اکسل (.xlsx) بارگذاری کنید. ردیف اول = کلید ستون‌ها؛ هر سلول به‌صورت key / index / cellValue ذخیره می‌شود.</p>
+          <div class="insp-field">
+            <label>عنوان منبع</label>
+            <input type="text" id="ds-title" placeholder="مثلاً مشتریان" @(ViewBag.CanModify == true ? "" : "disabled") />
+          </div>
+          <div class="insp-field">
+            <label>فایل اکسل</label>
+            <input type="file" id="ds-file" accept=".xlsx,.xlsm" @(ViewBag.CanModify == true ? "" : "disabled") />
+          </div>
+          <button type="button" class="btn-flow" id="btn-ds-upload" style="width:100%" @(ViewBag.CanModify == true ? "" : "disabled")>بارگذاری اکسل</button>
+          <div id="ds-status" class="ds-status"></div>
+          <ul class="ds-list" id="ds-list"></ul>
+        </div>
       </aside>
       <div class="canvas-wrap" id="canvas-wrap">
         <svg id="flow-svg" xmlns="http://www.w3.org/2000/svg">
@@ -47,7 +68,14 @@
           <g id="world"></g>
         </svg>
         <div class="list-wrap" id="list-wrap" hidden></div>
-        <div class="hint">چرخ: زوم · درگ خالی: پن · Shift+کلیک: چندانتخاب · Delete: حذف</div>
+        <div class="group-edit" id="group-edit" hidden>
+          <div class="group-edit-h">
+            <h2 id="group-edit-title">گروه</h2>
+            <button type="button" class="btn-flow btn-ghost" id="btn-group-edit-close">بستن</button>
+          </div>
+          <div id="group-steps"></div>
+        </div>
+        <div class="hint" id="flow-hint">دبل‌کلیک گروه: ویرایش مراحل · راست‌کلیک: منو · چرخ: زوم · Delete: حذف</div>
       </div>
       <aside class="flow-inspector">
         <h3>ویژگی‌ها</h3>
@@ -55,6 +83,7 @@
       </aside>
     </div>
   </div>
+  <ul class="ctx-menu" id="ctx-menu" hidden></ul>
   <script src="~/editor/flow.js"></script>
 </body>
 </html>

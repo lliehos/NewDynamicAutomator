@@ -1,0 +1,35 @@
+@{
+    ViewData["Title"] = "نصب افزونه";
+}
+<div class="card mb-4">
+  <div class="card-body">
+    <h4 class="mb-3">نصب افزونه اتوماتور</h4>
+
+    <div class="alert alert-warning">
+      <strong>مرورگر داخلی Cursor:</strong> امکان Load unpacked برای افزونه Chrome را ندارد.
+      برای ضبط باید از <strong>Google Chrome</strong> یا <strong>Microsoft Edge</strong> استفاده کنید و همان آدرس پرتال را آنجا باز کنید.
+    </div>
+
+    <p class="text-muted">بدون افزونه، دکمهٔ قرمز REC پایین‌چپ ظاهر نمی‌شود و ضبط/اجرا کار نمی‌کند.</p>
+    <ol class="mb-4">
+      <li class="mb-2">ZIP را دانلود کنید و unzip کنید <em>یا</em> در حالت توسعه مستقیم پوشهٔ پروژه را انتخاب کنید.</li>
+      <li class="mb-2">در <strong>Chrome/Edge</strong> باز کنید: <code>chrome://extensions</code> یا <code>edge://extensions</code></li>
+      <li class="mb-2">Developer mode را روشن کنید → <strong>Load unpacked</strong>.</li>
+      <li class="mb-2">پوشهٔ unzip شده (یا <code>extension</code> پروژه) را انتخاب کنید.</li>
+      <li class="mb-2">بعد از هر به‌روزرسانی کد، روی آیکون <strong>Reload</strong> افزونه کلیک کنید (نسخه باید <code>0.7.3</code> باشد).</li>
+      <li class="mb-2">پرتال را در همان Chrome رفرش کنید → مودال بسته می‌شود و REC قرمز پایین‌چپ ظاهر می‌شود.</li>
+    </ol>
+    @if (ViewBag.IsDev == true && !string.IsNullOrEmpty(ViewBag.ExtensionPath as string))
+    {
+      <div class="alert alert-primary">
+        مسیر توسعه برای Load unpacked:<br /><code>@ViewBag.ExtensionPath</code>
+      </div>
+    }
+    <div class="d-flex gap-2 flex-wrap">
+      <a class="btn btn-primary" href="/extension/download">دانلود افزونه (ZIP)</a>
+      <button type="button" class="btn btn-outline-secondary" data-da-action="check-extension" id="btn-recheck">بررسی مجدد</button>
+      <a class="btn btn-label-secondary" asp-controller="Home" asp-action="Index">بازگشت</a>
+    </div>
+    <p class="mt-3 mb-0" id="da-portal-status"></p>
+  </div>
+</div>

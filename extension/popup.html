@@ -4,21 +4,40 @@
     <meta charset="utf-8" />
     <style>
       body { font-family: Tahoma, sans-serif; width: 280px; padding: 12px; margin: 0; }
-      button, select { width: 100%; margin-top: 8px; padding: 8px; box-sizing: border-box; }
+      button, select, input { width: 100%; margin-top: 8px; padding: 8px; box-sizing: border-box; }
       .muted { color: #666; font-size: 12px; }
       h4 { margin: 0 0 8px; }
+      #record, #finish { background: #ea5455; color: #fff; border: 0; border-radius: 6px; }
+      #upload { background: #28c76f; color: #fff; border: 0; border-radius: 6px; }
     </style>
   </head>
   <body>
     <h4>اتوماتور پویا</h4>
     <div id="status" class="muted">در حال بررسی...</div>
-    <button id="refresh">بررسی ورود / تازه‌سازی</button>
-    <select id="task">
-      <option value="">— انتخاب فرآیند —</option>
-    </select>
-    <button id="play">پخش روی تب فعال</button>
-    <button id="stop" hidden>توقف پخش</button>
-    <p class="muted">لاگین از پرتال وب. دکمه DA پایین‌راست صفحه برای ضبط و پخش.</p>
+    <button id="refresh">تازه‌سازی</button>
+
+    <div id="idle-box">
+      <button id="record">شروع ضبط (تب خالی)</button>
+      <select id="task">
+        <option value="">— انتخاب فرآیند —</option>
+      </select>
+      <button id="play">پخش روی تب فعال</button>
+      <button id="stop" hidden>توقف پخش</button>
+    </div>
+
+    <div id="rec-box" hidden>
+      <p class="muted">آدرس را در نوار مرورگر تایپ کنید؛ به‌عنوان مرحله ثبت می‌شود.</p>
+      <button id="finish">اتمام ضبط</button>
+    </div>
+
+    <div id="review-box" hidden>
+      <input id="title" type="text" value="فرآیند ضبط‌شده" placeholder="عنوان فرآیند" />
+      <button id="upload">ذخیره محلی</button>
+      <button id="rerecord">ضبط مجدد</button>
+      <button id="discard">انصراف</button>
+    </div>
+
+    <p class="muted">شروع = تب خالی. تغییر آدرس = مرحله GoToUrl.</p>
     <script src="popup.js"></script>
   </body>
 </html>

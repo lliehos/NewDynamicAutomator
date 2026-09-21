@@ -19,6 +19,7 @@ public static class DependencyInjection
         services.AddScoped<TaskService>();
         services.AddScoped<RecordingService>();
         services.AddScoped<GraphService>();
+        services.AddScoped<DataSourceService>();
         return services;
     }
 }

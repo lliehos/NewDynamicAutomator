@@ -8,25 +8,21 @@
     <div class="app-brand justify-content-center mb-6">
       <span class="app-brand-text demo text-heading fw-bold">اتوماتور پویا</span>
     </div>
-    <h4 class="mb-1">ورود به پرتال</h4>
-    <p class="mb-6">برای ضبط و اجرای فرآیندها ابتدا وارد شوید.</p>
-    @if (ViewBag.Error != null)
-    {
-      <div class="alert alert-danger">@ViewBag.Error</div>
-    }
+    <h4 class="mb-1">ورود فرضی (محلی)</h4>
+    <p class="mb-4">فعلاً داده روی سرور ذخیره نمی‌شود؛ همه چیز در مرورگر می‌ماند. هر نام کاربری کافی است.</p>
+    <div class="alert alert-info small">پیشنهاد: <code>test</code> / هر رمزی — یا خالی بگذارید و وارد شوید.</div>
     <form method="post" asp-action="Login">
       @Html.AntiForgeryToken()
       <input type="hidden" name="returnUrl" value="@ViewBag.ReturnUrl" />
       <div class="mb-6">
         <label class="form-label" for="userName">نام کاربری</label>
-        <input class="form-control" id="userName" name="userName" required autofocus />
+        <input class="form-control" id="userName" name="userName" value="test" autofocus />
       </div>
       <div class="mb-6">
         <label class="form-label" for="password">رمز عبور</label>
-        <input class="form-control" type="password" id="password" name="password" required />
+        <input class="form-control" type="password" id="password" name="password" value="test" />
       </div>
-      <button class="btn btn-primary d-grid w-100" type="submit">ورود</button>
+      <button class="btn btn-primary d-grid w-100" type="submit">ورود تستی</button>
     </form>
-    <p class="mt-4 text-muted small">کاربر پیش‌فرض توسعه: admin / Admin123!</p>
   </div>
 </div>

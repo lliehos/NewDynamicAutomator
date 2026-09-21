@@ -1,3 +1,5 @@
+using DynamicAutomator.Domain.Enums;
+
 namespace DynamicAutomator.Domain.Entities;
 
 public class AutomationTask
@@ -15,6 +17,9 @@ public class AutomationTask
 
     /// <summary>Viewport and node coordinates for the visual flowchart editor.</summary>
     public string? CanvasJson { get; set; }
+
+    /// <summary>Manual designer vs captured from the Chrome recorder.</summary>
+    public TaskDesignOrigin DesignOrigin { get; set; } = TaskDesignOrigin.Manual;
 
     public AppUser? Creator { get; set; }
     public ICollection<Group> Groups { get; set; } = new List<Group>();

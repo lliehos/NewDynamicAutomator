@@ -1,7 +1,13 @@
 let recording = false;
 
-chrome.storage.local.get("recording").then((d) => {
+chrome.storage.local.get(["recording", "recordPhase"]).then((d) => {
   recording = !!d.recording;
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.recording) {
+    recording = !!changes.recording.newValue;
+  }
 });
 
 chrome.runtime.onMessage.addListener((message) => {

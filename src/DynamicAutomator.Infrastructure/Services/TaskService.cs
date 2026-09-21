@@ -25,7 +25,8 @@ public class TaskService
                 CreatedAtUtc = a.Task.CreatedAtUtc,
                 GroupCount = a.Task.Groups.Count,
                 StepCount = a.Task.Groups.SelectMany(g => g.Steps).Count(),
-                CanModify = a.CanModify || a.Task.CreatorUserId == userId
+                CanModify = a.CanModify || a.Task.CreatorUserId == userId,
+                DesignOrigin = a.Task.DesignOrigin.ToString()
             })
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
@@ -40,7 +41,10 @@ public class TaskService
             DelayAfterMs = request.DelayAfterMs,
             UseGlobalDataSources = request.UseGlobalDataSources,
             CreatorUserId = userId,
-            CreatedAtUtc = DateTime.UtcNow
+            CreatedAtUtc = DateTime.UtcNow,
+            DesignOrigin = Enum.TryParse<TaskDesignOrigin>(request.DesignOrigin, true, out var origin)
+                ? origin
+                : TaskDesignOrigin.Manual
         };
         task.UserAccess.Add(new UserTaskAccess { UserId = userId, CanModify = true });
         _db.Tasks.Add(task);
@@ -81,13 +85,18 @@ public class RecordingService
             if (!await _tasks.CanModifyAsync(userId, taskId, ct))
                 throw new UnauthorizedAccessException("No modify access to this task.");
             task = await _db.Tasks.FirstAsync(t => t.Id == taskId, ct);
+            task.DesignOrigin = TaskDesignOrigin.Recorded;
         }
         else
         {
             var title = string.IsNullOrWhiteSpace(request.NewTaskTitle)
                 ? $"ضبط {DateTime.Now:yyyy-MM-dd HH:mm}"
                 : request.NewTaskTitle.Trim();
-            task = await _tasks.CreateAsync(userId, new CreateTaskRequest { Title = title }, ct);
+            task = await _tasks.CreateAsync(userId, new CreateTaskRequest
+            {
+                Title = title,
+                DesignOrigin = nameof(TaskDesignOrigin.Recorded)
+            }, ct);
         }
 
         var group = new Group

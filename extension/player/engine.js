@@ -25,19 +25,23 @@ async function stopPlay() {
 }
 
 async function listTasks() {
-  const base = await apiBase();
-  const res = await fetch(`${base}/api/tasks`, {
-    headers: await authHeaders(),
-    credentials: "include"
-  });
-  if (!res.ok) return { ok: false, error: await res.text() || res.statusText };
-  return { ok: true, tasks: await res.json() };
+  const tasks = await loadUserTasks();
+  return {
+    ok: true,
+    tasks: tasks.map((t) => ({
+      id: t.id,
+      title: t.title,
+      designOrigin: t.designOrigin || "Manual",
+      groupCount: t.groupCount ?? t.graph?.nodes?.filter((n) => n.kind === "group").length ?? 0,
+      stepCount: t.stepCount ?? t.graph?.nodes?.filter((n) => n.kind === "step").length ?? 0,
+      createdAtUtc: t.createdAt
+    }))
+  };
 }
 
-async function startPlay(taskId, tabId, runMode) {
+async function startPlay(taskId, tabId, runMode, options) {
   if (playStatus.playing) return { ok: false, error: "پخش در حال اجراست." };
-  const session = await checkSession();
-  if (!session.signedIn) return { ok: false, error: "ابتدا در پرتال وارد شوید." };
+  await checkSession();
 
   const { recording } = await chrome.storage.local.get("recording");
   if (recording) return { ok: false, error: "ابتدا ضبط را متوقف کنید." };
@@ -48,27 +52,34 @@ async function startPlay(taskId, tabId, runMode) {
   }
   if (!tabId) return { ok: false, error: "تب فعال پیدا نشد." };
 
-  const base = await apiBase();
-  const res = await fetch(`${base}/api/tasks/${taskId}/graph`, {
-    headers: await authHeaders(),
-    credentials: "include"
-  });
-  if (!res.ok) {
-    return { ok: false, error: res.status === 404 ? "فرآیند پیدا نشد." : await res.text() || res.statusText };
+  const tasks = await loadUserTasks();
+  const graph = tasks.find((t) => String(t.id) === String(taskId))?.graph || null;
+  if (!graph) {
+    return { ok: false, error: "فرآیند در حافظهٔ محلی پیدا نشد." };
   }
-  const graph = await res.json();
-  const steps = collectPlaySteps(graph);
+
+  let steps = collectPlaySteps(graph);
+  const opts = options || {};
+  if (opts.groupNodeId) {
+    steps = steps.filter((s) => s.groupNodeId === opts.groupNodeId);
+  }
+  if (opts.stepNodeId) {
+    steps = steps.filter((s) => s.id === opts.stepNodeId);
+  }
   if (steps.length === 0) return { ok: false, error: "هیچ استپی برای اجرا نیست." };
+
+  tabId = await ensurePlayTab(tabId, steps);
 
   playAbort = false;
   playStatus = {
     playing: true,
-    taskId: graph.taskId,
+    taskId: graph.taskId || taskId,
     title: graph.title,
     stepIndex: 0,
     stepTotal: steps.length,
     lastError: null,
-    runMode: runMode === RunMode.Learn ? RunMode.Learn : RunMode.Play
+    runMode: runMode === RunMode.Learn ? RunMode.Learn : RunMode.Play,
+    scope: opts.stepNodeId ? "step" : opts.groupNodeId ? "group" : "task"
   };
   await chrome.storage.local.set({ playing: true });
 
@@ -79,6 +90,24 @@ async function startPlay(taskId, tabId, runMode) {
   });
 
   return getPlayStatus();
+}
+
+async function ensurePlayTab(tabId, steps) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const portal = await portalBase();
+    const url = tab.url || "";
+    const onPortal = url.startsWith(portal)
+      || /:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url);
+    if (!onPortal) return tabId;
+    const nav = steps.find((s) =>
+      (s.actionType === "GoToUrl" || s.actionType === "Navigate") && (s.navigateUrl || s.constantValue));
+    const target = nav?.navigateUrl || nav?.constantValue || "about:blank";
+    const created = await chrome.tabs.create({ url: target, active: true });
+    return created.id || tabId;
+  } catch {
+    return tabId;
+  }
 }
 
 async function runPlayLoop(tabId, graph, steps) {
@@ -194,6 +223,9 @@ async function pauseForUser(_state) {
 }
 
 function collectPlaySteps(graph) {
+  // MVP: linear walk of root groups → steps.
+  // Reserved for phase 4: expandGroupByRepeatSource (DataSource / Elements / Loops)
+  // and branch on condition success/fail edges before entering the next group.
   const nodes = new Map((graph.nodes || []).map((n) => [n.id, n]));
   const edges = graph.edges || [];
   const parentTargets = new Set(edges.filter((e) => e.kind === "parent").map((e) => e.to));
@@ -205,6 +237,12 @@ function collectPlaySteps(graph) {
   if (startNext) {
     const first = nodes.get(startNext.to);
     if (first?.kind === "group") ordered.push(first);
+    // Condition after start: follow success edge for Play MVP (fail path later).
+    if (first?.kind === "condition") {
+      const ok = edges.find((e) => e.from === first.id && e.kind === "success");
+      const g = ok && nodes.get(ok.to);
+      if (g?.kind === "group") ordered.push(g);
+    }
   }
   for (const g of rootGroups.sort((a, b) => (a.entityId || 0) - (b.entityId || 0))) {
     if (!ordered.some((x) => x.id === g.id)) ordered.push(g);
@@ -212,6 +250,7 @@ function collectPlaySteps(graph) {
 
   const steps = [];
   for (const group of ordered) {
+    // TODO(phase4): iterations = resolveRepeat(group.repeatSourceType, group.selectorValue, group.dataSourceId)
     const contains = edges.find((e) => e.from === group.id && e.kind === "contains");
     if (!contains) continue;
     let cur = contains.to;
@@ -229,6 +268,18 @@ function collectPlaySteps(graph) {
     }
   }
   return steps;
+}
+
+/** Phase 4 hook — do not call from Play MVP yet. */
+async function expandGroupByRepeatSource(_tabId, group) {
+  const type = (group.repeatSourceType || "None").toLowerCase();
+  if (type === "none" || !type) return [0];
+  if (type === "loops") {
+    const n = Math.max(1, Number(group.constantValue) || 1);
+    return Array.from({ length: n }, (_, i) => i);
+  }
+  // DataSource / Elements: reserved — return single pass until implemented.
+  return [0];
 }
 
 function parseFramePath(raw) {

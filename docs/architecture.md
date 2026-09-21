@@ -1,21 +1,21 @@
 # معماری
 
-سه بخش، یک دامنه:
+دو بخش فعال (فعلاً بدون API جدا):
 
-1. **API** `https://localhost:7101` — JWT در کوکی `da_access` و در صورت نیاز `Authorization`
-2. **Web** `https://localhost:7201` — Vuexy RTL؛ لاگین؛ ویرایشگر نمودار+فهرست
-3. **Chrome MV3** — رکورد + پخش قطعی (MVP)
+1. **Web / پرتال** `https://localhost:7201` — لاگین، ویرایشگر، و همهٔ `/api/*` برای افزونه
+2. **Chrome MV3** — ضبط + پخش؛ صحبت فقط با همان origin پرتال
+
+پروژهٔ `DynamicAutomator.Api` موقتاً کنار گذاشته شده تا فقط یک اپ لانچ شود.
 
 ```
-پرتال لاگین → کوکی JWT
-افزونه REC (همه فریم‌ها) → chrome.storage
-ذخیره → POST /api/recordings
-ویرایش → /Tasks/Editor/{id}  (گراف + فهرست)
-پخش → GET /api/tasks/{id}/graph → resolve framePath → execute در فریم
+پرتال لاگین → کوکی JWT `da_access`
+افزونه REC → chrome.storage (پیش‌نویس محلی)
+اتمام ضبط → انتخاب ارسال / انصراف / مجدد
+ارسال → POST /api/recordings (روی پرتال)
+ویرایش → /Tasks/Editor/{id}
+پخش → GET /api/tasks/{id}/graph → اجرا در تب
 ```
 
-بدون Selenium. صفحات هدف فریم‌تو‌فریم‌اند؛ سلکتور همیشه با `framePath` است.
+بدون Selenium. سلکتور با `framePath`.
 
-ویرایش WinForms نیست: بوم گردش + فهرست همگام، گروه‌بندی، منبع تکرار روی گروه.
-
-`RunMode`: `Play` برای فاز ۳؛ `Learn` فاز ضروری ۵ (هوک `UnexpectedStateDto` هست، رفتار Learn نه).
+`RunMode`: `Play` MVP؛ `Learn` فاز بعد.

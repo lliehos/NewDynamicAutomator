@@ -31,6 +31,9 @@ public class GraphService
 
         var task = await _db.Tasks
             .Include(t => t.DataSources)
+                .ThenInclude(d => d.Cells)
+            .Include(t => t.Groups)
+                .ThenInclude(g => g.Selector)
             .Include(t => t.Groups)
                 .ThenInclude(g => g.Steps)
                     .ThenInclude(s => s.Action)
@@ -54,8 +57,12 @@ public class GraphService
             TaskId = task.Id,
             Title = task.Title,
             CanModify = canModify,
+            DesignOrigin = task.DesignOrigin.ToString(),
             Viewport = stored?.Viewport ?? new GraphViewportDto { Zoom = 1, X = 80, Y = 40 },
-            DataSources = task.DataSources.Select(d => new DataSourceRefDto { Id = d.Id, Title = d.Title }).ToList()
+            DataSources = task.DataSources
+                .OrderBy(d => d.Id)
+                .Select(MapDataSourceRef)
+                .ToList()
         };
 
         dto.Nodes.Add(new GraphNodeDto
@@ -81,6 +88,8 @@ public class GraphService
                 RepeatSourceType = group.SourceType.ToString(),
                 MoveLoop = group.MoveLoop,
                 DataSourceId = group.DataSourceId,
+                SelectorValue = group.Selector?.ElementValue,
+                FramePathJson = group.Selector?.FramePathJson,
                 X = pos.GetValueOrDefault(gid)?.X ?? gx,
                 Y = pos.GetValueOrDefault(gid)?.Y ?? 80
             });
@@ -157,6 +166,7 @@ public class GraphService
             throw new UnauthorizedAccessException();
 
         var task = await _db.Tasks
+            .Include(t => t.Groups).ThenInclude(g => g.Selector)
             .Include(t => t.Groups).ThenInclude(g => g.Steps).ThenInclude(s => s.Action)
             .Include(t => t.Groups).ThenInclude(g => g.Steps).ThenInclude(s => s.ConditionGroups)
             .FirstAsync(t => t.Id == taskId, ct);
@@ -204,6 +214,14 @@ public class GraphService
                 group.SourceType = rst;
             group.MoveLoop = node.MoveLoop;
             group.DataSourceId = node.DataSourceId > 0 ? node.DataSourceId : null;
+            if (!string.IsNullOrWhiteSpace(node.SelectorValue) || !string.IsNullOrWhiteSpace(node.FramePathJson))
+            {
+                group.Selector ??= new Selector { ElementBy = SelectorBy.CssSelector };
+                if (!string.IsNullOrWhiteSpace(node.SelectorValue))
+                    group.Selector.ElementValue = node.SelectorValue.Trim();
+                if (!string.IsNullOrWhiteSpace(node.FramePathJson))
+                    group.Selector.FramePathJson = node.FramePathJson;
+            }
             groupByNode[node.Id] = group;
         }
         await _db.SaveChangesAsync(ct);
@@ -341,6 +359,50 @@ public class GraphService
 
     private static GraphEdgeDto Edge(string id, string from, string to, string kind) =>
         new() { Id = id, From = from, To = to, Kind = kind };
+
+    private static DataSourceRefDto MapDataSourceRef(DataSource d)
+    {
+        var keys = ReadColumnKeys(d.ColumnsJson);
+        var rowCount = d.Cells.Count == 0 ? 0 : d.Cells.Max(c => c.RowIndex) + 1;
+        return new DataSourceRefDto
+        {
+            Id = d.Id,
+            Title = d.Title,
+            ColumnCount = keys.Count,
+            RowCount = rowCount,
+            ColumnKeys = keys
+        };
+    }
+
+    private static List<string> ReadColumnKeys(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new List<string>();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return new List<string>();
+            var list = new List<string>();
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                if (el.ValueKind == JsonValueKind.String)
+                {
+                    var s = el.GetString();
+                    if (!string.IsNullOrWhiteSpace(s)) list.Add(s!);
+                }
+                else if (el.ValueKind == JsonValueKind.Object)
+                {
+                    var key = el.TryGetProperty("key", out var k) ? k.GetString()
+                        : el.TryGetProperty("Key", out var k2) ? k2.GetString() : null;
+                    if (!string.IsNullOrWhiteSpace(key)) list.Add(key!);
+                }
+            }
+            return list;
+        }
+        catch
+        {
+            return new List<string>();
+        }
+    }
 
     private static List<string> Topo(HashSet<string> nodes, List<GraphEdgeDto> edges)
     {

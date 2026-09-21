@@ -4,14 +4,11 @@ using Microsoft.AspNetCore.Mvc;
 namespace DynamicAutomator.Web.Controllers;
 
 [Authorize]
-public class HomeController : Controller
+public class RecordController : Controller
 {
+    [HttpGet]
     public IActionResult Index()
     {
-        // Tasks are listed from browser localStorage / extension (local-first).
         return View();
     }
-
-    [AllowAnonymous]
-    public IActionResult Error() => View();
 }

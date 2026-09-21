@@ -1,7 +1,12 @@
 .flow-shell{position:fixed;inset:0;display:grid;grid-template-rows:56px 1fr;background:#f4f5fa;font-family:Vazirmatn,Tahoma,sans-serif;direction:rtl}
 .flow-ribbon{display:flex;align-items:center;gap:8px;padding:0 14px;background:#fff;border-bottom:1px solid #e6e6f0;z-index:5}
 .flow-ribbon h1{font-size:15px;margin:0 6px 0 auto;font-weight:700;color:#4b465c}
+.origin-badge{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:700;display:none}
+.origin-badge.manual{display:inline-block;background:#e7e3fc;color:#5e50ee}
+.origin-badge.recorded{display:inline-block;background:#fce4e4;color:#ea5455}
 .btn-flow{border:0;background:#7367f0;color:#fff;border-radius:8px;padding:7px 12px;font-size:12px;cursor:pointer;font-family:inherit}
+.btn-play{background:#28c76f}
+.btn-play-soft{background:#39da8a}
 .btn-ghost{background:#eeedf7;color:#5e5873}
 .tabs{display:flex;gap:4px;background:#f0eff8;border-radius:10px;padding:3px}
 .tabs button{border:0;background:transparent;padding:6px 12px;border-radius:8px;cursor:pointer;font-family:inherit}
@@ -24,3 +29,28 @@
 .insp-field label{display:block;font-size:12px;color:#6f6b7d;margin-bottom:4px}
 .insp-field input,.insp-field select,.insp-field textarea{width:100%;border:1px solid #e6e6f0;border-radius:8px;padding:7px;font-family:inherit}
 .hint{position:absolute;left:12px;bottom:12px;background:rgba(255,255,255,.92);padding:7px 10px;border-radius:10px;font-size:11px;color:#6f6b7d;pointer-events:none}
+.palette-hint{font-size:12px;color:#a8aaae;line-height:1.8;margin-top:14px}
+.ds-panel{margin-top:18px;padding-top:14px;border-top:1px solid #eceaf5}
+.ds-panel h3{margin-top:0}
+.ds-status{font-size:11px;color:#6f6b7d;margin:8px 0;min-height:1.2em}
+.ds-list{list-style:none;margin:0;padding:0}
+.ds-list li{background:#f7f7fb;border-radius:10px;padding:8px 10px;margin-bottom:6px;font-size:12px}
+.ds-list .ds-title{font-weight:700;color:#4b465c;display:block;margin-bottom:2px}
+.ds-list .ds-meta{color:#a8aaae;font-size:11px;line-height:1.6}
+.ds-list .ds-keys{color:#7367f0;font-size:11px;word-break:break-all}
+.ds-list .ds-actions{display:flex;gap:6px;margin-top:6px}
+.ds-list .ds-actions button{flex:1;font-size:11px;padding:5px 8px}
+.group-edit{position:absolute;inset:0;overflow:auto;padding:16px 20px;background:#f7f7fb}
+.group-edit-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.group-edit-h h2{margin:0;font-size:18px}
+.group-step-row{display:flex;gap:10px;align-items:center;background:#fff;border-radius:12px;padding:12px;margin-bottom:8px;box-shadow:0 4px 14px rgba(75,70,92,.06);cursor:pointer}
+.group-step-row.on{outline:2px solid #7367f0}
+.group-step-row .idx{width:28px;height:28px;border-radius:50%;background:#f1f0ff;color:#7367f0;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
+.group-step-row .body{flex:1;display:flex;flex-direction:column;gap:2px}
+.group-step-row .body b{font-size:13px}
+.group-step-row .body span{font-size:12px;color:#a8aaae}
+.btn-mini{border:0;background:#f1f0ff;border-radius:8px;padding:6px 10px;cursor:pointer;font-family:inherit}
+.empty-steps{color:#a8aaae;padding:24px;text-align:center}
+.ctx-menu{position:fixed;z-index:50;margin:0;padding:6px;list-style:none;background:#fff;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.15);min-width:160px}
+.ctx-menu li{padding:8px 12px;cursor:pointer;border-radius:8px;font-family:Vazirmatn,Tahoma,sans-serif;font-size:13px}
+.ctx-menu li:hover{background:#f1f0ff}

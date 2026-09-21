@@ -32,6 +32,9 @@ public class DataSourceRefDto
 {
     public int Id { get; set; }
     public string Title { get; set; } = string.Empty;
+    public int ColumnCount { get; set; }
+    public int RowCount { get; set; }
+    public List<string> ColumnKeys { get; set; } = new();
 }
 
 public class GraphEdgeDto
@@ -47,6 +50,8 @@ public class TaskGraphDto
     public int TaskId { get; set; }
     public string Title { get; set; } = string.Empty;
     public bool CanModify { get; set; }
+    /// <summary>Manual or Recorded</summary>
+    public string DesignOrigin { get; set; } = "Manual";
     public GraphViewportDto Viewport { get; set; } = new();
     public List<GraphNodeDto> Nodes { get; set; } = new();
     public List<GraphEdgeDto> Edges { get; set; } = new();

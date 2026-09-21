@@ -11,32 +11,34 @@ public class TasksController : Controller
 {
     private readonly TaskService _tasks;
     private readonly GraphService _graph;
+    private readonly DataSourceService _dataSources;
 
-    public TasksController(TaskService tasks, GraphService graph)
+    public TasksController(TaskService tasks, GraphService graph, DataSourceService dataSources)
     {
         _tasks = tasks;
         _graph = graph;
+        _dataSources = dataSources;
     }
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Create(string title, CancellationToken ct)
+    public IActionResult Create(string title)
     {
+        // Local-first: manual create happens in browser JS; this is a fallback redirect shell.
         if (string.IsNullOrWhiteSpace(title))
             return RedirectToAction("Index", "Home");
-        var task = await _tasks.CreateAsync(UserId, new CreateTaskRequest { Title = title.Trim() }, ct);
-        return RedirectToAction(nameof(Editor), new { id = task.Id });
+        return RedirectToAction("Index", "Home");
     }
 
     [HttpGet]
-    public async Task<IActionResult> Editor(int id, CancellationToken ct)
+    public IActionResult Editor(int id)
     {
-        if (!await _tasks.CanViewAsync(UserId, id, ct))
-            return Forbid();
+        // Local-first: graph lives in localStorage; no DB permission check.
         ViewBag.TaskId = id;
-        ViewBag.CanModify = await _tasks.CanModifyAsync(UserId, id, ct);
+        ViewBag.CanModify = true;
+        ViewBag.LocalMode = true;
         return View();
     }
 
@@ -59,5 +61,66 @@ public class TasksController : Controller
         {
             return Forbid();
         }
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> DataSources(int id, CancellationToken ct)
+    {
+        if (!await _tasks.CanViewAsync(UserId, id, ct))
+            return Forbid();
+        return Json(await _dataSources.ListForTaskAsync(UserId, id, ct));
+    }
+
+    [HttpPost]
+    [IgnoreAntiforgeryToken]
+    [RequestSizeLimit(20_000_000)]
+    public async Task<IActionResult> UploadDataSource(int id, IFormFile file, string? title, CancellationToken ct)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest(new { message = "فایل اکسل لازم است." });
+        var name = file.FileName ?? "";
+        if (!name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase)
+            && !name.EndsWith(".xlsm", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "فقط فایل .xlsx پشتیبانی می‌شود." });
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            var result = await _dataSources.UploadExcelAsync(
+                UserId, id, title ?? Path.GetFileNameWithoutExtension(name), stream, ct);
+            return Json(result);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpPost]
+    [IgnoreAntiforgeryToken]
+    public async Task<IActionResult> DeleteDataSource(int id, int sourceId, CancellationToken ct)
+    {
+        try
+        {
+            var ok = await _dataSources.DeleteAsync(UserId, sourceId, ct);
+            return ok ? Ok(new { ok = true }) : NotFound();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> DataSourceDetail(int id, int sourceId, CancellationToken ct)
+    {
+        if (!await _tasks.CanViewAsync(UserId, id, ct))
+            return Forbid();
+        var dto = await _dataSources.GetAsync(UserId, sourceId, ct);
+        return dto is null ? NotFound() : Json(dto);
     }
 }

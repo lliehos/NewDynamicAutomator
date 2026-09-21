@@ -106,6 +106,9 @@ namespace DynamicAutomator.Infrastructure.Persistence.Migrations
                     b.Property<int>("DelayBeforeMs")
                         .HasColumnType("int");
 
+                    b.Property<int>("DesignOrigin")
+                        .HasColumnType("int");
+
                     b.Property<int?>("LastExecuteUserId")
                         .HasColumnType("int");
 

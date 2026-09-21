@@ -1,16 +1,21 @@
-﻿@model List<TaskListItemDto>
-@{
+﻿@{
     ViewData["Title"] = "فرآیندها";
 }
 
-<div class="d-flex justify-content-between align-items-center mb-4">
-  <h4 class="mb-0">فرآیندها</h4>
-  <form asp-controller="Tasks" asp-action="Create" method="post" class="d-flex gap-2">
-    @Html.AntiForgeryToken()
-    <input class="form-control" name="title" placeholder="عنوان فرآیند جدید" required />
-    <button class="btn btn-primary" type="submit">طراحی گردش</button>
-  </form>
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+  <h4 class="mb-0">فرآیندها <span class="badge bg-label-secondary">ذخیره محلی مرورگر</span></h4>
+  <div class="d-flex gap-2 flex-wrap">
+    <button type="button" class="btn btn-success" id="da-btn-start-record" data-da-action="start-record">
+      شروع ضبط
+    </button>
+    <a class="btn btn-outline-secondary" asp-controller="Extension" asp-action="Install">نصب افزونه</a>
+    <div class="d-flex gap-2">
+      <input class="form-control" id="da-new-title" placeholder="عنوان فرآیند جدید (دستی)" />
+      <button class="btn btn-primary" type="button" id="da-create-local">طراحی دستی</button>
+    </div>
+  </div>
 </div>
+<p class="text-muted small" id="da-portal-status">فرآیندها در مرورگر ذخیره می‌شوند (بدون سرور).</p>
 
 <div class="card">
   <div class="table-responsive">
@@ -18,29 +23,19 @@
       <thead>
         <tr>
           <th>عنوان</th>
+          <th>نوع ساخت</th>
           <th>گروه</th>
           <th>مرحله</th>
           <th></th>
         </tr>
       </thead>
-      <tbody>
-      @if (Model.Count == 0)
-      {
-        <tr><td colspan="4" class="text-center text-muted py-6">فرآیندی نیست. ضبط کنید یا گردش جدید بسازید.</td></tr>
-      }
-      else
-      {
-        foreach (var t in Model)
-        {
-          <tr>
-            <td>@t.Title</td>
-            <td>@t.GroupCount</td>
-            <td>@t.StepCount</td>
-            <td><a class="btn btn-sm btn-primary" href="@Url.Action("Editor","Tasks", new { id = t.Id })">نمودار و فهرست</a></td>
-          </tr>
-        }
-      }
+      <tbody id="da-task-rows">
+        <tr><td colspan="5" class="text-center text-muted py-6">در حال بارگذاری از حافظهٔ محلی...</td></tr>
       </tbody>
     </table>
   </div>
 </div>
+
+@section Scripts {
+<script src="~/js/local-tasks.js"></script>
+}

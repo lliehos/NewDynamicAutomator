@@ -24,10 +24,36 @@
   <style>
     body, .menu, .layout-navbar, .card, input, button { font-family: Vazirmatn, "Public Sans", sans-serif !important; }
   </style>
+  <link rel="stylesheet" href="~/css/extension-gate.css" />
   <script src="~/assets/vendor/js/helpers.js"></script>
   <script src="~/assets/js/config.js"></script>
 </head>
 <body>
+  <div id="da-ext-banner">
+    افزونه اتوماتور نصب نیست.
+    <a href="/Extension/Install">راهنمای نصب</a>
+    یا
+    <a href="/extension/download">دانلود ZIP</a>
+  </div>
+  <div id="da-ext-modal" role="dialog" aria-modal="true" aria-labelledby="da-ext-title">
+    <div class="da-ext-card">
+      <h2 id="da-ext-title">نصب افزونه لازم است</h2>
+      <p>برای ضبط و پخش باید افزونه روی <strong>Chrome یا Edge</strong> نصب شود. مرورگر داخلی Cursor از افزونه پشتیبانی نمی‌کند.</p>
+      <ol>
+        <li>ZIP را دانلود کنید و از حالت فشرده خارج کنید.</li>
+        <li>در Chrome/Edge: <code>chrome://extensions</code> یا <code>edge://extensions</code></li>
+        <li>Developer mode → Load unpacked → پوشهٔ افزونه.</li>
+        <li>اگر قبلاً نصب بود، روی <strong>Reload</strong> بزنید (نسخه باید <code>0.7.3</code> باشد).</li>
+        <li>همین پرتال را در همان مرورگر رفرش کنید، بعد «بررسی مجدد».</li>
+      </ol>
+      <div class="da-ext-actions">
+        <button type="button" class="btn-da btn-da-primary" id="da-ext-download">دانلود افزونه</button>
+        <button type="button" class="btn-da btn-da-ghost" id="da-ext-guide">راهنمای کامل</button>
+        <button type="button" class="btn-da btn-da-ghost" id="da-ext-recheck">بررسی مجدد</button>
+        <button type="button" class="btn-da btn-da-ghost" id="da-ext-dismiss">انصراف</button>
+      </div>
+    </div>
+  </div>
   <div class="layout-wrapper layout-content-navbar">
     <div class="layout-container">
       <aside id="layout-menu" class="layout-menu menu-vertical menu bg-menu-theme">
@@ -73,6 +99,7 @@
   <script src="~/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.js"></script>
   <script src="~/assets/vendor/js/menu.js"></script>
   <script src="~/assets/js/main.js"></script>
+  <script src="~/js/extension-gate.js"></script>
   @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>
