@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Dynamic Automator Recorder",
+  "version": "0.2.0",
+  "description": "ضبط و اجرای فرآیند روی صفحات فریم‌تو‌فریم",
+  "permissions": ["storage", "cookies", "scripting", "webNavigation", "tabs", "activeTab"],
+  "host_permissions": [
+    "http://localhost:7100/*",
+    "https://localhost:7101/*",
+    "http://localhost:7200/*",
+    "https://localhost:7201/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "اتوماتور پویا"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content/selector.js", "content/frames.js", "content/recorder.js", "content/player.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content/fab.js"],
+      "css": ["styles/fab.css"],
+      "all_frames": false,
+      "run_at": "document_idle"
+    }
+  ]
+}

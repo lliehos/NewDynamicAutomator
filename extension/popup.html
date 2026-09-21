@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: Tahoma, sans-serif; width: 280px; padding: 12px; margin: 0; }
+      button, select { width: 100%; margin-top: 8px; padding: 8px; box-sizing: border-box; }
+      .muted { color: #666; font-size: 12px; }
+      h4 { margin: 0 0 8px; }
+    </style>
+  </head>
+  <body>
+    <h4>اتوماتور پویا</h4>
+    <div id="status" class="muted">در حال بررسی...</div>
+    <button id="refresh">بررسی ورود / تازه‌سازی</button>
+    <select id="task">
+      <option value="">— انتخاب فرآیند —</option>
+    </select>
+    <button id="play">پخش روی تب فعال</button>
+    <button id="stop" hidden>توقف پخش</button>
+    <p class="muted">لاگین از پرتال وب. دکمه DA پایین‌راست صفحه برای ضبط و پخش.</p>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+@{
+    Layout = "_AuthLayout";
+    ViewData["Title"] = "ورود";
+}
+
+<div class="card">
+  <div class="card-body">
+    <div class="app-brand justify-content-center mb-6">
+      <span class="app-brand-text demo text-heading fw-bold">اتوماتور پویا</span>
+    </div>
+    <h4 class="mb-1">ورود به پرتال</h4>
+    <p class="mb-6">برای ضبط و اجرای فرآیندها ابتدا وارد شوید.</p>
+    @if (ViewBag.Error != null)
+    {
+      <div class="alert alert-danger">@ViewBag.Error</div>
+    }
+    <form method="post" asp-action="Login">
+      @Html.AntiForgeryToken()
+      <input type="hidden" name="returnUrl" value="@ViewBag.ReturnUrl" />
+      <div class="mb-6">
+        <label class="form-label" for="userName">نام کاربری</label>
+        <input class="form-control" id="userName" name="userName" required autofocus />
+      </div>
+      <div class="mb-6">
+        <label class="form-label" for="password">رمز عبور</label>
+        <input class="form-control" type="password" id="password" name="password" required />
+      </div>
+      <button class="btn btn-primary d-grid w-100" type="submit">ورود</button>
+    </form>
+    <p class="mt-4 text-muted small">کاربر پیش‌فرض توسعه: admin / Admin123!</p>
+  </div>
+</div>

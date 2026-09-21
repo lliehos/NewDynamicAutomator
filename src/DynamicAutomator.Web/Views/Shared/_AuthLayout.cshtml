@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="fa" class="light-style layout-wide customizer-hide" dir="rtl" data-assets-path="~/assets/" data-style="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>@ViewData["Title"]</title>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/rtl/core.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/rtl/theme-default.css" />
+  <link rel="stylesheet" href="~/assets/css/demo.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/pages/page-auth.css" />
+  <style>body { font-family: Vazirmatn, sans-serif !important; }</style>
+  <script src="~/assets/vendor/js/helpers.js"></script>
+  <script src="~/assets/js/config.js"></script>
+</head>
+<body>
+  <div class="container-xxl">
+    <div class="authentication-wrapper authentication-basic container-p-y">
+      <div class="authentication-inner py-6">
+        @RenderBody()
+      </div>
+    </div>
+  </div>
+</body>
+</html>
