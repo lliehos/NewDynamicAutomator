@@ -142,6 +142,19 @@ function isActionNode(n) {
     });
   });
 
+  window.addEventListener("da-store-copied-selector", (ev) => {
+    const d = ev.detail || {};
+    chrome.runtime.sendMessage({
+      type: "setCopiedSelector",
+      payload: d.payload,
+      text: d.text
+    }).then((res) => {
+      window.dispatchEvent(new CustomEvent("da-stored-selector", { detail: res || { ok: false } }));
+    }).catch(() => {
+      window.dispatchEvent(new CustomEvent("da-stored-selector", { detail: { ok: false } }));
+    });
+  });
+
   window.addEventListener("da-request-local-tasks", pullFromExtension);
   window.addEventListener("da-local-tasks", (ev) => {
     // Only push when page intentionally wrote tasks (has user+tasks detail from write)

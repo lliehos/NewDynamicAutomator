@@ -123,12 +123,16 @@
       const payload = { type: "startRecordSession" };
       const tabId = selectedRecordTabId();
       if (tabId != null) payload.tabId = tabId;
+      const taskId = t.getAttribute("data-task-id");
+      if (taskId) payload.taskId = Number(taskId);
       const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
       const status = document.getElementById("da-portal-status") || document.getElementById("da-page-rec-status");
       if (status) {
         status.textContent = res?.ok
           ? (res.reused
-            ? "ضبط روی تب انتخاب‌شده شروع شد — کار کنید، بعد «اتمام ضبط» را بزنید."
+            ? (taskId
+              ? `ضبط روی فرآیند #${taskId} شروع شد — بعد از اتمام، در FAB ذخیره کنید.`
+              : "ضبط روی تب انتخاب‌شده شروع شد — کار کنید، بعد «اتمام ضبط» را بزنید.")
             : "تب جدید باز شد — در سایت هدف کار کنید، بعد از FAB «اتمام ضبط» را بزنید.")
           : (res?.error || "خطا در شروع ضبط");
       }
@@ -157,6 +161,7 @@
     if (action === "save-draft") {
       ev.preventDefault();
       const title = prompt("عنوان فرآیند", "فرآیند ضبط‌شده");
+      if (title == null) return;
       const res = await chrome.runtime.sendMessage({
         type: "saveDraft",
         payload: { newTaskTitle: title }

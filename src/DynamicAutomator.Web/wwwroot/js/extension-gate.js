@@ -3,23 +3,16 @@
   const banner = document.getElementById("da-ext-banner");
   if (!modal) return;
 
-  const DISMISS_KEY = "da-ext-modal-dismissed";
   const pathEl = document.getElementById("da-ext-modal-path");
   const hintEl = document.getElementById("da-ext-modal-hint");
   let installPath = "";
+  /** @type {null | { kind: string, el?: Element, detail?: object }} */
+  let pendingAction = null;
 
   function hasExtension() {
     if (document.documentElement.dataset.daExtension === "1") return true;
     if (document.getElementById("da-recorder-fab")) return true;
     return false;
-  }
-
-  function isDismissed() {
-    try {
-      return sessionStorage.getItem(DISMISS_KEY) === "1";
-    } catch {
-      return false;
-    }
   }
 
   async function ensureInstallPath() {
@@ -37,36 +30,43 @@
     }
   }
 
-  function apply(ok) {
-    const showModal = !ok && !isDismissed();
-    modal.classList.toggle("open", showModal);
-    if (banner) banner.classList.toggle("show", !ok);
-    if (showModal) ensureInstallPath();
+  function hideGate() {
+    modal.classList.remove("open");
+    if (banner) banner.classList.remove("show");
+  }
 
-    document.querySelectorAll("[data-requires-extension]").forEach((el) => {
-      if (el instanceof HTMLButtonElement || el instanceof HTMLInputElement)
-        el.disabled = !ok;
-      else el.style.opacity = ok ? "" : "0.45";
-      el.toggleAttribute("aria-disabled", !ok);
-    });
-
-    const st = document.getElementById("da-portal-status");
-    if (st && ok) {
-      st.textContent = "افزونه متصل است. دکمه قرمز REC پایین‌چپ صفحه را ببینید.";
+  function showGate(reason) {
+    modal.classList.add("open");
+    if (banner) banner.classList.remove("show");
+    ensureInstallPath();
+    if (hintEl) {
+      hintEl.textContent = reason
+        || "برای ضبط یا اجرا باید افزونه را یک‌بار Load unpacked کنید.";
     }
   }
 
-  function check() {
+  /**
+   * Call before record/play. Returns true if extension is present.
+   * Otherwise opens the install modal and returns false.
+   */
+  async function requireExtension(opts) {
     if (hasExtension()) {
-      try { sessionStorage.removeItem(DISMISS_KEY); } catch { /* ignore */ }
+      hideGate();
+      return true;
     }
-    apply(hasExtension());
+    pendingAction = opts?.pending || null;
+    showGate(opts?.reason);
+    return false;
   }
+
+  window.daRequireExtension = requireExtension;
+  window.daHasExtension = hasExtension;
 
   function dismiss() {
-    try { sessionStorage.setItem(DISMISS_KEY, "1"); } catch { /* ignore */ }
     modal.classList.remove("open");
-    if (banner) banner.classList.add("show");
+    // Soft banner only after user tried record/play and chose «بعداً»
+    if (banner && pendingAction) banner.classList.add("show");
+    pendingAction = null;
   }
 
   async function copyPath() {
@@ -83,7 +83,73 @@
     }
   }
 
-  window.addEventListener("da-extension-ready", () => apply(true));
+  function retryPending() {
+    const p = pendingAction;
+    pendingAction = null;
+    if (!p) return;
+    if (p.kind === "click" && p.el instanceof HTMLElement) {
+      // Re-click so portal-ui / native handlers run with extension present
+      setTimeout(() => p.el.click(), 50);
+      return;
+    }
+    if (p.kind === "da-play" && p.detail) {
+      window.dispatchEvent(new CustomEvent("da-play", { detail: p.detail }));
+    }
+  }
+
+  function onExtensionOk() {
+    hideGate();
+    if (hintEl) hintEl.textContent = "افزونه متصل شد.";
+    retryPending();
+  }
+
+  function check() {
+    if (hasExtension()) {
+      onExtensionOk();
+      return true;
+    }
+    if (modal.classList.contains("open")) {
+      if (hintEl) hintEl.textContent = "هنوز افزونه پیدا نشد — Load unpacked را انجام دهید و دوباره بررسی کنید.";
+    }
+    return false;
+  }
+
+  const EXT_ACTIONS = new Set([
+    "start-record",
+    "play-task",
+    "play-group",
+    "play-step"
+  ]);
+
+  function isPlayButton(el) {
+    if (!el) return false;
+    const id = el.id || "";
+    return id === "btn-play-task" || id === "btn-play-selection";
+  }
+
+  // Capture: gate record/play before any handler; no check on idle load.
+  document.addEventListener("click", (ev) => {
+    const el = ev.target instanceof Element
+      ? ev.target.closest("[data-da-action], #btn-play-task, #btn-play-selection")
+      : null;
+    if (!el) return;
+
+    const action = el.getAttribute("data-da-action");
+    const needs = (action && EXT_ACTIONS.has(action)) || isPlayButton(el);
+    if (!needs) return;
+    if (hasExtension()) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+    pendingAction = { kind: "click", el };
+    showGate(action === "start-record"
+      ? "برای شروع ضبط، افزونه لازم است."
+      : "برای اجرای فرآیند، افزونه لازم است.");
+  }, true);
+
+  window.addEventListener("da-extension-ready", () => {
+    if (modal.classList.contains("open") || pendingAction) onExtensionOk();
+  });
   window.addEventListener("da-extension-recheck", check);
 
   document.getElementById("da-ext-recheck")?.addEventListener("click", check);
@@ -93,21 +159,6 @@
     window.location.href = "/Extension/Install";
   });
 
-  ensureInstallPath();
-  check();
-  [200, 500, 1000, 2000, 4000].forEach((ms) => setTimeout(check, ms));
-
-  const obs = new MutationObserver(() => {
-    if (hasExtension()) {
-      apply(true);
-      obs.disconnect();
-    }
-  });
-  obs.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["data-da-extension"],
-    childList: true,
-    subtree: true
-  });
-  setTimeout(() => obs.disconnect(), 15000);
+  // Idle: never open modal / banner. Keep path cache warm for when user needs it.
+  hideGate();
 })();

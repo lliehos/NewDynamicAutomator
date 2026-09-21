@@ -106,6 +106,8 @@ async function handleMessage(message, sender) {
       return startRecordSession({ ...message, rerecord: true });
     case "getCopiedSelector":
       return getCopiedSelector();
+    case "setCopiedSelector":
+      return setCopiedSelector(message.payload, message.text);
     case "clearCopiedSelector":
       await chrome.storage.local.remove(["copiedSelector", "copiedSelectorText"]);
       return { ok: true };
@@ -225,13 +227,25 @@ async function startRecordSession(message = {}) {
     steps: []
   });
 
+  const targetTaskId = message.taskId != null && message.taskId !== ""
+    ? Number(message.taskId)
+    : null;
+  let targetTitle = null;
+  if (targetTaskId && Number.isFinite(targetTaskId)) {
+    const tasks = await loadUserTasks();
+    const existing = tasks.find((t) => String(t.id) === String(targetTaskId));
+    targetTitle = existing?.title || null;
+  }
+
   await chrome.storage.local.set({
     recording: true,
     recordPhase: "recording",
     draft: flattenGroupSteps(recordingGroups),
     recordingGroups,
     recordTabId: null,
-    lastNavUrl: null
+    lastNavUrl: null,
+    recordTargetTaskId: targetTaskId && Number.isFinite(targetTaskId) ? targetTaskId : null,
+    recordTargetTitle: targetTitle
   });
 
   const requestedTabId = message.tabId != null && message.tabId !== ""
@@ -307,7 +321,9 @@ async function discardRecord() {
     draft: [],
     recordingGroups: [],
     recordTabId: null,
-    lastNavUrl: null
+    lastNavUrl: null,
+    recordTargetTaskId: null,
+    recordTargetTitle: null
   });
   const state = await broadcastRecordState();
   setTimeout(() => pollDevReload(), 400);
@@ -481,7 +497,9 @@ function describeIframe(childUrl, indexInParent) {
 }
 
 async function saveDraft(payload) {
-  const { draft, recordingGroups } = await chrome.storage.local.get(["draft", "recordingGroups"]);
+  const { draft, recordingGroups, recordTargetTaskId, recordTargetTitle } = await chrome.storage.local.get([
+    "draft", "recordingGroups", "recordTargetTaskId", "recordTargetTitle"
+  ]);
   let groups = Array.isArray(recordingGroups) ? recordingGroups : [];
   // Legacy flat draft → one group
   if (!groups.length && Array.isArray(draft) && draft.length) {
@@ -492,20 +510,56 @@ async function saveDraft(payload) {
     groups = [{ id: "group-1", title: payload?.groupTitle || "گروه خالی", steps: [] }];
   }
 
-  const title = (payload?.newTaskTitle || "").trim() || `ضبط ${new Date().toLocaleString("fa-IR")}`;
-  const id = Number(`${Date.now() % 1e9}${Math.floor(Math.random() * 90 + 10)}`);
-  const graph = buildGraphFromRecordingGroups(id, title, groups);
-  const stepCount = flattenGroupSteps(groups).length;
   const tasks = await loadUserTasks();
-  tasks.push({
-    id,
-    title,
-    designOrigin: "Recorded",
-    groupCount: groups.length,
-    stepCount,
-    createdAt: new Date().toISOString(),
-    graph
-  });
+  const targetId = payload?.taskId != null
+    ? Number(payload.taskId)
+    : (recordTargetTaskId != null ? Number(recordTargetTaskId) : null);
+  const existingIdx = targetId && Number.isFinite(targetId)
+    ? tasks.findIndex((t) => String(t.id) === String(targetId))
+    : -1;
+
+  let id;
+  let title;
+  let graph;
+  let stepCount = flattenGroupSteps(groups).length;
+  let groupCount = groups.length;
+
+  if (existingIdx >= 0) {
+    const existing = tasks[existingIdx];
+    id = existing.id;
+    title = (payload?.newTaskTitle || "").trim()
+      || recordTargetTitle
+      || existing.title
+      || `ضبط ${new Date().toLocaleString("fa-IR")}`;
+    graph = mergeRecordingGroupsIntoGraph(existing.graph, groups, id, title);
+    const nodes = graph.nodes || [];
+    stepCount = nodes.filter((n) => n.kind === "action" || n.kind === "step").length;
+    groupCount = nodes.filter((n) => n.kind === "group").length;
+    tasks[existingIdx] = {
+      ...existing,
+      title,
+      designOrigin: existing.designOrigin || "Recorded",
+      groupCount,
+      stepCount,
+      dataSourceCount: Array.isArray(graph.dataSources) ? graph.dataSources.length : 0,
+      graph
+    };
+  } else {
+    title = (payload?.newTaskTitle || "").trim() || `ضبط ${new Date().toLocaleString("fa-IR")}`;
+    id = Number(`${Date.now() % 1e9}${Math.floor(Math.random() * 90 + 10)}`);
+    graph = buildGraphFromRecordingGroups(id, title, groups);
+    tasks.push({
+      id,
+      title,
+      designOrigin: "Recorded",
+      groupCount,
+      stepCount,
+      dataSourceCount: 0,
+      createdAt: new Date().toISOString(),
+      graph
+    });
+  }
+
   await saveUserTasks(tasks);
   await chrome.storage.local.set({
     recording: false,
@@ -513,12 +567,100 @@ async function saveDraft(payload) {
     draft: [],
     recordingGroups: [],
     recordTabId: null,
-    lastNavUrl: null
+    lastNavUrl: null,
+    recordTargetTaskId: null,
+    recordTargetTitle: null
   });
   await pushTasksToPortalTabs(tasks);
   await broadcastRecordState();
   setTimeout(() => pollDevReload(), 400);
-  return { ok: true, result: { taskId: id, groupId: 1, stepCount, groupCount: groups.length } };
+  return { ok: true, result: { taskId: id, groupId: 1, stepCount, groupCount, merged: existingIdx >= 0 } };
+}
+
+/** Append newly recorded groups/steps onto an existing task graph. */
+function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
+  const base = existingGraph && typeof existingGraph === "object"
+    ? existingGraph
+    : { nodes: [], edges: [], dataSources: [], viewport: { x: 40, y: 40, zoom: 1 } };
+  const nodes = Array.isArray(base.nodes) ? base.nodes.slice() : [];
+  const edges = Array.isArray(base.edges) ? base.edges.slice() : [];
+  if (!nodes.some((n) => n.id === "start" || n.kind === "start")) {
+    nodes.unshift({ id: "start", kind: "start", title: "شروع", x: 40, y: 220 });
+  }
+
+  const stamp = Date.now();
+  let maxEntity = 0;
+  for (const n of nodes) {
+    if (n.entityId != null && Number(n.entityId) > maxEntity) maxEntity = Number(n.entityId);
+  }
+
+  // Tip of the root "next" chain (start → …)
+  let tip = nodes.find((n) => n.kind === "start")?.id || "start";
+  const seen = new Set();
+  while (tip && !seen.has(tip)) {
+    seen.add(tip);
+    const next = edges.find((e) => e.from === tip && e.kind === "next");
+    if (!next) break;
+    tip = next.to;
+  }
+
+  const list = Array.isArray(groups) && groups.length
+    ? groups
+    : [{ id: "group-1", title: "گروه ضبط", steps: [] }];
+
+  list.forEach((g, gi) => {
+    maxEntity += 1;
+    const gid = `group-rec-${stamp}-${gi + 1}`;
+    nodes.push({
+      id: gid,
+      kind: "group",
+      entityId: maxEntity,
+      title: g.title || `گروه ضبط ${gi + 1}`,
+      x: 280 + gi * 280,
+      y: 80 + (nodes.filter((n) => n.kind === "group").length * 20),
+      repeatSourceType: "None",
+      moveLoop: true
+    });
+    edges.push({ id: `e-rec-${stamp}-g-${gi}`, from: tip, to: gid, kind: "next" });
+    tip = gid;
+
+    let prevStep = null;
+    (g.steps || []).forEach((a, i) => {
+      maxEntity += 1;
+      const sid = `${gid}-step-${i + 1}`;
+      const isNav = String(a.actionType || "").toLowerCase() === "gotourl";
+      nodes.push({
+        id: sid,
+        kind: "action",
+        entityId: maxEntity,
+        title: `${a.actionType || "Click"} ${i + 1}`,
+        groupNodeId: gid,
+        actionType: a.actionType || "Click",
+        selectorValue: a.elementValue || "",
+        constantValue: isNav ? "" : (a.value || ""),
+        navigateUrl: isNav ? (a.url || a.value || "") : null,
+        framePathJson: JSON.stringify(a.framePath || []),
+        isActive: true,
+        x: 40,
+        y: i * 90
+      });
+      if (prevStep) edges.push({ id: `e-rec-${stamp}-${gi}-${i}`, from: prevStep, to: sid, kind: "next" });
+      else edges.push({ id: `e-rec-c-${stamp}-${gi}-${i}`, from: gid, to: sid, kind: "contains" });
+      prevStep = sid;
+    });
+  });
+
+  return {
+    ...base,
+    taskId,
+    title,
+    canModify: true,
+    designOrigin: base.designOrigin || "Recorded",
+    viewport: base.viewport || { x: 40, y: 40, zoom: 1 },
+    nodes,
+    edges,
+    dataSources: Array.isArray(base.dataSources) ? base.dataSources : []
+  };
 }
 
 async function currentLocalUser() {
@@ -862,6 +1004,34 @@ async function getCopiedSelector() {
     payload: data.copiedSelector,
     text: data.copiedSelectorText || encodeDaSelector(data.copiedSelector)
   };
+}
+
+async function setCopiedSelector(payload, text) {
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, error: "payload نامعتبر است." };
+  }
+  const selector = payload.selector || payload.Selector || "";
+  if (!String(selector).trim()) {
+    return { ok: false, error: "سلکتور خالی است." };
+  }
+  const normalized = {
+    v: payload.v || 1,
+    kind: "da-selector",
+    selector: String(selector),
+    elementBy: payload.elementBy || payload.ElementBy || "CssSelector",
+    framePath: payload.framePath || payload.FramePath || [],
+    url: payload.url || payload.Url || "",
+    copiedAt: payload.copiedAt || new Date().toISOString(),
+    hasAttribute: payload.hasAttribute ?? payload.HasAttribute,
+    attributeName: payload.attributeName || payload.AttributeName || "",
+    attributeValueIsDynamic: payload.attributeValueIsDynamic ?? payload.AttributeValueIsDynamic,
+    attributeValue: payload.attributeValue || payload.AttributeValue || "",
+    attributeDynamicColumn: payload.attributeDynamicColumn || payload.AttributeDynamicColumn || "",
+    attributeDataSourceId: payload.attributeDataSourceId ?? payload.AttributeDataSourceId ?? null
+  };
+  const encoded = text || encodeDaSelector(normalized);
+  await chrome.storage.local.set({ copiedSelector: normalized, copiedSelectorText: encoded });
+  return { ok: true, payload: normalized, text: encoded };
 }
 
 function encodeDaSelector(payload) {

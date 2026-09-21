@@ -580,27 +580,35 @@
     return !!n && (n.kind === "group" || n.kind === "condition" || isActionNode(n));
   }
 
-  /** Compact orange action box: icon (right) + title (left of icon). */
+  /** Compact orange action box: icon (right) + title — width always fits full title. */
   function stepBoxSize(n) {
     const label = String(n.title || actionTypeLabel(n.actionType) || "اقدام").trim() || "اقدام";
     const fontSize = 11;
-    const charW = fontSize * 0.72;
     const padL = 8;
     const padR = 8;
     const iconSize = 20;
     const gap = 8;
-    const textW = Math.ceil(label.length * charW);
-    const w = Math.min(248, Math.max(108, textW + padL + padR + iconSize + gap));
+    const textW = measureSvgTextWidth(label, fontSize, "600");
+    const w = Math.max(108, Math.ceil(textW + padL + padR + iconSize + gap + 2));
     return { w, h: 40, padL, padR, iconSize, gap, fontSize };
   }
 
-  /** Truncate action title to the text band left of the icon. */
-  function fitActionLabel(text, maxW, fontSize = 11) {
-    const raw = String(text || "اقدام").trim() || "اقدام";
-    const charW = fontSize * 0.72;
-    const maxChars = Math.max(4, Math.floor(maxW / charW));
-    if (raw.length <= maxChars) return raw;
-    return raw.slice(0, Math.max(3, maxChars - 1)) + "…";
+  let _measureCanvas = null;
+  function measureSvgTextWidth(text, fontSize = 11, weight = "400") {
+    try {
+      if (!_measureCanvas) _measureCanvas = document.createElement("canvas");
+      const ctx = _measureCanvas.getContext("2d");
+      if (!ctx) throw new Error("no-ctx");
+      ctx.font = `${weight} ${fontSize}px Vazirmatn, Tahoma, sans-serif`;
+      return ctx.measureText(String(text || "")).width;
+    } catch {
+      return String(text || "").length * fontSize * 0.72;
+    }
+  }
+
+  /** Keep full action title (box width already fits). */
+  function fitActionLabel(text) {
+    return String(text || "اقدام").trim() || "اقدام";
   }
 
   const STEP_STROKE = "#ff9f43";
@@ -1656,7 +1664,6 @@
       fontSize = fitted.fontSize;
     } else if (isActionNode(n)) {
       fontSize = actionLayout.fontSize || 11;
-      const padL = actionLayout.padL ?? 8;
       const padR = actionLayout.padR ?? 8;
       const iconSize = actionLayout.iconSize || 20;
       const gap = actionLayout.gap ?? 8;
@@ -1664,8 +1671,7 @@
       // Page is RTL: text-anchor "start" = right edge of glyph run → text grows left, clear of icon.
       labelX = iconLeft - gap;
       labelAnchor = "start";
-      const textMaxW = Math.max(24, iconLeft - gap - padL);
-      label = fitActionLabel(n.title || actionTypeLabel(n.actionType) || "اقدام", textMaxW, fontSize);
+      label = fitActionLabel(n.title || actionTypeLabel(n.actionType) || "اقدام");
       appendActionTypeIcon(g, n, w, h, actionLayout);
     }
     if (labelLines) {
@@ -1751,9 +1757,7 @@
       if (!selected.has(n.id)) selectNode(n.id, false);
       highlightSelection();
       renderInspector();
-      if (n.kind === "group" || isActionNode(n)) {
-        showCtx(ev.clientX, ev.clientY, n);
-      }
+      showCtx(ev.clientX, ev.clientY, n);
     });
     world.appendChild(g);
   }
@@ -2047,7 +2051,13 @@
     ctxMenu.style.left = `${x}px`;
     ctxMenu.style.top = `${y}px`;
 
-    const items = [];
+    const items = [
+      {
+        act: "props",
+        label: "مشخصات",
+        title: "نمایش پنل ویژگی‌ها"
+      }
+    ];
     if (n.kind === "group") {
       items.push({ act: "edit", label: "باز کردن طراح داخل" });
       const canConv = groupCanConvertToAction(n.id);
@@ -2059,7 +2069,6 @@
           ? "فقط مشاهده"
           : (canConv ? "گروه خالی را به اقدام تبدیل می‌کند" : "گروه حاوی شرط یا اقدام است")
       });
-      items.push({ act: "select", label: "انتخاب" });
     } else if (isActionNode(n)) {
       const multi = selectedActionsForGroupConvert();
       const multiOk = Array.isArray(multi) && multi.length >= 1 && multi.some((a) => a.id === n.id);
@@ -2074,11 +2083,8 @@
             ? (count > 1 ? "اقدام‌های انتخاب‌شده را داخل یک گروه می‌برد" : "اقدام را داخل یک گروه جدید می‌برد")
             : "فقط اقدام‌های هم‌سطح را با Ctrl انتخاب کنید")
       });
-      items.push({ act: "select", label: "انتخاب" });
-    } else {
-      ctxMenu.hidden = true;
-      return;
     }
+    items.push({ act: "select", label: "انتخاب" });
 
     ctxMenu.innerHTML = items.map((it) =>
       `<li data-act="${it.act}" class="${it.disabled ? "disabled" : ""}"${it.title ? ` title="${esc(it.title)}"` : ""}>${it.label}</li>`
@@ -2090,7 +2096,12 @@
         if (li.classList.contains("disabled")) return;
         ctxMenu.hidden = true;
         const act = li.dataset.act;
-        if (act === "edit") openGroup(n.id);
+        if (act === "props") {
+          selected = new Set([n.id]);
+          highlightSelection();
+          ensureInspectorExpanded();
+          renderInspector();
+        } else if (act === "edit") openGroup(n.id);
         else if (act === "select") { selected = new Set([n.id]); render(); }
         else if (act === "to-action") {
           if (convertGroupToAction(n)) {
@@ -2371,7 +2382,8 @@
             n.dynamicSourceColumnName = null;
           }
         } else if (k === "dataSourceId" || k === "selectorDataSourceId" || k === "sourceId"
-          || k === "equalSelectorDataSourceId") {
+          || k === "equalSelectorDataSourceId"
+          || k === "attributeDataSourceId" || k === "equalAttributeDataSourceId") {
           n[k] = inp.value ? Number(inp.value) : null;
           if (k === "dataSourceId" && n.kind === "start") setMasterDataSource(n.dataSourceId);
         } else if (k === "loopCount") {
@@ -2414,11 +2426,26 @@
           || k === "selectorDataSourceId" || k === "equalSelectorDataSourceId"
           || k === "sourceId" || k === "moveLoop" || k === "valueFromSource" || k === "dataSourceId"
           || k === "dynamicSourceColumnName" || k === "selectorDynamicColumn"
-          || k === "equalSelectorDynamicColumn" || k === "memoryVariableName") {
+          || k === "equalSelectorDynamicColumn" || k === "memoryVariableName"
+          || k === "hasAttribute" || k === "equalHasAttribute"
+          || k === "attributeValueIsDynamic" || k === "equalAttributeValueIsDynamic"
+          || k === "attributeDataSourceId" || k === "equalAttributeDataSourceId"
+          || k === "attributeDynamicColumn" || k === "equalAttributeDynamicColumn") {
           if (isActionNode(n) && (n.valueFromSource || n.contentSourceType === "DataSource")) {
             syncStepParamFromSource(n);
           }
-          renderInspector();
+          // Let switch thumb animate before rebuilding inspector DOM
+          const isSwitch = inp.type === "checkbox" && (
+            k === "selectorIsDynamic" || k === "equalSelectorIsDynamic"
+            || k === "hasAttribute" || k === "equalHasAttribute"
+            || k === "attributeValueIsDynamic" || k === "equalAttributeValueIsDynamic"
+          );
+          if (isSwitch) {
+            clearTimeout(window.__daInspSwitchT);
+            window.__daInspSwitchT = setTimeout(() => renderInspector(), 300);
+          } else {
+            renderInspector();
+          }
           return;
         }
         if (k === "navigateUrl" && isActionNode(n)) {
@@ -2521,9 +2548,7 @@
 
     if (stepNeedsSelector(at)) {
       html += `<div class="insp-section-title">هدف روی صفحه</div>`;
-      html += selectorFieldHtml(n, "سلکتور");
-      html += `<div class="insp-field"><label>زنجیره فریم (JSON)</label>
-        <textarea data-k="framePathJson" data-da-framepath="1" rows="3">${esc(n.framePathJson || "[]")}</textarea></div>`;
+      html += selectorFieldHtml(n, "سلکتور", { includeFramePath: true });
     }
 
     return html;
@@ -2601,7 +2626,13 @@
         valueKey: "equalSelectorValue",
         dynFlag: "equalSelectorIsDynamic",
         dynDs: "equalSelectorDataSourceId",
-        dynCol: "equalSelectorDynamicColumn"
+        dynCol: "equalSelectorDynamicColumn",
+        hasAttr: "equalHasAttribute",
+        attrName: "equalAttributeName",
+        attrDynFlag: "equalAttributeValueIsDynamic",
+        attrValue: "equalAttributeValue",
+        attrDynCol: "equalAttributeDynamicColumn",
+        attrDynDs: "equalAttributeDataSourceId"
       });
     } else if (src === "DataSource") {
       html += `
@@ -2688,11 +2719,21 @@
     const dynFlag = opts.dynFlag || "selectorIsDynamic";
     const dynDs = opts.dynDs || "selectorDataSourceId";
     const dynCol = opts.dynCol || "selectorDynamicColumn";
+    const hasAttrKey = opts.hasAttr || "hasAttribute";
+    const attrNameKey = opts.attrName || "attributeName";
+    const attrDynFlag = opts.attrDynFlag || "attributeValueIsDynamic";
+    const attrValueKey = opts.attrValue || "attributeValue";
+    const attrDynCol = opts.attrDynCol || "attributeDynamicColumn";
+    const attrDynDs = opts.attrDynDs || "attributeDataSourceId";
     const wrapId = opts.wrapId ? ` id="${opts.wrapId}"` : "";
 
     // Default off unless explicitly true
     if (n[dynFlag] == null) n[dynFlag] = false;
+    if (n[hasAttrKey] == null) n[hasAttrKey] = false;
+    if (n[attrDynFlag] == null) n[attrDynFlag] = false;
     const dynOn = n[dynFlag] === true;
+    const attrOn = n[hasAttrKey] === true;
+    const attrDynOn = n[attrDynFlag] === true;
     const selectedDs = n[dynDs] || "";
     const dsId = selectedDs || resolveSelectorDsId(n, dynDs);
     const dsOpts = processDataSourceOptions(selectedDs || dsId);
@@ -2700,12 +2741,22 @@
     const colOpts = cols.map((c) =>
       `<option value="${esc(c)}" ${n[dynCol] === c ? "selected" : ""}>${esc(c)}</option>`
     ).join("");
+
+    const attrSelectedDs = n[attrDynDs] || "";
+    const attrDsId = attrSelectedDs || resolveSelectorDsId(n, attrDynDs);
+    const attrDsOpts = processDataSourceOptions(attrSelectedDs || attrDsId);
+    const attrCols = dataSourceColumnKeys(attrDsId);
+    const attrColOpts = attrCols.map((c) =>
+      `<option value="${esc(c)}" ${n[attrDynCol] === c ? "selected" : ""}>${esc(c)}</option>`
+    ).join("");
+
     const selVal = n[valueKey] || "";
     const hasPh = selectorHasDynPlaceholder(selVal);
     const empty = !(graph.dataSources || []).length
       ? `<p class="palette-hint">منبعی نیست — روی نود شروع اضافه کنید.</p>`
       : "";
     const borderCls = dynOn ? (hasPh ? " sel-dyn-ok" : " sel-dyn-bad") : "";
+    const showFrame = opts.includeFramePath === true;
 
     return `
       <div class="insp-sel-block"${wrapId} data-dyn-flag="${dynFlag}" data-sel-key="${valueKey}">
@@ -2735,11 +2786,54 @@
             placeholder="${esc(dynOn ? DYN_SEL_PLACEHOLDER : "#btn")}"
             ${dynOn && !hasPh ? `aria-invalid="true"` : ""} />
           <div class="sel-toolbar">
-            <button type="button" class="btn-mini" data-sel-act="paste">پیست از حافظه</button>
-            <button type="button" class="btn-mini" data-sel-act="paste-clip" title="از کلیپ‌بورد سیستم">پیست کلیپ‌بورد</button>
+            <button type="button" class="btn-mini" data-sel-act="save-mem" data-sel-key="${valueKey}">ذخیره در حافظه</button>
+            <button type="button" class="btn-mini" data-sel-act="load-mem" data-sel-key="${valueKey}">خواندن از حافظه</button>
           </div>
           <p class="insp-warn insp-warn-dyn" ${dynOn && !hasPh ? "" : "hidden"}>سلکتور باید شامل «${esc(DYN_SEL_PLACEHOLDER)}» باشد.</p>
         </div>
+        ${showFrame ? `
+          <div class="insp-field">
+            <label>زنجیره فریم (JSON)</label>
+            <textarea data-k="framePathJson" data-da-framepath="1" rows="3">${esc(n.framePathJson || "[]")}</textarea>
+          </div>
+        ` : ""}
+        <div class="insp-field">
+          <label class="da-switch">
+            <input type="checkbox" data-k="${hasAttrKey}" ${attrOn ? "checked" : ""}/>
+            <span class="da-switch-ui" aria-hidden="true"></span>
+            <span class="da-switch-text">دارای اتریبیوت / ویژگی</span>
+          </label>
+          <p class="palette-hint" style="margin:4px 0 0">مثلاً optionهایی که value خاصی دارند: سلکتور <code>select option</code> + اتریبیوت <code>value</code>.</p>
+        </div>
+        ${attrOn ? `
+          <div class="insp-sel-attr">
+            <div class="insp-field"><label>نام اتریبیوت</label>
+              <input data-k="${attrNameKey}" value="${esc(n[attrNameKey] || "")}" placeholder="مثلاً value یا data-id" />
+            </div>
+            <div class="insp-field">
+              <label class="da-switch">
+                <input type="checkbox" data-k="${attrDynFlag}" ${attrDynOn ? "checked" : ""}/>
+                <span class="da-switch-ui" aria-hidden="true"></span>
+                <span class="da-switch-text">مقدار اتریبیوت پویا</span>
+              </label>
+            </div>
+            ${attrDynOn ? `
+              <div class="insp-sel-dyn">
+                <div class="insp-field"><label>منبع مقدار</label>
+                  <select data-k="${attrDynDs}"><option value="">— انتخاب منبع —</option>${attrDsOpts}</select>
+                </div>
+                <div class="insp-field"><label>ستون مقدار</label>
+                  <select data-k="${attrDynCol}"><option value="">— انتخاب ستون —</option>${attrColOpts}</select>
+                </div>
+                ${empty}
+              </div>
+            ` : `
+              <div class="insp-field"><label>مقدار اتریبیوت (ثابت)</label>
+                <input data-k="${attrValueKey}" value="${esc(n[attrValueKey] || "")}" placeholder="مثلاً active" />
+              </div>
+            `}
+          </div>
+        ` : ""}
       </div>`;
   }
 
@@ -2753,15 +2847,74 @@
       return {
         selector: obj.selector || obj.Selector || "",
         framePath: obj.framePath || obj.FramePath || [],
-        elementBy: obj.elementBy || "CssSelector"
+        elementBy: obj.elementBy || "CssSelector",
+        hasAttribute: obj.hasAttribute ?? obj.HasAttribute,
+        attributeName: obj.attributeName || obj.AttributeName || "",
+        attributeValueIsDynamic: obj.attributeValueIsDynamic ?? obj.AttributeValueIsDynamic,
+        attributeValue: obj.attributeValue || obj.AttributeValue || "",
+        attributeDynamicColumn: obj.attributeDynamicColumn || obj.AttributeDynamicColumn || "",
+        attributeDataSourceId: obj.attributeDataSourceId ?? obj.AttributeDataSourceId ?? null
       };
     } catch {
       return null;
     }
   }
 
+  function encodeDaSelectorPayload(payload) {
+    return "DASEL:" + JSON.stringify(payload);
+  }
+
+  function readSelectorFieldLive(n, preferKey) {
+    const key = preferKey || "selectorValue";
+    const inp = inspector.querySelector(`[data-k="${key}"]`);
+    if (inp) n[key] = inp.value;
+    const frameTa = inspector.querySelector("[data-k=framePathJson]");
+    if (frameTa) n.framePathJson = frameTa.value;
+    return key;
+  }
+
+  function buildSelectorPayloadFromNode(n, preferKey) {
+    const key = readSelectorFieldLive(n, preferKey);
+    let framePath = [];
+    try {
+      const parsed = JSON.parse(n.framePathJson || "[]");
+      framePath = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      framePath = [];
+    }
+    const isEqual = key === "equalSelectorValue";
+    const payload = {
+      v: 1,
+      kind: "da-selector",
+      selector: n[key] || "",
+      elementBy: "CssSelector",
+      framePath: isEqual ? [] : framePath,
+      copiedAt: new Date().toISOString()
+    };
+    if (isEqual) {
+      if (n.equalHasAttribute) {
+        payload.hasAttribute = true;
+        payload.attributeName = n.equalAttributeName || "";
+        payload.attributeValueIsDynamic = !!n.equalAttributeValueIsDynamic;
+        payload.attributeValue = n.equalAttributeValue || "";
+        payload.attributeDynamicColumn = n.equalAttributeDynamicColumn || "";
+        payload.attributeDataSourceId = n.equalAttributeDataSourceId ?? null;
+      }
+    } else if (n.hasAttribute) {
+      payload.hasAttribute = true;
+      payload.attributeName = n.attributeName || "";
+      payload.attributeValueIsDynamic = !!n.attributeValueIsDynamic;
+      payload.attributeValue = n.attributeValue || "";
+      payload.attributeDynamicColumn = n.attributeDynamicColumn || "";
+      payload.attributeDataSourceId = n.attributeDataSourceId ?? null;
+    }
+    return payload;
+  }
+
+  const SEL_MEM_KEY = "da_copied_selector";
+
   function applySelectorPayload(n, payload, preferKey) {
-    if (!payload?.selector) return false;
+    if (!payload || payload.selector == null || String(payload.selector).trim() === "") return false;
     const hasEqualField = !!inspector.querySelector("[data-k=equalSelectorValue]");
     const hasSubjectField = !!inspector.querySelector("[data-k=selectorValue]");
     let targetKey = preferKey;
@@ -2775,13 +2928,66 @@
     n[targetKey] = payload.selector;
     if (targetKey === "selectorValue") {
       n.framePathJson = JSON.stringify(payload.framePath || []);
+      if (payload.hasAttribute != null) {
+        n.hasAttribute = !!payload.hasAttribute;
+        if (payload.attributeName != null) n.attributeName = payload.attributeName;
+        if (payload.attributeValueIsDynamic != null) n.attributeValueIsDynamic = !!payload.attributeValueIsDynamic;
+        if (payload.attributeValue != null) n.attributeValue = payload.attributeValue;
+        if (payload.attributeDynamicColumn != null) n.attributeDynamicColumn = payload.attributeDynamicColumn;
+        if (payload.attributeDataSourceId != null) n.attributeDataSourceId = payload.attributeDataSourceId;
+      }
+    } else if (targetKey === "equalSelectorValue" && payload.hasAttribute != null) {
+      n.equalHasAttribute = !!payload.hasAttribute;
+      if (payload.attributeName != null) n.equalAttributeName = payload.attributeName;
+      if (payload.attributeValueIsDynamic != null) n.equalAttributeValueIsDynamic = !!payload.attributeValueIsDynamic;
+      if (payload.attributeValue != null) n.equalAttributeValue = payload.attributeValue;
+      if (payload.attributeDynamicColumn != null) n.equalAttributeDynamicColumn = payload.attributeDynamicColumn;
+      if (payload.attributeDataSourceId != null) n.equalAttributeDataSourceId = payload.attributeDataSourceId;
     }
-    status.textContent = "سلکتور پیست شد.";
+    status.textContent = "سلکتور از حافظه خوانده شد.";
     render();
     return true;
   }
 
-  async function pasteSelectorFromExtension(n) {
+  async function saveSelectorToMemory(n, preferKey) {
+    const payload = buildSelectorPayloadFromNode(n, preferKey);
+    if (!payload.selector) {
+      status.textContent = "سلکتور خالی است — چیزی برای ذخیره نیست.";
+      return;
+    }
+    const text = encodeDaSelectorPayload(payload);
+    try {
+      localStorage.setItem(SEL_MEM_KEY, text);
+    } catch { /* ignore quota */ }
+
+    let extOk = false;
+    try {
+      const res = await new Promise((resolve) => {
+        const done = (ev) => {
+          window.removeEventListener("da-stored-selector", done);
+          resolve(ev.detail || null);
+        };
+        window.addEventListener("da-stored-selector", done);
+        window.dispatchEvent(new CustomEvent("da-store-copied-selector", { detail: { payload, text } }));
+        setTimeout(() => {
+          window.removeEventListener("da-stored-selector", done);
+          resolve(null);
+        }, 1200);
+      });
+      extOk = !!(res && res.ok);
+    } catch { /* no extension */ }
+
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+    } catch { /* ignore */ }
+
+    status.textContent = extOk
+      ? "سلکتور در حافظه افزونه ذخیره شد."
+      : "سلکتور در حافظه محلی ذخیره شد.";
+  }
+
+  async function loadSelectorFromMemory(n, preferKey) {
+    // Prefer extension memory
     try {
       const res = await new Promise((resolve) => {
         const done = (ev) => {
@@ -2798,29 +3004,39 @@
       if (res?.ok && res.payload) {
         applySelectorPayload(n, {
           selector: res.payload.selector,
-          framePath: res.payload.framePath || []
-        });
+          framePath: res.payload.framePath || [],
+          hasAttribute: res.payload.hasAttribute,
+          attributeName: res.payload.attributeName,
+          attributeValueIsDynamic: res.payload.attributeValueIsDynamic,
+          attributeValue: res.payload.attributeValue,
+          attributeDynamicColumn: res.payload.attributeDynamicColumn,
+          attributeDataSourceId: res.payload.attributeDataSourceId
+        }, preferKey);
         return;
       }
-      // Fallback: try clipboard
-      await pasteSelectorFromClipboard(n);
-    } catch {
-      status.textContent = "پیست سلکتور ناموفق بود.";
-    }
-  }
+    } catch { /* fall through */ }
 
-  async function pasteSelectorFromClipboard(n) {
+    // localStorage fallback
+    try {
+      const raw = localStorage.getItem(SEL_MEM_KEY);
+      const parsed = parseDaSelectorText(raw);
+      if (parsed) {
+        applySelectorPayload(n, parsed, preferKey);
+        return;
+      }
+    } catch { /* ignore */ }
+
+    // clipboard last
     try {
       const text = await navigator.clipboard.readText();
       const parsed = parseDaSelectorText(text);
-      if (!parsed) {
-        status.textContent = "در کلیپ‌بورد سلکتور اتوماتور نیست (DASEL:...).";
+      if (parsed) {
+        applySelectorPayload(n, parsed, preferKey);
         return;
       }
-      applySelectorPayload(n, parsed);
-    } catch {
-      status.textContent = "دسترسی به کلیپ‌بورد ممکن نیست — از «پیست از حافظه» استفاده کنید.";
-    }
+    } catch { /* ignore */ }
+
+    status.textContent = "سلکتوری در حافظه نیست.";
   }
 
   function bindSelectorTools(n) {
@@ -2828,8 +3044,11 @@
       btn.addEventListener("click", async (ev) => {
         ev.preventDefault();
         const act = btn.getAttribute("data-sel-act");
-        if (act === "paste") await pasteSelectorFromExtension(n);
-        else if (act === "paste-clip") await pasteSelectorFromClipboard(n);
+        const key = btn.getAttribute("data-sel-key")
+          || btn.closest(".insp-sel-block")?.getAttribute("data-sel-key")
+          || "selectorValue";
+        if (act === "save-mem") await saveSelectorToMemory(n, key);
+        else if (act === "load-mem") await loadSelectorFromMemory(n, key);
       });
     });
     inspector.querySelectorAll("[data-da-selector]").forEach((inp) => {
@@ -2955,7 +3174,7 @@
 
     if (needsSubjectSelector) {
       html += `<div class="insp-section-title">المان مورد بررسی</div>` +
-        selectorFieldHtml(n, "سلکتور المان");
+        selectorFieldHtml(n, "سلکتور المان", { includeFramePath: true });
     }
 
     if (needsSubjectDs) {
@@ -2991,7 +3210,13 @@
           valueKey: "equalSelectorValue",
           dynFlag: "equalSelectorIsDynamic",
           dynDs: "equalSelectorDataSourceId",
-          dynCol: "equalSelectorDynamicColumn"
+          dynCol: "equalSelectorDynamicColumn",
+          hasAttr: "equalHasAttribute",
+          attrName: "equalAttributeName",
+          attrDynFlag: "equalAttributeValueIsDynamic",
+          attrValue: "equalAttributeValue",
+          attrDynCol: "equalAttributeDynamicColumn",
+          attrDynDs: "equalAttributeDataSourceId"
         });
       } else if (src === "DataSource" && allowCompareDs) {
         html += `<div class="insp-field"><label>منبع داده</label>
@@ -3057,10 +3282,7 @@
         <p class="palette-hint" style="margin:4px 0 0">فقط یکی مادر است؛ بقیه در گروه‌ها/مراحل استفاده می‌شوند.</p>
       </div>
       <div id="insp-el">
-        <div class="insp-field">
-          <label>سلکتور المان‌ها (تکرار کلی)</label>
-          <input data-k="selectorValue" data-da-selector="1" value="${esc(n.selectorValue || "")}" />
-        </div>
+        ${selectorFieldHtml(n, "سلکتور المان‌ها (تکرار کلی)")}
       </div>
     `;
   }
@@ -3132,7 +3354,6 @@
     }
     updatePlaySelectionBtn();
     if (hadEdge) redrawEdgesOnly();
-    if (nodeById(id)) ensureInspectorExpanded();
   }
 
   function updatePlaySelectionBtn() {
@@ -3156,17 +3377,30 @@
   }
 
   function requestPlay(scope) {
+    const detail = {
+      taskId: Number(taskId),
+      groupNodeId: scope?.groupNodeId || null,
+      stepNodeId: scope?.stepNodeId || null
+    };
+    if (typeof window.daRequireExtension === "function") {
+      window.daRequireExtension({
+        reason: "برای اجرای فرآیند، افزونه لازم است.",
+        pending: { kind: "da-play", detail }
+      }).then((ok) => {
+        if (!ok) {
+          status.textContent = "افزونه متصل نیست — راهنمای نصب را ببینید.";
+          return;
+        }
+        window.dispatchEvent(new CustomEvent("da-play", { detail }));
+        status.textContent = "درخواست اجرا ارسال شد...";
+      });
+      return;
+    }
     if (!extOkHint()) {
       status.textContent = "افزونه متصل نیست — صفحه را در Chrome رفرش کنید یا افزونه را Reload کنید.";
       return;
     }
-    window.dispatchEvent(new CustomEvent("da-play", {
-      detail: {
-        taskId: Number(taskId),
-        groupNodeId: scope?.groupNodeId || null,
-        stepNodeId: scope?.stepNodeId || null
-      }
-    }));
+    window.dispatchEvent(new CustomEvent("da-play", { detail }));
     status.textContent = "درخواست اجرا ارسال شد...";
   }
 

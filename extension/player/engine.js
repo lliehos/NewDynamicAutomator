@@ -272,25 +272,52 @@ function resolveDynamicSelector(step, graph, rowIndex, opts = {}) {
   if (!sel) return sel;
   const hasLegacy = /\{\{[^}]+\}\}/.test(sel);
   const hasPh = sel.includes(DYN_SEL_PLACEHOLDER);
-  if (!step[dynFlag] && !hasLegacy && !hasPh) return sel;
+  if (step[dynFlag] || hasLegacy || hasPh) {
+    const sources = graph?.dataSources || [];
+    let ds = null;
+    if (step[dynDs] != null) {
+      ds = sources.find((d) => Number(d.id) === Number(step[dynDs])) || null;
+    }
+    if (!ds) ds = findDataSourceForStep(step, graph);
+    const row = rowIndex ?? 0;
+    const col = step[dynCol];
 
-  const sources = graph?.dataSources || [];
-  let ds = null;
-  if (step[dynDs] != null) {
-    ds = sources.find((d) => Number(d.id) === Number(step[dynDs])) || null;
+    if (hasPh) {
+      const val = (col && ds) ? (cellValue(ds, col, row) ?? "") : "";
+      sel = sel.split(DYN_SEL_PLACEHOLDER).join(val);
+    }
+    if (/\{\{[^}]+\}\}/.test(sel)) {
+      sel = sel.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => cellValue(ds, key, row) ?? "");
+    }
   }
-  if (!ds) ds = findDataSourceForStep(step, graph);
-  const row = rowIndex ?? 0;
-  const col = step[dynCol];
+  return appendAttributeFilter(sel, step, graph, rowIndex, opts);
+}
 
-  if (hasPh) {
-    const val = (col && ds) ? (cellValue(ds, col, row) ?? "") : "";
-    sel = sel.split(DYN_SEL_PLACEHOLDER).join(val);
+/** Appends [attr="value"] when hasAttribute (or equalHasAttribute) is on. */
+function appendAttributeFilter(sel, step, graph, rowIndex, opts = {}) {
+  const hasAttrKey = opts.hasAttr || "hasAttribute";
+  if (!step[hasAttrKey] || !sel) return sel;
+  const attrName = String(step[opts.attrName || "attributeName"] || "").trim();
+  if (!attrName) return sel;
+
+  const attrDynFlag = opts.attrDynFlag || "attributeValueIsDynamic";
+  let attrVal = "";
+  if (step[attrDynFlag]) {
+    const dynDsKey = opts.attrDynDs || "attributeDataSourceId";
+    const dynColKey = opts.attrDynCol || "attributeDynamicColumn";
+    const sources = graph?.dataSources || [];
+    let ds = null;
+    if (step[dynDsKey] != null) {
+      ds = sources.find((d) => Number(d.id) === Number(step[dynDsKey])) || null;
+    }
+    if (!ds) ds = findDataSourceForStep(step, graph);
+    attrVal = cellValue(ds, step[dynColKey], rowIndex ?? 0) ?? "";
+  } else {
+    attrVal = step[opts.attrValue || "attributeValue"] ?? "";
   }
-  if (/\{\{[^}]+\}\}/.test(sel)) {
-    sel = sel.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => cellValue(ds, key, row) ?? "");
-  }
-  return sel;
+  const escapedName = String(attrName).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escapedVal = String(attrVal).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `${sel}[${escapedName}="${escapedVal}"]`;
 }
 
 function resolveStepParam(step, graph, rowIndex, opts = {}) {
@@ -321,7 +348,13 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
       valueKey: "equalSelectorValue",
       dynFlag: "equalSelectorIsDynamic",
       dynDs: "equalSelectorDataSourceId",
-      dynCol: "equalSelectorDynamicColumn"
+      dynCol: "equalSelectorDynamicColumn",
+      hasAttr: "equalHasAttribute",
+      attrName: "equalAttributeName",
+      attrDynFlag: "equalAttributeValueIsDynamic",
+      attrValue: "equalAttributeValue",
+      attrDynCol: "equalAttributeDynamicColumn",
+      attrDynDs: "equalAttributeDataSourceId"
     });
     if (!valueSel) return "";
     let frameId;

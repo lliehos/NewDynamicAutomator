@@ -142,6 +142,9 @@ public class AppDbContext : DbContext
             e.Property(x => x.ElementValue).HasMaxLength(2000).IsRequired();
             e.Property(x => x.FramePathJson).IsRequired();
             e.Property(x => x.DynamicSourceColumnName).HasMaxLength(100);
+            e.Property(x => x.AttributeName).HasMaxLength(100);
+            e.Property(x => x.AttributeValue).HasMaxLength(500);
+            e.Property(x => x.AttributeDynamicColumn).HasMaxLength(100);
             e.Property(x => x.ShadowSelector).HasMaxLength(500);
             e.HasOne(x => x.ElementSource)
                 .WithMany(x => x.Selectors)

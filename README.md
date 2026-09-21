@@ -1,36 +1,31 @@
 # Dynamic Automator V3
 
-بازنویسی اتوماتور پویا بدون Selenium: API دات‌نت، پرتال Vuexy، افزونه Chrome.
+بازنویسی اتوماتور پویا بدون Selenium: پرتال ASP.NET + بوم گردش، افزونه Chrome MV3.
 
-**این پوشه را در Cursor باز کنید:** `C:\Projects\DynamicAutomatorV3`  
 وضعیت دقیق و فازها: [docs/STATUS.md](docs/STATUS.md)
 
-## اجرا
-
-1. Connection string در `src/DynamicAutomator.Api/appsettings.json` و Web (پیش‌فرض LocalDB).
-2. از ریشه:
+## اجرا (local-first)
 
 ```bash
-dotnet run --project src/DynamicAutomator.Api
 dotnet run --project src/DynamicAutomator.Web
 ```
 
 - پرتال: https://localhost:7201
-- API: https://localhost:7101
-- ورود: `admin` / `Admin123!`
-- افزونه: Load unpacked روی `extension/`
+- ورود فرضی (مثلاً `test`)
+- افزونه: Load unpacked — مسیر sync یا پوشه `extension/` (نسخه فعلی در STATUS)
 - ویرایش گردش: `/Tasks/Editor/{id}`
 
-مایگریشن‌ها از قبل در `Infrastructure/Persistence/Migrations` هستند؛ در استارت‌آپ `MigrateAsync` زده می‌شود.
+مایگریشن‌ها در استارت‌آپ با `MigrateAsync` اعمال می‌شوند.
 
 ## ساختار
 
 ```
-src/DynamicAutomator.Api              REST
 src/DynamicAutomator.Web              پرتال + بوم گردش
-src/DynamicAutomator.Domain           موجودیت / enum (از جمله RunMode)
+src/DynamicAutomator.Domain           موجودیت / enum
 src/DynamicAutomator.Contracts        DTO
 src/DynamicAutomator.Infrastructure   EF + سرویس‌ها
 extension/                            رکورد + پخش MV3
 docs/                                 معماری و فازها
 ```
+
+جزئیات رکورد/پخش: [docs/record-play.md](docs/record-play.md) — ویرایشگر: [docs/visual-editor.md](docs/visual-editor.md)

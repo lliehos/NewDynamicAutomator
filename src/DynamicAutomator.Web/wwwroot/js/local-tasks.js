@@ -43,6 +43,17 @@
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
   }
 
+  function dataSourceCount(t) {
+    if (Array.isArray(t.graph?.dataSources)) return t.graph.dataSources.length;
+    if (t.dataSourceCount != null) return Number(t.dataSourceCount) || 0;
+    return 0;
+  }
+
+  const ICO_PLAY = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg>`;
+  const ICO_REC = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="currentColor"/></svg>`;
+  const ICO_EDIT = `<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M4 17.5V20h2.5L18 8.5 15.5 6 4 17.5zm16.7-11.2a1 1 0 0 0 0-1.4l-2.1-2.1a1 1 0 0 0-1.4 0l-1.6 1.6 3.5 3.5 1.6-1.6z"/></svg>`;
+  const ICO_DEL = `<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
+
   function render(tasks) {
     const body = document.getElementById("da-task-rows");
     if (!body) return;
@@ -50,21 +61,26 @@
     if (status) status.textContent = `کاربر محلی: ${currentUser()} — داده‌ها فقط در این مرورگر برای همین کاربر.`;
 
     if (!tasks.length) {
-      body.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-6">فرآیندی نیست. ضبط کنید یا طراحی دستی بسازید.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-6">فرآیندی نیست. طراحی دستی بسازید یا روی یک فرآیند ضبط کنید.</td></tr>`;
       return;
     }
     body.innerHTML = tasks.map((t) => {
       const steps = t.graph?.nodes?.filter((n) => n.kind === "action" || n.kind === "step").length || t.stepCount || 0;
       const groups = t.graph?.nodes?.filter((n) => n.kind === "group").length || t.groupCount || 0;
+      const sources = dataSourceCount(t);
       return `<tr>
         <td>${escapeHtml(t.title)}</td>
         <td><span class="badge ${originClass(t.designOrigin)}">${originLabel(t.designOrigin)}</span></td>
         <td>${groups}</td>
         <td>${steps}</td>
-        <td>
-          <a class="btn btn-sm btn-primary" href="/Tasks/Editor/${t.id}">ویرایش</a>
-          <button type="button" class="btn btn-sm btn-success" data-da-action="play-task" data-task-id="${t.id}">اجرا</button>
-          <button type="button" class="btn btn-sm btn-outline-danger" data-da-del="${t.id}">حذف</button>
+        <td>${sources}</td>
+        <td class="text-nowrap">
+          <div class="d-inline-flex gap-1 align-items-center flex-wrap">
+            <a class="btn btn-sm btn-icon btn-primary" href="/Tasks/Editor/${t.id}" title="ویرایش">${ICO_EDIT}</a>
+            <button type="button" class="btn btn-sm btn-icon btn-success" data-da-action="play-task" data-task-id="${t.id}" title="اجرا">${ICO_PLAY}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-danger" data-da-action="start-record" data-task-id="${t.id}" title="ضبط روی این فرآیند">${ICO_REC}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-outline-danger" data-da-del="${t.id}" title="حذف">${ICO_DEL}</button>
+          </div>
         </td>
       </tr>`;
     }).join("");
@@ -72,6 +88,7 @@
     body.querySelectorAll("[data-da-del]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = Number(btn.getAttribute("data-da-del"));
+        if (!confirm("این فرآیند حذف شود؟")) return;
         const next = readTasks().filter((t) => t.id !== id);
         writeTasks(next);
         render(next);
@@ -116,6 +133,7 @@
       designOrigin: "Manual",
       groupCount: 1,
       stepCount: 0,
+      dataSourceCount: 0,
       createdAt: new Date().toISOString(),
       graph
     });

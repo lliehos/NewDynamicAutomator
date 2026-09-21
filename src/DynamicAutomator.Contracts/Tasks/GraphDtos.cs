@@ -27,6 +27,14 @@ public class GraphNodeDto
     public string? SelectorDynamicColumn { get; set; }
     /// <summary>Optional override; otherwise parent group's DataSourceId is used.</summary>
     public int? SelectorDataSourceId { get; set; }
+    /// <summary>When true, append [attr="value"] filter to the CSS selector.</summary>
+    public bool HasAttribute { get; set; }
+    public string? AttributeName { get; set; }
+    /// <summary>When true, AttributeValue (or AttributeDynamicColumn) is resolved from a data-source row.</summary>
+    public bool AttributeValueIsDynamic { get; set; }
+    public string? AttributeValue { get; set; }
+    public string? AttributeDynamicColumn { get; set; }
+    public int? AttributeDataSourceId { get; set; }
     public string? ConstantValue { get; set; }
     public string? NavigateUrl { get; set; }
     public string? RepeatSourceType { get; set; }
@@ -57,6 +65,13 @@ public class GraphNodeDto
     public bool EqualSelectorIsDynamic { get; set; }
     public string? EqualSelectorDynamicColumn { get; set; }
     public int? EqualSelectorDataSourceId { get; set; }
+    /// <summary>Attribute filter for EqualSelectorValue (same rules as HasAttribute).</summary>
+    public bool EqualHasAttribute { get; set; }
+    public string? EqualAttributeName { get; set; }
+    public bool EqualAttributeValueIsDynamic { get; set; }
+    public string? EqualAttributeValue { get; set; }
+    public string? EqualAttributeDynamicColumn { get; set; }
+    public int? EqualAttributeDataSourceId { get; set; }
 }
 
 public class DataSourceRefDto

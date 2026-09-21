@@ -376,6 +376,24 @@ namespace DynamicAutomator.Infrastructure.Persistence.Migrations
                     b.Property<bool>("ApplyElementState")
                         .HasColumnType("bit");
 
+                    b.Property<int?>("AttributeDataSourceId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("AttributeDynamicColumn")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("AttributeName")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("AttributeValue")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<bool>("AttributeValueIsDynamic")
+                        .HasColumnType("bit");
+
                     b.Property<int?>("CopyFromId")
                         .HasColumnType("int");
 
@@ -403,6 +421,9 @@ namespace DynamicAutomator.Infrastructure.Persistence.Migrations
                     b.Property<string>("FramePathJson")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<bool>("HasAttribute")
+                        .HasColumnType("bit");
 
                     b.Property<bool>("IsDynamic")
                         .HasColumnType("bit");

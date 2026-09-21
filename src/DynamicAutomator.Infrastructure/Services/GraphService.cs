@@ -93,6 +93,12 @@ public class GraphService
                 SelectorIsDynamic = group.Selector?.IsDynamic ?? false,
                 SelectorDynamicColumn = group.Selector?.DynamicSourceColumnName,
                 SelectorDataSourceId = group.Selector?.ElementSourceId,
+                HasAttribute = group.Selector?.HasAttribute ?? false,
+                AttributeName = group.Selector?.AttributeName,
+                AttributeValueIsDynamic = group.Selector?.AttributeValueIsDynamic ?? false,
+                AttributeValue = group.Selector?.AttributeValue,
+                AttributeDynamicColumn = group.Selector?.AttributeDynamicColumn,
+                AttributeDataSourceId = group.Selector?.AttributeDataSourceId,
                 // Loop count lives on the graph node for local-first; DB Group has no dedicated column yet.
                 LoopCount = null,
                 X = pos.GetValueOrDefault(gid)?.X ?? gx,
@@ -121,6 +127,12 @@ public class GraphService
                     SelectorIsDynamic = step.Action?.Selector?.IsDynamic ?? false,
                     SelectorDynamicColumn = step.Action?.Selector?.DynamicSourceColumnName,
                     SelectorDataSourceId = step.Action?.Selector?.ElementSourceId,
+                    HasAttribute = step.Action?.Selector?.HasAttribute ?? false,
+                    AttributeName = step.Action?.Selector?.AttributeName,
+                    AttributeValueIsDynamic = step.Action?.Selector?.AttributeValueIsDynamic ?? false,
+                    AttributeValue = step.Action?.Selector?.AttributeValue,
+                    AttributeDynamicColumn = step.Action?.Selector?.AttributeDynamicColumn,
+                    AttributeDataSourceId = step.Action?.Selector?.AttributeDataSourceId,
                     ConstantValue = step.Action?.ConstantValue,
                     NavigateUrl = step.Action?.NavigateUrl,
                     X = pos.GetValueOrDefault(sid)?.X ?? (dto.Nodes.Last(n => n.Id == gid).X + 28),
@@ -223,7 +235,8 @@ public class GraphService
             group.MoveLoop = node.MoveLoop;
             group.DataSourceId = node.DataSourceId > 0 ? node.DataSourceId : null;
             if (!string.IsNullOrWhiteSpace(node.SelectorValue) || !string.IsNullOrWhiteSpace(node.FramePathJson)
-                || node.SelectorIsDynamic || !string.IsNullOrWhiteSpace(node.SelectorDynamicColumn))
+                || node.SelectorIsDynamic || !string.IsNullOrWhiteSpace(node.SelectorDynamicColumn)
+                || node.HasAttribute)
             {
                 group.Selector ??= new Selector { ElementBy = SelectorBy.CssSelector };
                 if (!string.IsNullOrWhiteSpace(node.SelectorValue))
@@ -234,6 +247,7 @@ public class GraphService
                 group.Selector.DynamicSourceColumnName = string.IsNullOrWhiteSpace(node.SelectorDynamicColumn)
                     ? null : node.SelectorDynamicColumn.Trim();
                 group.Selector.ElementSourceId = node.SelectorDataSourceId > 0 ? node.SelectorDataSourceId : null;
+                ApplyAttributeFields(group.Selector, node);
             }
             groupByNode[node.Id] = group;
         }
@@ -274,7 +288,8 @@ public class GraphService
             step.Action.ConstantValue = node.ConstantValue;
             step.Action.NavigateUrl = node.NavigateUrl;
             if (!string.IsNullOrWhiteSpace(node.SelectorValue) || !string.IsNullOrWhiteSpace(node.FramePathJson)
-                || node.SelectorIsDynamic || !string.IsNullOrWhiteSpace(node.SelectorDynamicColumn))
+                || node.SelectorIsDynamic || !string.IsNullOrWhiteSpace(node.SelectorDynamicColumn)
+                || node.HasAttribute)
             {
                 step.Action.Selector ??= new Selector { ElementBy = SelectorBy.CssSelector };
                 if (!string.IsNullOrWhiteSpace(node.SelectorValue))
@@ -285,6 +300,7 @@ public class GraphService
                 step.Action.Selector.DynamicSourceColumnName = string.IsNullOrWhiteSpace(node.SelectorDynamicColumn)
                     ? null : node.SelectorDynamicColumn.Trim();
                 step.Action.Selector.ElementSourceId = node.SelectorDataSourceId > 0 ? node.SelectorDataSourceId : null;
+                ApplyAttributeFields(step.Action.Selector, node);
             }
             stepByNode[node.Id] = step;
         }
@@ -420,6 +436,17 @@ public class GraphService
         {
             return new List<string>();
         }
+    }
+
+    private static void ApplyAttributeFields(Selector selector, GraphNodeDto node)
+    {
+        selector.HasAttribute = node.HasAttribute;
+        selector.AttributeName = string.IsNullOrWhiteSpace(node.AttributeName) ? null : node.AttributeName.Trim();
+        selector.AttributeValueIsDynamic = node.AttributeValueIsDynamic;
+        selector.AttributeValue = string.IsNullOrWhiteSpace(node.AttributeValue) ? null : node.AttributeValue;
+        selector.AttributeDynamicColumn = string.IsNullOrWhiteSpace(node.AttributeDynamicColumn)
+            ? null : node.AttributeDynamicColumn.Trim();
+        selector.AttributeDataSourceId = node.AttributeDataSourceId > 0 ? node.AttributeDataSourceId : null;
     }
 
     private static List<string> Topo(HashSet<string> nodes, List<GraphEdgeDto> edges)

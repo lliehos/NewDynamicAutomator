@@ -21,6 +21,13 @@ public class Selector
     public bool IsDynamic { get; set; }
     public string? DynamicSourceColumnName { get; set; }
     public int? ElementSourceId { get; set; }
+    /// <summary>When true, ElementValue is combined with [AttributeName="…"] at play time.</summary>
+    public bool HasAttribute { get; set; }
+    public string? AttributeName { get; set; }
+    public bool AttributeValueIsDynamic { get; set; }
+    public string? AttributeValue { get; set; }
+    public string? AttributeDynamicColumn { get; set; }
+    public int? AttributeDataSourceId { get; set; }
     public bool IsInShadowRoot { get; set; }
     public string? ShadowSelector { get; set; }
     public bool IsIndexDependent { get; set; }
