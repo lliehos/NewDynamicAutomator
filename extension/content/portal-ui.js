@@ -5,6 +5,49 @@
       || !!document.getElementById("da-recorder-fab");
   }
 
+  function tabOptionLabel(t) {
+    const title = (t.title || "بدون عنوان").trim();
+    let host = "";
+    try {
+      if (t.url && /^https?:/i.test(t.url)) host = new URL(t.url).host;
+      else if (t.isBlank) host = "خالی";
+    } catch {
+      /* ignore */
+    }
+    const mark = t.active ? " [فعال]" : "";
+    return host ? `${title}${mark} — ${host}` : `${title}${mark}`;
+  }
+
+  function fillRecordTabSelectFromList(sel, tabs) {
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = `<option value="">تب جدید (خالی)</option>`;
+    for (const t of tabs || []) {
+      if (t.isPortal) continue;
+      const opt = document.createElement("option");
+      opt.value = String(t.id);
+      opt.textContent = tabOptionLabel(t);
+      sel.appendChild(opt);
+    }
+    if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  }
+
+  async function fillRecordTabSelect(sel) {
+    if (!sel) return;
+    const res = await chrome.runtime.sendMessage({ type: "listOpenTabs" }).catch(() => null);
+    fillRecordTabSelectFromList(sel, res?.ok ? res.tabs : []);
+  }
+
+  async function loadPortalRecordTabs(fromBroadcast) {
+    if (fromBroadcast?.tabs) {
+      fillRecordTabSelectFromList(document.getElementById("da-record-tab"), fromBroadcast.tabs);
+      fillRecordTabSelectFromList(document.getElementById("da-page-record-tab"), fromBroadcast.tabs);
+      return;
+    }
+    await fillRecordTabSelect(document.getElementById("da-record-tab"));
+    await fillRecordTabSelect(document.getElementById("da-page-record-tab"));
+  }
+
   function syncRecordPageFab() {
     const fab = document.getElementById("da-page-rec-fab");
     const panel = document.getElementById("da-page-rec-panel");
@@ -39,6 +82,7 @@
         else if (phase === "review") status.textContent = `${state.count || 0} اکشن آماده — ارسال / انصراف / مجدد`;
         else status.textContent = "آماده برای شروع ضبط";
       }
+      if (phase === "idle") loadPortalRecordTabs();
     }).catch(() => {});
   }
 
@@ -61,17 +105,31 @@
     return res;
   }
 
+  function selectedRecordTabId() {
+    const sel = document.getElementById("da-record-tab")
+      || document.getElementById("da-page-record-tab");
+    const val = sel?.value;
+    if (!val) return null;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : null;
+  }
+
   document.addEventListener("click", async (ev) => {
     const t = ev.target instanceof Element ? ev.target.closest("[data-da-action]") : null;
     if (!t) return;
     const action = t.getAttribute("data-da-action");
     if (action === "start-record") {
       ev.preventDefault();
-      const res = await chrome.runtime.sendMessage({ type: "startRecordSession" }).catch((e) => ({ ok: false, error: e.message }));
+      const payload = { type: "startRecordSession" };
+      const tabId = selectedRecordTabId();
+      if (tabId != null) payload.tabId = tabId;
+      const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
       const status = document.getElementById("da-portal-status") || document.getElementById("da-page-rec-status");
       if (status) {
         status.textContent = res?.ok
-          ? "تب جدید باز شد — در سایت هدف کار کنید، بعد از FAB «اتمام ضبط» را بزنید."
+          ? (res.reused
+            ? "ضبط روی تب انتخاب‌شده شروع شد — کار کنید، بعد «اتمام ضبط» را بزنید."
+            : "تب جدید باز شد — در سایت هدف کار کنید، بعد از FAB «اتمام ضبط» را بزنید.")
           : (res?.error || "خطا در شروع ضبط");
       }
       syncRecordPageFab();
@@ -156,8 +214,23 @@
     setTimeout(hideDup, 800);
   }
 
-  window.addEventListener("da-extension-ready", syncRecordPageFab);
-  window.addEventListener("da-extension-recheck", syncRecordPageFab);
+  window.addEventListener("da-extension-ready", () => {
+    syncRecordPageFab();
+    loadPortalRecordTabs();
+  });
+  window.addEventListener("da-extension-recheck", () => {
+    syncRecordPageFab();
+    loadPortalRecordTabs();
+  });
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === "openTabsChanged") {
+      loadPortalRecordTabs(message);
+    }
+  });
+
   syncRecordPageFab();
+  loadPortalRecordTabs();
   setTimeout(syncRecordPageFab, 500);
+  setTimeout(loadPortalRecordTabs, 600);
 })();

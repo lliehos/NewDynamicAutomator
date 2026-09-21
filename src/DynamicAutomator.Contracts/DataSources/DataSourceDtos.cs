@@ -44,3 +44,14 @@ public class UploadDataSourceResponse
     public int RowCount { get; set; }
     public List<DataSourceColumnDto> Columns { get; set; } = new();
 }
+
+/// <summary>Parsed Excel without persisting — for local-first process properties.</summary>
+public class ParsedExcelDto
+{
+    public string SuggestedTitle { get; set; } = string.Empty;
+    public int ColumnCount { get; set; }
+    public int RowCount { get; set; }
+    public List<DataSourceColumnDto> Columns { get; set; } = new();
+    public List<DataSourceCellDto> Cells { get; set; } = new();
+    public List<string> ColumnKeys { get; set; } = new();
+}

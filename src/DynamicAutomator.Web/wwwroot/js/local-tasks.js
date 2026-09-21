@@ -54,7 +54,7 @@
       return;
     }
     body.innerHTML = tasks.map((t) => {
-      const steps = t.graph?.nodes?.filter((n) => n.kind === "step").length || t.stepCount || 0;
+      const steps = t.graph?.nodes?.filter((n) => n.kind === "action" || n.kind === "step").length || t.stepCount || 0;
       const groups = t.graph?.nodes?.filter((n) => n.kind === "group").length || t.groupCount || 0;
       return `<tr>
         <td>${escapeHtml(t.title)}</td>
@@ -96,7 +96,7 @@
           x: 280,
           y: 80,
           repeatSourceType: "None",
-          moveLoop: false
+          moveLoop: true
         }
       ],
       edges: [{ id: "e-start", from: "start", to: "group-1", kind: "next" }],

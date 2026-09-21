@@ -1,3 +1,7 @@
+function isActionNode(n) {
+  return !!n && (n.kind === "action" || n.kind === "step");
+}
+
 /** Play engine — imported by background via importScripts. */
 
 const RunMode = { Play: 0, Learn: 1 };
@@ -60,6 +64,7 @@ async function startPlay(taskId, tabId, runMode, options) {
   if (steps.length === 0) return { ok: false, error: "هیچ استپی برای اجرا نیست." };
 
   tabId = await ensurePlayTab(tabId, steps);
+  await ensurePlayMemory(graph);
 
   playAbort = false;
   playStatus = {
@@ -102,38 +107,78 @@ async function ensurePlayTab(tabId, steps) {
 }
 
 async function runPlayLoop(tabId, graph, steps) {
+  let activeTabId = tabId;
   try {
     for (let i = 0; i < steps.length; i++) {
       if (playAbort) break;
       playStatus.stepIndex = i + 1;
       const step = steps[i];
-      const outcome = await runStep(tabId, graph.taskId, step, playStatus.runMode);
+      const outcome = await runStep(activeTabId, graph.taskId, step, playStatus.runMode, graph, 0);
       if (!outcome.ok) {
         playStatus.lastError = outcome.error || "توقف به‌خاطر واگرایی";
         break;
       }
+      if (outcome.tabId) activeTabId = outcome.tabId;
       if (outcome.waitMs) await sleep(outcome.waitMs);
       else await sleep(120);
     }
   } finally {
     playStatus.playing = false;
     await chrome.storage.local.set({ playing: false });
-    notifyTab(tabId, { type: "playStateChanged", ...playStatus });
+    notifyTab(activeTabId, { type: "playStateChanged", ...playStatus });
   }
 }
 
-async function runStep(tabId, taskId, step, runMode) {
+async function closeWindowTab(currentTabId, which) {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(currentTabId);
+  } catch {
+    return { ok: false, error: "تب فعلی پیدا نشد.", reason: "tab_missing" };
+  }
+  const winId = tab.windowId;
+  const tabs = await chrome.tabs.query({ windowId: winId });
+  const ordered = tabs.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  if (ordered.length <= 1) {
+    return { ok: false, error: "فقط یک تب باز است؛ قابل بستن نیست.", reason: "last_tab" };
+  }
+  const target = which === "first" ? ordered[0] : ordered[ordered.length - 1];
+  const next = ordered.find((t) => t.id !== target.id) || ordered[0];
+  await chrome.tabs.remove(target.id);
+  const continueId = target.id === currentTabId ? next.id : currentTabId;
+  if (continueId) {
+    try { await chrome.tabs.update(continueId, { active: true }); } catch { /* ignore */ }
+  }
+  return { ok: true, tabId: continueId };
+}
+
+async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   const actionType = step.actionType || "Click";
   const framePath = parseFramePath(step.framePathJson);
+  const resolvedSelector = resolveDynamicSelector(step, graph, rowIndex ?? 0);
+  const resolvedValue = resolveStepParam(step, graph, rowIndex ?? 0);
+  const resolvedUrl = resolveStepParam(step, graph, rowIndex ?? 0, { preferUrl: true });
 
-  if (actionType === "GoToUrl" || actionType === "NewPage") {
-    const url = step.navigateUrl || step.constantValue;
+  if (actionType === "CloseFirstTab" || actionType === "CloseLastTab") {
+    return closeWindowTab(tabId, actionType === "CloseFirstTab" ? "first" : "last");
+  }
+
+  if (actionType === "NewPage") {
+    const url = resolvedUrl || "about:blank";
+    const created = await chrome.tabs.create({ url, active: true });
+    const newId = created.id;
+    if (newId) await waitTabComplete(newId);
+    return { ok: true, tabId: newId, navigated: true };
+  }
+
+  if (actionType === "GoToUrl" || actionType === "Navigate") {
+    const url = resolvedUrl;
     if (!url) {
       return onUnexpected(runMode, {
         taskId,
         stepId: step.entityId,
         reason: "missing_url",
-        expectedSelector: step.selectorValue,
+        expectedSelector: resolvedSelector,
         actualUrl: null,
         framePathJson: step.framePathJson
       });
@@ -144,7 +189,15 @@ async function runStep(tabId, taskId, step, runMode) {
   }
 
   if (actionType === "WaitTime") {
-    return { ok: true, waitMs: Number(step.constantValue) || 0 };
+    return { ok: true, waitMs: Number(resolvedValue) || 0 };
+  }
+
+  // Insert/Load/Input from Memory or Elements need async lookup
+  let valueForAction = resolvedValue;
+  const cst = step.contentSourceType || "";
+  if ((actionType === "InsertContent" || actionType === "LoadContent" || actionType === "InputContent")
+    && (cst === "Memory" || cst === "Elements")) {
+    valueForAction = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
   }
 
   let frameId;
@@ -155,16 +208,17 @@ async function runStep(tabId, taskId, step, runMode) {
       taskId,
       stepId: step.entityId,
       reason: "frame_resolve_failed",
-      expectedSelector: step.selectorValue,
+      expectedSelector: resolvedSelector,
       actualUrl: null,
       framePathJson: step.framePathJson || JSON.stringify(framePath)
     }, err.message);
   }
 
+  const isCapture = actionType === "TakeContent" || actionType === "SaveContent";
   const payload = {
-    actionType,
-    selectorValue: step.selectorValue,
-    constantValue: step.constantValue,
+    actionType: isCapture ? "TakeContent" : actionType,
+    selectorValue: resolvedSelector,
+    constantValue: valueForAction,
     navigateUrl: step.navigateUrl
   };
 
@@ -181,14 +235,246 @@ async function runStep(tabId, taskId, step, runMode) {
       taskId,
       stepId: step.entityId,
       reason: result?.reason || "action_failed",
-      expectedSelector: step.selectorValue,
+      expectedSelector: resolvedSelector,
       actualUrl: result?.url || null,
       framePathJson: step.framePathJson || JSON.stringify(framePath)
     }, result?.error);
   }
 
+  if (isCapture) {
+    const text = result.text != null ? String(result.text) : "";
+    const store = await storeCapturedContent(step, graph, text, rowIndex ?? 0);
+    if (!store.ok) {
+      return onUnexpected(runMode, {
+        taskId,
+        stepId: step.entityId,
+        reason: store.reason || "capture_store_failed",
+        expectedSelector: resolvedSelector,
+        actualUrl: null,
+        framePathJson: step.framePathJson
+      }, store.error);
+    }
+  }
+
   if (result.navigated) await waitTabComplete(tabId);
   return result;
+}
+
+const DYN_SEL_PLACEHOLDER = "{مقدار پویا}";
+
+function resolveDynamicSelector(step, graph, rowIndex, opts = {}) {
+  const valueKey = opts.valueKey || "selectorValue";
+  const dynFlag = opts.dynFlag || "selectorIsDynamic";
+  const dynDs = opts.dynDs || "selectorDataSourceId";
+  const dynCol = opts.dynCol || "selectorDynamicColumn";
+
+  let sel = step[valueKey] || "";
+  if (!sel) return sel;
+  const hasLegacy = /\{\{[^}]+\}\}/.test(sel);
+  const hasPh = sel.includes(DYN_SEL_PLACEHOLDER);
+  if (!step[dynFlag] && !hasLegacy && !hasPh) return sel;
+
+  const sources = graph?.dataSources || [];
+  let ds = null;
+  if (step[dynDs] != null) {
+    ds = sources.find((d) => Number(d.id) === Number(step[dynDs])) || null;
+  }
+  if (!ds) ds = findDataSourceForStep(step, graph);
+  const row = rowIndex ?? 0;
+  const col = step[dynCol];
+
+  if (hasPh) {
+    const val = (col && ds) ? (cellValue(ds, col, row) ?? "") : "";
+    sel = sel.split(DYN_SEL_PLACEHOLDER).join(val);
+  }
+  if (/\{\{[^}]+\}\}/.test(sel)) {
+    sel = sel.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => cellValue(ds, key, row) ?? "");
+  }
+  return sel;
+}
+
+function resolveStepParam(step, graph, rowIndex, opts = {}) {
+  const cst = step.contentSourceType || "";
+  if (cst === "DataSource" || step?.valueFromSource || (step?.dataSourceId && step?.dynamicSourceColumnName && cst !== "Memory" && cst !== "Elements")) {
+    const ds = findDataSourceForValue(step, graph);
+    const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0);
+    if (v != null && String(v).trim() !== "") return String(v);
+  }
+  const raw = opts.preferUrl
+    ? (step.navigateUrl || step.constantValue || "")
+    : (step.constantValue || step.navigateUrl || "");
+  return resolveDynamicText(raw, step, graph, rowIndex ?? 0);
+}
+
+async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
+  const cst = step.contentSourceType || "";
+  if (cst === "Memory") {
+    const name = String(step.memoryVariableName || "").trim();
+    if (!name) return "";
+    const vars = await getPlayMemoryVars();
+    return vars[name] != null ? String(vars[name]) : "";
+  }
+  if (cst === "Elements") {
+    const tabId = opts.tabId;
+    if (!tabId) return "";
+    const valueSel = resolveDynamicSelector(step, graph, rowIndex ?? 0, {
+      valueKey: "equalSelectorValue",
+      dynFlag: "equalSelectorIsDynamic",
+      dynDs: "equalSelectorDataSourceId",
+      dynCol: "equalSelectorDynamicColumn"
+    });
+    if (!valueSel) return "";
+    let frameId;
+    try {
+      frameId = await resolveFramePath(tabId, opts.framePath || []);
+    } catch {
+      frameId = 0;
+    }
+    const payload = { actionType: "TakeContent", selectorValue: valueSel, constantValue: "" };
+    let result = await chrome.tabs
+      .sendMessage(tabId, { type: "playExecute", payload }, { frameId })
+      .catch(() => null);
+    if (!result) result = await executeInFrame(tabId, frameId, payload);
+    return result?.text != null ? String(result.text) : "";
+  }
+  return resolveStepParam(step, graph, rowIndex, opts);
+}
+
+const PLAY_MEMORY_SCHEMA = 1;
+
+function memoryStructureKey(graph) {
+  const parts = (graph?.nodes || [])
+    .filter((n) => isActionNode(n))
+    .map((n) => [
+      n.id,
+      n.actionType || "",
+      n.contentSourceType || "",
+      n.memoryVariableName || "",
+      n.dataSourceId ?? "",
+      n.dynamicSourceColumnName || ""
+    ].join(":"))
+    .sort();
+  return `${PLAY_MEMORY_SCHEMA}|${graph?.taskId || ""}|${parts.join("|")}`;
+}
+
+async function clearPlayMemory(reason) {
+  await chrome.storage.local.remove("playMemory");
+  if (reason) console.info("[DA] playMemory cleared:", reason);
+  return { ok: true };
+}
+
+async function ensurePlayMemory(graph) {
+  const key = memoryStructureKey(graph);
+  const { playMemory } = await chrome.storage.local.get("playMemory");
+  if (!playMemory
+    || playMemory.schema !== PLAY_MEMORY_SCHEMA
+    || playMemory.structureKey !== key) {
+    await chrome.storage.local.set({
+      playMemory: { schema: PLAY_MEMORY_SCHEMA, structureKey: key, vars: {} }
+    });
+    if (playMemory) console.info("[DA] playMemory reset (structure/schema change)");
+  }
+}
+
+async function getPlayMemoryVars() {
+  const { playMemory } = await chrome.storage.local.get("playMemory");
+  return playMemory?.vars || {};
+}
+
+async function setPlayMemoryVar(name, value) {
+  const key = String(name || "").trim();
+  if (!key) return { ok: false, error: "نام متغیر خالی است.", reason: "missing_memory_name" };
+  const { playMemory } = await chrome.storage.local.get("playMemory");
+  const mem = playMemory && playMemory.schema === PLAY_MEMORY_SCHEMA
+    ? playMemory
+    : { schema: PLAY_MEMORY_SCHEMA, structureKey: "", vars: {} };
+  mem.vars = mem.vars || {};
+  mem.vars[key] = value == null ? "" : String(value);
+  await chrome.storage.local.set({ playMemory: mem });
+  return { ok: true };
+}
+
+async function storeCapturedContent(step, graph, text, rowIndex) {
+  const cst = step.contentSourceType || "Memory";
+  if (cst === "DataSource") {
+    const ds = findDataSourceForValue(step, graph);
+    const col = step.dynamicSourceColumnName;
+    if (!ds || !col) {
+      return { ok: false, error: "منبع/ستون مقصد خواندن مشخص نیست.", reason: "missing_save_target" };
+    }
+    ds.cells = ds.cells || [];
+    const idx = Number(rowIndex) || 0;
+    const hit = ds.cells.find((c) =>
+      (c.key === col || c.Key === col || c.columnName === col)
+      && Number(c.index ?? c.Index ?? c.rowIndex) === idx
+    );
+    if (hit) {
+      if (hit.cellValue !== undefined) hit.cellValue = text;
+      else if (hit.CellValue !== undefined) hit.CellValue = text;
+      else hit.value = text;
+    } else {
+      ds.cells.push({ key: col, index: idx, cellValue: text });
+    }
+    return { ok: true };
+  }
+  return setPlayMemoryVar(step.memoryVariableName || step.constantValue, text);
+}
+
+function findDataSourceForStep(step, graph) {
+  const sources = graph?.dataSources || [];
+  const group = step.groupNodeId
+    ? (graph.nodes || []).find((n) => n.id === step.groupNodeId)
+    : null;
+  const start = (graph.nodes || []).find((n) => n.kind === "start");
+  const sid = step.selectorDataSourceId
+    || step.dataSourceId
+    || group?.dataSourceId
+    || start?.dataSourceId
+    || graph.dataSourceId
+    || null;
+  if (sid != null) {
+    const found = sources.find((d) => Number(d.id) === Number(sid));
+    if (found) return found;
+  }
+  return sources[0] || null;
+}
+
+function resolveDynamicText(text, step, graph, rowIndex) {
+  if (text == null || text === "") {
+    // Value-from-source without embedding token in constantValue
+    if (step?.dynamicSourceColumnName) {
+      const ds = findDataSourceForValue(step, graph);
+      const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0);
+      return v != null ? String(v) : "";
+    }
+    return text || "";
+  }
+  if (typeof text !== "string") return text || "";
+  if (!/\{\{[^}]+\}\}/.test(text)) return text;
+  const ds = findDataSourceForValue(step, graph) || findDataSourceForStep(step, graph);
+  return text.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => cellValue(ds, key, rowIndex ?? 0) ?? "");
+}
+
+function findDataSourceForValue(step, graph) {
+  const sources = graph?.dataSources || [];
+  if (step?.dataSourceId != null) {
+    const found = sources.find((d) => Number(d.id) === Number(step.dataSourceId));
+    if (found) return found;
+  }
+  return findDataSourceForStep(step, graph);
+}
+
+function cellValue(ds, columnKey, rowIndex) {
+  if (!ds || !columnKey) return null;
+  const key = String(columnKey).trim();
+  const cells = ds.cells || [];
+  const hit = cells.find((c) =>
+    (c.key === key || c.Key === key || c.columnName === key)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === Number(rowIndex)
+  );
+  if (hit) return hit.cellValue ?? hit.CellValue ?? hit.value ?? "";
+  // Fallback: columns-only ref without cells
+  return null;
 }
 
 /**
@@ -249,12 +535,12 @@ function collectPlaySteps(graph) {
     while (cur && !seen.has(cur)) {
       seen.add(cur);
       const node = nodes.get(cur);
-      if (!node || node.kind !== "step") break;
+      if (!node || !isActionNode(node)) break;
       if (node.isActive !== false) steps.push(node);
       const nextStep = edges
         .filter((e) => e.from === cur && e.kind === "next")
         .map((e) => nodes.get(e.to))
-        .find((n) => n && n.kind === "step");
+        .find((n) => n && isActionNode(n));
       cur = nextStep ? nextStep.id : null;
     }
   }
@@ -266,10 +552,11 @@ async function expandGroupByRepeatSource(_tabId, group) {
   const type = (group.repeatSourceType || "None").toLowerCase();
   if (type === "none" || !type) return [0];
   if (type === "loops") {
-    const n = Math.max(1, Number(group.constantValue) || 1);
+    const n = Math.max(1, Number(group.loopCount ?? group.constantValue) || 1);
     return Array.from({ length: n }, (_, i) => i);
   }
-  // DataSource / Elements: reserved — return single pass until implemented.
+  // DataSource / Elements: reserved until play expands by rowCount / querySelectorAll.
+  // MoveLoop=false → independent index stack (restore parent index on exit).
   return [0];
 }
 

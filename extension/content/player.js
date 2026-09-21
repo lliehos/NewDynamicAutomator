@@ -16,8 +16,13 @@ function executeAction(payload) {
   const navigateUrl = payload.navigateUrl;
 
   if (actionType === "GoToUrl" || actionType === "NewPage") {
+    // NewPage is handled in the play engine (chrome.tabs.create). Content script fallback:
     const url = navigateUrl || value;
     if (!url) return { ok: false, error: "آدرس ناوبری خالی است." };
+    if (actionType === "NewPage") {
+      window.open(url, "_blank");
+      return { ok: true, navigated: true };
+    }
     location.href = url;
     return { ok: true, navigated: true };
   }
@@ -72,6 +77,13 @@ function executeAction(payload) {
       el.scrollIntoView({ block: "center", inline: "nearest" });
       setElementValue(el, value == null ? "" : String(value));
       return { ok: true };
+    }
+
+    case "TakeContent":
+    case "SaveContent": {
+      el.scrollIntoView({ block: "center", inline: "nearest" });
+      const text = readElementText(el);
+      return { ok: true, text };
     }
 
     case "Hover":

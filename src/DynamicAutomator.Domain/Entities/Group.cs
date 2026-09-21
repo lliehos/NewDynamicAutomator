@@ -12,7 +12,7 @@ public class Group
     public int? DataSourceId { get; set; }
     public int? SelectorId { get; set; }
     public RepeatSourceType SourceType { get; set; } = RepeatSourceType.None;
-    public bool MoveLoop { get; set; }
+    public bool MoveLoop { get; set; } = true;
     public int? CopyFromId { get; set; }
 
     public AutomationTask Task { get; set; } = null!;

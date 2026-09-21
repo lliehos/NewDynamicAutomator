@@ -100,6 +100,27 @@ public class DataSourceService
         };
     }
 
+    /// <summary>Parse .xlsx into columns/cells without attaching to a task (local-first).</summary>
+    public ParsedExcelDto ParseExcelOnly(Stream excelStream, string? suggestedTitle = null)
+    {
+        var (columns, cells) = ParseExcel(excelStream);
+        if (columns.Count == 0)
+            throw new InvalidOperationException("فایل اکسل ستون معتبری ندارد (ردیف اول باید هدر باشد).");
+
+        var rowCount = cells.Count == 0 ? 0 : cells.Max(c => c.Index) + 1;
+        return new ParsedExcelDto
+        {
+            SuggestedTitle = string.IsNullOrWhiteSpace(suggestedTitle)
+                ? $"منبع {DateTime.Now:yyyy-MM-dd HH:mm}"
+                : suggestedTitle.Trim(),
+            ColumnCount = columns.Count,
+            RowCount = rowCount,
+            Columns = columns,
+            Cells = cells,
+            ColumnKeys = columns.Select(c => c.Key).ToList()
+        };
+    }
+
     public async Task<bool> DeleteAsync(int userId, int id, CancellationToken ct = default)
     {
         var ds = await _db.DataSources

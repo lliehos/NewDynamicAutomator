@@ -1,3 +1,7 @@
+function isActionNode(n) {
+  return !!n && (n.kind === "action" || n.kind === "step");
+}
+
 /** Portal handshake + per-user local task sync. */
 (function () {
   function readCookie(name) {
@@ -16,7 +20,7 @@
   }
 
   function stepCountOf(t) {
-    const fromGraph = t?.graph?.nodes?.filter((n) => n.kind === "step").length;
+    const fromGraph = t?.graph?.nodes?.filter((n) => isActionNode(n)).length;
     return fromGraph || t?.stepCount || 0;
   }
 
@@ -128,6 +132,14 @@
       return true;
     }
     return false;
+  });
+
+  window.addEventListener("da-request-copied-selector", () => {
+    chrome.runtime.sendMessage({ type: "getCopiedSelector" }).then((res) => {
+      window.dispatchEvent(new CustomEvent("da-copied-selector", { detail: res || { ok: false } }));
+    }).catch(() => {
+      window.dispatchEvent(new CustomEvent("da-copied-selector", { detail: { ok: false } }));
+    });
   });
 
   window.addEventListener("da-request-local-tasks", pullFromExtension);

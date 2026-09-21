@@ -73,6 +73,34 @@ public class TasksController : Controller
     }
 
     [HttpPost]
+    [AllowAnonymous]
+    [IgnoreAntiforgeryToken]
+    [RequestSizeLimit(20_000_000)]
+    public IActionResult ParseExcel(IFormFile file, string? title = null)
+    {
+        // Local-first: parse only — sources attach to process properties in the browser.
+        if (file is null || file.Length == 0)
+            return BadRequest(new { message = "فایل اکسل لازم است." });
+        var name = file.FileName ?? "";
+        if (!name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase)
+            && !name.EndsWith(".xlsm", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "فقط فایل .xlsx پشتیبانی می‌شود." });
+
+        try
+        {
+            using var stream = file.OpenReadStream();
+            var suggested = string.IsNullOrWhiteSpace(title)
+                ? Path.GetFileNameWithoutExtension(name)
+                : title;
+            return Json(_dataSources.ParseExcelOnly(stream, suggested));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpPost]
     [IgnoreAntiforgeryToken]
     [RequestSizeLimit(20_000_000)]
     public async Task<IActionResult> UploadDataSource(int id, IFormFile file, string? title, CancellationToken ct)

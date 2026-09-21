@@ -90,6 +90,11 @@ public class GraphService
                 DataSourceId = group.DataSourceId,
                 SelectorValue = group.Selector?.ElementValue,
                 FramePathJson = group.Selector?.FramePathJson,
+                SelectorIsDynamic = group.Selector?.IsDynamic ?? false,
+                SelectorDynamicColumn = group.Selector?.DynamicSourceColumnName,
+                SelectorDataSourceId = group.Selector?.ElementSourceId,
+                // Loop count lives on the graph node for local-first; DB Group has no dedicated column yet.
+                LoopCount = null,
                 X = pos.GetValueOrDefault(gid)?.X ?? gx,
                 Y = pos.GetValueOrDefault(gid)?.Y ?? 80
             });
@@ -113,6 +118,9 @@ public class GraphService
                     IsActive = step.IsActive,
                     SelectorValue = step.Action?.Selector?.ElementValue,
                     FramePathJson = step.Action?.Selector?.FramePathJson,
+                    SelectorIsDynamic = step.Action?.Selector?.IsDynamic ?? false,
+                    SelectorDynamicColumn = step.Action?.Selector?.DynamicSourceColumnName,
+                    SelectorDataSourceId = step.Action?.Selector?.ElementSourceId,
                     ConstantValue = step.Action?.ConstantValue,
                     NavigateUrl = step.Action?.NavigateUrl,
                     X = pos.GetValueOrDefault(sid)?.X ?? (dto.Nodes.Last(n => n.Id == gid).X + 28),
@@ -214,13 +222,18 @@ public class GraphService
                 group.SourceType = rst;
             group.MoveLoop = node.MoveLoop;
             group.DataSourceId = node.DataSourceId > 0 ? node.DataSourceId : null;
-            if (!string.IsNullOrWhiteSpace(node.SelectorValue) || !string.IsNullOrWhiteSpace(node.FramePathJson))
+            if (!string.IsNullOrWhiteSpace(node.SelectorValue) || !string.IsNullOrWhiteSpace(node.FramePathJson)
+                || node.SelectorIsDynamic || !string.IsNullOrWhiteSpace(node.SelectorDynamicColumn))
             {
                 group.Selector ??= new Selector { ElementBy = SelectorBy.CssSelector };
                 if (!string.IsNullOrWhiteSpace(node.SelectorValue))
                     group.Selector.ElementValue = node.SelectorValue.Trim();
                 if (!string.IsNullOrWhiteSpace(node.FramePathJson))
                     group.Selector.FramePathJson = node.FramePathJson;
+                group.Selector.IsDynamic = node.SelectorIsDynamic;
+                group.Selector.DynamicSourceColumnName = string.IsNullOrWhiteSpace(node.SelectorDynamicColumn)
+                    ? null : node.SelectorDynamicColumn.Trim();
+                group.Selector.ElementSourceId = node.SelectorDataSourceId > 0 ? node.SelectorDataSourceId : null;
             }
             groupByNode[node.Id] = group;
         }
@@ -252,21 +265,26 @@ public class GraphService
                 _db.Steps.Add(step);
             }
             step.GroupId = group.Id;
-            step.Title = string.IsNullOrWhiteSpace(node.Title) ? "مرحله" : node.Title.Trim();
-            step.IsConditional = node.IsConditional;
+            step.Title = string.IsNullOrWhiteSpace(node.Title) ? "اقدام" : node.Title.Trim();
+            step.IsConditional = false;
             step.IsActive = node.IsActive;
             step.Action ??= new StepAction();
             if (Enum.TryParse<ActionType>(node.ActionType, true, out var at))
                 step.Action.ActionType = at;
             step.Action.ConstantValue = node.ConstantValue;
             step.Action.NavigateUrl = node.NavigateUrl;
-            if (!string.IsNullOrWhiteSpace(node.SelectorValue) || !string.IsNullOrWhiteSpace(node.FramePathJson))
+            if (!string.IsNullOrWhiteSpace(node.SelectorValue) || !string.IsNullOrWhiteSpace(node.FramePathJson)
+                || node.SelectorIsDynamic || !string.IsNullOrWhiteSpace(node.SelectorDynamicColumn))
             {
                 step.Action.Selector ??= new Selector { ElementBy = SelectorBy.CssSelector };
                 if (!string.IsNullOrWhiteSpace(node.SelectorValue))
                     step.Action.Selector.ElementValue = node.SelectorValue;
                 if (!string.IsNullOrWhiteSpace(node.FramePathJson))
                     step.Action.Selector.FramePathJson = node.FramePathJson;
+                step.Action.Selector.IsDynamic = node.SelectorIsDynamic;
+                step.Action.Selector.DynamicSourceColumnName = string.IsNullOrWhiteSpace(node.SelectorDynamicColumn)
+                    ? null : node.SelectorDynamicColumn.Trim();
+                step.Action.Selector.ElementSourceId = node.SelectorDataSourceId > 0 ? node.SelectorDataSourceId : null;
             }
             stepByNode[node.Id] = step;
         }

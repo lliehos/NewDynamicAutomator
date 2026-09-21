@@ -1,3 +1,39 @@
+function tabOptionLabel(t) {
+  const title = (t.title || "بدون عنوان").trim();
+  let host = "";
+  try {
+    if (t.url && /^https?:/i.test(t.url)) host = new URL(t.url).host;
+    else if (t.isBlank) host = "خالی";
+  } catch {
+    /* ignore */
+  }
+  const mark = t.active ? " [فعال]" : "";
+  return host ? `${title}${mark} — ${host}` : `${title}${mark}`;
+}
+
+async function loadRecordTabs(fromBroadcast) {
+  const sel = document.getElementById("record-tab");
+  if (!sel) return;
+  const prev = sel.value;
+  const res = fromBroadcast?.tabs
+    ? { ok: true, tabs: fromBroadcast.tabs }
+    : await chrome.runtime.sendMessage({ type: "listOpenTabs" }).catch(() => null);
+  sel.innerHTML = `<option value="">تب جدید (خالی)</option>`;
+  if (!res?.ok || !Array.isArray(res.tabs)) return;
+  for (const t of res.tabs) {
+    if (t.isPortal) continue;
+    const opt = document.createElement("option");
+    opt.value = String(t.id);
+    opt.textContent = tabOptionLabel(t);
+    sel.appendChild(opt);
+  }
+  if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  else {
+    const active = (res.tabs || []).find((t) => t.active && !t.isPortal);
+    if (active) sel.value = String(active.id);
+  }
+}
+
 async function refresh() {
   const session = await chrome.runtime.sendMessage({ type: "session" }).catch(() => ({
     signedIn: true, userName: "test", local: true
@@ -42,6 +78,7 @@ async function refresh() {
   }
 
   await loadTasks();
+  if (phase === "idle" && !playing) await loadRecordTabs();
 }
 
 async function loadTasks() {
@@ -62,8 +99,16 @@ async function loadTasks() {
 document.getElementById("refresh").addEventListener("click", refresh);
 
 document.getElementById("record").addEventListener("click", async () => {
-  const res = await chrome.runtime.sendMessage({ type: "startRecordSession" });
+  const tabVal = document.getElementById("record-tab")?.value;
+  const payload = { type: "startRecordSession" };
+  if (tabVal) payload.tabId = Number(tabVal);
+  const res = await chrome.runtime.sendMessage(payload);
   if (!res.ok) document.getElementById("status").textContent = res.error || "خطا";
+  else {
+    document.getElementById("status").textContent = res.reused
+      ? "ضبط روی تب انتخاب‌شده شروع شد."
+      : "تب خالی باز شد — آدرس را تایپ کنید.";
+  }
   await refresh();
 });
 
@@ -111,6 +156,15 @@ document.getElementById("play").addEventListener("click", async () => {
 document.getElementById("stop").addEventListener("click", async () => {
   await chrome.runtime.sendMessage({ type: "stopPlay" });
   await refresh();
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === "openTabsChanged") {
+    loadRecordTabs(message);
+  }
+  if (message.type === "recordingChanged" || message.type === "playStateChanged") {
+    refresh();
+  }
 });
 
 refresh();

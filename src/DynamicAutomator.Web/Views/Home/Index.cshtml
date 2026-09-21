@@ -4,7 +4,10 @@
 
 <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
   <h4 class="mb-0">فرآیندها <span class="badge bg-label-secondary">ذخیره محلی مرورگر</span></h4>
-  <div class="d-flex gap-2 flex-wrap">
+  <div class="d-flex gap-2 flex-wrap align-items-center">
+    <select id="da-record-tab" class="form-select" style="min-width: 220px; max-width: 320px;" title="محل ضبط">
+      <option value="">تب جدید (خالی)</option>
+    </select>
     <button type="button" class="btn btn-success" id="da-btn-start-record" data-da-action="start-record">
       شروع ضبط
     </button>
@@ -25,7 +28,7 @@
           <th>عنوان</th>
           <th>نوع ساخت</th>
           <th>گروه</th>
-          <th>مرحله</th>
+          <th>اقدام</th>
           <th></th>
         </tr>
       </thead>

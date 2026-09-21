@@ -3,12 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      body { font-family: Tahoma, sans-serif; width: 280px; padding: 12px; margin: 0; }
+      body { font-family: Tahoma, sans-serif; width: 300px; padding: 12px; margin: 0; }
       button, select, input { width: 100%; margin-top: 8px; padding: 8px; box-sizing: border-box; }
       .muted { color: #666; font-size: 12px; }
       h4 { margin: 0 0 8px; }
       #record, #finish { background: #ea5455; color: #fff; border: 0; border-radius: 6px; }
       #upload { background: #28c76f; color: #fff; border: 0; border-radius: 6px; }
+      label { display: block; font-size: 12px; color: #666; margin-top: 10px; }
     </style>
   </head>
   <body>
@@ -17,7 +18,11 @@
     <button id="refresh">تازه‌سازی</button>
 
     <div id="idle-box">
-      <button id="record">شروع ضبط (تب خالی)</button>
+      <label for="record-tab">محل ضبط</label>
+      <select id="record-tab">
+        <option value="">تب جدید (خالی)</option>
+      </select>
+      <button id="record">شروع ضبط</button>
       <select id="task">
         <option value="">— انتخاب فرآیند —</option>
       </select>
@@ -26,7 +31,7 @@
     </div>
 
     <div id="rec-box" hidden>
-      <p class="muted">آدرس را در نوار مرورگر تایپ کنید؛ به‌عنوان مرحله ثبت می‌شود.</p>
+      <p class="muted">روی تب انتخاب‌شده کار کنید؛ تغییر آدرس به‌عنوان GoToUrl ثبت می‌شود.</p>
       <button id="finish">اتمام ضبط</button>
     </div>
 
@@ -37,7 +42,7 @@
       <button id="discard">انصراف</button>
     </div>
 
-    <p class="muted">شروع = تب خالی. تغییر آدرس = مرحله GoToUrl.</p>
+    <p class="muted">می‌توانید تب باز را انتخاب کنید یا تب جدید بسازید.</p>
     <script src="popup.js"></script>
   </body>
 </html>

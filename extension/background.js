@@ -83,6 +83,8 @@ async function handleMessage(message, sender) {
       return listTasks();
     case "getLocalTasks":
       return listTasks();
+    case "listOpenTabs":
+      return listOpenTabs();
     case "getTaskGraph":
       return getLocalTaskGraph(message.taskId);
     case "startPlay":
@@ -102,6 +104,11 @@ async function handleMessage(message, sender) {
       return discardRecord();
     case "rerecord":
       return startRecordSession({ ...message, rerecord: true });
+    case "getCopiedSelector":
+      return getCopiedSelector();
+    case "clearCopiedSelector":
+      await chrome.storage.local.remove(["copiedSelector", "copiedSelectorText"]);
+      return { ok: true };
     default:
       return { ok: false, error: "unknown" };
   }
@@ -120,6 +127,84 @@ async function broadcastRecordState() {
     }).catch(() => {});
   }
   return state;
+}
+
+async function isPortalTabUrl(url) {
+  if (!url) return false;
+  const portal = await portalBase();
+  try {
+    if (url.startsWith(portal)) return true;
+  } catch {
+    /* ignore */
+  }
+  return /:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
+}
+
+async function listOpenTabs() {
+  const tabs = await chrome.tabs.query({});
+  const items = [];
+  for (const t of tabs) {
+    if (!t.id) continue;
+    const url = t.url || t.pendingUrl || "";
+    const isNewBlank =
+      !url
+      || url === "about:blank"
+      || /^chrome:\/\/(newtab|new-tab-page)/i.test(url)
+      || /^edge:\/\/(newtab|new-tab-page)/i.test(url);
+    if (
+      !isNewBlank
+      && (
+        url.startsWith("chrome://")
+        || url.startsWith("chrome-extension://")
+        || url.startsWith("edge://")
+        || url.startsWith("devtools://")
+      )
+    ) {
+      continue;
+    }
+    const portal = !isNewBlank && (await isPortalTabUrl(url));
+    const title = isNewBlank
+      ? (t.title && t.title !== "New Tab" && t.title !== "برگهٔ جدید" ? t.title : "تب جدید / خالی")
+      : (t.title || "بدون عنوان");
+    items.push({
+      id: t.id,
+      title: String(title).slice(0, 80),
+      url: (url || "about:blank").slice(0, 220),
+      active: !!t.active,
+      windowId: t.windowId,
+      isPortal: !!portal,
+      isBlank: !!isNewBlank
+    });
+  }
+  // Prefer non-portal tabs first; active tabs near the top within each group.
+  items.sort((a, b) => {
+    if (a.isPortal !== b.isPortal) return a.isPortal ? 1 : -1;
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return 0;
+  });
+  return { ok: true, tabs: items };
+}
+
+let openTabsBroadcastTimer = null;
+function scheduleOpenTabsBroadcast(reason) {
+  if (openTabsBroadcastTimer) clearTimeout(openTabsBroadcastTimer);
+  openTabsBroadcastTimer = setTimeout(() => {
+    openTabsBroadcastTimer = null;
+    broadcastOpenTabsChanged(reason).catch(() => {});
+  }, 180);
+}
+
+async function broadcastOpenTabsChanged(reason) {
+  const list = await listOpenTabs();
+  const payload = { type: "openTabsChanged", reason: reason || "update", tabs: list.tabs };
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    chrome.tabs.sendMessage(tab.id, payload).catch(() => {});
+  }
+  // Popup / other extension pages listening on runtime
+  chrome.runtime.sendMessage(payload).catch(() => {});
+  return list;
 }
 
 async function startRecordSession(message = {}) {
@@ -149,12 +234,44 @@ async function startRecordSession(message = {}) {
     lastNavUrl: null
   });
 
-  const tab = await chrome.tabs.create({ url: "about:blank", active: true });
+  const requestedTabId = message.tabId != null && message.tabId !== ""
+    ? Number(message.tabId)
+    : null;
+  let tab = null;
+  let reused = false;
+
+  if (requestedTabId && Number.isFinite(requestedTabId)) {
+    try {
+      tab = await chrome.tabs.get(requestedTabId);
+      await chrome.tabs.update(requestedTabId, { active: true });
+      if (tab.windowId != null) {
+        await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+      }
+      reused = true;
+    } catch {
+      await chrome.storage.local.set({ recording: false, recordPhase: "idle", recordingGroups: [], draft: [] });
+      return { ok: false, error: "تب انتخاب‌شده پیدا نشد یا بسته شده است." };
+    }
+  } else {
+    tab = await chrome.tabs.create({ url: "about:blank", active: true });
+  }
+
   if (tab?.id) {
     await chrome.storage.local.set({ recordTabId: tab.id });
+    // If continuing on an open page, seed GoToUrl so playback starts there.
+    const url = tab.url || tab.pendingUrl || "";
+    if (reused && isTrackableNavUrl(url)) {
+      await appendNavStep(url, tab.id);
+    }
   }
   await broadcastRecordState();
-  return { ok: true, tabId: tab?.id, startUrl: "about:blank", groupCount: recordingGroups.length };
+  return {
+    ok: true,
+    tabId: tab?.id,
+    startUrl: tab?.url || "about:blank",
+    reused,
+    groupCount: recordingGroups.length
+  };
 }
 
 function flattenGroupSteps(groups) {
@@ -179,6 +296,7 @@ async function finishRecord() {
     recordPhase: "review"
   });
   const state = await broadcastRecordState();
+  setTimeout(() => pollDevReload(), 400);
   return { ok: true, count: countRecordedSteps(recordingGroups, draft), ...state };
 }
 
@@ -191,7 +309,9 @@ async function discardRecord() {
     recordTabId: null,
     lastNavUrl: null
   });
-  return broadcastRecordState();
+  const state = await broadcastRecordState();
+  setTimeout(() => pollDevReload(), 400);
+  return state;
 }
 
 async function getState() {
@@ -397,6 +517,7 @@ async function saveDraft(payload) {
   });
   await pushTasksToPortalTabs(tasks);
   await broadcastRecordState();
+  setTimeout(() => pollDevReload(), 400);
   return { ok: true, result: { taskId: id, groupId: 1, stepCount, groupCount: groups.length } };
 }
 
@@ -465,7 +586,7 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
       x: 280 + gi * 280,
       y: 80,
       repeatSourceType: "None",
-      moveLoop: false
+      moveLoop: true
     });
     edges.push({ id: `e-g-${gi}`, from: prevNode, to: gid, kind: "next" });
     prevNode = gid;
@@ -477,7 +598,7 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
       const isNav = String(a.actionType || "").toLowerCase() === "gotourl";
       nodes.push({
         id: sid,
-        kind: "step",
+        kind: "action",
         entityId: stepEntity,
         title: `${a.actionType || "Click"} ${i + 1}`,
         groupNodeId: gid,
@@ -487,7 +608,6 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         framePathJson: JSON.stringify(a.framePath || []),
         isActive: true,
-        isConditional: false,
         x: 40,
         y: i * 90
       });
@@ -563,20 +683,97 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (changeInfo.url || changeInfo.title || changeInfo.status === "complete" || changeInfo.status === "loading") {
+    scheduleOpenTabsBroadcast(changeInfo.url ? "url" : "update");
+  }
   if (!changeInfo.url) return;
   const { recording, recordTabId } = await chrome.storage.local.get(["recording", "recordTabId"]);
   if (!recording || !recordTabId || tabId !== recordTabId) return;
   await appendNavStep(changeInfo.url, tabId);
 });
 
-/** Dev/local auto-reload: portal syncs files to LocalAppData; we reload when stamp changes. */
+chrome.tabs.onCreated.addListener(() => scheduleOpenTabsBroadcast("created"));
+chrome.tabs.onRemoved.addListener(() => scheduleOpenTabsBroadcast("removed"));
+chrome.tabs.onActivated.addListener(() => scheduleOpenTabsBroadcast("activated"));
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) scheduleOpenTabsBroadcast("focus");
+});
+
+/** Dev/local auto-reload: only when portal (app) is open and not recording/playing.
+ *  Refreshing a recorded external page must NOT reload the extension. */
 const DEV_POLL_MS = 2500;
 const DEV_STAMP_URLS = [
   "https://localhost:7201/extension/dev-stamp",
   "http://localhost:5201/extension/dev-stamp"
 ];
 
+function isPortalAppUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  try {
+    const u = new URL(url);
+    const host = (u.hostname || "").toLowerCase();
+    if (host !== "localhost" && host !== "127.0.0.1") return false;
+    // Extension sync endpoints alone don't count as "using the app"
+    if (u.pathname.startsWith("/extension/")) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function hasOpenPortalAppTab() {
+  try {
+    const portal = await portalBase().catch(() => DEFAULT_PORTAL);
+    let origin;
+    try { origin = new URL(portal).origin; } catch { origin = null; }
+    const tabs = await chrome.tabs.query({});
+    return tabs.some((t) => {
+      const url = t.url || "";
+      if (origin && url.startsWith(origin) && isPortalAppUrl(url)) return true;
+      return isPortalAppUrl(url);
+    });
+  } catch {
+    return false;
+  }
+}
+
 async function pollDevReload() {
+  const { recording, playing, pendingDevReload, pendingDevStamp } =
+    await chrome.storage.local.get(["recording", "playing", "pendingDevReload", "pendingDevStamp"]);
+
+  // Never tear down the service worker mid-record / mid-play (page refresh on target site is fine).
+  if (recording || playing) {
+    // Still detect updates and queue them for after finish.
+    await detectDevStampChange({ queueOnly: true });
+    return;
+  }
+
+  // Outside recording: only apply reload when user has the app open — not while browsing/recording targets.
+  const appOpen = await hasOpenPortalAppTab();
+  if (!appOpen) {
+    if (pendingDevReload && pendingDevStamp) {
+      // Keep stamp queued; apply next time app is open.
+      return;
+    }
+    await detectDevStampChange({ queueOnly: true });
+    return;
+  }
+
+  if (pendingDevReload && pendingDevStamp) {
+    await chrome.storage.local.set({
+      devStamp: pendingDevStamp,
+      pendingDevReload: false,
+      pendingDevStamp: null
+    });
+    console.info("[DA] applying deferred extension reload (app open, idle)");
+    chrome.runtime.reload();
+    return;
+  }
+
+  await detectDevStampChange({ queueOnly: false });
+}
+
+async function detectDevStampChange({ queueOnly }) {
   const portal = await portalBase().catch(() => DEFAULT_PORTAL);
   const urls = [`${portal}/extension/dev-stamp`, ...DEV_STAMP_URLS];
   const seen = new Set();
@@ -589,10 +786,23 @@ async function pollDevReload() {
       const data = await res.json();
       if (!data?.stamp) continue;
       const { devStamp } = await chrome.storage.local.get("devStamp");
+      const origin = new URL(url).origin;
       if (devStamp && devStamp !== data.stamp) {
+        if (queueOnly) {
+          await chrome.storage.local.set({
+            pendingDevReload: true,
+            pendingDevStamp: data.stamp,
+            portalBase: origin,
+            installPath: data.path || null
+          });
+          console.info("[DA] extension update queued (recording/play or no app tab)", data.version || "");
+          return;
+        }
         await chrome.storage.local.set({
           devStamp: data.stamp,
-          portalBase: new URL(url).origin,
+          pendingDevReload: false,
+          pendingDevStamp: null,
+          portalBase: origin,
           installPath: data.path || null
         });
         console.info("[DA] extension updated → reload", data.version || "", data.path || "");
@@ -601,7 +811,7 @@ async function pollDevReload() {
       }
       await chrome.storage.local.set({
         devStamp: data.stamp,
-        portalBase: new URL(url).origin,
+        portalBase: origin,
         installPath: data.path || null
       });
       return;
@@ -613,3 +823,133 @@ async function pollDevReload() {
 
 pollDevReload();
 setInterval(pollDevReload, DEV_POLL_MS);
+
+const CTX_COPY_SELECTOR = "da-copy-selector";
+
+function ensureContextMenus() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: CTX_COPY_SELECTOR,
+      title: "کپی سلکتور (اتوماتور پویا)",
+      contexts: ["all"]
+    });
+  });
+}
+
+chrome.runtime.onInstalled.addListener(ensureContextMenus);
+chrome.runtime.onStartup.addListener(ensureContextMenus);
+ensureContextMenus();
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId !== CTX_COPY_SELECTOR || !tab?.id) return;
+  try {
+    const result = await copySelectorFromContext(info, tab);
+    if (result.ok) {
+      console.info("[DA] selector copied", result.selector?.slice(0, 80));
+    } else {
+      console.warn("[DA] copy selector failed", result.error);
+    }
+  } catch (err) {
+    console.warn("[DA] copy selector error", err?.message || err);
+  }
+});
+
+async function getCopiedSelector() {
+  const data = await chrome.storage.local.get(["copiedSelector", "copiedSelectorText"]);
+  if (!data.copiedSelector) return { ok: false, error: "سلکتوری در حافظه نیست." };
+  return {
+    ok: true,
+    payload: data.copiedSelector,
+    text: data.copiedSelectorText || encodeDaSelector(data.copiedSelector)
+  };
+}
+
+function encodeDaSelector(payload) {
+  return "DASEL:" + JSON.stringify(payload);
+}
+
+function parseDaSelectorText(text) {
+  if (!text || typeof text !== "string") return null;
+  const raw = text.trim();
+  if (!raw.startsWith("DASEL:")) return null;
+  try {
+    const obj = JSON.parse(raw.slice(6));
+    if (!obj || typeof obj !== "object") return null;
+    if (!obj.selector && !obj.Selector) return null;
+    return {
+      v: obj.v || 1,
+      kind: "da-selector",
+      selector: obj.selector || obj.Selector || "",
+      elementBy: obj.elementBy || obj.ElementBy || "CssSelector",
+      framePath: obj.framePath || obj.FramePath || [],
+      url: obj.url || obj.Url || "",
+      copiedAt: obj.copiedAt || null
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function copySelectorFromContext(info, tab) {
+  const frameId = info.frameId ?? 0;
+  let captured = null;
+  try {
+    captured = await chrome.tabs.sendMessage(tab.id, { type: "captureContextSelector" }, { frameId });
+  } catch {
+    captured = null;
+  }
+  if (!captured?.ok || !captured.selector) {
+    return { ok: false, error: captured?.error || "سلکتور گرفته نشد — صفحه را رفرش کنید." };
+  }
+
+  const framePath = await buildFramePath(tab.id, frameId);
+  const payload = {
+    v: 1,
+    kind: "da-selector",
+    selector: captured.selector,
+    elementBy: "CssSelector",
+    framePath,
+    url: captured.url || tab.url || "",
+    tag: captured.tag || "",
+    copiedAt: new Date().toISOString()
+  };
+  const text = encodeDaSelector(payload);
+  await chrome.storage.local.set({ copiedSelector: payload, copiedSelectorText: text });
+
+  // Prefer writing clipboard in the page (user-gesture from context menu).
+  let clipped = false;
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [frameId] },
+      func: (t) => {
+        try {
+          if (navigator.clipboard?.writeText) {
+            return navigator.clipboard.writeText(t).then(() => true).catch(() => false);
+          }
+        } catch {
+          /* fall through */
+        }
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = t;
+          ta.style.position = "fixed";
+          ta.style.left = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          const ok = document.execCommand("copy");
+          ta.remove();
+          return ok;
+        } catch {
+          return false;
+        }
+      },
+      args: [text]
+    });
+    clipped = !!result;
+  } catch {
+    clipped = false;
+  }
+
+  return { ok: true, selector: payload.selector, clipped, frameHops: framePath.length };
+}
+
