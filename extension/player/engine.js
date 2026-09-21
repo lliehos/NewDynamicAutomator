@@ -41,12 +41,6 @@ async function startPlay(taskId, tabId, runMode, options) {
   const { recording } = await chrome.storage.local.get("recording");
   if (recording) return { ok: false, error: "ابتدا ضبط را متوقف کنید." };
 
-  if (!tabId) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    tabId = tab?.id;
-  }
-  if (!tabId) return { ok: false, error: "تب فعال پیدا نشد." };
-
   const tasks = await loadUserTasks();
   const graph = tasks.find((t) => String(t.id) === String(taskId))?.graph || null;
   if (!graph) {
@@ -63,7 +57,10 @@ async function startPlay(taskId, tabId, runMode, options) {
   }
   if (steps.length === 0) return { ok: false, error: "هیچ استپی برای اجرا نیست." };
 
-  tabId = await ensurePlayTab(tabId, steps);
+  // Always execute in a fresh blank tab (never reuse portal or an existing page).
+  const created = await chrome.tabs.create({ url: "about:blank", active: true });
+  tabId = created?.id;
+  if (!tabId) return { ok: false, error: "تب جدید ساخته نشد." };
   await ensurePlayMemory(graph);
 
   playAbort = false;

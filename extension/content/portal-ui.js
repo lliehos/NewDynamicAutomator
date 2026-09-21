@@ -120,20 +120,17 @@
     const action = t.getAttribute("data-da-action");
     if (action === "start-record") {
       ev.preventDefault();
+      // Always open a fresh about:blank tab (no tab picker on portal).
       const payload = { type: "startRecordSession" };
-      const tabId = selectedRecordTabId();
-      if (tabId != null) payload.tabId = tabId;
       const taskId = t.getAttribute("data-task-id");
       if (taskId) payload.taskId = Number(taskId);
       const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
       const status = document.getElementById("da-portal-status") || document.getElementById("da-page-rec-status");
       if (status) {
         status.textContent = res?.ok
-          ? (res.reused
-            ? (taskId
-              ? `ضبط روی فرآیند #${taskId} شروع شد — بعد از اتمام، در FAB ذخیره کنید.`
-              : "ضبط روی تب انتخاب‌شده شروع شد — کار کنید، بعد «اتمام ضبط» را بزنید.")
-            : "تب جدید باز شد — در سایت هدف کار کنید، بعد از FAB «اتمام ضبط» را بزنید.")
+          ? (taskId
+            ? `ضبط روی فرآیند #${taskId} در تب جدید شروع شد — بعد از اتمام، در FAB ذخیره کنید.`
+            : "تب جدید خالی باز شد — کار کنید، بعد از FAB «اتمام ضبط» را بزنید.")
           : (res?.error || "خطا در شروع ضبط");
       }
       syncRecordPageFab();

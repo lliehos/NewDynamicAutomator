@@ -76,10 +76,21 @@
         <td>${sources}</td>
         <td class="text-nowrap">
           <div class="d-inline-flex gap-1 align-items-center flex-wrap">
-            <a class="btn btn-sm btn-icon btn-primary" href="/Tasks/Editor/${t.id}" title="ویرایش">${ICO_EDIT}</a>
-            <button type="button" class="btn btn-sm btn-icon btn-success" data-da-action="play-task" data-task-id="${t.id}" title="اجرا">${ICO_PLAY}</button>
-            <button type="button" class="btn btn-sm btn-icon btn-danger" data-da-action="start-record" data-task-id="${t.id}" title="ضبط روی این فرآیند">${ICO_REC}</button>
-            <button type="button" class="btn btn-sm btn-icon btn-outline-danger" data-da-del="${t.id}" title="حذف">${ICO_DEL}</button>
+            <a class="btn btn-sm btn-primary d-inline-flex align-items-center gap-1" href="/Tasks/Editor/${t.id}" title="ویرایش">
+              ${ICO_EDIT}<span>ویرایش</span>
+            </a>
+            <button type="button" class="btn btn-sm btn-success d-inline-flex align-items-center gap-1"
+              data-da-action="play-task" data-task-id="${t.id}" title="اجرا">
+              ${ICO_PLAY}<span>اجرا</span>
+            </button>
+            <button type="button" class="btn btn-sm btn-danger d-inline-flex align-items-center gap-1"
+              data-da-action="start-record" data-task-id="${t.id}" title="ضبط روی این فرآیند">
+              ${ICO_REC}<span>ضبط</span>
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-danger d-inline-flex align-items-center gap-1"
+              data-da-del="${t.id}" title="حذف">
+              ${ICO_DEL}<span>حذف</span>
+            </button>
           </div>
         </td>
       </tr>`;
@@ -122,7 +133,8 @@
   }
 
   document.getElementById("da-create-local")?.addEventListener("click", () => {
-    const title = (document.getElementById("da-new-title")?.value || "").trim() || "فرآیند دستی";
+    const titleInp = document.getElementById("da-new-title");
+    const title = (titleInp?.value || "").trim() || "فرآیند جدید";
     const tasks = readTasks();
     const id = Date.now();
     const graph = emptyGraph(title);
@@ -138,7 +150,10 @@
       graph
     });
     writeTasks(tasks);
-    location.href = `/Tasks/Editor/${id}`;
+    if (titleInp) titleInp.value = "";
+    render(tasks);
+    const status = document.getElementById("da-portal-status");
+    if (status) status.textContent = `فرآیند «${title}» اضافه شد.`;
   });
 
   window.addEventListener("da-local-tasks", (ev) => {

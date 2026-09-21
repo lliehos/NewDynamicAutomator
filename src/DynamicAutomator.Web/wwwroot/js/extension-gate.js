@@ -1,6 +1,5 @@
 (function () {
   const modal = document.getElementById("da-ext-modal");
-  const banner = document.getElementById("da-ext-banner");
   if (!modal) return;
 
   const pathEl = document.getElementById("da-ext-modal-path");
@@ -32,12 +31,10 @@
 
   function hideGate() {
     modal.classList.remove("open");
-    if (banner) banner.classList.remove("show");
   }
 
   function showGate(reason) {
     modal.classList.add("open");
-    if (banner) banner.classList.remove("show");
     ensureInstallPath();
     if (hintEl) {
       hintEl.textContent = reason
@@ -64,8 +61,6 @@
 
   function dismiss() {
     modal.classList.remove("open");
-    // Soft banner only after user tried record/play and chose «بعداً»
-    if (banner && pendingAction) banner.classList.add("show");
     pendingAction = null;
   }
 
@@ -88,7 +83,6 @@
     pendingAction = null;
     if (!p) return;
     if (p.kind === "click" && p.el instanceof HTMLElement) {
-      // Re-click so portal-ui / native handlers run with extension present
       setTimeout(() => p.el.click(), 50);
       return;
     }
@@ -127,7 +121,6 @@
     return id === "btn-play-task" || id === "btn-play-selection";
   }
 
-  // Capture: gate record/play before any handler; no check on idle load.
   document.addEventListener("click", (ev) => {
     const el = ev.target instanceof Element
       ? ev.target.closest("[data-da-action], #btn-play-task, #btn-play-selection")
@@ -159,6 +152,5 @@
     window.location.href = "/Extension/Install";
   });
 
-  // Idle: never open modal / banner. Keep path cache warm for when user needs it.
   hideGate();
 })();

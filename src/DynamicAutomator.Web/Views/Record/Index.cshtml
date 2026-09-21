@@ -5,7 +5,7 @@
   <div class="card-body text-center py-5">
     <h3 class="mb-3">صفحهٔ ضبط</h3>
     <p class="text-muted mb-2" id="da-record-gate-msg">اگر افزونه نصب باشد، دکمهٔ قرمز <strong>REC</strong> پایین‌چپ ظاهر می‌شود.</p>
-    <p class="mb-1">قبل از شروع، تب باز یا «تب جدید» را انتخاب کنید؛ کارها موقتاً ذخیره می‌شوند. بعد «اتمام ضبط» و ارسال/انصراف/مجدد.</p>
+    <p class="mb-1">ضبط همیشه در تب جدید خالی شروع می‌شود. کارها موقتاً ذخیره می‌شوند؛ بعد «اتمام ضبط» و ارسال/انصراف/مجدد.</p>
     <a class="btn btn-label-secondary mt-3" asp-controller="Home" asp-action="Index">فرآیندها</a>
     <p class="mt-3 text-muted" id="da-portal-status"></p>
   </div>
@@ -15,10 +15,7 @@
 <div id="da-page-rec-panel" class="da-page-rec-panel" hidden>
   <div id="da-page-rec-status" class="small text-muted mb-2">...</div>
   <div id="da-page-idle">
-    <select id="da-page-record-tab" class="form-select form-select-sm mb-2">
-      <option value="">تب جدید (خالی)</option>
-    </select>
-    <button type="button" class="btn btn-sm btn-danger w-100 mb-1" data-da-action="start-record">شروع ضبط</button>
+    <button type="button" class="btn btn-sm btn-danger w-100 mb-1" data-da-action="start-record">شروع ضبط (تب جدید)</button>
   </div>
   <div id="da-page-recording" hidden>
     <button type="button" class="btn btn-sm btn-warning w-100 mb-1" data-da-action="finish-record">اتمام ضبط</button>

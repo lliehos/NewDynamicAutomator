@@ -11,10 +11,7 @@
 
       <div id="da-fab-idle">
         <div class="da-fab-section">ضبط</div>
-        <p class="da-fab-hint">تب باز را انتخاب کنید یا تب جدید بسازید؛ آدرس به‌عنوان GoToUrl ثبت می‌شود.</p>
-        <select id="da-fab-record-tab" class="da-fab-select">
-          <option value="">تب جدید (خالی)</option>
-        </select>
+        <p class="da-fab-hint">همیشه در تب جدید خالی شروع می‌شود؛ آدرس را خودتان باز کنید.</p>
         <button type="button" id="da-fab-record" class="da-fab-rec">شروع ضبط</button>
         <div class="da-fab-section">اجرا</div>
         <select id="da-fab-task" class="da-fab-select">
@@ -66,53 +63,13 @@
   const playBtn = root.querySelector("#da-fab-play");
   const stopBtn = root.querySelector("#da-fab-stop");
   const taskSelect = root.querySelector("#da-fab-task");
-  const recordTabSelect = root.querySelector("#da-fab-record-tab");
   const toggleBtn = root.querySelector("#da-fab-toggle");
   const titleInp = root.querySelector("#da-fab-title");
   const reviewCount = root.querySelector("#da-fab-review-count");
 
-  function tabOptionLabel(t) {
-    const title = (t.title || "بدون عنوان").trim();
-    let host = "";
-    try {
-      if (t.url && /^https?:/i.test(t.url)) host = new URL(t.url).host;
-      else if (t.isBlank) host = "خالی";
-    } catch {
-      /* ignore */
-    }
-    const mark = t.active ? " [فعال]" : "";
-    return host ? `${title}${mark} — ${host}` : `${title}${mark}`;
-  }
-
-  async function loadRecordTabs(fromBroadcast) {
-    if (!recordTabSelect) return;
-    const prev = recordTabSelect.value;
-    const res = fromBroadcast?.tabs
-      ? { ok: true, tabs: fromBroadcast.tabs }
-      : await chrome.runtime.sendMessage({ type: "listOpenTabs" }).catch(() => null);
-    recordTabSelect.innerHTML = `<option value="">تب جدید (خالی)</option>`;
-    if (!res?.ok || !Array.isArray(res.tabs)) return;
-    for (const t of res.tabs) {
-      if (t.isPortal) continue;
-      const opt = document.createElement("option");
-      opt.value = String(t.id);
-      opt.textContent = tabOptionLabel(t);
-      recordTabSelect.appendChild(opt);
-    }
-    if (prev && [...recordTabSelect.options].some((o) => o.value === prev)) {
-      recordTabSelect.value = prev;
-    } else {
-      const active = (res.tabs || []).find((t) => t.active && !t.isPortal);
-      if (active) recordTabSelect.value = String(active.id);
-    }
-  }
-
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === "playStateChanged" || message.type === "recordingChanged" || message.type === "draftUpdated") {
       refresh();
-    }
-    if (message.type === "openTabsChanged") {
-      loadRecordTabs(message);
     }
   });
 
@@ -126,15 +83,10 @@
   recordBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    const tabVal = recordTabSelect?.value;
-    const payload = { type: "startRecordSession" };
-    if (tabVal) payload.tabId = Number(tabVal);
-    const res = await chrome.runtime.sendMessage(payload);
+    const res = await chrome.runtime.sendMessage({ type: "startRecordSession" });
     if (!res?.ok) status.textContent = res?.error || "خطا در شروع ضبط";
     else {
-      status.textContent = res.reused
-        ? "ضبط روی تب انتخاب‌شده شروع شد."
-        : "تب خالی باز شد — آدرس را تایپ کنید";
+      status.textContent = "تب خالی باز شد — آدرس را تایپ کنید";
       panel.hidden = false;
     }
     await refresh();
@@ -282,9 +234,6 @@
     if (!taskSelect.dataset.loaded) {
       await loadTasks();
       taskSelect.dataset.loaded = "1";
-    }
-    if (phase === "idle" && !playing && !panel.hidden) {
-      await loadRecordTabs();
     }
   }
 

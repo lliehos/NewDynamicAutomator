@@ -11,7 +11,7 @@
 - پروژه Api جدا و ارسال اجباری به سرور فعلاً لازم نیست
 
 پرتال: `https://localhost:7201`  
-افزونه: نسخه `0.8.5` — Reload unpacked روی مسیر sync‌شده (`%LocalAppData%\DynamicAutomator\extension`) یا `extension/`
+افزونه: نسخه `0.8.6` — Reload unpacked روی مسیر sync‌شده (`%LocalAppData%\DynamicAutomator\extension`) یا `extension/`
 
 ```bash
 dotnet run --project src/DynamicAutomator.Web

@@ -5,16 +5,11 @@
 <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
   <h4 class="mb-0">فرآیندها <span class="badge bg-label-secondary">ذخیره محلی مرورگر</span></h4>
   <div class="d-flex gap-2 flex-wrap align-items-center">
-    <select id="da-record-tab" class="form-select" style="min-width: 200px; max-width: 280px;" title="محل ضبط هنگام زدن دکمه ضبط روی فرآیند">
-      <option value="">تب جدید (خالی)</option>
-    </select>
-    <div class="d-flex gap-2">
-      <input class="form-control" id="da-new-title" placeholder="عنوان فرآیند جدید (دستی)" />
-      <button class="btn btn-primary" type="button" id="da-create-local">طراحی دستی</button>
-    </div>
+    <input class="form-control" id="da-new-title" placeholder="عنوان فرآیند جدید" style="min-width: 200px;" />
+    <button class="btn btn-primary" type="button" id="da-create-local">ایجاد فرآیند</button>
   </div>
 </div>
-<p class="text-muted small" id="da-portal-status">فرآیندها در مرورگر ذخیره می‌شوند (بدون سرور).</p>
+<p class="text-muted small" id="da-portal-status">فرآیندها در مرورگر ذخیره می‌شوند (بدون سرور). اجرا و ضبط همیشه در تب جدید خالی انجام می‌شود.</p>
 
 <div class="card">
   <div class="table-responsive">
@@ -37,5 +32,5 @@
 </div>
 
 @section Scripts {
-<script src="~/js/local-tasks.js?v=task-actions-1"></script>
+<script src="~/js/local-tasks.js?v=task-actions-4"></script>
 }

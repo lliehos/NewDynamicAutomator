@@ -49,13 +49,3 @@
 }
 #da-ext-modal .btn-da-primary { background: #7367f0; color: #fff; }
 #da-ext-modal .btn-da-ghost { background: #eeedf7; color: #5e5873; }
-#da-ext-banner {
-  display: none;
-  background: #fff3cd;
-  border: 1px solid #ffecb5;
-  color: #664d03;
-  border-radius: 10px;
-  padding: 10px 14px;
-  margin-bottom: 16px;
-}
-#da-ext-banner.show { display: block; }

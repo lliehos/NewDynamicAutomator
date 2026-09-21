@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Dynamic Automator Recorder",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "ضبط و اجرای فرآیند روی صفحات فریم‌تو‌فریم",
   "permissions": ["storage", "cookies", "scripting", "webNavigation", "tabs", "activeTab", "windows", "contextMenus", "clipboardWrite"],
   "host_permissions": [
