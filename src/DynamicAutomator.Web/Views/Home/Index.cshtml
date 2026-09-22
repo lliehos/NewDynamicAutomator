@@ -2,35 +2,78 @@
     ViewData["Title"] = "فرآیندها";
 }
 
-<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
-  <h4 class="mb-0">فرآیندها <span class="badge bg-label-secondary">ذخیره محلی مرورگر</span></h4>
-  <div class="d-flex gap-2 flex-wrap align-items-center">
-    <input class="form-control" id="da-new-title" placeholder="عنوان فرآیند جدید" style="min-width: 200px;" />
-    <button class="btn btn-primary" type="button" id="da-create-local">ایجاد فرآیند</button>
-  </div>
-</div>
-<p class="text-muted small" id="da-portal-status">فرآیندها در مرورگر ذخیره می‌شوند (بدون سرور). اجرا و ضبط همیشه در تب جدید خالی انجام می‌شود.</p>
+<div class="da-home">
+  <header class="da-home-head">
+    <div>
+      <h4 class="da-home-title mb-0">فرآیندها</h4>
+      <p class="da-home-sub mb-0" id="da-portal-status">فرآیندها در مرورگر ذخیره می‌شوند (بدون سرور).</p>
+    </div>
+    <button class="btn btn-primary da-home-create d-none d-md-inline-flex align-items-center gap-1" type="button"
+            data-bs-toggle="modal" data-bs-target="#da-create-task-modal">
+      <i class="ti ti-plus"></i>
+      <span class="da-home-create-label">ایجاد فرآیند جدید</span>
+    </button>
+  </header>
 
-<div class="card">
-  <div class="table-responsive">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>عنوان</th>
-          <th>نوع ساخت</th>
-          <th>گروه</th>
-          <th>اقدام</th>
-          <th>منبع</th>
-          <th class="text-nowrap">عملیات</th>
-        </tr>
-      </thead>
-      <tbody id="da-task-rows">
-        <tr><td colspan="6" class="text-center text-muted py-6">در حال بارگذاری از حافظهٔ محلی...</td></tr>
-      </tbody>
-    </table>
+  <div class="da-tasks-panel" id="da-tasks-panel">
+    <div class="da-tasks-busy" id="da-tasks-busy" hidden aria-live="assertive">
+      <div class="da-tasks-busy-inner">
+        <span class="da-tasks-spinner" aria-hidden="true"></span>
+        <span class="da-tasks-busy-text">آماده‌سازی افزونهٔ اجرا…</span>
+      </div>
+    </div>
+
+    <div class="card d-none d-md-block mb-0">
+      <div class="table-responsive">
+        <table class="table mb-0">
+          <thead>
+            <tr>
+              <th>عنوان</th>
+              <th class="text-nowrap">زمان ثبت</th>
+              <th>کاربر ثبت‌کننده</th>
+              <th>کاربران مشترک</th>
+              <th>گروه</th>
+              <th>اقدام</th>
+              <th>منبع</th>
+              <th class="text-nowrap">عملیات</th>
+            </tr>
+          </thead>
+          <tbody id="da-task-rows">
+            <tr><td colspan="8" class="text-center text-muted py-6">در حال بارگذاری...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="da-task-list d-md-none" id="da-task-cards" aria-live="polite">
+      <div class="da-task-empty text-muted">در حال بارگذاری...</div>
+    </div>
+  </div>
+
+  <button type="button" class="da-fab d-md-none" data-bs-toggle="modal" data-bs-target="#da-create-task-modal"
+          aria-label="ایجاد فرآیند جدید" title="ایجاد فرآیند جدید">
+    <i class="ti ti-plus"></i>
+  </button>
+</div>
+
+<div class="modal fade" id="da-create-task-modal" tabindex="-1" aria-labelledby="da-create-task-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header border-0 pb-0">
+        <h5 class="modal-title" id="da-create-task-title">ایجاد فرآیند جدید</h5>
+      </div>
+      <div class="modal-body">
+        <label class="form-label" for="da-new-title">عنوان فرآیند</label>
+        <input class="form-control form-control-lg" id="da-new-title" type="text" placeholder="مثلاً ثبت سفارش" autocomplete="off" />
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-label-secondary" data-bs-dismiss="modal">انصراف</button>
+        <button type="button" class="btn btn-primary" id="da-create-local">ایجاد</button>
+      </div>
+    </div>
   </div>
 </div>
 
 @section Scripts {
-<script src="~/js/local-tasks.js?v=task-actions-4"></script>
+<script src="~/js/local-tasks.js?v=play-loader-1"></script>
 }

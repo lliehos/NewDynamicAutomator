@@ -5,61 +5,88 @@ using System.Text.Json;
 namespace DynamicAutomator.Web.Services;
 
 /// <summary>
-/// Keeps a stable per-user extension folder in sync with the project source.
-/// Chrome cannot auto-install unpacked extensions — user loads this path once with
-/// Developer Mode; then portal sync + extension polling reloads on change.
+/// Keeps two per-user extension folders in sync: Recorder and Player.
+/// Chrome cannot auto-install unpacked extensions — user loads each path once.
 /// </summary>
 public sealed class ExtensionSyncService : IHostedService, IDisposable
 {
     public static readonly string BootId = Guid.NewGuid().ToString("N");
 
+    public const string RoleRecorder = "recorder";
+    public const string RolePlayer = "player";
+    public const string RoleSelector = "selector";
+
     private readonly IWebHostEnvironment _env;
     private readonly IConfiguration _config;
     private readonly ILogger<ExtensionSyncService> _log;
-    private FileSystemWatcher? _watcher;
+    private readonly List<FileSystemWatcher> _watchers = new();
     private readonly object _gate = new();
     private Timer? _debounce;
-    private string _lastStamp = "";
-    private string _syncedContentStamp = "";
+    private readonly Dictionary<string, PackageState> _packages = new(StringComparer.OrdinalIgnoreCase);
 
     public ExtensionSyncService(IWebHostEnvironment env, IConfiguration config, ILogger<ExtensionSyncService> log)
     {
         _env = env;
         _config = config;
         _log = log;
+
+        var baseInstall = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DynamicAutomator");
+
+        _packages[RoleRecorder] = new PackageState(
+            RoleRecorder,
+            Path.Combine(baseInstall, "extension-recorder"),
+            "extension-recorder");
+        _packages[RolePlayer] = new PackageState(
+            RolePlayer,
+            Path.Combine(baseInstall, "extension-player"),
+            "extension-player");
+        _packages[RoleSelector] = new PackageState(
+            RoleSelector,
+            Path.Combine(baseInstall, "extension-selector"),
+            "extension-selector");
     }
 
-    public string InstallPath { get; private set; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DynamicAutomator", "extension");
+    /// <summary>Legacy single-path accessor → recorder (most common install first).</summary>
+    public string InstallPath => _packages[RoleRecorder].InstallPath;
 
-    public string? SourcePath { get; private set; }
+    public string? SourcePath => _packages[RoleRecorder].SourcePath;
+
+    public string InstallPathFor(string role) => ResolveRole(role).InstallPath;
+
+    public string? SourcePathFor(string role) => ResolveRole(role).SourcePath;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        SourcePath = ResolveSourceFolder();
-        SyncNow("startup");
-
-        if (_env.IsDevelopment() && !string.IsNullOrEmpty(SourcePath) && Directory.Exists(SourcePath))
+        foreach (var pkg in _packages.Values)
         {
-            try
+            pkg.SourcePath = ResolveSourceFolder(pkg.SourceFolderName, pkg.Role);
+            SyncPackage(pkg, "startup");
+
+            if (_env.IsDevelopment() && !string.IsNullOrEmpty(pkg.SourcePath) && Directory.Exists(pkg.SourcePath))
             {
-                _watcher = new FileSystemWatcher(SourcePath)
+                try
                 {
-                    IncludeSubdirectories = true,
-                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
-                                   | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime
-                };
-                _watcher.Changed += OnSourceChanged;
-                _watcher.Created += OnSourceChanged;
-                _watcher.Deleted += OnSourceChanged;
-                _watcher.Renamed += OnSourceChanged;
-                _watcher.EnableRaisingEvents = true;
-                _log.LogInformation("Watching extension source for auto-sync: {Path}", SourcePath);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Could not watch extension source folder");
+                    var watcher = new FileSystemWatcher(pkg.SourcePath)
+                    {
+                        IncludeSubdirectories = true,
+                        NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
+                                       | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime
+                    };
+                    var role = pkg.Role;
+                    watcher.Changed += (_, e) => OnSourceChanged(role, e);
+                    watcher.Created += (_, e) => OnSourceChanged(role, e);
+                    watcher.Deleted += (_, e) => OnSourceChanged(role, e);
+                    watcher.Renamed += (_, e) => OnSourceChanged(role, e);
+                    watcher.EnableRaisingEvents = true;
+                    _watchers.Add(watcher);
+                    _log.LogInformation("Watching {Role} extension source: {Path}", pkg.Role, pkg.SourcePath);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Could not watch {Role} extension source", pkg.Role);
+                }
             }
         }
 
@@ -68,8 +95,8 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        _watcher?.Dispose();
-        _watcher = null;
+        foreach (var w in _watchers) w.Dispose();
+        _watchers.Clear();
         _debounce?.Dispose();
         _debounce = null;
         return Task.CompletedTask;
@@ -77,7 +104,8 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
 
     public void Dispose()
     {
-        _watcher?.Dispose();
+        foreach (var w in _watchers) w.Dispose();
+        _watchers.Clear();
         _debounce?.Dispose();
     }
 
@@ -85,45 +113,122 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     {
         lock (_gate)
         {
-            SourcePath = ResolveSourceFolder();
-            if (string.IsNullOrEmpty(SourcePath) || !Directory.Exists(SourcePath))
+            SyncResult? last = null;
+            foreach (var pkg in _packages.Values)
             {
-                return new SyncResult(false, InstallPath, SourcePath, _lastStamp, "منبع افزونه پیدا نشد.");
+                last = SyncPackage(pkg, reason);
             }
-
-            var contentStamp = ComputeContentStamp(SourcePath);
-            var installReady = Directory.Exists(InstallPath)
-                               && System.IO.File.Exists(Path.Combine(InstallPath, "manifest.json"));
-
-            // Skip copy when source unchanged — re-copying would bump mtimes and loop reloads.
-            if (installReady && contentStamp == _syncedContentStamp)
-            {
-                _lastStamp = $"{BootId}:{contentStamp}";
-                return new SyncResult(true, InstallPath, SourcePath, _lastStamp, null);
-            }
-
-            Directory.CreateDirectory(InstallPath);
-            CopyTree(SourcePath, InstallPath);
-            _syncedContentStamp = contentStamp;
-            _lastStamp = $"{BootId}:{contentStamp}";
-            _log.LogInformation("Extension synced ({Reason}) → {Install} stamp={Stamp}", reason, InstallPath, _lastStamp);
-            return new SyncResult(true, InstallPath, SourcePath, _lastStamp, null);
+            return last ?? new SyncResult(false, InstallPath, SourcePath, "", "هیچ بسته‌ای تعریف نشده.");
         }
     }
 
-    public StampInfo GetStamp(bool syncFirst = true)
+    public SyncResult SyncRole(string role, string reason = "manual")
     {
-        if (syncFirst)
-            SyncNow("stamp");
-        else if (string.IsNullOrEmpty(_lastStamp))
-            _lastStamp = $"{BootId}:{ComputeContentStamp(Directory.Exists(InstallPath) ? InstallPath : (SourcePath ?? InstallPath))}";
-
-        return new StampInfo(_lastStamp, BootId, ReadManifestVersion(InstallPath), InstallPath, SourcePath);
+        lock (_gate)
+        {
+            return SyncPackage(ResolveRole(role), reason);
+        }
     }
 
-    private void OnSourceChanged(object sender, FileSystemEventArgs e)
+    public StampInfo GetStamp(bool syncFirst = true) => GetStamp(RoleRecorder, syncFirst);
+
+    public StampInfo GetStamp(string role, bool syncFirst = true)
     {
-        // Ignore editor temp files
+        var pkg = ResolveRole(role);
+        if (syncFirst)
+            SyncRole(pkg.Role, "stamp");
+        else if (string.IsNullOrEmpty(pkg.LastStamp))
+            pkg.LastStamp = $"{BootId}:{ComputeContentStamp(Directory.Exists(pkg.InstallPath) ? pkg.InstallPath : (pkg.SourcePath ?? pkg.InstallPath))}";
+
+        return new StampInfo(pkg.LastStamp, BootId, ReadManifestVersion(pkg.InstallPath), pkg.InstallPath, pkg.SourcePath, pkg.Role);
+    }
+
+    public object InstallPathsPayload()
+    {
+        SyncNow("install-path");
+        var recorder = Snapshot(RoleRecorder);
+        var player = Snapshot(RolePlayer);
+        var selector = Snapshot(RoleSelector);
+        return new
+        {
+            ok = recorder.Ok && player.Ok && selector.Ok,
+            recorder,
+            player,
+            selector,
+            // Back-compat single fields → recorder
+            path = recorder.Path,
+            source = recorder.Source,
+            stamp = recorder.Stamp,
+            version = recorder.Version,
+            error = recorder.Error ?? player.Error ?? selector.Error,
+            hint = "سه افزونه جدا: Recorder (ضبط)، Player (اجرا)، Selector (کپی سلکتور با راست‌کلیک). هر کدام را یک‌بار Load unpacked کنید."
+        };
+    }
+
+    private PackageSnapshot Snapshot(string role)
+    {
+        var pkg = ResolveRole(role);
+        var ok = Directory.Exists(pkg.InstallPath) && File.Exists(Path.Combine(pkg.InstallPath, "manifest.json"));
+        var (name, title, description) = pkg.Role switch
+        {
+            RolePlayer => ("Dynamic Automator Player", "افزونهٔ اجرا", "برای اجرای فرآیند، توقف و پاز لازم است."),
+            RoleSelector => ("Dynamic Automator Selector", "افزونهٔ سلکتور", "راست‌کلیک روی عنصر → کپی سلکتور به حافظه برای ویرایشگر."),
+            _ => ("Dynamic Automator Recorder", "افزونهٔ ضبط", "برای شروع/اتمام ضبط و ذخیرهٔ فرآیند لازم است.")
+        };
+        return new PackageSnapshot(
+            ok,
+            pkg.Role,
+            pkg.InstallPath,
+            pkg.SourcePath,
+            pkg.LastStamp,
+            ReadManifestVersion(pkg.InstallPath),
+            name,
+            title,
+            description,
+            ok ? null : "پوشهٔ نصب آماده نیست."
+        );
+    }
+
+    private PackageState ResolveRole(string? role)
+    {
+        var key = string.IsNullOrWhiteSpace(role) ? RoleRecorder : role.Trim().ToLowerInvariant();
+        if (key is "play" or "player") key = RolePlayer;
+        if (key is "record" or "recorder" or "rec") key = RoleRecorder;
+        if (key is "sel" or "selector" or "pick" or "context") key = RoleSelector;
+        if (!_packages.TryGetValue(key, out var pkg))
+            throw new ArgumentException($"Unknown extension role: {role}");
+        return pkg;
+    }
+
+    private SyncResult SyncPackage(PackageState pkg, string reason)
+    {
+        pkg.SourcePath = ResolveSourceFolder(pkg.SourceFolderName, pkg.Role);
+        if (string.IsNullOrEmpty(pkg.SourcePath) || !Directory.Exists(pkg.SourcePath))
+        {
+            return new SyncResult(false, pkg.InstallPath, pkg.SourcePath, pkg.LastStamp, $"منبع {pkg.Role} پیدا نشد.");
+        }
+
+        var contentStamp = ComputeContentStamp(pkg.SourcePath);
+        var installReady = Directory.Exists(pkg.InstallPath)
+                           && File.Exists(Path.Combine(pkg.InstallPath, "manifest.json"));
+
+        if (installReady && contentStamp == pkg.SyncedContentStamp)
+        {
+            pkg.LastStamp = $"{BootId}:{contentStamp}";
+            return new SyncResult(true, pkg.InstallPath, pkg.SourcePath, pkg.LastStamp, null);
+        }
+
+        Directory.CreateDirectory(pkg.InstallPath);
+        CopyTree(pkg.SourcePath, pkg.InstallPath);
+        pkg.SyncedContentStamp = contentStamp;
+        pkg.LastStamp = $"{BootId}:{contentStamp}";
+        _log.LogInformation("{Role} extension synced ({Reason}) → {Install} stamp={Stamp}",
+            pkg.Role, reason, pkg.InstallPath, pkg.LastStamp);
+        return new SyncResult(true, pkg.InstallPath, pkg.SourcePath, pkg.LastStamp, null);
+    }
+
+    private void OnSourceChanged(string role, FileSystemEventArgs e)
+    {
         var name = Path.GetFileName(e.Name ?? e.FullPath);
         if (string.IsNullOrEmpty(name) || name.EndsWith("~", StringComparison.Ordinal) || name.StartsWith(".", StringComparison.Ordinal))
             return;
@@ -131,22 +236,28 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         _debounce?.Dispose();
         _debounce = new Timer(_ =>
         {
-            try { SyncNow("watch"); }
-            catch (Exception ex) { _log.LogWarning(ex, "Extension sync after watch failed"); }
+            try { SyncRole(role, "watch"); }
+            catch (Exception ex) { _log.LogWarning(ex, "Extension sync after watch failed ({Role})", role); }
         }, null, TimeSpan.FromMilliseconds(600), Timeout.InfiniteTimeSpan);
     }
 
-    private string? ResolveSourceFolder()
+    private string? ResolveSourceFolder(string folderName, string role)
     {
-        var configured = _config["Extension:Path"];
+        var configKey = role switch
+        {
+            RolePlayer => "Extension:PlayerPath",
+            RoleSelector => "Extension:SelectorPath",
+            _ => "Extension:RecorderPath"
+        };
+        var configured = _config[configKey] ?? (role == RoleRecorder ? _config["Extension:Path"] : null);
         if (!string.IsNullOrWhiteSpace(configured) && Directory.Exists(configured))
             return Path.GetFullPath(configured);
 
         var candidates = new[]
         {
-            Path.GetFullPath(Path.Combine(_env.ContentRootPath, "..", "..", "extension")),
-            Path.GetFullPath(Path.Combine(_env.ContentRootPath, "extension")),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "extension"))
+            Path.GetFullPath(Path.Combine(_env.ContentRootPath, "..", "..", folderName)),
+            Path.GetFullPath(Path.Combine(_env.ContentRootPath, folderName)),
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", folderName))
         };
         return candidates.FirstOrDefault(Directory.Exists);
     }
@@ -166,17 +277,16 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
             var rel = Path.GetRelativePath(source, file);
             var target = Path.Combine(dest, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            System.IO.File.Copy(file, target, overwrite: true);
+            File.Copy(file, target, overwrite: true);
         }
 
-        // Remove files in dest that no longer exist in source (keep folder clean)
         foreach (var file in Directory.EnumerateFiles(dest, "*", SearchOption.AllDirectories))
         {
             var rel = Path.GetRelativePath(dest, file);
             var src = Path.Combine(source, rel);
-            if (!System.IO.File.Exists(src))
+            if (!File.Exists(src))
             {
-                try { System.IO.File.Delete(file); } catch { /* ignore */ }
+                try { File.Delete(file); } catch { /* ignore */ }
             }
         }
     }
@@ -192,7 +302,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         {
             var name = Path.GetFileName(file);
             if (name.StartsWith(".", StringComparison.Ordinal)) continue;
-            var ticks = System.IO.File.GetLastWriteTimeUtc(file).Ticks;
+            var ticks = File.GetLastWriteTimeUtc(file).Ticks;
             if (ticks > maxTicks) maxTicks = ticks;
             sb.Append(Path.GetRelativePath(folder, file).Replace('\\', '/'))
               .Append(':').Append(ticks).Append(';');
@@ -207,8 +317,8 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         try
         {
             var path = Path.Combine(folder, "manifest.json");
-            if (!System.IO.File.Exists(path)) return "";
-            using var doc = JsonDocument.Parse(System.IO.File.ReadAllText(path));
+            if (!File.Exists(path)) return "";
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
             return doc.RootElement.TryGetProperty("version", out var v) ? (v.GetString() ?? "") : "";
         }
         catch
@@ -217,6 +327,34 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         }
     }
 
+    private sealed class PackageState
+    {
+        public PackageState(string role, string installPath, string sourceFolderName)
+        {
+            Role = role;
+            InstallPath = installPath;
+            SourceFolderName = sourceFolderName;
+        }
+
+        public string Role { get; }
+        public string InstallPath { get; }
+        public string SourceFolderName { get; }
+        public string? SourcePath { get; set; }
+        public string LastStamp { get; set; } = "";
+        public string SyncedContentStamp { get; set; } = "";
+    }
+
     public readonly record struct SyncResult(bool Ok, string InstallPath, string? SourcePath, string Stamp, string? Error);
-    public readonly record struct StampInfo(string Stamp, string BootId, string Version, string InstallPath, string? SourcePath);
+    public readonly record struct StampInfo(string Stamp, string BootId, string Version, string InstallPath, string? SourcePath, string Role = RoleRecorder);
+    public readonly record struct PackageSnapshot(
+        bool Ok,
+        string Role,
+        string Path,
+        string? Source,
+        string Stamp,
+        string Version,
+        string Name,
+        string Title,
+        string Description,
+        string? Error);
 }

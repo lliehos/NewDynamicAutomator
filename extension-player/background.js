@@ -56,7 +56,15 @@ async function authHeaders() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  handleMessage(message, sender).then(sendResponse).catch((err) => sendResponse({ ok: false, error: err.message }));
+  let answered = false;
+  const reply = (payload) => {
+    if (answered) return;
+    answered = true;
+    try { sendResponse(payload); } catch { /* channel already closed */ }
+  };
+  handleMessage(message, sender)
+    .then(reply)
+    .catch((err) => reply({ ok: false, error: err?.message || String(err) }));
   return true;
 });
 
@@ -64,19 +72,10 @@ async function handleMessage(message, sender) {
   switch (message.type) {
     case "getState":
       return getState();
-    case "toggleRecord":
-      // legacy: if recording → finish; else → start
-      return (await getState()).recording ? finishRecord() : startRecordSession(message);
-    case "clearDraft":
-      return discardRecord();
-    case "saveDraft":
-      return saveDraft(message.payload);
     case "session":
       return checkSession();
     case "syncPortalSession":
       return syncPortalSession();
-    case "recordedEvent":
-      return onRecordedEvent(message.payload, sender);
     case "describeChildIframe":
       return null;
     case "listTasks":
@@ -88,10 +87,7 @@ async function handleMessage(message, sender) {
     case "getTaskGraph":
       return getLocalTaskGraph(message.taskId);
     case "startPlay":
-      return startPlay(message.taskId, sender.tab?.id ?? message.tabId, message.runMode, {
-        groupNodeId: message.groupNodeId || null,
-        stepNodeId: message.stepNodeId || null
-      });
+      return startPlayWithAutoReload(message, sender);
     case "stopPlay":
       return stopPlay();
     case "pausePlay":
@@ -100,21 +96,26 @@ async function handleMessage(message, sender) {
       return resumePlay();
     case "getPlayState":
       return getPlayStatus();
+    case "clearPlayLogs":
+      return clearPlayLogs();
+    case "reloadPlayerNow":
+      return reloadPlayerNow(message.pendingPlay || null);
+    case "toggleRecord":
+    case "clearDraft":
+    case "saveDraft":
+    case "recordedEvent":
     case "startRecordSession":
-      return startRecordSession(message);
     case "finishRecord":
-      return finishRecord();
     case "discardRecord":
-      return discardRecord();
     case "rerecord":
-      return startRecordSession({ ...message, rerecord: true });
     case "getCopiedSelector":
-      return getCopiedSelector();
     case "setCopiedSelector":
-      return setCopiedSelector(message.payload, message.text);
     case "clearCopiedSelector":
-      await chrome.storage.local.remove(["copiedSelector", "copiedSelectorText"]);
-      return { ok: true };
+      return {
+        ok: false,
+        error: "این افزونه فقط اجرا است. برای ضبط، افزونهٔ Recorder را نصب کنید.",
+        needExtension: "recorder"
+      };
     default:
       return { ok: false, error: "unknown" };
   }
@@ -854,13 +855,208 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId !== chrome.windows.WINDOW_ID_NONE) scheduleOpenTabsBroadcast("focus");
 });
 
-/** Dev/local auto-reload: only when portal (app) is open and not recording/playing.
- *  Refreshing a recorded external page must NOT reload the extension. */
-const DEV_POLL_MS = 2500;
+/** Dev/local auto-reload for Player only (never use recorder stamp). */
+const DEV_POLL_MS = 2000;
 const DEV_STAMP_URLS = [
-  "https://localhost:7201/extension/dev-stamp",
-  "http://localhost:5201/extension/dev-stamp"
+  "https://localhost:7201/extension/dev-stamp/player",
+  "http://localhost:5201/extension/dev-stamp/player",
+  "http://localhost:5000/extension/dev-stamp/player"
 ];
+
+/**
+ * Play: sync install folder; if code changed, respond first then reload & resume.
+ * Never call chrome.runtime.reload() before sendResponse — that closes the channel.
+ */
+async function startPlayWithAutoReload(message, sender) {
+  const pendingPlay = {
+    taskId: message.taskId,
+    tabId: sender.tab?.id ?? message.tabId ?? null,
+    runMode: message.runMode || null,
+    groupNodeId: message.groupNodeId || null,
+    stepNodeId: message.stepNodeId || null,
+    // New blank tab ONLY when Start is pressed from our portal web app.
+    openNewTab: message.openNewTab === true
+  };
+
+  const playOpts = {
+    groupNodeId: pendingPlay.groupNodeId,
+    stepNodeId: pendingPlay.stepNodeId,
+    openNewTab: pendingPlay.openNewTab
+  };
+
+  const { resumePlayAfterReload } = await chrome.storage.local.get("resumePlayAfterReload");
+  if (resumePlayAfterReload) {
+    await chrome.storage.local.remove("resumePlayAfterReload");
+    return startPlay(pendingPlay.taskId, pendingPlay.tabId, pendingPlay.runMode, playOpts);
+  }
+
+  const stampInfo = await fetchPlayerStamp({ forceSync: true });
+  const { playerDevStamp } = await chrome.storage.local.get("playerDevStamp");
+  const prev = playerDevStamp || null;
+
+  if (stampInfo?.stamp) {
+    await chrome.storage.local.set({
+      playerDevStamp: stampInfo.stamp,
+      portalBase: stampInfo.origin || undefined,
+      installPath: stampInfo.path || null
+    });
+  }
+
+  // First run or unchanged code → play immediately (no reload).
+  const needsReload = !!(prev && stampInfo?.stamp && prev !== stampInfo.stamp);
+  if (!needsReload) {
+    return startPlay(pendingPlay.taskId, pendingPlay.tabId, pendingPlay.runMode, playOpts);
+  }
+
+  await chrome.storage.local.set({
+    pendingPlayRequest: pendingPlay,
+    pendingPlayAt: Date.now(),
+    resumePlayAfterReload: true,
+    pendingDevReload: false,
+    pendingDevStamp: null
+  });
+
+  // Respond to the page first; reload after the message channel can flush.
+  setTimeout(() => {
+    console.info("[DA Player] play → auto reload after response", pendingPlay.taskId);
+    try { chrome.runtime.reload(); } catch { /* ignore */ }
+  }, 120);
+
+  return {
+    ok: true,
+    reloading: true,
+    message: "افزونهٔ اجرا در حال به‌روزرسانی است — اجرا خودکار شروع می‌شود…"
+  };
+}
+
+async function reloadPlayerNow(pendingPlay) {
+  if (pendingPlay) {
+    await chrome.storage.local.set({
+      pendingPlayRequest: pendingPlay,
+      pendingPlayAt: Date.now()
+    });
+  }
+  // Delay reload so any pending sendResponse can flush (same as play path).
+  setTimeout(() => {
+    try { chrome.runtime.reload(); } catch { /* ignore */ }
+  }, 120);
+  return { ok: true, reloading: true };
+}
+
+async function ensurePlayerUpToDate(pendingPlay) {
+  // Force portal to sync extension-player → install folder, then read stamp.
+  const stampInfo = await fetchPlayerStamp({ forceSync: true });
+  if (!stampInfo?.stamp) return { reloading: false };
+
+  const { playerDevStamp, recording, playing } = await chrome.storage.local.get([
+    "playerDevStamp", "devStamp", "recording", "playing"
+  ]);
+  // Prefer role-specific key; fall back to legacy shared key once.
+  const prev = playerDevStamp || null;
+
+  await chrome.storage.local.set({
+    playerDevStamp: stampInfo.stamp,
+    portalBase: stampInfo.origin || undefined,
+    installPath: stampInfo.path || null
+  });
+
+  // First run after install: just remember stamp, don't reload-loop.
+  if (!prev) return { reloading: false };
+
+  if (prev === stampInfo.stamp) return { reloading: false };
+
+  // Code on disk is newer than the running service worker → reload, then resume play.
+  if (recording || playing) {
+    await chrome.storage.local.set({
+      pendingDevReload: true,
+      pendingDevStamp: stampInfo.stamp,
+      pendingPlayRequest: pendingPlay,
+      pendingPlayAt: Date.now()
+    });
+    return { reloading: false, queued: true };
+  }
+
+  await chrome.storage.local.set({
+    pendingPlayRequest: pendingPlay,
+    pendingPlayAt: Date.now(),
+    pendingDevReload: false,
+    pendingDevStamp: null
+  });
+  console.info("[DA Player] code updated → auto reload before play", stampInfo.version || "");
+  setTimeout(() => {
+    try { chrome.runtime.reload(); } catch { /* ignore */ }
+  }, 120);
+  return { reloading: true };
+}
+
+async function fetchPlayerStamp({ forceSync }) {
+  const portal = await portalBase().catch(() => DEFAULT_PORTAL);
+  if (forceSync) {
+    try {
+      await fetch(`${portal}/extension/sync`, { method: "POST", cache: "no-store" });
+    } catch {
+      /* sync optional if portal down */
+    }
+  }
+  const urls = [
+    `${portal}/extension/dev-stamp/player`,
+    ...DEV_STAMP_URLS
+  ];
+  const seen = new Set();
+  for (const url of urls) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (!data?.stamp) continue;
+      let origin = portal;
+      try { origin = new URL(url).origin; } catch { /* keep */ }
+      return {
+        stamp: data.stamp,
+        version: data.version || "",
+        path: data.path || null,
+        origin
+      };
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
+async function resumePendingPlayAfterReload() {
+  const { pendingPlayRequest, pendingPlayAt } = await chrome.storage.local.get([
+    "pendingPlayRequest", "pendingPlayAt"
+  ]);
+  if (!pendingPlayRequest?.taskId) return;
+  // Ignore stale requests older than 2 minutes.
+  if (pendingPlayAt && Date.now() - Number(pendingPlayAt) > 120000) {
+    await chrome.storage.local.remove(["pendingPlayRequest", "pendingPlayAt", "resumePlayAfterReload"]);
+    return;
+  }
+  await chrome.storage.local.remove(["pendingPlayRequest", "pendingPlayAt"]);
+  // Mark so the next startPlayWithAutoReload (if any) does not reload again.
+  await chrome.storage.local.set({ resumePlayAfterReload: true });
+  console.info("[DA Player] resuming play after auto-reload", pendingPlayRequest.taskId);
+  setTimeout(() => {
+    startPlay(
+      pendingPlayRequest.taskId,
+      pendingPlayRequest.tabId,
+      pendingPlayRequest.runMode,
+      {
+        groupNodeId: pendingPlayRequest.groupNodeId || null,
+        stepNodeId: pendingPlayRequest.stepNodeId || null,
+        openNewTab: pendingPlayRequest.openNewTab === true
+      }
+    ).then(() => chrome.storage.local.remove("resumePlayAfterReload"))
+      .catch((err) => {
+        chrome.storage.local.remove("resumePlayAfterReload");
+        console.warn("[DA Player] resume play failed", err);
+      });
+  }, 700);
+}
 
 function isPortalAppUrl(url) {
   if (!url || typeof url !== "string") return false;
@@ -868,7 +1064,6 @@ function isPortalAppUrl(url) {
     const u = new URL(url);
     const host = (u.hostname || "").toLowerCase();
     if (host !== "localhost" && host !== "127.0.0.1") return false;
-    // Extension sync endpoints alone don't count as "using the app"
     if (u.pathname.startsWith("/extension/")) return false;
     return true;
   } catch {
@@ -896,31 +1091,24 @@ async function pollDevReload() {
   const { recording, playing, pendingDevReload, pendingDevStamp } =
     await chrome.storage.local.get(["recording", "playing", "pendingDevReload", "pendingDevStamp"]);
 
-  // Never tear down the service worker mid-record / mid-play (page refresh on target site is fine).
   if (recording || playing) {
-    // Still detect updates and queue them for after finish.
     await detectDevStampChange({ queueOnly: true });
     return;
   }
 
-  // Outside recording: only apply reload when user has the app open — not while browsing/recording targets.
   const appOpen = await hasOpenPortalAppTab();
   if (!appOpen) {
-    if (pendingDevReload && pendingDevStamp) {
-      // Keep stamp queued; apply next time app is open.
-      return;
-    }
     await detectDevStampChange({ queueOnly: true });
     return;
   }
 
   if (pendingDevReload && pendingDevStamp) {
     await chrome.storage.local.set({
-      devStamp: pendingDevStamp,
+      playerDevStamp: pendingDevStamp,
       pendingDevReload: false,
       pendingDevStamp: null
     });
-    console.info("[DA] applying deferred extension reload (app open, idle)");
+    console.info("[DA Player] applying deferred extension reload (app open, idle)");
     chrome.runtime.reload();
     return;
   }
@@ -929,210 +1117,43 @@ async function pollDevReload() {
 }
 
 async function detectDevStampChange({ queueOnly }) {
-  const portal = await portalBase().catch(() => DEFAULT_PORTAL);
-  const urls = [`${portal}/extension/dev-stamp`, ...DEV_STAMP_URLS];
-  const seen = new Set();
-  for (const url of urls) {
-    if (seen.has(url)) continue;
-    seen.add(url);
-    try {
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) continue;
-      const data = await res.json();
-      if (!data?.stamp) continue;
-      const { devStamp } = await chrome.storage.local.get("devStamp");
-      const origin = new URL(url).origin;
-      if (devStamp && devStamp !== data.stamp) {
-        if (queueOnly) {
-          await chrome.storage.local.set({
-            pendingDevReload: true,
-            pendingDevStamp: data.stamp,
-            portalBase: origin,
-            installPath: data.path || null
-          });
-          console.info("[DA] extension update queued (recording/play or no app tab)", data.version || "");
-          return;
-        }
-        await chrome.storage.local.set({
-          devStamp: data.stamp,
-          pendingDevReload: false,
-          pendingDevStamp: null,
-          portalBase: origin,
-          installPath: data.path || null
-        });
-        console.info("[DA] extension updated → reload", data.version || "", data.path || "");
-        chrome.runtime.reload();
-        return;
-      }
+  const info = await fetchPlayerStamp({ forceSync: false });
+  if (!info?.stamp) return;
+
+  const { playerDevStamp } = await chrome.storage.local.get("playerDevStamp");
+  if (playerDevStamp && playerDevStamp !== info.stamp) {
+    if (queueOnly) {
       await chrome.storage.local.set({
-        devStamp: data.stamp,
-        portalBase: origin,
-        installPath: data.path || null
+        pendingDevReload: true,
+        pendingDevStamp: info.stamp,
+        portalBase: info.origin,
+        installPath: info.path || null
       });
+      console.info("[DA Player] update queued", info.version || "");
       return;
-    } catch {
-      /* portal not up yet */
     }
+    await chrome.storage.local.set({
+      playerDevStamp: info.stamp,
+      pendingDevReload: false,
+      pendingDevStamp: null,
+      portalBase: info.origin,
+      installPath: info.path || null
+    });
+    console.info("[DA Player] updated → reload", info.version || "", info.path || "");
+    chrome.runtime.reload();
+    return;
   }
+
+  await chrome.storage.local.set({
+    playerDevStamp: info.stamp,
+    portalBase: info.origin,
+    installPath: info.path || null
+  });
 }
 
 pollDevReload();
 setInterval(pollDevReload, DEV_POLL_MS);
+resumePendingPlayAfterReload();
 
-const CTX_COPY_SELECTOR = "da-copy-selector";
-
-function ensureContextMenus() {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: CTX_COPY_SELECTOR,
-      title: "کپی سلکتور (اتوماتور پویا)",
-      contexts: ["all"]
-    });
-  });
-}
-
-chrome.runtime.onInstalled.addListener(ensureContextMenus);
-chrome.runtime.onStartup.addListener(ensureContextMenus);
-ensureContextMenus();
-
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== CTX_COPY_SELECTOR || !tab?.id) return;
-  try {
-    const result = await copySelectorFromContext(info, tab);
-    if (result.ok) {
-      console.info("[DA] selector copied", result.selector?.slice(0, 80));
-    } else {
-      console.warn("[DA] copy selector failed", result.error);
-    }
-  } catch (err) {
-    console.warn("[DA] copy selector error", err?.message || err);
-  }
-});
-
-async function getCopiedSelector() {
-  const data = await chrome.storage.local.get(["copiedSelector", "copiedSelectorText"]);
-  if (!data.copiedSelector) return { ok: false, error: "سلکتوری در حافظه نیست." };
-  return {
-    ok: true,
-    payload: data.copiedSelector,
-    text: data.copiedSelectorText || encodeDaSelector(data.copiedSelector)
-  };
-}
-
-async function setCopiedSelector(payload, text) {
-  if (!payload || typeof payload !== "object") {
-    return { ok: false, error: "payload نامعتبر است." };
-  }
-  const selector = payload.selector || payload.Selector || "";
-  if (!String(selector).trim()) {
-    return { ok: false, error: "سلکتور خالی است." };
-  }
-  const normalized = {
-    v: payload.v || 1,
-    kind: "da-selector",
-    selector: String(selector),
-    elementBy: payload.elementBy || payload.ElementBy || "CssSelector",
-    framePath: payload.framePath || payload.FramePath || [],
-    url: payload.url || payload.Url || "",
-    copiedAt: payload.copiedAt || new Date().toISOString(),
-    hasAttribute: payload.hasAttribute ?? payload.HasAttribute,
-    attributeName: payload.attributeName || payload.AttributeName || "",
-    attributeValueIsDynamic: payload.attributeValueIsDynamic ?? payload.AttributeValueIsDynamic,
-    attributeValue: payload.attributeValue || payload.AttributeValue || "",
-    attributeDynamicColumn: payload.attributeDynamicColumn || payload.AttributeDynamicColumn || "",
-    attributeDataSourceId: payload.attributeDataSourceId ?? payload.AttributeDataSourceId ?? null
-  };
-  const encoded = text || encodeDaSelector(normalized);
-  await chrome.storage.local.set({ copiedSelector: normalized, copiedSelectorText: encoded });
-  return { ok: true, payload: normalized, text: encoded };
-}
-
-function encodeDaSelector(payload) {
-  return "DASEL:" + JSON.stringify(payload);
-}
-
-function parseDaSelectorText(text) {
-  if (!text || typeof text !== "string") return null;
-  const raw = text.trim();
-  if (!raw.startsWith("DASEL:")) return null;
-  try {
-    const obj = JSON.parse(raw.slice(6));
-    if (!obj || typeof obj !== "object") return null;
-    if (!obj.selector && !obj.Selector) return null;
-    return {
-      v: obj.v || 1,
-      kind: "da-selector",
-      selector: obj.selector || obj.Selector || "",
-      elementBy: obj.elementBy || obj.ElementBy || "CssSelector",
-      framePath: obj.framePath || obj.FramePath || [],
-      url: obj.url || obj.Url || "",
-      copiedAt: obj.copiedAt || null
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function copySelectorFromContext(info, tab) {
-  const frameId = info.frameId ?? 0;
-  let captured = null;
-  try {
-    captured = await chrome.tabs.sendMessage(tab.id, { type: "captureContextSelector" }, { frameId });
-  } catch {
-    captured = null;
-  }
-  if (!captured?.ok || !captured.selector) {
-    return { ok: false, error: captured?.error || "سلکتور گرفته نشد — صفحه را رفرش کنید." };
-  }
-
-  const framePath = await buildFramePath(tab.id, frameId);
-  const payload = {
-    v: 1,
-    kind: "da-selector",
-    selector: captured.selector,
-    elementBy: "CssSelector",
-    framePath,
-    url: captured.url || tab.url || "",
-    tag: captured.tag || "",
-    copiedAt: new Date().toISOString()
-  };
-  const text = encodeDaSelector(payload);
-  await chrome.storage.local.set({ copiedSelector: payload, copiedSelectorText: text });
-
-  // Prefer writing clipboard in the page (user-gesture from context menu).
-  let clipped = false;
-  try {
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, frameIds: [frameId] },
-      func: (t) => {
-        try {
-          if (navigator.clipboard?.writeText) {
-            return navigator.clipboard.writeText(t).then(() => true).catch(() => false);
-          }
-        } catch {
-          /* fall through */
-        }
-        try {
-          const ta = document.createElement("textarea");
-          ta.value = t;
-          ta.style.position = "fixed";
-          ta.style.left = "-9999px";
-          document.body.appendChild(ta);
-          ta.select();
-          const ok = document.execCommand("copy");
-          ta.remove();
-          return ok;
-        } catch {
-          return false;
-        }
-      },
-      args: [text]
-    });
-    clipped = !!result;
-  } catch {
-    clipped = false;
-  }
-
-  return { ok: true, selector: payload.selector, clipped, frameHops: framePath.length };
-}
+// Player: no contextMenus permission — selector clipboard lives in Recorder only.
 

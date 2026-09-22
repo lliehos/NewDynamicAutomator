@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: Tahoma, sans-serif; width: 320px; padding: 12px; margin: 0; }
+      h4 { margin: 0 0 8px; }
+      .muted { color: #666; font-size: 12px; line-height: 1.5; }
+      code { display: block; background: #f5f5f9; padding: 8px; border-radius: 8px; font-size: 11px; word-break: break-all; max-height: 120px; overflow: auto; }
+      button { width: 100%; margin-top: 8px; padding: 8px; border: 0; border-radius: 6px; cursor: pointer; background: #f1f0ff; }
+      #clear { background: #6e6b7b; color: #fff; }
+    </style>
+  </head>
+  <body>
+    <h4>سلکتور — اتوماتور پویا</h4>
+    <p class="muted">روی صفحه راست‌کلیک → «کپی سلکتور»، سپس در ویرایشگر «خواندن از حافظه».</p>
+    <div class="muted" id="status">...</div>
+    <code id="preview">—</code>
+    <button type="button" id="refresh">تازه‌سازی</button>
+    <button type="button" id="clear">پاک کردن حافظه</button>
+    <script src="popup.js"></script>
+  </body>
+</html>

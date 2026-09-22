@@ -1,0 +1,295 @@
+/* Portal home — mobile app shell */
+
+.da-home {
+  position: relative;
+}
+
+.da-home-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 1rem;
+}
+
+.da-home-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.da-home-sub {
+  color: #8a8699;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  margin-top: 0.25rem;
+  max-width: 42rem;
+}
+
+.da-tasks-panel {
+  position: relative;
+  min-height: 8rem;
+}
+
+.da-tasks-busy {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(2px);
+  border-radius: 0.5rem;
+}
+
+.da-tasks-busy[hidden] {
+  display: none !important;
+}
+
+.da-tasks-panel.is-busy {
+  pointer-events: none;
+  user-select: none;
+}
+
+.da-tasks-busy-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  text-align: center;
+  max-width: 22rem;
+}
+
+.da-tasks-spinner {
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 3px solid #d8d6de;
+  border-top-color: #28c76f;
+  border-radius: 50%;
+  animation: da-tasks-spin 0.75s linear infinite;
+}
+
+.da-tasks-busy-text {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #5e5873;
+  line-height: 1.5;
+}
+
+@keyframes da-tasks-spin {
+  to { transform: rotate(360deg); }
+}
+
+.da-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 5.5rem;
+}
+
+.da-task-empty {
+  text-align: center;
+  padding: 2.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.da-task-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 14px 14px 12px;
+  box-shadow: 0 1px 2px rgba(47, 43, 61, 0.06), 0 8px 20px rgba(47, 43, 61, 0.06);
+  border: 1px solid rgba(47, 43, 61, 0.06);
+}
+
+.da-task-card-top {
+  margin-bottom: 10px;
+}
+
+.da-task-card-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #2f2b3d;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.da-task-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  color: #8a8699;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.da-task-card-meta li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.da-task-card-meta .ti {
+  font-size: 0.95rem;
+  opacity: 0.85;
+}
+
+.da-task-stats {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.da-task-stat {
+  flex: 1;
+  text-align: center;
+  background: #f7f7fb;
+  border-radius: 12px;
+  padding: 8px 4px;
+  min-width: 0;
+}
+
+.da-task-stat b {
+  display: block;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #2f2b3d;
+  line-height: 1.2;
+}
+
+.da-task-stat span {
+  display: block;
+  font-size: 0.68rem;
+  color: #a8aaae;
+  margin-top: 2px;
+}
+
+.da-task-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.da-task-actions .btn,
+.da-task-actions .da-import-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 12px;
+  min-height: 52px;
+  line-height: 1.2;
+  margin: 0;
+  cursor: pointer;
+}
+
+.da-task-actions-desk .btn,
+.da-task-actions-desk .da-import-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-direction: row;
+  min-height: 0;
+  padding: 0.25rem 0.5rem;
+}
+
+.da-home-create {
+  display: inline-flex;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.da-fab {
+  position: fixed;
+  z-index: 1080;
+  /* Physical corner opposite the (now-hidden) extension REC so it stays visible in RTL. */
+  right: 18px;
+  left: auto;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: 50%;
+  background: #7367f0;
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(115, 103, 240, 0.45);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.da-fab:active {
+  transform: scale(0.96);
+}
+
+.da-fab .ti {
+  font-size: 1.55rem;
+  line-height: 1;
+}
+
+@media (max-width: 767.98px) {
+  .layout-navbar.navbar-detached {
+    width: calc(100% - 1.5rem) !important;
+    margin-inline: 0.75rem !important;
+    border-radius: 0.75rem;
+    box-shadow: 0 2px 12px rgba(47, 43, 61, 0.08);
+  }
+
+  .container-p-y {
+    padding-block: 0.85rem !important;
+  }
+
+  .container-xxl {
+    padding-inline: 0.75rem !important;
+  }
+
+  .da-home-head {
+    margin-bottom: 0.75rem;
+    align-items: center;
+  }
+
+  .da-home-title {
+    font-size: 1.35rem;
+  }
+
+  .da-home-sub {
+    font-size: 0.75rem;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .da-home-create {
+    padding-inline: 0.7rem;
+  }
+
+  .da-home-create-label {
+    display: none;
+  }
+
+  .da-home-create {
+    display: none !important;
+  }
+
+  #da-create-task-modal .modal-header {
+    border-bottom: 0;
+    padding-bottom: 0.25rem;
+  }
+
+  .content-wrapper,
+  .layout-page {
+    background: #f3f2f8;
+  }
+}

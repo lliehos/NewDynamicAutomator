@@ -1,4 +1,4 @@
-importScripts("player/engine.js");
+/** Recorder-only extension — play messages are rejected. */
 
 /** Single-app mode: portal hosts UI + /api/* — no separate API process. */
 const DEFAULT_PORTAL = "https://localhost:7201";
@@ -88,18 +88,15 @@ async function handleMessage(message, sender) {
     case "getTaskGraph":
       return getLocalTaskGraph(message.taskId);
     case "startPlay":
-      return startPlay(message.taskId, sender.tab?.id ?? message.tabId, message.runMode, {
-        groupNodeId: message.groupNodeId || null,
-        stepNodeId: message.stepNodeId || null
-      });
     case "stopPlay":
-      return stopPlay();
     case "pausePlay":
-      return pausePlay();
     case "resumePlay":
-      return resumePlay();
     case "getPlayState":
-      return getPlayStatus();
+      return {
+        ok: false,
+        error: "این افزونه فقط ضبط است. برای اجرا، افزونهٔ Player را نصب کنید.",
+        needExtension: "player"
+      };
     case "startRecordSession":
       return startRecordSession(message);
     case "finishRecord":
@@ -109,12 +106,12 @@ async function handleMessage(message, sender) {
     case "rerecord":
       return startRecordSession({ ...message, rerecord: true });
     case "getCopiedSelector":
-      return getCopiedSelector();
     case "setCopiedSelector":
-      return setCopiedSelector(message.payload, message.text);
     case "clearCopiedSelector":
-      await chrome.storage.local.remove(["copiedSelector", "copiedSelectorText"]);
-      return { ok: true };
+      return {
+        ok: false,
+        error: "کپی سلکتور به افزونهٔ Selector منتقل شد — آن را جداگانه نصب کنید."
+      };
     default:
       return { ok: false, error: "unknown" };
   }
@@ -338,7 +335,6 @@ async function getState() {
   const data = await chrome.storage.local.get([
     "recording", "draft", "recordingGroups", "token", "playing", "recordPhase", "recordTabId", "localUser"
   ]);
-  const play = getPlayStatus();
   const count = countRecordedSteps(data.recordingGroups, data.draft);
   const phase = data.recording
     ? "recording"
@@ -347,14 +343,19 @@ async function getState() {
     ok: true,
     recording: !!data.recording,
     recordPhase: phase,
-    playing: !!data.playing || !!play.playing,
+    playing: false,
     count,
     groupCount: Array.isArray(data.recordingGroups) ? data.recordingGroups.length : 0,
     signedIn: true,
     localUser: data.localUser || "test",
     recordTabId: data.recordTabId || null,
-    play
+    play: { playing: false }
   };
+}
+
+async function listTasks() {
+  const tasks = await loadUserTasks();
+  return { ok: true, tasks };
 }
 
 async function toggleRecord(tabId) {
@@ -834,13 +835,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.url || changeInfo.title || changeInfo.status === "complete" || changeInfo.status === "loading") {
     scheduleOpenTabsBroadcast(changeInfo.url ? "url" : "update");
   }
-  // Keep play HUD (pause/stop + results) on the execution tab after navigations.
-  if (changeInfo.status === "complete" && typeof playStatus !== "undefined" && playStatus?.playing) {
-    const activePlayTab = (typeof playTabId !== "undefined" && playTabId) || null;
-    if (activePlayTab && tabId === activePlayTab && typeof injectPlayFab === "function") {
-      injectPlayFab(tabId).catch(() => {});
-    }
-  }
   if (!changeInfo.url) return;
   const { recording, recordTabId } = await chrome.storage.local.get(["recording", "recordTabId"]);
   if (!recording || !recordTabId || tabId !== recordTabId) return;
@@ -858,8 +852,9 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
  *  Refreshing a recorded external page must NOT reload the extension. */
 const DEV_POLL_MS = 2500;
 const DEV_STAMP_URLS = [
-  "https://localhost:7201/extension/dev-stamp",
-  "http://localhost:5201/extension/dev-stamp"
+  "https://localhost:7201/extension/dev-stamp/recorder",
+  "http://localhost:5201/extension/dev-stamp/recorder",
+  "http://localhost:5000/extension/dev-stamp/recorder"
 ];
 
 function isPortalAppUrl(url) {
@@ -979,160 +974,5 @@ async function detectDevStampChange({ queueOnly }) {
 pollDevReload();
 setInterval(pollDevReload, DEV_POLL_MS);
 
-const CTX_COPY_SELECTOR = "da-copy-selector";
-
-function ensureContextMenus() {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: CTX_COPY_SELECTOR,
-      title: "کپی سلکتور (اتوماتور پویا)",
-      contexts: ["all"]
-    });
-  });
-}
-
-chrome.runtime.onInstalled.addListener(ensureContextMenus);
-chrome.runtime.onStartup.addListener(ensureContextMenus);
-ensureContextMenus();
-
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== CTX_COPY_SELECTOR || !tab?.id) return;
-  try {
-    const result = await copySelectorFromContext(info, tab);
-    if (result.ok) {
-      console.info("[DA] selector copied", result.selector?.slice(0, 80));
-    } else {
-      console.warn("[DA] copy selector failed", result.error);
-    }
-  } catch (err) {
-    console.warn("[DA] copy selector error", err?.message || err);
-  }
-});
-
-async function getCopiedSelector() {
-  const data = await chrome.storage.local.get(["copiedSelector", "copiedSelectorText"]);
-  if (!data.copiedSelector) return { ok: false, error: "سلکتوری در حافظه نیست." };
-  return {
-    ok: true,
-    payload: data.copiedSelector,
-    text: data.copiedSelectorText || encodeDaSelector(data.copiedSelector)
-  };
-}
-
-async function setCopiedSelector(payload, text) {
-  if (!payload || typeof payload !== "object") {
-    return { ok: false, error: "payload نامعتبر است." };
-  }
-  const selector = payload.selector || payload.Selector || "";
-  if (!String(selector).trim()) {
-    return { ok: false, error: "سلکتور خالی است." };
-  }
-  const normalized = {
-    v: payload.v || 1,
-    kind: "da-selector",
-    selector: String(selector),
-    elementBy: payload.elementBy || payload.ElementBy || "CssSelector",
-    framePath: payload.framePath || payload.FramePath || [],
-    url: payload.url || payload.Url || "",
-    copiedAt: payload.copiedAt || new Date().toISOString(),
-    hasAttribute: payload.hasAttribute ?? payload.HasAttribute,
-    attributeName: payload.attributeName || payload.AttributeName || "",
-    attributeValueIsDynamic: payload.attributeValueIsDynamic ?? payload.AttributeValueIsDynamic,
-    attributeValue: payload.attributeValue || payload.AttributeValue || "",
-    attributeDynamicColumn: payload.attributeDynamicColumn || payload.AttributeDynamicColumn || "",
-    attributeDataSourceId: payload.attributeDataSourceId ?? payload.AttributeDataSourceId ?? null
-  };
-  const encoded = text || encodeDaSelector(normalized);
-  await chrome.storage.local.set({ copiedSelector: normalized, copiedSelectorText: encoded });
-  return { ok: true, payload: normalized, text: encoded };
-}
-
-function encodeDaSelector(payload) {
-  return "DASEL:" + JSON.stringify(payload);
-}
-
-function parseDaSelectorText(text) {
-  if (!text || typeof text !== "string") return null;
-  const raw = text.trim();
-  if (!raw.startsWith("DASEL:")) return null;
-  try {
-    const obj = JSON.parse(raw.slice(6));
-    if (!obj || typeof obj !== "object") return null;
-    if (!obj.selector && !obj.Selector) return null;
-    return {
-      v: obj.v || 1,
-      kind: "da-selector",
-      selector: obj.selector || obj.Selector || "",
-      elementBy: obj.elementBy || obj.ElementBy || "CssSelector",
-      framePath: obj.framePath || obj.FramePath || [],
-      url: obj.url || obj.Url || "",
-      copiedAt: obj.copiedAt || null
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function copySelectorFromContext(info, tab) {
-  const frameId = info.frameId ?? 0;
-  let captured = null;
-  try {
-    captured = await chrome.tabs.sendMessage(tab.id, { type: "captureContextSelector" }, { frameId });
-  } catch {
-    captured = null;
-  }
-  if (!captured?.ok || !captured.selector) {
-    return { ok: false, error: captured?.error || "سلکتور گرفته نشد — صفحه را رفرش کنید." };
-  }
-
-  const framePath = await buildFramePath(tab.id, frameId);
-  const payload = {
-    v: 1,
-    kind: "da-selector",
-    selector: captured.selector,
-    elementBy: "CssSelector",
-    framePath,
-    url: captured.url || tab.url || "",
-    tag: captured.tag || "",
-    copiedAt: new Date().toISOString()
-  };
-  const text = encodeDaSelector(payload);
-  await chrome.storage.local.set({ copiedSelector: payload, copiedSelectorText: text });
-
-  // Prefer writing clipboard in the page (user-gesture from context menu).
-  let clipped = false;
-  try {
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, frameIds: [frameId] },
-      func: (t) => {
-        try {
-          if (navigator.clipboard?.writeText) {
-            return navigator.clipboard.writeText(t).then(() => true).catch(() => false);
-          }
-        } catch {
-          /* fall through */
-        }
-        try {
-          const ta = document.createElement("textarea");
-          ta.value = t;
-          ta.style.position = "fixed";
-          ta.style.left = "-9999px";
-          document.body.appendChild(ta);
-          ta.select();
-          const ok = document.execCommand("copy");
-          ta.remove();
-          return ok;
-        } catch {
-          return false;
-        }
-      },
-      args: [text]
-    });
-    clipped = !!result;
-  } catch {
-    clipped = false;
-  }
-
-  return { ok: true, selector: payload.selector, clipped, frameHops: framePath.length };
-}
+// Context-menu selector copy lives in extension-selector (dedicated package).
 

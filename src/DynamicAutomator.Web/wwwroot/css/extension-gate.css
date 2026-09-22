@@ -10,6 +10,9 @@
   padding: 24px;
 }
 #da-ext-modal.open { display: flex; }
+#da-ext-modal[hidden] { display: none !important; }
+#da-ext-modal[data-role="player"] .da-ext-card { border-top: 4px solid #28c76f; }
+#da-ext-modal[data-role="recorder"] .da-ext-card { border-top: 4px solid #ea5455; }
 #da-ext-modal .da-ext-card {
   background: #fff;
   border-radius: 16px;

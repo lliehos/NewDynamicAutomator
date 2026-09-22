@@ -44,6 +44,15 @@
   animation: none;
   letter-spacing: 1px;
 }
+.da-fab-btn-hud {
+  width: 44px !important;
+  height: 44px !important;
+  border-radius: 12px !important;
+  background: #5e5873 !important;
+  box-shadow: 0 6px 16px rgba(47, 43, 61, 0.28) !important;
+  font-size: 16px !important;
+  letter-spacing: 0 !important;
+}
 @keyframes da-rec-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(234, 84, 85, 0.55); }
   50% { box-shadow: 0 0 0 12px rgba(234, 84, 85, 0); }
@@ -62,8 +71,6 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
 }
 .da-fab-panel button {
-  display: block;
-  width: 100%;
   margin-top: 8px;
   padding: 8px;
   border: 0;
@@ -72,10 +79,11 @@
   cursor: pointer;
 }
 .da-fab-panel button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
 }
-.da-fab-play {
+.da-fab-play,
+.da-fab-start {
   background: #28c76f !important;
   color: #fff !important;
 }
@@ -85,6 +93,10 @@
 }
 .da-fab-stop {
   background: #ea5455 !important;
+  color: #fff !important;
+}
+.da-fab-clear {
+  background: #6e6b7b !important;
   color: #fff !important;
 }
 .da-fab-section {
@@ -195,17 +207,21 @@
 .da-fab-log-error { color: #ea5455; font-weight: 600; }
 .da-fab-play-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 2px;
+  align-items: center;
 }
 .da-fab-play-icons {
   justify-content: flex-start;
 }
+.da-fab-panel .da-fab-play-actions button,
 .da-fab-panel .da-ico-btn,
 .da-ico-btn {
   width: 42px !important;
   height: 42px !important;
-  min-width: 42px;
+  min-width: 42px !important;
+  max-width: 42px !important;
   margin-top: 0 !important;
   padding: 0 !important;
   border: 0;
@@ -215,6 +231,13 @@
   justify-content: center;
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  flex: 0 0 auto;
+}
+.da-fab-panel .da-ico-btn[hidden],
+.da-ico-btn[hidden],
+.da-fab-panel button[hidden],
+.da-fab-btn[hidden] {
+  display: none !important;
 }
 .da-ico-btn svg { display: block; }
 .da-fab-status {

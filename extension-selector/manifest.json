@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Dynamic Automator Selector",
+  "version": "1.0.0",
+  "description": "کپی سلکتور عنصر با راست‌کلیک — برای خواندن از حافظه در ویرایشگر",
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs",
+    "activeTab",
+    "webNavigation",
+    "contextMenus",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "http://localhost/*",
+    "https://localhost/*",
+    "http://127.0.0.1/*",
+    "https://127.0.0.1/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "سلکتور — اتوماتور پویا"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content/selector.js", "content/frames.js", "content/context-selector.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://localhost/*",
+        "https://localhost/*",
+        "http://127.0.0.1/*",
+        "https://127.0.0.1/*"
+      ],
+      "js": ["content/portal-bridge.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

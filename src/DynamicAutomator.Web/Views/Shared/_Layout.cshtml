@@ -21,20 +21,22 @@
   <link rel="stylesheet" href="~/assets/css/demo.css" />
   <link rel="stylesheet" href="~/assets/vendor/libs/node-waves/node-waves.css" />
   <link rel="stylesheet" href="~/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.css" />
+  <link rel="stylesheet" href="~/css/extension-gate.css?v=dual-1" />
+  <link rel="stylesheet" href="~/css/portal-app.css?v=play-loader-1" />
+  <link rel="stylesheet" href="~/css/da-notify.css?v=2" />
   <style>
     body, .menu, .layout-navbar, .card, input, button { font-family: Vazirmatn, "Public Sans", sans-serif !important; }
   </style>
-  <link rel="stylesheet" href="~/css/extension-gate.css" />
   <script src="~/assets/vendor/js/helpers.js"></script>
   <script src="~/assets/js/config.js"></script>
 </head>
 <body>
-  <div id="da-ext-modal" role="dialog" aria-modal="true" aria-labelledby="da-ext-title">
+  <div id="da-ext-modal" role="dialog" aria-modal="true" aria-labelledby="da-ext-title" data-role="recorder" hidden>
     <div class="da-ext-card">
-      <h2 id="da-ext-title">اتصال افزونه (یک‌بار)</h2>
-      <p>دانلود و Unzip لازم نیست. پرتال افزونه را در پوشهٔ کاربر آماده می‌کند. فقط اگر <strong>Developer mode</strong> خاموش است آن را روشن کنید، بعد یک‌بار Load unpacked.</p>
+      <h2 id="da-ext-title">افزونهٔ ضبط لازم است</h2>
+      <p id="da-ext-desc">برای ضبط فرآیند، افزونهٔ <strong>Dynamic Automator Recorder</strong> را یک‌بار با Load unpacked نصب کنید. افزونهٔ اجرا جداست و برای ضبط لازم نیست.</p>
       <div class="da-ext-path-box">
-        <div class="da-ext-path-label">مسیر ثابت</div>
+        <div class="da-ext-path-label" id="da-ext-path-label">مسیر افزونهٔ ضبط</div>
         <code id="da-ext-modal-path">در حال آماده‌سازی...</code>
       </div>
       <ol>
@@ -42,7 +44,7 @@
         <li><strong>Developer mode</strong> را روشن کنید (اگر روشن نیست).</li>
         <li><strong>Load unpacked</strong> → مسیر بالا را انتخاب کنید.</li>
       </ol>
-      <p class="da-ext-note">از این به بعد با تغییر کد / ری‌استارت پرتال خودش به‌روز می‌شود.</p>
+      <p class="da-ext-note">هر افزونه (ضبط / اجرا) مسیر جدا دارد و فقط یک‌بار Load می‌شود؛ بعد با همگام‌سازی پرتال به‌روز می‌ماند.</p>
       <div class="da-ext-actions">
         <button type="button" class="btn-da btn-da-primary" id="da-ext-copy-path">کپی مسیر</button>
         <button type="button" class="btn-da btn-da-ghost" id="da-ext-recheck">بررسی مجدد</button>
@@ -73,9 +75,15 @@
       <div class="layout-page">
         <nav class="layout-navbar container-xxl navbar navbar-expand-xl navbar-detached align-items-center bg-navbar-theme"
              id="layout-navbar">
-          <div class="navbar-nav-right d-flex align-items-center" id="navbar-collapse">
+          <div class="layout-menu-toggle navbar-nav align-items-xl-center me-3 me-xl-0 d-xl-none">
+            <a class="nav-item nav-link px-0 me-xl-4" href="javascript:void(0)">
+              <i class="ti ti-menu-2 ti-md"></i>
+            </a>
+          </div>
+          <div class="navbar-nav-right d-flex align-items-center w-100" id="navbar-collapse">
+            <div class="d-xl-none fw-semibold text-heading me-auto">اتوماتور پویا</div>
             <ul class="navbar-nav flex-row align-items-center ms-auto">
-              <li class="nav-item me-3">@User.Identity?.Name</li>
+              <li class="nav-item me-3 d-none d-sm-block">@User.Identity?.Name</li>
               <li class="nav-item">
                 <a class="nav-link" asp-controller="Account" asp-action="Logout">خروج</a>
               </li>
@@ -89,6 +97,8 @@
         </div>
       </div>
     </div>
+    <div class="layout-overlay layout-menu-toggle"></div>
+    <div class="drag-target"></div>
   </div>
   <script src="~/assets/vendor/libs/jquery/jquery.js"></script>
   <script src="~/assets/vendor/libs/popper/popper.js"></script>
@@ -97,7 +107,8 @@
   <script src="~/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.js"></script>
   <script src="~/assets/vendor/js/menu.js"></script>
   <script src="~/assets/js/main.js"></script>
-  <script src="~/js/extension-gate.js?v=lazy-ext-3"></script>
+  <script src="~/js/da-notify.js?v=2"></script>
+  <script src="~/js/extension-gate.js?v=dual-ext-1"></script>
   @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

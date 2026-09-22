@@ -24,6 +24,15 @@
   const btnBack = document.getElementById("btn-back-group");
   const inspHeading = document.getElementById("insp-heading");
 
+  /** status bar + toast for important feedback */
+  function setStatus(msg, type) {
+    if (status && msg != null) status.textContent = String(msg);
+    if (!msg || typeof window.daNotify !== "function") return;
+    if (type === "error" || type === "success" || type === "warn" || type === "info") {
+      window.daNotify(String(msg), type);
+    }
+  }
+
   const ACTION_LABELS = {
     NoAction: "بدون اقدام",
     Click: "کلیک",
@@ -58,9 +67,21 @@
     });
   }
 
+  const DEFAULT_HIGHLIGHT_COLOR = "#ea5455";
+  function normalizeHighlightColor(v) {
+    const s = String(v || "").trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
+    if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+      const r = s[1], g = s[2], b = s[3];
+      return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+    }
+    return DEFAULT_HIGHLIGHT_COLOR;
+  }
+
   let graph = {
     nodes: [], edges: [], viewport: { x: 40, y: 40, zoom: 1 }, title: "",
-    dataSources: [], delayBeforeMs: 0, delayAfterMs: 0, canModify: true
+    dataSources: [], delayBeforeMs: 0, delayAfterMs: 0, stepDelayMs: 0,
+    highlightColor: DEFAULT_HIGHLIGHT_COLOR, canModify: true
   };
   let selected = new Set();
   let selectedEdgeId = null;
@@ -138,17 +159,28 @@
     graph.dataSources ||= [];
     graph.delayBeforeMs = graph.delayBeforeMs ?? local.delayBeforeMs ?? 0;
     graph.delayAfterMs = graph.delayAfterMs ?? local.delayAfterMs ?? 0;
+    graph.stepDelayMs = graph.stepDelayMs ?? local.stepDelayMs ?? 0;
+    graph.highlightColor = normalizeHighlightColor(graph.highlightColor ?? local.highlightColor);
     graph.repeatSourceType = graph.repeatSourceType || "None";
     const start = graph.nodes.find((n) => n.kind === "start");
     if (start) {
       start.repeatSourceType = start.repeatSourceType || graph.repeatSourceType || "None";
       if (start.dataSourceId == null && graph.dataSourceId != null) start.dataSourceId = graph.dataSourceId;
       if (start.loopCount == null && graph.loopCount != null) start.loopCount = graph.loopCount;
+      if (start.stepDelayMs == null) start.stepDelayMs = graph.stepDelayMs ?? 0;
+      else graph.stepDelayMs = start.stepDelayMs;
+      // Process-level ignore play errors — default ON.
+      if (start.ignorePlayError == null && graph.ignorePlayError == null) start.ignorePlayError = true;
+      else if (start.ignorePlayError == null) start.ignorePlayError = graph.ignorePlayError !== false;
+      graph.ignorePlayError = start.ignorePlayError !== false;
+      if (!start.highlightColor) start.highlightColor = graph.highlightColor;
+      else graph.highlightColor = normalizeHighlightColor(start.highlightColor);
     }
     graph.canModify = true;
     graph.designOrigin = local.designOrigin || graph.designOrigin || "Manual";
     migrateActionKinds(graph);
     enforceSingleStartOut();
+    normalizeProcessRepeat();
     titleEl.textContent = graph.title || local.title || "گردش کار";
     if (originEl) {
       const recorded = String(graph.designOrigin || "").toLowerCase() === "recorded";
@@ -174,12 +206,16 @@
       viewport: { x: 40, y: 40, zoom: 1 },
       nodes: [{
         id: "start", kind: "start", title: "شروع", x: 40, y: 220,
-        repeatSourceType: "None", loopCount: 1, moveLoop: false
+        repeatSourceType: "None", loopCount: 1, moveLoop: false, stepDelayMs: 0,
+        ignorePlayError: true, highlightColor: DEFAULT_HIGHLIGHT_COLOR
       }],
       edges: [],
       dataSources: [],
       delayBeforeMs: 0,
       delayAfterMs: 0,
+      stepDelayMs: 0,
+      ignorePlayError: true,
+      highlightColor: DEFAULT_HIGHLIGHT_COLOR,
       repeatSourceType: "None"
     };
     titleEl.textContent = graph.title;
@@ -293,8 +329,9 @@
       // Brief pause so the button loader is perceptible for local save.
       await new Promise((r) => setTimeout(r, 450));
       render();
+      setStatus("ذخیره شد.", "success");
     } catch (err) {
-      status.textContent = "خطا در ذخیره";
+      setStatus("خطا در ذخیره", "error");
       console.error(err);
     } finally {
       saving = false;
@@ -314,10 +351,54 @@
     graph.dataSourceId = id;
   }
 
+  /** Ensure process has a default data source when one exists / when repeat needs it. */
+  function ensureDefaultDataSource({ forceForRepeat = false } = {}) {
+    const list = graph.dataSources || [];
+    const start = processStart();
+    const rst = start?.repeatSourceType || graph.repeatSourceType || "None";
+    let masterId = masterDataSourceId();
+    const stillExists = list.some((d) => Number(d.id) === Number(masterId));
+    if (!stillExists) masterId = null;
+
+    if (!masterId && list.length) {
+      masterId = list[0].id;
+      setMasterDataSource(masterId);
+    } else if (!list.length) {
+      setMasterDataSource(null);
+      masterId = null;
+    }
+
+    if ((forceForRepeat || rst === "DataSource") && !masterId && list.length) {
+      setMasterDataSource(list[0].id);
+      masterId = list[0].id;
+    }
+    if (rst === "DataSource" && !list.length && start) {
+      start.repeatSourceType = "None";
+      graph.repeatSourceType = "None";
+    }
+    return masterId;
+  }
+
+  function normalizeProcessRepeat() {
+    const start = processStart();
+    if (!start) return;
+    let rst = start.repeatSourceType || graph.repeatSourceType || "None";
+    // Process has no page selector — Elements is invalid at process level.
+    if (rst === "Elements") {
+      rst = "None";
+      start.repeatSourceType = "None";
+      graph.repeatSourceType = "None";
+      delete start.selectorValue;
+      delete start.selectorIsDynamic;
+    }
+    ensureDefaultDataSource({ forceForRepeat: rst === "DataSource" });
+  }
+
   function renderDataSources() {
     const listEl = document.getElementById("ds-list");
     if (!listEl) return;
     const list = graph.dataSources || [];
+    ensureDefaultDataSource();
     const masterId = masterDataSourceId();
     if (!list.length) {
       listEl.innerHTML = `<li class="ds-meta" style="background:transparent;padding:0">هنوز منبعی اضافه نشده — فایل اکسل را از بالا بیفزایید.</li>`;
@@ -327,13 +408,13 @@
       const keys = (d.columnKeys || (d.columns || []).map((c) => c.key) || []).join("، ") || "—";
       const isMaster = Number(d.id) === Number(masterId);
       return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}">
-        <span class="ds-title">${esc(d.title)}${isMaster ? `<span class="ds-badge-master">مادر</span>` : ""}</span>
-        <div class="ds-meta">${d.columnCount || 0} ستون · ${d.rowCount || 0} ردیف${isMaster ? " · تکرار کل فرآیند" : " · قابل استفاده در گروه‌ها"}</div>
+        <span class="ds-title">${esc(d.title)}${isMaster ? `<span class="ds-badge-master">پیش‌فرض</span>` : ""}</span>
+        <div class="ds-meta">${d.columnCount || 0} ستون · ${d.rowCount || 0} ردیف${isMaster ? " · تکرار فرآیند" : " · قابل استفاده در گروه‌ها/اقدام‌ها"}</div>
         <div class="ds-keys">${esc(keys)}</div>
         ${canModify ? `<div class="ds-actions">
           ${isMaster
-            ? `<button type="button" class="btn-flow btn-ghost" disabled>دیتاسورس مادر</button>`
-            : `<button type="button" class="btn-flow btn-ghost ds-set-master" data-id="${d.id}">تنظیم به‌عنوان مادر</button>`}
+            ? `<button type="button" class="btn-flow btn-ghost" disabled>منبع پیش‌فرض</button>`
+            : `<button type="button" class="btn-flow btn-ghost ds-set-master" data-id="${d.id}">تنظیم به‌عنوان پیش‌فرض</button>`}
           <button type="button" class="btn-flow btn-ghost ds-del" data-id="${d.id}">حذف</button>
         </div>` : ""}
       </li>`;
@@ -346,7 +427,7 @@
     listEl.querySelectorAll(".ds-set-master").forEach((btn) => {
       btn.addEventListener("click", async () => {
         setMasterDataSource(Number(btn.dataset.id));
-        const start = graph.nodes.find((n) => n.kind === "start");
+        const start = processStart();
         if (start && (start.repeatSourceType || graph.repeatSourceType) !== "DataSource") {
           start.repeatSourceType = "DataSource";
           graph.repeatSourceType = "DataSource";
@@ -399,9 +480,16 @@
         cells: data.cells || []
       };
       graph.dataSources.push(entry);
+      if (!masterDataSourceId()) setMasterDataSource(entry.id);
+      else ensureDefaultDataSource();
       if (titleInp) titleInp.value = "";
       if (fileInp) fileInp.value = "";
-      if (statusEl) statusEl.textContent = `منبع «${entry.title}» اضافه شد (${entry.rowCount} ردیف).`;
+      if (statusEl) {
+        const isDefault = Number(masterDataSourceId()) === Number(entry.id);
+        statusEl.textContent = isDefault
+          ? `منبع «${entry.title}» اضافه و به‌عنوان پیش‌فرض تنظیم شد (${entry.rowCount} ردیف).`
+          : `منبع «${entry.title}» اضافه شد (${entry.rowCount} ردیف).`;
+      }
       await save();
       renderInspector();
       render();
@@ -414,6 +502,7 @@
     if (!canModify || !sourceId) return;
     graph.dataSources = (graph.dataSources || []).filter((d) => d.id !== sourceId);
     if (Number(masterDataSourceId()) === Number(sourceId)) setMasterDataSource(null);
+    ensureDefaultDataSource({ forceForRepeat: true });
     graph.nodes.forEach((n) => {
       if (n.kind !== "start" && Number(n.dataSourceId) === Number(sourceId)) n.dataSourceId = null;
       if (Number(n.sourceId) === Number(sourceId)) n.sourceId = null;
@@ -431,8 +520,8 @@
     return `
       <div class="insp-section-title">منابع داده فرآیند (${count})</div>
       <p class="palette-hint" style="margin:0 0 8px;line-height:1.7">
-        اکسل‌ها اینجا اضافه می‌شوند. یکی را به‌عنوان <b>مادر</b> برای تکرار کل برگزینید؛
-        بقیه در گروه‌ها و مراحل قابل انتخاب‌اند.
+        فرآیند می‌تواند چند منبع داشته باشد؛ یکی باید <b>پیش‌فرض</b> باشد
+        (برای تکرار بر اساس ردیف‌های منبع). بقیه در گروه‌ها و اقدام‌ها قابل انتخاب‌اند.
       </p>
       <div class="insp-field">
         <label>عنوان منبع</label>
@@ -450,7 +539,7 @@
 
   function processPropsHtml() {
     const disabled = canModify ? "" : "disabled";
-    const start = graph.nodes.find((n) => n.kind === "start");
+    const start = processStart();
     const rst = start?.repeatSourceType || graph.repeatSourceType || "None";
     const master = (graph.dataSources || []).find((d) => Number(d.id) === Number(masterDataSourceId()));
     const count = (graph.dataSources || []).length;
@@ -461,11 +550,19 @@
         <input type="number" min="0" data-task-k="delayBeforeMs" value="${Number(graph.delayBeforeMs) || 0}" ${disabled} /></div>
       <div class="insp-field"><label>تأخیر بعد (ms)</label>
         <input type="number" min="0" data-task-k="delayAfterMs" value="${Number(graph.delayAfterMs) || 0}" ${disabled} /></div>
+      <div class="insp-field">
+        <label>رنگ انتخابگر المان</label>
+        <div class="insp-color-row">
+          <input type="color" data-task-k="highlightColor" value="${esc(normalizeHighlightColor(start?.highlightColor || graph.highlightColor))}" ${disabled} />
+          <input type="text" data-task-k="highlightColor" value="${esc(normalizeHighlightColor(start?.highlightColor || graph.highlightColor))}" maxlength="7" ${disabled} />
+        </div>
+        <p class="palette-hint" style="margin:4px 0 0">هنگام اجرا، دور المان هدف با این رنگ بوردر کشیده می‌شود.</p>
+      </div>
       <div class="insp-section-title">منابع و تکرار</div>
       <p class="palette-hint" style="margin:0 0 8px;line-height:1.7">
-        مدیریت اکسل، دیتاسورس <b>مادر</b> و تکرار کلی روی نود <b>شروع</b>
+        مدیریت اکسل، منبع <b>پیش‌فرض</b> و تکرار فرآیند روی نود <b>شروع</b>
         (فعلی: ${esc(repeatTypeLabel(rst))}
-        ${master ? ` · مادر: «${esc(master.title)}»` : count ? " · مادر انتخاب نشده" : ""} · ${count} منبع).
+        ${master ? ` · پیش‌فرض: «${esc(master.title)}»` : count ? " · پیش‌فرض انتخاب نشده" : ""} · ${count} منبع).
       </p>
       <button type="button" class="btn-flow" id="insp-goto-start" style="width:100%">باز کردن نود شروع</button>
     `;
@@ -480,9 +577,22 @@
           titleEl.textContent = graph.title || "گردش کار";
         } else if (k === "delayBeforeMs" || k === "delayAfterMs") {
           graph[k] = Math.max(0, Number(inp.value) || 0);
+        } else if (k === "highlightColor") {
+          const raw = String(inp.value || "").trim();
+          if (inp.type === "text" && !/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(raw)) {
+            return;
+          }
+          const color = normalizeHighlightColor(raw);
+          graph.highlightColor = color;
+          const start = processStart();
+          if (start) start.highlightColor = color;
+          inspector.querySelectorAll('[data-task-k="highlightColor"]').forEach((el) => {
+            if (el !== inp) el.value = color;
+          });
         }
       };
       inp.addEventListener("change", apply);
+      inp.addEventListener("input", apply);
       inp.addEventListener("blur", apply);
     });
     document.getElementById("insp-goto-start")?.addEventListener("click", () => {
@@ -757,13 +867,13 @@
     const charW = titleFs * 0.58;
     const idealW = Math.ceil(title.length * charW + padX * 2);
     const meta = groupMetaText(n.id);
-    const metaW = Math.ceil(meta.length * 10 * 0.55 + padX * 2);
+    const metaW = Math.ceil(meta.length * 11 * 0.55 + padX * 2);
     const w = Math.min(300, Math.max(baseW, idealW, metaW));
     const titleLine = fitGroupTitle(title, w - padX * 2, titleFs);
     const topPad = 11;
     const titleH = 16;
     const metaGap = 8;
-    const metaH = 12;
+    const metaH = 14;
     const bottomPad = 11;
     const h = topPad + titleH + metaGap + metaH + bottomPad;
     return { w, h, titleLine, titleFs, metaGap };
@@ -783,10 +893,10 @@
         },
         {
           text: groupMetaText(n.id),
-          size: 10,
-          fill: "#6f6b7d",
+          size: 11,
+          fill: "#9a96a8",
           weight: "400",
-          leading: metaGap + 12
+          leading: metaGap + 13
         }
       ]
     };
@@ -913,6 +1023,284 @@
       zoom: graph.viewport.zoom,
       scroll: rememberScroll()
     };
+  }
+
+  /**
+   * Auto-layout for the current scope:
+   * 1) layered flow (keeps edges short / few crossings)
+   * 2) orientation + spacing chosen to fill the visible designer area
+   * 3) barycenter + swap passes to cut edge crossings / overlaps
+   */
+  function autoLayoutCurrentScope() {
+    if (!canModify) {
+      setStatus("در حالت فقط‌مشاهده چینش ممکن نیست.", "warn");
+      return false;
+    }
+    const nodes = scopedNodes();
+    if (nodes.length < 2) {
+      setStatus("برای چینش به بیش از یک المان نیاز است.", "warn");
+      return false;
+    }
+
+    const viewW = Math.max(120, canvasScroll?.clientWidth || wrap?.clientWidth || 800);
+    const viewH = Math.max(120, canvasScroll?.clientHeight || wrap?.clientHeight || 600);
+    const margin = 36;
+    const availW = Math.max(80, viewW - margin * 2);
+    const availH = Math.max(80, viewH - margin * 2);
+
+    const edges = scopedEdges().filter((e) =>
+      nodes.some((n) => n.id === e.from) && nodes.some((n) => n.id === e.to)
+    );
+    const idSet = new Set(nodes.map((n) => n.id));
+    const outs = new Map();
+    const ins = new Map();
+    nodes.forEach((n) => {
+      outs.set(n.id, []);
+      ins.set(n.id, []);
+    });
+    edges.forEach((e) => {
+      outs.get(e.from).push(e.to);
+      ins.get(e.to).push(e.from);
+    });
+
+    // --- Layer assignment (longest path from start / roots) ---
+    const layerOf = new Map();
+    const queue = [];
+    const start = nodes.find((n) => n.kind === "start");
+    if (start) {
+      layerOf.set(start.id, 0);
+      queue.push(start.id);
+    }
+    nodes.forEach((n) => {
+      if (layerOf.has(n.id)) return;
+      if (!(ins.get(n.id) || []).length) {
+        layerOf.set(n.id, 0);
+        queue.push(n.id);
+      }
+    });
+    let guard = 0;
+    while (queue.length && guard++ < nodes.length * nodes.length + 16) {
+      const id = queue.shift();
+      const L = layerOf.get(id) || 0;
+      for (const to of outs.get(id) || []) {
+        const next = L + 1;
+        if (!layerOf.has(to) || layerOf.get(to) < next) {
+          layerOf.set(to, next);
+          queue.push(to);
+        }
+      }
+    }
+    let maxL = 0;
+    layerOf.forEach((v) => { maxL = Math.max(maxL, v); });
+    nodes.forEach((n) => {
+      if (!layerOf.has(n.id)) {
+        maxL += 1;
+        layerOf.set(n.id, maxL);
+      }
+    });
+
+    const layers = new Map();
+    layerOf.forEach((L, id) => {
+      if (!layers.has(L)) layers.set(L, []);
+      layers.get(L).push(id);
+    });
+    const layerKeys = [...layers.keys()].sort((a, b) => a - b);
+
+    function posMap(layerList) {
+      const m = new Map();
+      layerList.forEach((id, i) => m.set(id, i));
+      return m;
+    }
+
+    function countLayerCrossings(orderA, orderB) {
+      const pa = posMap(orderA);
+      const pb = posMap(orderB);
+      const pairs = [];
+      edges.forEach((e) => {
+        if (!pa.has(e.from) || !pb.has(e.to)) return;
+        pairs.push([pa.get(e.from), pb.get(e.to)]);
+      });
+      let cross = 0;
+      for (let i = 0; i < pairs.length; i++) {
+        for (let j = i + 1; j < pairs.length; j++) {
+          const [a1, b1] = pairs[i];
+          const [a2, b2] = pairs[j];
+          if ((a1 - a2) * (b1 - b2) < 0) cross += 1;
+        }
+      }
+      return cross;
+    }
+
+    function totalCrossings(layerMap) {
+      let c = 0;
+      for (let i = 0; i < layerKeys.length - 1; i++) {
+        const a = layerMap.get(layerKeys[i]) || [];
+        const b = layerMap.get(layerKeys[i + 1]) || [];
+        c += countLayerCrossings(a, b);
+      }
+      return c;
+    }
+
+    function barycenter(ids, refPos, useParents) {
+      return ids.map((id) => {
+        const refs = useParents ? (ins.get(id) || []) : (outs.get(id) || []);
+        const hit = refs.filter((r) => refPos.has(r));
+        if (!hit.length) return { id, key: refPos.get(id) ?? 0 };
+        const avg = hit.reduce((s, r) => s + refPos.get(r), 0) / hit.length;
+        return { id, key: avg };
+      }).sort((a, b) => a.key - b.key || String(a.id).localeCompare(String(b.id)))
+        .map((x) => x.id);
+    }
+
+    // Copy working orders
+    const orders = new Map();
+    layerKeys.forEach((L) => {
+      orders.set(L, [...(layers.get(L) || [])]);
+    });
+
+    // Barycenter sweeps (down + up) to reduce crossings
+    for (let pass = 0; pass < 8; pass++) {
+      for (let i = 1; i < layerKeys.length; i++) {
+        const prev = posMap(orders.get(layerKeys[i - 1]));
+        orders.set(layerKeys[i], barycenter(orders.get(layerKeys[i]), prev, true));
+      }
+      for (let i = layerKeys.length - 2; i >= 0; i--) {
+        const next = posMap(orders.get(layerKeys[i + 1]));
+        orders.set(layerKeys[i], barycenter(orders.get(layerKeys[i]), next, false));
+      }
+    }
+
+    // Adjacent pairwise swaps if they reduce crossings with neighbor layers
+    function improveBySwaps(L) {
+      const list = orders.get(L);
+      if (!list || list.length < 2) return;
+      const prev = layerKeys.indexOf(L) > 0 ? orders.get(layerKeys[layerKeys.indexOf(L) - 1]) : null;
+      const next = layerKeys.indexOf(L) < layerKeys.length - 1 ? orders.get(layerKeys[layerKeys.indexOf(L) + 1]) : null;
+      let improved = true;
+      let rounds = 0;
+      while (improved && rounds++ < list.length * list.length) {
+        improved = false;
+        for (let i = 0; i < list.length - 1; i++) {
+          const before =
+            (prev ? countLayerCrossings(prev, list) : 0) +
+            (next ? countLayerCrossings(list, next) : 0);
+          const tmp = list[i];
+          list[i] = list[i + 1];
+          list[i + 1] = tmp;
+          const after =
+            (prev ? countLayerCrossings(prev, list) : 0) +
+            (next ? countLayerCrossings(list, next) : 0);
+          if (after < before) {
+            improved = true;
+          } else {
+            list[i + 1] = list[i];
+            list[i] = tmp;
+          }
+        }
+      }
+    }
+    for (let pass = 0; pass < 4; pass++) {
+      layerKeys.forEach(improveBySwaps);
+    }
+
+    const crossCount = totalCrossings(orders);
+
+    // --- Place in world coords: try both orientations, pick best viewport fill ---
+    const H_GAP = 56;
+    const V_GAP = 44;
+    const ORIGIN = 40;
+
+    function place(horizontal) {
+      // horizontal: layers along X, order along Y
+      // vertical: layers along Y, order along X
+      const positions = new Map();
+      const laneSizes = [];
+      const layerSizes = [];
+
+      layerKeys.forEach((L, li) => {
+        const ids = orders.get(L) || [];
+        let laneMax = 0;
+        let stack = 0;
+        ids.forEach((id, idx) => {
+          const n = nodeById(id);
+          const s = sizeOf(n);
+          if (horizontal) {
+            laneMax = Math.max(laneMax, s.w);
+            stack += s.h + (idx ? V_GAP : 0);
+          } else {
+            laneMax = Math.max(laneMax, s.h);
+            stack += s.w + (idx ? H_GAP : 0);
+          }
+        });
+        layerSizes[li] = laneMax;
+        laneSizes[li] = stack;
+      });
+
+      const maxStack = Math.max(0, ...laneSizes);
+      let cursor = ORIGIN;
+      layerKeys.forEach((L, li) => {
+        const ids = orders.get(L) || [];
+        const stack = laneSizes[li] || 0;
+        let cross = ORIGIN + Math.max(0, (maxStack - stack) / 2);
+        ids.forEach((id) => {
+          const n = nodeById(id);
+          const s = sizeOf(n);
+          if (horizontal) {
+            positions.set(id, {
+              x: cursor + Math.max(0, (layerSizes[li] - s.w) / 2),
+              y: cross
+            });
+            cross += s.h + V_GAP;
+          } else {
+            positions.set(id, {
+              x: cross,
+              y: cursor + Math.max(0, (layerSizes[li] - s.h) / 2)
+            });
+            cross += s.w + H_GAP;
+          }
+        });
+        cursor += layerSizes[li] + (horizontal ? H_GAP : V_GAP);
+      });
+
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      positions.forEach((p, id) => {
+        const s = sizeOf(nodeById(id));
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x + s.w);
+        maxY = Math.max(maxY, p.y + s.h);
+      });
+      const gridW = Math.max(1, maxX - minX);
+      const gridH = Math.max(1, maxY - minY);
+      const scale = Math.min(availW / gridW, availH / gridH);
+      const used = (gridW * scale) * (gridH * scale);
+      const waste = availW * availH - used;
+      const fillX = (gridW * scale) / availW;
+      const fillY = (gridH * scale) / availH;
+      const balance = Math.abs(fillX - fillY);
+      // Prefer max viewport coverage; light weight on orientation balance.
+      const score = waste + balance * availW * availH * 0.12;
+      return { positions, score, gridW, gridH };
+    }
+
+    const horiz = place(true);
+    const vert = place(false);
+    const chosen = horiz.score <= vert.score ? horiz : vert;
+
+    chosen.positions.forEach((p, id) => {
+      const n = nodeById(id);
+      if (!n) return;
+      n.x = Math.round(p.x);
+      n.y = Math.round(p.y);
+    });
+
+    setStatus(`چینش خودکار: ${nodes.length} المان · تقاطع تقریبی خطوط ${crossCount} · پر کردن محدوده دید.`, "success");
+    render();
+    requestAnimationFrame(() => fitDiagramToView());
+    return true;
   }
 
   /** Keep a node inside the visible scrollport when it drifts outside. */
@@ -1420,7 +1808,7 @@
     if (!selectedEdgeId) return false;
     graph.edges = graph.edges.filter((e) => e.id !== selectedEdgeId);
     selectedEdgeId = null;
-    status.textContent = "اتصال حذف شد.";
+    setStatus("اتصال حذف شد.", "info");
     render();
     return true;
   }
@@ -1489,11 +1877,11 @@
     const e = graph.edges.find((x) => x.id === edgeId);
     if (!e || !canModify) return false;
     if (String(newToId) === String(e.from)) {
-      status.textContent = "نمی‌توان به خود وصل کرد.";
+      setStatus("نمی‌توان به خود وصل کرد.", "warn");
       return false;
     }
     if (String(newToId) === String(e.to)) {
-      status.textContent = "مقصد همان است.";
+      setStatus("مقصد همان است.", "warn");
       return true;
     }
     const snapshot = { id: e.id, from: e.from, to: e.to, kind: e.kind };
@@ -1507,7 +1895,7 @@
       || graph.edges[graph.edges.length - 1];
     if (neu) neu.id = edgeId;
     selectedEdgeId = edgeId;
-    status.textContent = "مقصد اتصال تغییر کرد.";
+    setStatus("مقصد اتصال تغییر کرد.", "success");
     return true;
   }
 
@@ -1619,6 +2007,7 @@
     const actionLayout = isActionNode(n) ? stepBoxSize(n) : null;
     const g = el("g", { class: "node", "data-id": n.id, transform: `translate(${n.x},${n.y})` });
     if (selected.has(n.id)) g.classList.add("node-on");
+    if (isActionNode(n) && n.isActive === false) g.classList.add("node-inactive");
     const fill = n.kind === "start" ? startFill(n)
       : n.kind === "group" ? "#fff"
       : n.kind === "condition" ? COND_FILL
@@ -1914,12 +2303,17 @@
     selectedEdgeId = null;
     selected = new Set([copy.id]);
     render();
-    status.textContent = `کپی «${copy.title}» نزدیک اصل ساخته شد`;
+    setStatus(`کپی «${copy.title}» نزدیک اصل ساخته شد`, "success");
   }
 
   function groupCanConvertToAction(gid) {
     const { actions, conditions, groups } = groupChildCounts(gid);
     return actions === 0 && conditions === 0 && groups === 0;
+  }
+
+  /** Direct children of a group (exclude inner start). */
+  function groupDirectChildren(gid) {
+    return (graph.nodes || []).filter((x) => x.groupNodeId === gid && x.kind !== "start");
   }
 
   /** Empty group (no action/condition) → action in place; keep id & outer edges. */
@@ -1962,7 +2356,7 @@
 
     const scope = list[0].groupNodeId || null;
     if (list.some((a) => (a.groupNodeId || null) !== scope)) {
-      status.textContent = "اقدام‌های انتخاب‌شده باید در یک سطح دیاگرام باشند.";
+      setStatus("اقدام‌های انتخاب‌شده باید در یک سطح دیاگرام باشند.", "warn");
       return false;
     }
 
@@ -2060,6 +2454,17 @@
     ];
     if (n.kind === "group") {
       items.push({ act: "edit", label: "باز کردن طراح داخل" });
+      const childN = groupDirectChildren(n.id).length;
+      items.push({
+        act: "lift-children",
+        label: "انتقال فرزندان به این سطح",
+        disabled: !canModify || childN === 0,
+        title: !canModify
+          ? "فقط مشاهده"
+          : (childN
+            ? "همهٔ فرزندان گروه به همین سطح می‌آیند و گروه خالی می‌ماند"
+            : "گروه فرزندی ندارد")
+      });
       const canConv = groupCanConvertToAction(n.id);
       items.push({
         act: "to-action",
@@ -2070,6 +2475,19 @@
           : (canConv ? "گروه خالی را به اقدام تبدیل می‌کند" : "گروه حاوی شرط یا اقدام است")
       });
     } else if (isActionNode(n)) {
+      // Show when action lives inside a group (especially nested subgroups).
+      const container = n.groupNodeId ? nodeById(n.groupNodeId) : null;
+      const nestedUnderGroup = !!(container && container.groupNodeId);
+      if (nestedUnderGroup) {
+        items.push({
+          act: "promote",
+          label: "انتقال به سطح بالاتر",
+          disabled: !canModify,
+          title: !canModify
+            ? "فقط مشاهده"
+            : "اقدام از این زیرگروه به سطح گروه والد منتقل می‌شود"
+        });
+      }
       const multi = selectedActionsForGroupConvert();
       const multiOk = Array.isArray(multi) && multi.length >= 1 && multi.some((a) => a.id === n.id);
       const count = multiOk ? multi.length : 1;
@@ -2105,16 +2523,27 @@
         else if (act === "select") { selected = new Set([n.id]); render(); }
         else if (act === "to-action") {
           if (convertGroupToAction(n)) {
-            status.textContent = `«${n.title || "گروه"}» به اقدام تبدیل شد.`;
+            setStatus(`«${n.title || "گروه"}» به اقدام تبدیل شد.`, "success");
+            render();
+          }
+        } else if (act === "lift-children") {
+          const count = groupDirectChildren(n.id).length;
+          if (liftGroupChildrenToParent(n)) {
+            setStatus(`${count} فرزند به سطح فعلی منتقل شد؛ گروه خالی ماند.`, "success");
+            render();
+          }
+        } else if (act === "promote") {
+          if (promoteStepToParent(n)) {
+            setStatus(`اقدام «${n.title || ""}» به سطح بالاتر منتقل شد.`, "success");
             render();
           }
         } else if (act === "to-group") {
           const multi = selectedActionsForGroupConvert();
           const list = (Array.isArray(multi) && multi.length) ? multi : [n];
           if (convertActionsToGroup(list)) {
-            status.textContent = list.length > 1
+            setStatus(list.length > 1
               ? `${list.length} اقدام داخل گروه جدید قرار گرفت.`
-              : `اقدام «${n.title || ""}» داخل گروه جدید قرار گرفت.`;
+              : `اقدام «${n.title || ""}» داخل گروه جدید قرار گرفت.`, "success");
             render();
           }
         }
@@ -2176,19 +2605,59 @@
     return true;
   }
 
-  /** Lift step one scope up (out of its containing group). Kept for rare callers. */
+  /** Lift step one scope up (out of its containing group). */
   function promoteStepToParent(step) {
     if (!canModify || !step || !isActionNode(step) || !step.groupNodeId) return false;
     const parentGroup = nodeById(step.groupNodeId);
     if (!parentGroup) return false;
     const parentScope = parentGroup.groupNodeId || null;
     detachNodeFlowEdges(step.id);
+    // Drop legacy contains if this step was the entry.
+    graph.edges = (graph.edges || []).filter((e) =>
+      !(e.kind === "contains" && e.from === parentGroup.id && e.to === step.id)
+    );
     if (parentScope) step.groupNodeId = parentScope;
     else delete step.groupNodeId;
     const sz = sizeOf(parentGroup);
     step.x = parentGroup.x + sz.w + 28;
     step.y = parentGroup.y;
     selected = new Set([step.id]);
+    return true;
+  }
+
+  /**
+   * Move all direct children of a group onto the group's own scope (sibling level),
+   * leaving the group empty. Keeps edges between the children.
+   */
+  function liftGroupChildrenToParent(g) {
+    if (!canModify || !g || g.kind !== "group") return false;
+    const kids = groupDirectChildren(g.id);
+    if (!kids.length) return false;
+
+    const parentScope = g.groupNodeId || null;
+    const kidIds = new Set(kids.map((k) => k.id));
+    const start = scopeStart(g.id);
+    const sz = sizeOf(g);
+    const baseX = g.x + sz.w + 28;
+    const baseY = g.y;
+
+    // Remove group→entry contains and edges between start and children.
+    graph.edges = (graph.edges || []).filter((e) => {
+      if (e.kind === "contains" && e.from === g.id) return false;
+      if (start && (e.from === start.id || e.to === start.id)
+        && (kidIds.has(e.from) || kidIds.has(e.to))) return false;
+      return true;
+    });
+
+    kids.forEach((kid, i) => {
+      if (parentScope) kid.groupNodeId = parentScope;
+      else delete kid.groupNodeId;
+      kid.x = baseX;
+      kid.y = baseY + i * 56;
+    });
+
+    selected = new Set(kids.map((k) => k.id));
+    selectedEdgeId = null;
     return true;
   }
 
@@ -2262,7 +2731,7 @@
     const groupHint = document.querySelector("#palette-group .palette-hint");
     if (groupHint) groupHint.textContent = "تکرار از نود شروع داخل گروه تنظیم می‌شود.";
     const dsHint = document.getElementById("ds-palette-hint");
-    if (dsHint) dsHint.innerHTML = "اکسل و منبع مادر روی نود <strong>شروع</strong> است.";
+    if (dsHint) dsHint.innerHTML = "اکسل و منبع پیش‌فرض روی نود <strong>شروع</strong> فرآیند است.";
   }
 
   function addStep(groupId) {
@@ -2355,7 +2824,8 @@
       inspHeading.textContent = n.kind === "group" ? "ویژگی‌های گروه"
         : isActionNode(n) ? "ویژگی‌های اقدام"
         : n.kind === "condition" ? "ویژگی‌های شرط"
-        : n.kind === "start" ? "شروع فرآیند (تکرار کلی)"
+        : n.kind === "start"
+          ? (n.groupNodeId ? "شروع گروه (تکرار)" : "شروع فرآیند (تکرار)")
         : "ویژگی‌ها";
     }
     if (n.kind === "start") {
@@ -2366,6 +2836,7 @@
       inspector.innerHTML = groupInspectorHtml(n);
     } else if (isActionNode(n)) {
       inspector.innerHTML = stepInspectorHtml(n);
+      lockStepInspectorBody(n.isActive !== false);
     } else if (n.kind === "condition") {
       inspector.innerHTML = conditionInspectorHtml(n);
       toggleConditionFields(n.conditionType || "None");
@@ -2381,6 +2852,17 @@
             n.dataSourceId = null;
             n.dynamicSourceColumnName = null;
           }
+          if (k === "ignorePlayError" && n.kind === "start" && !n.groupNodeId) {
+            graph.ignorePlayError = inp.checked;
+          }
+          if (k === "isActive" && isActionNode(n)) {
+            clearTimeout(window.__daInspSwitchT);
+            window.__daInspSwitchT = setTimeout(() => {
+              renderInspector();
+              render();
+            }, 220);
+            return;
+          }
         } else if (k === "dataSourceId" || k === "selectorDataSourceId" || k === "sourceId"
           || k === "equalSelectorDataSourceId"
           || k === "attributeDataSourceId" || k === "equalAttributeDataSourceId") {
@@ -2394,13 +2876,43 @@
             graph.loopCount = num;
             graph.constantValue = String(num);
           }
+        } else if (k === "stepDelayMs") {
+          const num = Math.max(0, Number(inp.value) || 0);
+          n.stepDelayMs = num;
+          if (n.kind === "start" && !n.groupNodeId) graph.stepDelayMs = num;
+        } else if (k === "highlightColor") {
+          const raw = String(inp.value || "").trim();
+          if (inp.type === "text" && !/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(raw)) {
+            return;
+          }
+          const color = normalizeHighlightColor(raw);
+          n.highlightColor = color;
+          if (n.kind === "start" && !n.groupNodeId) {
+            graph.highlightColor = color;
+            inspector.querySelectorAll('[data-k="highlightColor"]').forEach((el) => {
+              if (el !== inp) el.value = color;
+            });
+          }
+          return;
         } else if (k === "moveLoop") {
           n.moveLoop = inp.value === "1" || inp.value === "true" || inp.checked === true;
           if (n.moveLoop || (n.repeatSourceType || "None") !== "DataSource") n.dataSourceId = null;
         } else if (k === "repeatSourceType") {
-          n[k] = inp.value;
-          if (n.kind === "start") graph.repeatSourceType = inp.value;
-          if (n.kind === "group" && inp.value !== "DataSource") n.dataSourceId = null;
+          let next = inp.value;
+          // Process-level start cannot repeat by page elements.
+          if (n.kind === "start" && !n.groupNodeId && next === "Elements") next = "None";
+          n[k] = next;
+          if (n.kind === "start" && !n.groupNodeId) {
+            graph.repeatSourceType = next;
+            if (next === "DataSource") ensureDefaultDataSource({ forceForRepeat: true });
+            if (next !== "DataSource" && next !== "Loops") {
+              /* keep default DS even when not used for repeat */
+            }
+          } else if (n.kind === "start") {
+            /* nested group start — do not sync graph.repeatSourceType */
+          } else if (n.kind === "group" && next !== "DataSource") {
+            n.dataSourceId = null;
+          }
         } else if (k === "contentSourceType") {
           n[k] = inp.value;
           n.valueFromSource = inp.value === "DataSource";
@@ -2430,7 +2942,8 @@
           || k === "hasAttribute" || k === "equalHasAttribute"
           || k === "attributeValueIsDynamic" || k === "equalAttributeValueIsDynamic"
           || k === "attributeDataSourceId" || k === "equalAttributeDataSourceId"
-          || k === "attributeDynamicColumn" || k === "equalAttributeDynamicColumn") {
+          || k === "attributeDynamicColumn" || k === "equalAttributeDynamicColumn"
+          || k === "selectorWaitEnabled" || k === "equalSelectorWaitEnabled") {
           if (isActionNode(n) && (n.valueFromSource || n.contentSourceType === "DataSource")) {
             syncStepParamFromSource(n);
           }
@@ -2439,6 +2952,7 @@
             k === "selectorIsDynamic" || k === "equalSelectorIsDynamic"
             || k === "hasAttribute" || k === "equalHasAttribute"
             || k === "attributeValueIsDynamic" || k === "equalAttributeValueIsDynamic"
+            || k === "selectorWaitEnabled" || k === "equalSelectorWaitEnabled"
           );
           if (isSwitch) {
             clearTimeout(window.__daInspSwitchT);
@@ -2446,6 +2960,10 @@
           } else {
             renderInspector();
           }
+          return;
+        }
+        if (k === "selectorWaitMs" || k === "equalSelectorWaitMs") {
+          n[k] = Math.max(0, Number(inp.value) || 0);
           return;
         }
         if (k === "navigateUrl" && isActionNode(n)) {
@@ -2457,8 +2975,8 @@
       if (inp.tagName === "TEXTAREA" || (inp.tagName === "INPUT" && inp.type !== "checkbox" && inp.type !== "file")) {
         inp.addEventListener("blur", apply);
       }
+      if (inp.type === "color") inp.addEventListener("input", apply);
     });
-    document.getElementById("insp-open-steps")?.addEventListener("click", () => openGroup(n.id));
     document.getElementById("insp-goto-start")?.addEventListener("click", () => {
       const start = graph.nodes.find((x) => x.kind === "start");
       if (!start) return;
@@ -2467,6 +2985,7 @@
       render();
     });
     bindSelectorTools(n);
+    if (isActionNode(n)) lockStepInspectorBody(n.isActive !== false);
   }
 
   const DYN_SEL_PLACEHOLDER = "{مقدار پویا}";
@@ -2531,27 +3050,66 @@
     return src;
   }
 
+  function lockStepInspectorBody(active) {
+    const body = inspector.querySelector(".insp-step-body");
+    if (!body) return;
+    body.classList.toggle("is-disabled", !active);
+    body.querySelectorAll("input, select, textarea, button").forEach((el) => {
+      if (el.closest(".insp-active-field")) return;
+      el.disabled = !active;
+    });
+  }
+
   function stepInspectorHtml(n) {
+    if (n.isActive == null) n.isActive = true;
+    const active = n.isActive !== false;
     const at = n.actionType || "Click";
-    let html = field("عنوان", "title", n.title) +
-      `<div class="insp-field"><label>نوع اقدام</label><select data-k="actionType">${optActions(at)}</select></div>`;
+    const ignoreError = n.ignoreError === true;
+    const disabledAttr = active ? "" : "disabled";
+
+    let body = field("عنوان", "title", n.title) +
+      `<div class="insp-field"><label>نوع اقدام</label><select data-k="actionType" ${disabledAttr}>${optActions(at)}</select></div>` +
+      `<div class="insp-field">
+        <label class="da-switch">
+          <input type="checkbox" data-k="ignoreError" ${ignoreError ? "checked" : ""} ${disabledAttr}/>
+          <span class="da-switch-ui" aria-hidden="true"></span>
+          <span class="da-switch-text">چشم‌پوشی از خطا</span>
+        </label>
+        <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">
+          خاموش (پیش‌فرض): با خطا، بقیهٔ این دور رد می‌شود و به تصمیم حلقه می‌رود.
+          روشن: خطا ثبت می‌شود و مرحلهٔ بعدی اجرا می‌شود.
+        </p>
+      </div>`;
 
     if (at === "NewPage") {
-      html += `<p class="palette-hint">تب جدید باز می‌شود و به آدرس می‌رود.</p>`;
+      body += `<p class="palette-hint">تب جدید باز می‌شود و به آدرس می‌رود.</p>`;
     }
     if (at === "CloseFirstTab" || at === "CloseLastTab") {
-      html += `<p class="palette-hint">${at === "CloseFirstTab" ? "اولین تب پنجره بسته می‌شود." : "آخرین تب پنجره بسته می‌شود."}</p>`;
+      body += `<p class="palette-hint">${at === "CloseFirstTab" ? "اولین تب پنجره بسته می‌شود." : "آخرین تب پنجره بسته می‌شود."}</p>`;
     }
 
-    if (stepIsCapture(at)) html += stepCaptureTargetHtml(n);
-    if (stepReceivesValue(at)) html += stepValueSourceHtml(n);
+    if (stepIsCapture(at)) body += stepCaptureTargetHtml(n);
+    if (stepReceivesValue(at)) body += stepValueSourceHtml(n);
 
     if (stepNeedsSelector(at)) {
-      html += `<div class="insp-section-title">هدف روی صفحه</div>`;
-      html += selectorFieldHtml(n, "سلکتور", { includeFramePath: true });
+      body += `<div class="insp-section-title">هدف روی صفحه</div>`;
+      body += selectorFieldHtml(n, "سلکتور", { includeFramePath: true });
     }
 
-    return html;
+    return `
+      <div class="insp-field insp-active-field">
+        <label class="da-switch">
+          <input type="checkbox" data-k="isActive" ${active ? "checked" : ""}/>
+          <span class="da-switch-ui" aria-hidden="true"></span>
+          <span class="da-switch-text">${active ? "فعال" : "غیرفعال"}</span>
+        </label>
+        <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">
+          اگر غیرفعال باشد، در اجرا فقط در لاگ ثبت می‌شود و هیچ اقدامی روی صفحه انجام نمی‌شود.
+        </p>
+      </div>
+      <div class="insp-step-body${active ? "" : " is-disabled"}" ${active ? "" : "aria-disabled=\"true\""}>
+        ${body}
+      </div>`;
   }
 
   function stepCaptureTargetHtml(n) {
@@ -2632,7 +3190,9 @@
         attrDynFlag: "equalAttributeValueIsDynamic",
         attrValue: "equalAttributeValue",
         attrDynCol: "equalAttributeDynamicColumn",
-        attrDynDs: "equalAttributeDataSourceId"
+        attrDynDs: "equalAttributeDataSourceId",
+        waitFlag: "equalSelectorWaitEnabled",
+        waitMsKey: "equalSelectorWaitMs"
       });
     } else if (src === "DataSource") {
       html += `
@@ -2660,7 +3220,7 @@
     const masterId = masterDataSourceId();
     return (graph.dataSources || []).map((d) => {
       const meta = d.rowCount != null ? ` (${d.rowCount} ردیف)` : "";
-      const tag = markMaster && Number(d.id) === Number(masterId) ? " — مادر" : "";
+      const tag = markMaster && Number(d.id) === Number(masterId) ? " — پیش‌فرض" : "";
       return `<option value="${d.id}" ${Number(selectedId) === Number(d.id) ? "selected" : ""}>${esc(d.title)}${meta}${tag}</option>`;
     }).join("");
   }
@@ -2725,15 +3285,21 @@
     const attrValueKey = opts.attrValue || "attributeValue";
     const attrDynCol = opts.attrDynCol || "attributeDynamicColumn";
     const attrDynDs = opts.attrDynDs || "attributeDataSourceId";
+    const waitFlag = opts.waitFlag || "selectorWaitEnabled";
+    const waitMsKey = opts.waitMsKey || "selectorWaitMs";
     const wrapId = opts.wrapId ? ` id="${opts.wrapId}"` : "";
 
     // Default off unless explicitly true
     if (n[dynFlag] == null) n[dynFlag] = false;
     if (n[hasAttrKey] == null) n[hasAttrKey] = false;
     if (n[attrDynFlag] == null) n[attrDynFlag] = false;
+    if (n[waitFlag] == null) n[waitFlag] = false;
+    if (n[waitMsKey] == null || n[waitMsKey] === "") n[waitMsKey] = 10000;
     const dynOn = n[dynFlag] === true;
     const attrOn = n[hasAttrKey] === true;
     const attrDynOn = n[attrDynFlag] === true;
+    const waitOn = n[waitFlag] === true;
+    const waitMs = Math.max(0, Number(n[waitMsKey]) || 0);
     const selectedDs = n[dynDs] || "";
     const dsId = selectedDs || resolveSelectorDsId(n, dynDs);
     const dsOpts = processDataSourceOptions(selectedDs || dsId);
@@ -2790,6 +3356,23 @@
             <button type="button" class="btn-mini" data-sel-act="load-mem" data-sel-key="${valueKey}">خواندن از حافظه</button>
           </div>
           <p class="insp-warn insp-warn-dyn" ${dynOn && !hasPh ? "" : "hidden"}>سلکتور باید شامل «${esc(DYN_SEL_PLACEHOLDER)}» باشد.</p>
+        </div>
+        <div class="insp-field insp-sel-wait">
+          <label class="da-switch">
+            <input type="checkbox" data-k="${waitFlag}" ${waitOn ? "checked" : ""}/>
+            <span class="da-switch-ui" aria-hidden="true"></span>
+            <span class="da-switch-text">انتظار تا ظاهر شدن المان</span>
+          </label>
+          <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">
+            خاموش: یک‌بار جستجو؛ اگر نبود، خطا (نات‌فاوند).
+            روشن: تا سقف زیر صبر می‌کند؛ بعد از آن نات‌فاوند.
+          </p>
+          ${waitOn ? `
+            <div class="insp-sel-wait-ms">
+              <label>حداکثر انتظار (ms)</label>
+              <input type="number" min="0" step="100" data-k="${waitMsKey}" value="${esc(waitMs)}" />
+            </div>
+          ` : ""}
         </div>
         ${showFrame ? `
           <div class="insp-field">
@@ -2944,7 +3527,7 @@
       if (payload.attributeDynamicColumn != null) n.equalAttributeDynamicColumn = payload.attributeDynamicColumn;
       if (payload.attributeDataSourceId != null) n.equalAttributeDataSourceId = payload.attributeDataSourceId;
     }
-    status.textContent = "سلکتور از حافظه خوانده شد.";
+    setStatus("سلکتور از حافظه خوانده شد.", "success");
     render();
     return true;
   }
@@ -2952,7 +3535,7 @@
   async function saveSelectorToMemory(n, preferKey) {
     const payload = buildSelectorPayloadFromNode(n, preferKey);
     if (!payload.selector) {
-      status.textContent = "سلکتور خالی است — چیزی برای ذخیره نیست.";
+      setStatus("سلکتور خالی است — چیزی برای ذخیره نیست.", "warn");
       return;
     }
     const text = encodeDaSelectorPayload(payload);
@@ -2981,13 +3564,14 @@
       if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
     } catch { /* ignore */ }
 
-    status.textContent = extOk
+    setStatus(extOk
       ? "سلکتور در حافظه افزونه ذخیره شد."
-      : "سلکتور در حافظه محلی ذخیره شد.";
+      : "سلکتور در حافظه محلی ذخیره شد.", "success");
   }
 
   async function loadSelectorFromMemory(n, preferKey) {
-    // Prefer extension memory
+    const hasSelectorExt = document.documentElement.dataset.daSelectorExtension === "1";
+    // Prefer extension memory (Dynamic Automator Selector)
     try {
       const res = await new Promise((resolve) => {
         const done = (ev) => {
@@ -3012,7 +3596,9 @@
           attributeDynamicColumn: res.payload.attributeDynamicColumn,
           attributeDataSourceId: res.payload.attributeDataSourceId
         }, preferKey);
-        return;
+        setStatus("سلکتور از حافظه خوانده شد.", "success");
+        render();
+        return true;
       }
     } catch { /* fall through */ }
 
@@ -3022,7 +3608,9 @@
       const parsed = parseDaSelectorText(raw);
       if (parsed) {
         applySelectorPayload(n, parsed, preferKey);
-        return;
+        setStatus("سلکتور از حافظه محلی خوانده شد.", "success");
+        render();
+        return true;
       }
     } catch { /* ignore */ }
 
@@ -3032,11 +3620,17 @@
       const parsed = parseDaSelectorText(text);
       if (parsed) {
         applySelectorPayload(n, parsed, preferKey);
-        return;
+        setStatus("سلکتور از کلیپ‌بورد خوانده شد.", "success");
+        render();
+        return true;
       }
     } catch { /* ignore */ }
 
-    status.textContent = "سلکتوری در حافظه نیست.";
+    if (!hasSelectorExt) {
+      setStatus("افزونهٔ سلکتور نصب نیست — از صفحهٔ نصب، مسیر Selector را Load unpacked کنید.", "warn");
+    } else {
+      setStatus("سلکتوری در حافظه نیست. روی صفحه راست‌کلیک → «کپی سلکتور».", "warn");
+    }
   }
 
   function bindSelectorTools(n) {
@@ -3078,8 +3672,8 @@
     switch (rst) {
       case "Loops": return "تعداد ثابت";
       case "Elements": return "المان‌های صفحه";
-      case "DataSource": return "ردیف‌های منبع";
-      default: return "بدون تکرار";
+      case "DataSource": return "ردیف‌های منبع پیش‌فرض";
+      default: return "یک‌بار";
     }
   }
 
@@ -3216,7 +3810,9 @@
           attrDynFlag: "equalAttributeValueIsDynamic",
           attrValue: "equalAttributeValue",
           attrDynCol: "equalAttributeDynamicColumn",
-          attrDynDs: "equalAttributeDataSourceId"
+          attrDynDs: "equalAttributeDataSourceId",
+          waitFlag: "equalSelectorWaitEnabled",
+          waitMsKey: "equalSelectorWaitMs"
         });
       } else if (src === "DataSource" && allowCompareDs) {
         html += `<div class="insp-field"><label>منبع داده</label>
@@ -3251,25 +3847,75 @@
   }
 
   function startInspectorHtml(n) {
+    // Nested group start keeps Elements (group can use page selectors).
+    if (n.groupNodeId) return groupStartInspectorHtml(n);
+
+    normalizeProcessRepeat();
     const rst = n.repeatSourceType || graph.repeatSourceType || "None";
     n.repeatSourceType = rst;
     n.dataSourceId = n.dataSourceId ?? graph.dataSourceId ?? null;
     n.loopCount = n.loopCount ?? graph.loopCount ?? (Number(graph.constantValue) || 1);
+    n.stepDelayMs = n.stepDelayMs ?? graph.stepDelayMs ?? 0;
+    graph.stepDelayMs = n.stepDelayMs;
+    if (n.ignorePlayError == null && graph.ignorePlayError == null) n.ignorePlayError = true;
+    else if (n.ignorePlayError == null) n.ignorePlayError = graph.ignorePlayError !== false;
+    graph.ignorePlayError = n.ignorePlayError !== false;
+    if (!n.highlightColor) n.highlightColor = graph.highlightColor || DEFAULT_HIGHLIGHT_COLOR;
+    else graph.highlightColor = normalizeHighlightColor(n.highlightColor);
+    n.highlightColor = normalizeHighlightColor(n.highlightColor);
     const loopCount = n.loopCount || 1;
-    const masterId = n.dataSourceId;
+    const stepDelayMs = Math.max(0, Number(n.stepDelayMs) || 0);
+    const ignorePlayError = n.ignorePlayError !== false;
+    const highlightColor = n.highlightColor;
+    const masterId = ensureDefaultDataSource({ forceForRepeat: rst === "DataSource" });
+    n.dataSourceId = masterId;
     const dsOpts = processDataSourceOptions(masterId);
+    const hasSources = (graph.dataSources || []).length > 0;
+    const dsWarn = rst === "DataSource" && !hasSources
+      ? `<p class="palette-hint" style="margin:6px 0 0;color:#ea5455">برای تکرار بر اساس منبع، حداقل یک منبع اضافه کنید.</p>`
+      : "";
+
     return `
       <p class="palette-hint" style="margin:0 0 10px;line-height:1.7">
-        اینجا منابع اکسل فرآیند و دیتاسورس <b>مادر</b> (تکرار کل گردش) تنظیم می‌شود.
+        فرآیند یا <b>یک‌بار</b> اجرا می‌شود، یا به <b>تعداد ثابت</b>، یا به تعداد ردیف‌های
+        <b>منبع پیش‌فرض</b>. چند منبع مجاز است؛ یکی باید پیش‌فرض باشد.
       </p>
+      <div class="insp-section-title">تنظیمات اجرا</div>
+      <div class="insp-field">
+        <label>فاصله بین مراحل (ms)</label>
+        <input type="number" min="0" step="50" data-k="stepDelayMs" value="${esc(stepDelayMs)}" />
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.6">
+          بعد از اتمام هر مرحله، قبل از شروع مرحلهٔ بعدی این مدت صبر می‌شود (نه قبل از اولی).
+        </p>
+      </div>
+      <div class="insp-field">
+        <label>رنگ انتخابگر المان</label>
+        <div class="insp-color-row">
+          <input type="color" data-k="highlightColor" value="${esc(highlightColor)}" />
+          <input type="text" data-k="highlightColor" value="${esc(highlightColor)}" maxlength="7" />
+        </div>
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">
+          هنگام اجرا، دور المانی که افزونه تارگت می‌کند با این رنگ بوردر کشیده می‌شود.
+        </p>
+      </div>
+      <div class="insp-field">
+        <label class="da-switch">
+          <input type="checkbox" data-k="ignorePlayError" ${ignorePlayError ? "checked" : ""}/>
+          <span class="da-switch-ui" aria-hidden="true"></span>
+          <span class="da-switch-text">چشم‌پوشی از خطای اجرا</span>
+        </label>
+        <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">
+          روشن (پیش‌فرض): اگر مرحله‌ای بدون چشم‌پوشی خطا بخورد، به اندیس بعدی حلقه می‌رود.
+          خاموش: کل اجرا متوقف می‌شود.
+        </p>
+      </div>
       ${dataSourcesPanelHtml()}
       <div class="insp-section-title">تکرار فرآیند</div>
-      <div class="insp-field"><label>نوع تکرار کلی</label>
+      <div class="insp-field"><label>نوع تکرار</label>
         <select data-k="repeatSourceType">
-          <option value="None" ${rst === "None" ? "selected" : ""}>بدون تکرار (یک‌بار)</option>
+          <option value="None" ${rst === "None" ? "selected" : ""}>یک‌بار</option>
           <option value="Loops" ${rst === "Loops" ? "selected" : ""}>تعداد ثابت</option>
-          <option value="Elements" ${rst === "Elements" ? "selected" : ""}>تعداد المان‌های صفحه</option>
-          <option value="DataSource" ${rst === "DataSource" ? "selected" : ""}>تعداد ردیف دیتاسورس مادر</option>
+          <option value="DataSource" ${rst === "DataSource" ? "selected" : ""}>تعداد ردیف منبع پیش‌فرض</option>
         </select>
       </div>
       <div class="insp-field" id="insp-loops">
@@ -3277,12 +3923,46 @@
         <input type="number" min="1" data-k="loopCount" value="${esc(loopCount)}" />
       </div>
       <div class="insp-field" id="insp-ds">
-        <label>دیتاسورس مادر (تکرار فرآیند)</label>
-        <select data-k="dataSourceId"><option value="">— انتخاب مادر —</option>${dsOpts}</select>
-        <p class="palette-hint" style="margin:4px 0 0">فقط یکی مادر است؛ بقیه در گروه‌ها/مراحل استفاده می‌شوند.</p>
+        <label>منبع پیش‌فرض</label>
+        <select data-k="dataSourceId">${hasSources
+          ? dsOpts
+          : `<option value="">— ابتدا منبع اضافه کنید —</option>`}</select>
+        <p class="palette-hint" style="margin:4px 0 0">وقتی نوع تکرار «منبع پیش‌فرض» باشد این انتخاب الزامی است.</p>
+        ${dsWarn}
+      </div>
+    `;
+  }
+
+  /** Repeat settings for start node inside a group (may use page selectors). */
+  function groupStartInspectorHtml(n) {
+    const rst = n.repeatSourceType || "None";
+    n.repeatSourceType = rst;
+    n.loopCount = n.loopCount || 1;
+    const loopCount = n.loopCount || 1;
+    const dsOpts = processDataSourceOptions(n.dataSourceId);
+    return `
+      <p class="palette-hint" style="margin:0 0 10px;line-height:1.7">
+        تکرار این گروه: یک‌بار، تعداد ثابت، المان‌های صفحه، یا ردیف منبع داده.
+      </p>
+      <div class="insp-section-title">تکرار گروه</div>
+      <div class="insp-field"><label>نوع تکرار</label>
+        <select data-k="repeatSourceType">
+          <option value="None" ${rst === "None" ? "selected" : ""}>یک‌بار</option>
+          <option value="Loops" ${rst === "Loops" ? "selected" : ""}>تعداد ثابت</option>
+          <option value="Elements" ${rst === "Elements" ? "selected" : ""}>تعداد المان‌های صفحه</option>
+          <option value="DataSource" ${rst === "DataSource" ? "selected" : ""}>تعداد ردیف منبع داده</option>
+        </select>
+      </div>
+      <div class="insp-field" id="insp-loops">
+        <label>تعداد تکرار ثابت</label>
+        <input type="number" min="1" data-k="loopCount" value="${esc(loopCount)}" />
+      </div>
+      <div class="insp-field" id="insp-ds">
+        <label>منبع داده</label>
+        <select data-k="dataSourceId"><option value="">— انتخاب منبع —</option>${dsOpts}</select>
       </div>
       <div id="insp-el">
-        ${selectorFieldHtml(n, "سلکتور المان‌ها (تکرار کلی)")}
+        ${selectorFieldHtml(n, "سلکتور المان‌ها (تکرار گروه)")}
       </div>
     `;
   }
@@ -3298,7 +3978,7 @@
     const toStep = nextEdges.map((e) => nodeById(e.to)).find((t) => isActionNode(t));
 
     return field("عنوان", "title", n.title) +
-      `<div class="ds-meta" style="margin-bottom:8px;line-height:1.7">
+      `<div class="insp-status">
         گروه = کانتینر دیاگرام داخل.
         <br/>محتوا: ${stepN} اقدام · ${groupN} گروه · ${condN} شرط
         <br/>خروجی بیرون: شرط(OR) · یک گروه یا اقدام بعدی
@@ -3306,7 +3986,7 @@
           ? `<br/>فعلی: ${toConds.length} شرط${toGroup ? ` + گروه «${esc(toGroup.title)}»` : ""}${toStep ? ` + اقدام «${esc(toStep.title)}»` : ""}`
           : ""}
       </div>` +
-      `<p class="palette-hint" style="margin:0 0 10px;line-height:1.7">
+      `<p class="palette-hint" style="margin:0 0 10px">
         تکرار و منبع داده روی نود <b>شروع</b> داخل همین گروه تنظیم می‌شود — نه روی خود گروه.
       </p>` +
       `<button type="button" class="btn-flow" id="insp-open-steps" style="width:100%;margin-top:8px">باز کردن طراح داخل گروه</button>`;
@@ -3317,11 +3997,13 @@
     const ds = document.getElementById("insp-ds");
     const el = document.getElementById("insp-el");
     const loops = document.getElementById("insp-loops");
+    const isProcessStart = n?.kind === "start" && !n.groupNodeId;
     const showDs = rst === "DataSource" && (
       n?.kind === "start" || (n?.kind === "group" && !n.moveLoop)
     );
-    if (ds) ds.style.display = showDs ? "" : "none";
-    if (el) el.style.display = rst === "Elements" ? "" : "none";
+    if (ds) ds.style.display = showDs || (isProcessStart && rst === "DataSource") ? "" : "none";
+    // Process start never uses page-element repeat.
+    if (el) el.style.display = (!isProcessStart && rst === "Elements") ? "" : "none";
     if (loops) loops.style.display = rst === "Loops" ? "" : "none";
   }
 
@@ -3382,31 +4064,46 @@
       groupNodeId: scope?.groupNodeId || null,
       stepNodeId: scope?.stepNodeId || null
     };
-    if (typeof window.daRequireExtension === "function") {
-      window.daRequireExtension({
-        reason: "برای اجرای فرآیند، افزونه لازم است.",
+    if (typeof window.daRequirePlayer === "function") {
+      window.daRequirePlayer({
+        reason: "برای اجرای فرآیند، افزونهٔ Player لازم است.",
         pending: { kind: "da-play", detail }
       }).then((ok) => {
         if (!ok) {
-          status.textContent = "افزونه متصل نیست — راهنمای نصب را ببینید.";
+          setStatus("افزونهٔ اجرا متصل نیست — راهنمای نصب را ببینید.", "warn");
           return;
         }
         window.dispatchEvent(new CustomEvent("da-play", { detail }));
-        status.textContent = "درخواست اجرا ارسال شد...";
+        setStatus("درخواست اجرا ارسال شد...", "info");
+      });
+      return;
+    }
+    if (typeof window.daRequireExtension === "function") {
+      window.daRequireExtension({
+        role: "player",
+        reason: "برای اجرای فرآیند، افزونهٔ Player لازم است.",
+        pending: { kind: "da-play", detail }
+      }).then((ok) => {
+        if (!ok) {
+          setStatus("افزونهٔ اجرا متصل نیست — راهنمای نصب را ببینید.", "warn");
+          return;
+        }
+        window.dispatchEvent(new CustomEvent("da-play", { detail }));
+        setStatus("درخواست اجرا ارسال شد...", "info");
       });
       return;
     }
     if (!extOkHint()) {
-      status.textContent = "افزونه متصل نیست — صفحه را در Chrome رفرش کنید یا افزونه را Reload کنید.";
+      setStatus("افزونهٔ اجرا متصل نیست — صفحه را در Chrome رفرش کنید یا Player را Reload کنید.", "warn");
       return;
     }
     window.dispatchEvent(new CustomEvent("da-play", { detail }));
-    status.textContent = "درخواست اجرا ارسال شد...";
+    setStatus("درخواست اجرا ارسال شد...", "info");
   }
 
   function extOkHint() {
-    return document.documentElement.dataset.daExtension === "1"
-      || !!document.getElementById("da-recorder-fab");
+    return document.documentElement.dataset.daPlayerExtension === "1"
+      || (typeof window.daHasPlayer === "function" && window.daHasPlayer());
   }
 
   function onNodeDown(ev, n, isPort, edgeHint) {
@@ -3432,7 +4129,7 @@
         }
       }
       if (n.kind === "group" && (kind === "success" || kind === "fail")) {
-        status.textContent = "گروه شاخه ندارد — برای دو مسیر یک شرط بگذارید.";
+        setStatus("گروه شاخه ندارد — برای دو مسیر یک شرط بگذارید.", "warn");
         linking = null;
       } else {
         const fromNode = n;
@@ -3597,7 +4294,7 @@
   function applyLink(fromId, toId, requestedKind) {
     const res = resolveLink(fromId, toId, requestedKind);
     if (!res.ok) {
-      status.textContent = res.error;
+      setStatus(res.error, "warn");
       return false;
     }
     let replacedGroup = null;
@@ -3659,7 +4356,7 @@
     }
     if (from?.kind === "condition" && to?.kind === "condition") note = " · AND زنجیره‌ای";
     const kindFa = res.kind === "success" ? "موفقیت" : res.kind === "fail" ? "شکست" : res.kind === "parent" ? "والد" : "بعدی";
-    status.textContent = `وصل شد: ${from?.title || fromId} → ${to?.title || toId} (${kindFa})${note}`;
+    setStatus(`وصل شد: ${from?.title || fromId} → ${to?.title || toId} (${kindFa})${note}`, "success");
     return true;
   }
 
@@ -3781,7 +4478,7 @@
       dragMoved = false;
       return true;
     }
-    status.textContent = linking.retargetEdgeId ? "تغییر مقصد لغو شد." : "اتصال لغو شد.";
+    setStatus(linking.retargetEdgeId ? "تغییر مقصد لغو شد." : "اتصال لغو شد.", "info");
     endLinkingGesture(ev);
     render();
     dragging = panning = null;
@@ -3853,7 +4550,7 @@
           dragging = panning = null;
           dragMoved = false;
           openGroup(hit.id);
-          status.textContent = `اقدام به داخل «${hit.title || "گروه"}» منتقل شد.`;
+          setStatus(`اقدام به داخل «${hit.title || "گروه"}» منتقل شد.`, "success");
           return;
         }
       }
@@ -3885,7 +4582,7 @@
           dragging = panning = null;
           dragMoved = false;
           openGroup(hit.id);
-          status.textContent = `اقدام به داخل «${hit.title || "گروه"}» منتقل شد.`;
+          setStatus(`اقدام به داخل «${hit.title || "گروه"}» منتقل شد.`, "success");
           return;
         }
       }
@@ -3939,7 +4636,7 @@
         });
         selected = new Set([node.id]);
         openGroup(hitGroup.id);
-        status.textContent = `اقدام داخل «${hitGroup.title || "گروه"}» اضافه شد.`;
+        setStatus(`اقدام داخل «${hitGroup.title || "گروه"}» اضافه شد.`, "success");
         return;
       }
       const node = createStepNode({
@@ -3949,7 +4646,7 @@
       });
       selected = new Set([node.id]);
       render();
-      status.textContent = "اقدام به نمودار اضافه شد.";
+      setStatus("اقدام به نمودار اضافه شد.", "success");
       return;
     }
 
@@ -4015,6 +4712,9 @@
     requestAnimationFrame(() => {
       fitDiagramToView();
     });
+  });
+  document.getElementById("btn-auto-layout")?.addEventListener("click", () => {
+    autoLayoutCurrentScope();
   });
   document.getElementById("tab-diagram")?.addEventListener("click", () => { closeGroup(); setView("diagram"); });
   document.getElementById("tab-list")?.addEventListener("click", () => { closeGroup(); setView("list"); });
@@ -4082,6 +4782,9 @@
     paletteCollapsed: false,
     inspCollapsed: false
   };
+  /** Desktop collapse prefs — mobile sheet open/close must not overwrite these. */
+  let desktopCollapse = { paletteCollapsed: false, inspCollapsed: false };
+  let wasMobileEditor = false;
 
   function readLayoutState() {
     try {
@@ -4092,11 +4795,29 @@
       if (Number.isFinite(o.inspW)) layoutState.inspW = clamp(o.inspW, PANEL_MIN.inspector, PANEL_MAX.inspector);
       layoutState.paletteCollapsed = !!o.paletteCollapsed;
       layoutState.inspCollapsed = !!o.inspCollapsed;
+      desktopCollapse = {
+        paletteCollapsed: layoutState.paletteCollapsed,
+        inspCollapsed: layoutState.inspCollapsed
+      };
     } catch { /* ignore */ }
   }
 
   function saveLayoutState() {
     try {
+      if (isMobileEditor()) {
+        // Persist widths only; keep last known desktop collapse flags.
+        localStorage.setItem(LAYOUT_KEY, JSON.stringify({
+          paletteW: layoutState.paletteW,
+          inspW: layoutState.inspW,
+          paletteCollapsed: desktopCollapse.paletteCollapsed,
+          inspCollapsed: desktopCollapse.inspCollapsed
+        }));
+        return;
+      }
+      desktopCollapse = {
+        paletteCollapsed: layoutState.paletteCollapsed,
+        inspCollapsed: layoutState.inspCollapsed
+      };
       localStorage.setItem(LAYOUT_KEY, JSON.stringify(layoutState));
     } catch { /* ignore */ }
   }
@@ -4105,51 +4826,165 @@
     return Math.min(hi, Math.max(lo, v));
   }
 
+  function isMobileEditor() {
+    return window.matchMedia && window.matchMedia("(max-width: 767.98px)").matches;
+  }
+
+  function syncMobileScrim() {
+    const shell = document.getElementById("flow-app");
+    const scrim = document.getElementById("flow-mobile-scrim");
+    if (!shell) return;
+    const open = isMobileEditor() && (!layoutState.paletteCollapsed || !layoutState.inspCollapsed);
+    shell.classList.toggle("mobile-panel-open", open);
+    if (scrim) {
+      scrim.hidden = !open;
+      scrim.setAttribute("aria-hidden", open ? "false" : "true");
+    }
+  }
+
+  function closeMobilePanels() {
+    if (!isMobileEditor()) return;
+    let changed = false;
+    if (!layoutState.paletteCollapsed) {
+      layoutState.paletteCollapsed = true;
+      changed = true;
+    }
+    if (!layoutState.inspCollapsed) {
+      layoutState.inspCollapsed = true;
+      changed = true;
+    }
+    if (!changed) return;
+    applyLayoutState();
+    saveLayoutState();
+  }
+
+  function clearMobilePanelStyles() {
+    for (const id of ["flow-palette", "flow-inspector"]) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.classList.remove("is-sheet-open");
+      ["bottom", "transform", "position", "left", "right", "top", "width", "max-height", "z-index", "visibility", "padding", "border", "border-radius", "box-shadow"].forEach((p) => {
+        el.style.removeProperty(p);
+      });
+    }
+    document.getElementById("flow-app")?.classList.remove("mobile-panel-open");
+    const scrim = document.getElementById("flow-mobile-scrim");
+    if (scrim) {
+      scrim.hidden = true;
+      scrim.setAttribute("aria-hidden", "true");
+    }
+  }
+
+  function onEditorBreakpointChange() {
+    const mobile = isMobileEditor();
+    if (mobile === wasMobileEditor) {
+      applyLayoutState();
+      return;
+    }
+    if (mobile) {
+      desktopCollapse = {
+        paletteCollapsed: layoutState.paletteCollapsed,
+        inspCollapsed: layoutState.inspCollapsed
+      };
+      layoutState.paletteCollapsed = true;
+      layoutState.inspCollapsed = true;
+    } else {
+      clearMobilePanelStyles();
+      layoutState.paletteCollapsed = desktopCollapse.paletteCollapsed;
+      layoutState.inspCollapsed = desktopCollapse.inspCollapsed;
+    }
+    wasMobileEditor = mobile;
+    applyLayoutState();
+  }
+
   function applyLayoutState() {
     if (!flowBody) return;
     flowBody.style.setProperty("--palette-w", `${layoutState.paletteW}px`);
     flowBody.style.setProperty("--insp-w", `${layoutState.inspW}px`);
     flowBody.classList.toggle("palette-collapsed", layoutState.paletteCollapsed);
     flowBody.classList.toggle("insp-collapsed", layoutState.inspCollapsed);
+    const palette = document.getElementById("flow-palette");
+    const inspector = document.getElementById("flow-inspector");
+    const mobile = isMobileEditor();
+    if (palette) {
+      const open = mobile && !layoutState.paletteCollapsed;
+      palette.classList.toggle("is-sheet-open", open);
+      if (mobile) palette.style.setProperty("bottom", open ? "0px" : "-100%", "important");
+      else {
+        palette.classList.remove("is-sheet-open");
+        palette.style.removeProperty("bottom");
+      }
+    }
+    if (inspector) {
+      const open = mobile && !layoutState.inspCollapsed;
+      inspector.classList.toggle("is-sheet-open", open);
+      if (mobile) inspector.style.setProperty("bottom", open ? "0px" : "-100%", "important");
+      else {
+        inspector.classList.remove("is-sheet-open");
+        inspector.style.removeProperty("bottom");
+      }
+    }
+    if (!mobile) clearMobilePanelStyles();
     const peekPal = document.getElementById("btn-peek-palette");
     const peekInsp = document.getElementById("btn-peek-inspector");
     if (peekPal) peekPal.hidden = !layoutState.paletteCollapsed;
     if (peekInsp) peekInsp.hidden = !layoutState.inspCollapsed;
     syncPanelChevrons();
+    syncMobileScrim();
     // Grow/shrink diagram viewport with panels — keep current zoom.
     if (typeof applyVp === "function" && view === "diagram") {
       requestAnimationFrame(() => applyVp());
     }
   }
 
-  /** Open state: outward chevrons. Collapsed/peek: reversed (inward). */
+  /** Open state: outward chevrons on desktop toggles. Mobile peeks use tool icons (not arrows). */
   function syncPanelChevrons() {
     const CHEV_RIGHT = "M8.5 5.5L15 12l-6.5 6.5";
     const CHEV_LEFT = "M15.5 5.5L9 12l6.5 6.5";
-    const setPath = (btn, d) => {
-      const p = btn?.querySelector?.("path");
-      if (p) p.setAttribute("d", d);
+    const ICO_CLOSE = "M6 6l12 12M18 6L6 18";
+    const setSvg = (btn, html) => {
+      if (!btn) return;
+      btn.innerHTML = html;
     };
-    // Palette (right): open → ▶ , collapsed peek → ◀
-    setPath(document.getElementById("btn-toggle-palette"), CHEV_RIGHT);
-    setPath(document.getElementById("btn-peek-palette"), CHEV_LEFT);
-    // Inspector (left): open → ◀ , collapsed peek → ▶
-    setPath(document.getElementById("btn-toggle-inspector"), CHEV_LEFT);
-    setPath(document.getElementById("btn-peek-inspector"), CHEV_RIGHT);
+    const chevronSvg = (d) =>
+      `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="${d}"/></svg>`;
 
+    const mobile = isMobileEditor();
     const tPal = document.getElementById("btn-toggle-palette");
     const tInsp = document.getElementById("btn-toggle-inspector");
+    const peekPal = document.getElementById("btn-peek-palette");
+    const peekInsp = document.getElementById("btn-peek-inspector");
+
+    if (mobile) {
+      setSvg(tPal, `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none"><path d="${ICO_CLOSE}" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>`);
+      setSvg(tInsp, `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none"><path d="${ICO_CLOSE}" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>`);
+      setSvg(peekPal, `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none"><rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`);
+      setSvg(peekInsp, `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`);
+    } else {
+      setSvg(tPal, chevronSvg(CHEV_RIGHT));
+      setSvg(tInsp, chevronSvg(CHEV_LEFT));
+      setSvg(peekPal, chevronSvg(CHEV_LEFT));
+      setSvg(peekInsp, chevronSvg(CHEV_RIGHT));
+    }
+
     if (tPal) {
-      tPal.title = layoutState.paletteCollapsed ? "نمایش جعبه ابزار" : "جمع کردن جعبه ابزار";
+      tPal.title = layoutState.paletteCollapsed ? "نمایش جعبه ابزار" : (mobile ? "بستن جعبه ابزار" : "جمع کردن جعبه ابزار");
       tPal.setAttribute("aria-label", tPal.title);
     }
     if (tInsp) {
-      tInsp.title = layoutState.inspCollapsed ? "نمایش ویژگی‌ها" : "جمع کردن ویژگی‌ها";
+      tInsp.title = layoutState.inspCollapsed ? "نمایش ویژگی‌ها" : (mobile ? "بستن ویژگی‌ها" : "جمع کردن ویژگی‌ها");
       tInsp.setAttribute("aria-label", tInsp.title);
     }
   }
 
   function ensureInspectorExpanded() {
+    if (isMobileEditor()) {
+      layoutState.paletteCollapsed = true;
+      layoutState.inspCollapsed = false;
+      applyLayoutState();
+      saveLayoutState();
+      return;
+    }
     if (!layoutState.inspCollapsed) return;
     layoutState.inspCollapsed = false;
     applyLayoutState();
@@ -4160,7 +4995,7 @@
     const palette = document.getElementById("flow-palette");
     const inspector = document.getElementById("flow-inspector") || document.querySelector(".flow-inspector");
     if (inspector && !inspector.id) inspector.id = "flow-inspector";
-    const canvas = document.getElementById("canvas-wrap");
+    const canvas = document.getElementById("canvas-wrap") || document.querySelector(".canvas-wrap");
 
     const ensureHead = (panel, titleText, btnId, titleAttr, chevronPath) => {
       if (!panel) return;
@@ -4216,7 +5051,7 @@
         b.className = "btn-panel-peek peek-palette";
         b.hidden = true;
         b.title = "نمایش جعبه ابزار";
-        b.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="${CHEV_LEFT}"/></svg>`;
+        b.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none"><rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
         canvas.appendChild(b);
       }
       if (!document.getElementById("btn-peek-inspector")) {
@@ -4226,7 +5061,7 @@
         b.className = "btn-panel-peek peek-insp";
         b.hidden = true;
         b.title = "نمایش ویژگی‌ها";
-        b.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="${CHEV_RIGHT}"/></svg>`;
+        b.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
         canvas.appendChild(b);
       }
     }
@@ -4238,29 +5073,64 @@
     if (!flowBody) return;
     ensurePanelChrome();
     readLayoutState();
+    wasMobileEditor = isMobileEditor();
+    if (wasMobileEditor) {
+      layoutState.paletteCollapsed = true;
+      layoutState.inspCollapsed = true;
+    } else if (layoutState.paletteCollapsed && layoutState.inspCollapsed) {
+      // Recover desktop after prior mobile sessions overwrote prefs.
+      layoutState.paletteCollapsed = false;
+      layoutState.inspCollapsed = false;
+      desktopCollapse = { paletteCollapsed: false, inspCollapsed: false };
+      saveLayoutState();
+    }
     applyLayoutState();
 
+    const mq = window.matchMedia("(max-width: 767.98px)");
+    const onMq = () => onEditorBreakpointChange();
+    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onMq);
+    else if (typeof mq.addListener === "function") mq.addListener(onMq);
+    window.addEventListener("resize", () => {
+      // Fallback for environments where matchMedia change is flaky.
+      if (isMobileEditor() !== wasMobileEditor) onEditorBreakpointChange();
+    });
+
     document.getElementById("btn-toggle-palette")?.addEventListener("click", () => {
-      layoutState.paletteCollapsed = !layoutState.paletteCollapsed;
+      if (isMobileEditor()) {
+        const opening = layoutState.paletteCollapsed;
+        layoutState.paletteCollapsed = !layoutState.paletteCollapsed;
+        if (opening) layoutState.inspCollapsed = true;
+      } else {
+        layoutState.paletteCollapsed = !layoutState.paletteCollapsed;
+      }
       applyLayoutState();
       saveLayoutState();
     });
     document.getElementById("btn-toggle-inspector")?.addEventListener("click", () => {
-      layoutState.inspCollapsed = !layoutState.inspCollapsed;
+      if (isMobileEditor()) {
+        const opening = layoutState.inspCollapsed;
+        layoutState.inspCollapsed = !layoutState.inspCollapsed;
+        if (opening) layoutState.paletteCollapsed = true;
+      } else {
+        layoutState.inspCollapsed = !layoutState.inspCollapsed;
+      }
       applyLayoutState();
       saveLayoutState();
     });
     document.getElementById("btn-peek-palette")?.addEventListener("click", () => {
       layoutState.paletteCollapsed = false;
+      if (isMobileEditor()) layoutState.inspCollapsed = true;
       applyLayoutState();
       saveLayoutState();
     });
     document.getElementById("btn-peek-inspector")?.addEventListener("click", () => {
       layoutState.inspCollapsed = false;
+      if (isMobileEditor()) layoutState.paletteCollapsed = true;
       applyLayoutState();
       saveLayoutState();
     });
 
+    document.getElementById("flow-mobile-scrim")?.addEventListener("click", closeMobilePanels);
     // Keep diagram surface sized to the canvas when the middle column changes.
     if (typeof ResizeObserver !== "undefined" && canvasScroll) {
       let roPending = false;
@@ -4278,6 +5148,7 @@
     let drag = null;
     flowBody.querySelectorAll(".panel-resize").forEach((handle) => {
       handle.addEventListener("pointerdown", (ev) => {
+        if (isMobileEditor()) return;
         ev.preventDefault();
         const which = handle.getAttribute("data-resize");
         drag = {

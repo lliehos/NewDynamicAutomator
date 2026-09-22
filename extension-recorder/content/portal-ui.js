@@ -1,8 +1,22 @@
-/** Handles portal buttons and scoped play (page world cannot call chrome.*). */
+/** Recorder portal UI — record actions only. */
 (function () {
-  function extOk() {
-    return document.documentElement.dataset.daExtension === "1"
-      || !!document.getElementById("da-recorder-fab");
+  function recorderOk() {
+    return document.documentElement.dataset.daRecorderExtension === "1"
+      || document.documentElement.dataset.daExtension === "1";
+  }
+
+  function setPortalStatus(msg, type) {
+    const status = document.getElementById("da-portal-status")
+      || document.getElementById("da-page-rec-status")
+      || document.getElementById("flow-status");
+    if (status && msg != null) status.textContent = String(msg);
+    if (msg) {
+      try {
+        window.dispatchEvent(new CustomEvent("da-notify", {
+          detail: { message: String(msg), type: type || "info" }
+        }));
+      } catch { /* ignore */ }
+    }
   }
 
   function tabOptionLabel(t) {
@@ -55,12 +69,12 @@
     const msg = document.getElementById("da-record-gate-msg");
     if (!fab) return;
 
-    const ok = extOk();
+    const ok = recorderOk();
     fab.hidden = !ok;
     if (msg) {
       msg.innerHTML = ok
-        ? "افزونه متصل است. دکمهٔ قرمز <strong>REC</strong> پایین‌چپ را بزنید."
-        : "افزونه نصب نیست. در <strong>Chrome یا Edge</strong> نصب کنید — مرورگر داخلی Cursor از افزونه پشتیبانی نمی‌کند.";
+        ? "افزونهٔ <strong>ضبط</strong> متصل است. دکمهٔ قرمز <strong>REC</strong> پایین‌چپ را بزنید."
+        : "افزونهٔ <strong>ضبط (Recorder)</strong> نصب نیست. در Chrome/Edge با Load unpacked نصب کنید.";
     }
     if (!ok) {
       if (panel) panel.hidden = true;
@@ -86,58 +100,32 @@
     }).catch(() => {});
   }
 
-  async function playTask(taskId, scope) {
-    const payload = {
-      type: "startPlay",
-      taskId: Number(taskId),
-      groupNodeId: scope?.groupNodeId || null,
-      stepNodeId: scope?.stepNodeId || null
-    };
-    const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
-    const status = document.getElementById("da-portal-status")
-      || document.getElementById("flow-status")
-      || document.getElementById("da-page-rec-status");
-    if (status) {
-      status.textContent = res?.ok
-        ? `اجرا شروع شد — ${res.stepTotal} مرحله`
-        : (res?.error || "خطا در اجرا");
-    }
-    return res;
-  }
-
-  function selectedRecordTabId() {
-    const sel = document.getElementById("da-record-tab")
-      || document.getElementById("da-page-record-tab");
-    const val = sel?.value;
-    if (!val) return null;
-    const n = Number(val);
-    return Number.isFinite(n) ? n : null;
-  }
-
   document.addEventListener("click", async (ev) => {
     const t = ev.target instanceof Element ? ev.target.closest("[data-da-action]") : null;
     if (!t) return;
     const action = t.getAttribute("data-da-action");
+
     if (action === "start-record") {
       ev.preventDefault();
-      // Always open a fresh about:blank tab (no tab picker on portal).
       const payload = { type: "startRecordSession" };
       const taskId = t.getAttribute("data-task-id");
       if (taskId) payload.taskId = Number(taskId);
       const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
-      const status = document.getElementById("da-portal-status") || document.getElementById("da-page-rec-status");
-      if (status) {
-        status.textContent = res?.ok
-          ? (taskId
+      if (res?.ok) {
+        setPortalStatus(
+          taskId
             ? `ضبط روی فرآیند #${taskId} در تب جدید شروع شد — بعد از اتمام، در FAB ذخیره کنید.`
-            : "تب جدید خالی باز شد — کار کنید، بعد از FAB «اتمام ضبط» را بزنید.")
-          : (res?.error || "خطا در شروع ضبط");
+            : "تب جدید خالی باز شد — کار کنید، بعد از FAB «اتمام ضبط» را بزنید.",
+          "success"
+        );
+      } else {
+        setPortalStatus(res?.error || "خطا در شروع ضبط", "error");
       }
       syncRecordPageFab();
     }
-    if (action === "check-extension") {
+    if (action === "check-extension" || action === "check-recorder") {
       ev.preventDefault();
-      window.dispatchEvent(new CustomEvent("da-extension-recheck"));
+      window.dispatchEvent(new CustomEvent("da-extension-recheck", { detail: { role: "recorder" } }));
       syncRecordPageFab();
     }
     if (action === "clear-draft") {
@@ -163,41 +151,13 @@
         type: "saveDraft",
         payload: { newTaskTitle: title }
       }).catch((e) => ({ ok: false, error: e.message }));
-      const status = document.getElementById("da-page-rec-status") || document.getElementById("da-portal-status");
-      if (status) {
-        status.textContent = res?.ok
-          ? `ذخیره شد — ویرایش: /Tasks/Editor/${res.result?.taskId}`
-          : (res?.error || "خطا");
+      if (res?.ok) {
+        setPortalStatus(`ذخیره شد — ویرایش: /Tasks/Editor/${res.result?.taskId}`, "success");
+      } else {
+        setPortalStatus(res?.error || "خطا در ذخیره ضبط", "error");
       }
       syncRecordPageFab();
     }
-    if (action === "play-task") {
-      ev.preventDefault();
-      const taskId = t.getAttribute("data-task-id");
-      if (!taskId) return;
-      await playTask(taskId);
-    }
-    if (action === "play-group") {
-      ev.preventDefault();
-      const taskId = t.getAttribute("data-task-id") || document.getElementById("flow-app")?.dataset?.taskId;
-      const groupNodeId = t.getAttribute("data-group-id");
-      if (!taskId || !groupNodeId) return;
-      await playTask(taskId, { groupNodeId });
-    }
-    if (action === "play-step") {
-      ev.preventDefault();
-      const taskId = t.getAttribute("data-task-id") || document.getElementById("flow-app")?.dataset?.taskId;
-      const stepNodeId = t.getAttribute("data-step-id");
-      if (!taskId || !stepNodeId) return;
-      await playTask(taskId, { stepNodeId });
-    }
-  });
-
-  // Editor can dispatch: window.dispatchEvent(new CustomEvent("da-play", { detail: { taskId, groupNodeId, stepNodeId } }))
-  window.addEventListener("da-play", async (ev) => {
-    const d = ev.detail || {};
-    if (!d.taskId) return;
-    await playTask(d.taskId, { groupNodeId: d.groupNodeId, stepNodeId: d.stepNodeId });
   });
 
   document.getElementById("da-page-rec-fab")?.addEventListener("click", (e) => {
@@ -207,7 +167,6 @@
     syncRecordPageFab();
   });
 
-  // Hide global extension REC only on the portal app origin (not other localhost sites).
   const hidePortalExtFab = async () => {
     try {
       const { portalBase } = await chrome.storage.local.get("portalBase");
@@ -223,7 +182,12 @@
   setTimeout(hidePortalExtFab, 400);
   setTimeout(hidePortalExtFab, 1200);
 
-  window.addEventListener("da-extension-ready", () => {
+  window.addEventListener("da-recorder-ready", () => {
+    syncRecordPageFab();
+    loadPortalRecordTabs();
+  });
+  window.addEventListener("da-extension-ready", (ev) => {
+    if (ev.detail?.role && ev.detail.role !== "recorder") return;
     syncRecordPageFab();
     loadPortalRecordTabs();
   });
