@@ -2224,7 +2224,7 @@
       || graph.edges[graph.edges.length - 1];
     if (neu) neu.id = edgeId;
     selectedEdgeId = edgeId;
-    setStatus("مقصد اتصال تغییر کرد.", "success");
+    setStatus(t("editor.edge.saved"), "success");
     return true;
   }
 
