@@ -1,0 +1,112 @@
+@{
+    ViewData["Title"] = L["panel.dashTitle"] + " — " + L["brand.name"];
+}
+
+<div class="da-home da-dash">
+  <header class="da-home-head">
+    <div>
+      <div class="da-home-brand" data-i18n="brand.name">@L["brand.name"]</div>
+      <h4 class="da-home-title mb-0" data-i18n="panel.dashTitle">@L["panel.dashTitle"]</h4>
+      <p class="da-home-sub mb-0" id="da-dash-status" data-i18n="panel.dashSub">@L["panel.dashSub"]</p>
+    </div>
+  </header>
+
+  <section class="da-dash-stats" aria-label="@L["panel.shortcuts"]">
+    <article class="da-dash-stat">
+      <div class="da-dash-stat-ico" aria-hidden="true"><i class="ti ti-git-branch"></i></div>
+      <div>
+        <b id="da-stat-tasks">0</b>
+        <span data-i18n="panel.statProcesses">@L["panel.statProcesses"]</span>
+      </div>
+    </article>
+    <article class="da-dash-stat">
+      <div class="da-dash-stat-ico" aria-hidden="true"><i class="ti ti-database"></i></div>
+      <div>
+        <b id="da-stat-sources">0</b>
+        <span data-i18n="panel.statSources">@L["panel.statSources"]</span>
+      </div>
+    </article>
+    <article class="da-dash-stat">
+      <div class="da-dash-stat-ico" aria-hidden="true"><i class="ti ti-click"></i></div>
+      <div>
+        <b id="da-stat-steps">0</b>
+        <span data-i18n="panel.statSteps">@L["panel.statSteps"]</span>
+      </div>
+    </article>
+    <article class="da-dash-stat">
+      <div class="da-dash-stat-ico" aria-hidden="true"><i class="ti ti-folders"></i></div>
+      <div>
+        <b id="da-stat-groups">0</b>
+        <span data-i18n="panel.statGroups">@L["panel.statGroups"]</span>
+      </div>
+    </article>
+  </section>
+
+  <section class="da-dash-section" aria-label="@L["panel.shortcuts"]">
+    <h5 class="da-dash-section-title" data-i18n="panel.shortcuts">@L["panel.shortcuts"]</h5>
+    <div class="da-dash-shortcuts">
+      <a class="da-dash-shot" asp-area="Panel" asp-controller="Home" asp-action="Processes">
+        <i class="ti ti-list"></i>
+        <span data-i18n="panel.shotProcesses">@L["panel.shotProcesses"]</span>
+        <small data-i18n="panel.shotProcessesSub">@L["panel.shotProcessesSub"]</small>
+      </a>
+      <a class="da-dash-shot" asp-area="Panel" asp-controller="Home" asp-action="DataSources">
+        <i class="ti ti-database"></i>
+        <span data-i18n="panel.shotSources">@L["panel.shotSources"]</span>
+        <small data-i18n="panel.shotSourcesSub">@L["panel.shotSourcesSub"]</small>
+      </a>
+      <button type="button" class="da-dash-shot da-dash-shot-primary" data-bs-toggle="modal" data-bs-target="#da-create-task-modal">
+        <i class="ti ti-plus"></i>
+        <span data-i18n="panel.shotNew">@L["panel.shotNew"]</span>
+        <small data-i18n="panel.shotNewSub">@L["panel.shotNewSub"]</small>
+      </button>
+      <a class="da-dash-shot" asp-area="Panel" asp-controller="Extension" asp-action="Install">
+        <i class="ti ti-puzzle"></i>
+        <span data-i18n="panel.shotExt">@L["panel.shotExt"]</span>
+        <small data-i18n="panel.shotExtSub">@L["panel.shotExtSub"]</small>
+      </a>
+    </div>
+  </section>
+
+  <section class="da-dash-section" aria-label="@L["panel.recentProcesses"]">
+    <div class="da-dash-section-head">
+      <h5 class="da-dash-section-title mb-0" data-i18n="panel.recentProcesses">@L["panel.recentProcesses"]</h5>
+      <a class="small" asp-area="Panel" asp-controller="Home" asp-action="Processes" data-i18n="common.all">@L["common.all"]</a>
+    </div>
+    <div class="da-dash-recent" id="da-dash-recent">
+      <div class="da-task-empty text-muted" data-i18n="common.loading">@L["common.loading"]</div>
+    </div>
+  </section>
+
+  <section class="da-dash-section" aria-label="@L["panel.recentSources"]">
+    <div class="da-dash-section-head">
+      <h5 class="da-dash-section-title mb-0" data-i18n="panel.recentSources">@L["panel.recentSources"]</h5>
+      <a class="small" asp-area="Panel" asp-controller="Home" asp-action="DataSources" data-i18n="common.all">@L["common.all"]</a>
+    </div>
+    <div class="da-dash-recent" id="da-dash-sources">
+      <div class="da-task-empty text-muted" data-i18n="common.loading">@L["common.loading"]</div>
+    </div>
+  </section>
+</div>
+
+<div class="modal fade" id="da-create-task-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header border-0 pb-0">
+        <h5 class="modal-title" data-i18n="panel.createProcess">@L["panel.createProcess"]</h5>
+      </div>
+      <div class="modal-body">
+        <label class="form-label" for="da-new-title" data-i18n="panel.processTitle">@L["panel.processTitle"]</label>
+        <input class="form-control form-control-lg" id="da-new-title" type="text" data-i18n-placeholder="panel.processTitlePh" placeholder="@L["panel.processTitlePh"]" autocomplete="off" />
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-label-secondary" data-bs-dismiss="modal" data-i18n="common.cancel">@L["common.cancel"]</button>
+        <button type="button" class="btn btn-primary" id="da-create-local" data-i18n="common.create">@L["common.create"]</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+@section Scripts {
+<script src="~/js/local-dashboard.js?v=mrbt-2"></script>
+}

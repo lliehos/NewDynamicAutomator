@@ -1,0 +1,37 @@
+@{
+  var culture = L.Culture;
+  var dir = L.Dir;
+  var cssPrefix = L.IsRtl ? "rtl/" : "";
+}
+<!doctype html>
+<html lang="@culture" class="light-style layout-wide customizer-hide" dir="@dir" data-culture="@culture" data-assets-path="~/assets/" data-style="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>@(string.IsNullOrWhiteSpace(ViewData["Title"] as string) ? L["brand.name"] : $"{ViewData["Title"]} — {L["brand.name"]}")</title>
+  <link rel="icon" href="~/img/brand/morobot-mark.svg" type="image/svg+xml" />
+  <link rel="icon" type="image/png" sizes="32x32" href="~/img/brand/morobot-icon.png" />
+  <link rel="apple-touch-icon" href="~/img/brand/apple-touch-icon.png" />
+  <meta name="theme-color" content="#0d9488" />
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/@(cssPrefix)core.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/@(cssPrefix)theme-default.css" />
+  <link rel="stylesheet" href="~/assets/css/demo.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/pages/page-auth.css" />
+  <link rel="stylesheet" href="~/css/portal-app.css?v=morobot-i18n-1" />
+  <style>body { font-family: Vazirmatn, sans-serif !important; }</style>
+  <script src="~/assets/vendor/js/helpers.js"></script>
+  <script src="~/assets/js/config.js"></script>
+</head>
+<body>
+  <div class="container-xxl">
+    <div class="authentication-wrapper authentication-basic container-p-y">
+      <div class="authentication-inner py-6">
+        @RenderBody()
+      </div>
+    </div>
+  </div>
+  <script src="~/js/i18n.js?v=1"></script>
+</body>
+</html>

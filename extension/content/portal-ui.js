@@ -166,7 +166,7 @@
       const status = document.getElementById("da-page-rec-status") || document.getElementById("da-portal-status");
       if (status) {
         status.textContent = res?.ok
-          ? `ذخیره شد — ویرایش: /Tasks/Editor/${res.result?.taskId}`
+          ? `ذخیره شد — ویرایش: /Panel/Tasks/Editor/${res.result?.taskId}`
           : (res?.error || "خطا");
       }
       syncRecordPageFab();

@@ -121,6 +121,53 @@ public class DataSourceService
         };
     }
 
+    /// <summary>Rebuild a clean .xlsx from columns + flattened cells (local-first download).</summary>
+    public byte[] BuildExcel(IReadOnlyList<DataSourceColumnDto> columns, IReadOnlyList<DataSourceCellDto> cells)
+    {
+        if (columns is null || columns.Count == 0)
+            throw new InvalidOperationException("منبع ستون معتبری برای خروجی ندارد.");
+
+        using var book = new XLWorkbook();
+        var sheet = book.Worksheets.Add("Data");
+
+        for (var c = 0; c < columns.Count; c++)
+        {
+            var col = columns[c];
+            var header = string.IsNullOrWhiteSpace(col.Title) ? col.Key : col.Title;
+            sheet.Cell(1, c + 1).Value = header ?? "";
+            sheet.Cell(1, c + 1).Style.Font.Bold = true;
+        }
+
+        var byRow = new Dictionary<int, Dictionary<string, string>>();
+        foreach (var cell in cells ?? Array.Empty<DataSourceCellDto>())
+        {
+            var idx = cell.Index;
+            if (!byRow.TryGetValue(idx, out var row))
+            {
+                row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                byRow[idx] = row;
+            }
+            row[cell.Key ?? ""] = cell.CellValue ?? "";
+        }
+
+        var rowIndexes = byRow.Keys.OrderBy(i => i).ToList();
+        for (var r = 0; r < rowIndexes.Count; r++)
+        {
+            var map = byRow[rowIndexes[r]];
+            for (var c = 0; c < columns.Count; c++)
+            {
+                var key = columns[c].Key ?? "";
+                map.TryGetValue(key, out var val);
+                sheet.Cell(r + 2, c + 1).Value = val ?? "";
+            }
+        }
+
+        sheet.Columns().AdjustToContents(1, 40);
+        using var ms = new MemoryStream();
+        book.SaveAs(ms);
+        return ms.ToArray();
+    }
+
     public async Task<bool> DeleteAsync(int userId, int id, CancellationToken ct = default)
     {
         var ds = await _db.DataSources

@@ -1,0 +1,72 @@
+@{
+    ViewData["Title"] = L["panel.sourcesTitle"] + " — " + L["brand.name"];
+}
+
+<div class="da-home da-sources-home">
+  <header class="da-home-head">
+    <div>
+      <div class="da-home-brand" data-i18n="brand.name">@L["brand.name"]</div>
+      <h4 class="da-home-title mb-0" data-i18n="panel.sourcesTitle">@L["panel.sourcesTitle"]</h4>
+      <p class="da-home-sub mb-0" id="da-sources-status" data-i18n="panel.sourcesSub">@L["panel.sourcesSub"]</p>
+    </div>
+  </header>
+
+  <div class="da-tasks-panel" id="da-sources-panel">
+    <div class="card d-none d-md-block mb-0">
+      <div class="table-responsive">
+        <table class="table mb-0">
+          <thead>
+            <tr>
+              <th>عنوان منبع</th>
+              <th>فرآیند</th>
+              <th class="text-nowrap">ستون</th>
+              <th class="text-nowrap">ردیف</th>
+              <th>فایل</th>
+              <th class="text-nowrap">عملیات</th>
+            </tr>
+          </thead>
+          <tbody id="da-source-rows">
+            <tr><td colspan="6" class="text-center text-muted py-6">در حال بارگذاری...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="da-task-list d-md-none" id="da-source-cards" aria-live="polite">
+      <div class="da-task-empty text-muted">در حال بارگذاری...</div>
+    </div>
+  </div>
+</div>
+
+<div class="ds-viewer" id="da-portal-ds-viewer" hidden>
+  <div class="ds-viewer-backdrop" data-portal-ds-close="1"></div>
+  <div class="ds-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="da-portal-ds-title">
+    <div class="ds-viewer-head">
+      <div>
+        <h2 id="da-portal-ds-title">منبع داده</h2>
+        <p class="ds-viewer-sub" id="da-portal-ds-sub"></p>
+      </div>
+        <div class="ds-viewer-head-actions">
+          <span class="ds-viewer-live" id="da-portal-ds-live" title="اتصال زنده">● آفلاین</span>
+          <button type="button" class="btn btn-sm btn-label-secondary" id="da-portal-ds-refresh">بازخوانی</button>
+          <button type="button" class="btn btn-sm btn-label-secondary" data-portal-ds-close="1">بستن</button>
+        </div>
+    </div>
+    <div class="ds-viewer-legend">
+      <span class="ds-leg ds-leg-read">خواندن</span>
+      <span class="ds-leg ds-leg-write">نوشتن</span>
+    </div>
+    <div class="ds-viewer-scroll">
+      <table class="ds-viewer-table" id="da-portal-ds-table">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+@section Scripts {
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<link rel="stylesheet" href="~/editor/flow.css?v=morobot-teal-1" />
+<script src="~/js/local-data-sources.js?v=mrbt-2"></script>
+}

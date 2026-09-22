@@ -2,18 +2,24 @@ using System.Text;
 using DynamicAutomator.Infrastructure;
 using DynamicAutomator.Infrastructure.Identity;
 using DynamicAutomator.Infrastructure.Persistence;
+using DynamicAutomator.Web.Hubs;
+using DynamicAutomator.Web.Middleware;
+using DynamicAutomator.Web.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ILocaleService, LocaleService>();
 builder.Services.AddControllersWithViews()
     .AddJsonOptions(o =>
     {
         o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
         o.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
     });
+builder.Services.AddSignalR();
 builder.Services.AddInfrastructure(builder.Configuration);
 
 var jwtKey = builder.Configuration["Jwt:Key"] ?? "CHANGE-ME-TO-A-LONG-SECRET-KEY-32+";
@@ -42,6 +48,12 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 {
                     ctx.Token = cookie;
                 }
+                if (string.IsNullOrEmpty(ctx.Token)
+                    && ctx.Request.Path.StartsWithSegments("/hubs")
+                    && ctx.Request.Query.TryGetValue("access_token", out var accessToken))
+                {
+                    ctx.Token = accessToken;
+                }
                 return Task.CompletedTask;
             },
             OnChallenge = ctx =>
@@ -56,15 +68,15 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 if (!ctx.Response.HasStarted)
                 {
                     ctx.HandleResponse();
-                    ctx.Response.Redirect("/Account/Login");
+                    ctx.Response.Redirect("/Panel/Account/Login");
                 }
                 return Task.CompletedTask;
             }
         };
     });
 builder.Services.AddAuthorization();
-builder.Services.AddSingleton<DynamicAutomator.Web.Services.ExtensionSyncService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<DynamicAutomator.Web.Services.ExtensionSyncService>());
+builder.Services.AddSingleton<ExtensionSyncService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ExtensionSyncService>());
 
 var app = builder.Build();
 
@@ -77,10 +89,17 @@ if (!app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
+app.UseMiddleware<CultureMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.MapControllerRoute(name: "default", pattern: "{controller=Home}/{action=Index}/{id?}");
+app.MapHub<PlayDataHub>("/hubs/play-data");
+app.MapControllerRoute(
+    name: "areas",
+    pattern: "{area:exists}/{controller=Home}/{action=Index}/{id?}");
+app.MapControllerRoute(
+    name: "default",
+    pattern: "{controller=Home}/{action=Index}/{id?}");
 
 using (var scope = app.Services.CreateScope())
 {

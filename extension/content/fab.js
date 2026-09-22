@@ -160,7 +160,7 @@
     });
     const portal = (await chrome.storage.local.get("portalBase")).portalBase || "https://localhost:7201";
     if (res?.ok) {
-      status.textContent = `ذخیره محلی شد. ویرایش: ${portal}/Tasks/Editor/${res.result.taskId}`;
+      status.textContent = `ذخیره محلی شد. ویرایش: ${portal}/Panel/Tasks/Editor/${res.result.taskId}`;
       panel.hidden = false;
     } else {
       status.textContent = res?.error || "خطا در ارسال";

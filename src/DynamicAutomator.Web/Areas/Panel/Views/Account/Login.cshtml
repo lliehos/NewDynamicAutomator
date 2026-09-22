@@ -1,0 +1,40 @@
+@{
+    Layout = "_AuthLayout";
+    ViewData["Title"] = L["login.title"];
+    var nextLang = L.IsRtl ? "en" : "fa";
+    var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
+}
+
+<div class="card">
+  <div class="card-body">
+    <div class="d-flex justify-content-end mb-2">
+      <button type="button" class="btn btn-sm btn-label-primary rounded-pill px-3" data-lang-switch data-lang-next="@nextLang">@langLabel</button>
+    </div>
+    <div class="app-brand justify-content-center mb-6 morobot-login-brand">
+      <img class="morobot-login-logo" src="~/img/brand/morobot-mark.svg" width="120" height="120" alt="@L["brand.name"]" />
+      <div class="morobot-login-titles">
+        <span class="app-brand-text demo text-heading fw-bold" data-i18n="brand.name">@L["brand.name"]</span>
+      </div>
+    </div>
+    <h4 class="mb-1" data-i18n="login.heading">@L["login.heading"]</h4>
+    <p class="mb-4" data-i18n="login.hint">@L["login.hint"]</p>
+    <div class="alert alert-info small" data-i18n="login.suggest">@L["login.suggest"]</div>
+    <form method="post" asp-area="Panel" asp-controller="Account" asp-action="Login">
+      @Html.AntiForgeryToken()
+      <input type="hidden" name="returnUrl" value="@ViewBag.ReturnUrl" />
+      <div class="mb-6">
+        <label class="form-label" for="userName" data-i18n="login.userName">@L["login.userName"]</label>
+        <input class="form-control" id="userName" name="userName" value="test" autofocus />
+      </div>
+      <div class="mb-6">
+        <label class="form-label" for="password" data-i18n="login.password">@L["login.password"]</label>
+        <input class="form-control" type="password" id="password" name="password" value="test" />
+      </div>
+      <button class="btn btn-primary d-grid w-100" type="submit" data-i18n="login.submit">@L["login.submit"]</button>
+    </form>
+    <p class="text-center mt-4 mb-0">
+      <a href="/" data-i18n="login.backSite">@L["login.backSite"]</a>
+    </p>
+    <p class="text-center text-muted small mt-3 mb-0" data-i18n="brand.copyright">@L["brand.copyright"]</p>
+  </div>
+</div>

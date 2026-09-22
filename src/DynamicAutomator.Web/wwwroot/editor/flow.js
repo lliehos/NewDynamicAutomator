@@ -1,4 +1,35 @@
 (() => {
+  // ---------------------------------------------------------------------------
+  // i18n helper — uses DaI18n when available, falls back to key
+  // ---------------------------------------------------------------------------
+  function t(key, vars) {
+    if (window.DaI18n && typeof DaI18n.t === "function") return DaI18n.t(key, vars);
+    return key;
+  }
+
+  function actionLabels() {
+    return {
+      NoAction: t("editor.actions.NoAction"),
+      Click: t("editor.actions.Click"),
+      DoubleClick: t("editor.actions.DoubleClick"),
+      RightClick: t("editor.actions.RightClick"),
+      Hover: t("editor.actions.Hover"),
+      Enter: t("editor.actions.Enter"),
+      InputContent: t("editor.actions.InputContent"),
+      InsertContent: t("editor.actions.InsertContent"),
+      LoadContent: t("editor.actions.LoadContent"),
+      SaveContent: t("editor.actions.SaveContent"),
+      TakeContent: t("editor.actions.TakeContent"),
+      GoToUrl: t("editor.actions.GoToUrl"),
+      NewPage: t("editor.actions.NewPage"),
+      CloseFirstTab: t("editor.actions.CloseFirstTab"),
+      CloseLastTab: t("editor.actions.CloseLastTab"),
+      WaitTime: t("editor.actions.WaitTime"),
+      WaitForLoading: t("editor.actions.WaitForLoading"),
+      Refresh: t("editor.actions.Refresh")
+    };
+  }
+
   const app = document.getElementById("flow-app");
   // Prefer URL segment: local task ids are Date.now() and may exceed Int32
   // (older Editor(int) routes would put "0" in data-task-id).
@@ -33,33 +64,19 @@
     }
   }
 
-  const ACTION_LABELS = {
-    NoAction: "بدون اقدام",
-    Click: "کلیک",
-    DoubleClick: "دبل‌کلیک",
-    RightClick: "کلیک راست",
-    Hover: "هاور",
-    Enter: "اینتر",
-    InputContent: "ورود متن",
-    InsertContent: "درج محتوا",
-    LoadContent: "بارگذاری محتوا",
-    SaveContent: "ذخیره محتوا",
-    TakeContent: "خواندن محتوا",
-    GoToUrl: "رفتن به آدرس",
-    NewPage: "تب جدید",
-    CloseFirstTab: "بستن تب اول",
-    CloseLastTab: "بستن تب آخر",
-    WaitTime: "انتظار زمانی",
-    WaitForLoading: "انتظار بارگذاری",
-    Refresh: "بارگذاری مجدد"
-  };
-  const ACTIONS = Object.keys(ACTION_LABELS);
+  // ACTION_LABELS is now dynamically generated via actionLabels() for i18n
+  const ACTIONS = [
+    "NoAction","Click","DoubleClick","RightClick","Hover","Enter",
+    "InputContent","InsertContent","LoadContent","SaveContent","TakeContent",
+    "GoToUrl","NewPage","CloseFirstTab","CloseLastTab","WaitTime","WaitForLoading","Refresh"
+  ];
 
   function isActionNode(n) {
     return !!n && (n.kind === "action" || n.kind === "step");
   }
   function actionTypeLabel(at) {
-    return ACTION_LABELS[at] || at || "اقدام";
+    const map = actionLabels();
+    return map[at] || at || t("editor.nodes.action");
   }
   function migrateActionKinds(g) {
     (g?.nodes || []).forEach((n) => {
@@ -120,34 +137,42 @@
     return m ? decodeURIComponent(m[1]) : "";
   }
   function currentUser() {
+    if (window.DaSecureStore) return DaSecureStore.currentUser();
     const u = readCookie("da_local_user") || localStorage.getItem(LOCAL_USER_KEY) || "test";
     localStorage.setItem(LOCAL_USER_KEY, u);
     return u;
   }
   function tasksKey() {
-    return "da_local_tasks__" + currentUser();
+    return window.DaSecureStore ? DaSecureStore.tasksKey() : ("da_local_tasks__" + currentUser());
   }
 
   const LOCAL_KEY = tasksKey();
 
   function readLocalTasks() {
+    if (window.DaSecureStore) return DaSecureStore.readTasks();
     try { return JSON.parse(localStorage.getItem(tasksKey()) || "[]"); } catch { return []; }
   }
   function writeLocalTasks(tasks) {
+    if (window.DaSecureStore) {
+      try {
+        DaSecureStore.writeTasks(tasks);
+        return;
+      } catch (err) {
+        // fall through to legacy with quota messaging
+      }
+    }
     try {
       localStorage.setItem(tasksKey(), JSON.stringify(tasks));
     } catch (err) {
       const name = err?.name || "";
       const msg = String(err?.message || err || "");
       if (name === "QuotaExceededError" || /quota|exceeded|full/i.test(msg)) {
-        const err2 = new Error(
-          "حافظهٔ مرورگر پر است — فایل اکسل/منبع خیلی بزرگ است. حجم را کم کنید یا منابع بلااستفاده را حذف کنید."
-        );
+        const err2 = new Error(t("editor.status.quotaError"));
         err2.code = "QUOTA";
         err2.cause = err;
         throw err2;
       }
-      const err2 = new Error(`ذخیره در مرورگر ناموفق بود: ${msg || "خطای ناشناخته"}`);
+      const err2 = new Error(t("editor.status.storageFailed", { msg: msg || "?" }));
       err2.cause = err;
       throw err2;
     }
@@ -197,17 +222,17 @@
     migrateActionKinds(graph);
     enforceSingleStartOut();
     normalizeProcessRepeat();
-    titleEl.textContent = graph.title || local.title || "گردش کار";
+    titleEl.textContent = graph.title || local.title || t("editor.ribbon.workflow");
     if (originEl) {
       const recorded = String(graph.designOrigin || "").toLowerCase() === "recorded";
       originEl.className = "origin-badge " + (recorded ? "recorded" : "manual");
-      originEl.textContent = recorded ? "ویرایش: از رکورد" : "ویرایش: دستی";
+      originEl.textContent = recorded ? t("editor.origin.fromRecord") : t("editor.origin.manual");
     }
     const steps = graph.nodes.filter((n) => isActionNode(n)).length;
     const groups = graph.nodes.filter((n) => n.kind === "group");
     status.textContent = steps
-      ? `${steps} اقدام — روی گروه دبل‌کلیک کنید تا اقدام‌ها را ببینید`
-      : "آماده ویرایش (ذخیره محلی)";
+      ? t("editor.status.stepsHint", { steps })
+      : t("editor.status.readyEdit");
     renderDataSources();
     render();
     // Stay on diagram so single-click shows properties; user opens children via double-click.
@@ -216,12 +241,12 @@
   function emptyShell() {
     graph = {
       taskId: Number(taskId) || taskId,
-      title: "فرآیند محلی",
+      title: t("editor.nodes.localProcess"),
       canModify: true,
       designOrigin: "Manual",
       viewport: { x: 40, y: 40, zoom: 1 },
       nodes: [{
-        id: "start", kind: "start", title: "شروع", x: 40, y: 220,
+        id: "start", kind: "start", title: t("editor.nodes.start"), x: 40, y: 220,
         repeatSourceType: "None", loopCount: 1, moveLoop: false, stepDelayMs: 0,
         ignorePlayError: true, highlightColor: DEFAULT_HIGHLIGHT_COLOR
       }],
@@ -235,7 +260,7 @@
       repeatSourceType: "None"
     };
     titleEl.textContent = graph.title;
-    status.textContent = "در حال دریافت از حافظهٔ محلی...";
+    status.textContent = t("editor.status.loadingLocal");
     renderDataSources();
     render();
   }
@@ -280,7 +305,8 @@
   }, ms));
 
   const SAVE_ICON_SVG = `<svg class="btn-canvas-save-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>`;
-  const SAVE_SPINNER_HTML = `<span class="btn-save-spinner" aria-hidden="true"></span><span>در حال ذخیره…</span>`;
+  function saveBtnSpinnerHtml() { return `<span class="btn-save-spinner" aria-hidden="true"></span><span>${t("editor.ribbon.saving")}</span>`; }
+  function saveBtnLabelHtml() { return `${SAVE_ICON_SVG}<span>${t("editor.ribbon.save")}</span>`; }
   let saving = false;
 
   function saveButtons() {
@@ -292,12 +318,12 @@
 
   function setSaveButtonsBusy(busy) {
     saveButtons().forEach((btn) => {
-      if (busy) {
+        if (busy) {
         if (!btn.dataset.saveHtml) btn.dataset.saveHtml = btn.innerHTML;
         btn.classList.add("is-saving");
         btn.disabled = true;
         btn.setAttribute("aria-busy", "true");
-        btn.innerHTML = SAVE_SPINNER_HTML;
+        btn.innerHTML = saveBtnSpinnerHtml();
       } else {
         btn.classList.remove("is-saving");
         btn.removeAttribute("aria-busy");
@@ -305,11 +331,11 @@
           btn.innerHTML = btn.dataset.saveHtml;
           delete btn.dataset.saveHtml;
         } else if (btn.id === "btn-canvas-save") {
-          btn.innerHTML = `${SAVE_ICON_SVG}<span>ذخیره</span>`;
+          btn.innerHTML = saveBtnLabelHtml();
         } else if (btn.id === "btn-save") {
-          btn.innerHTML = `${SAVE_ICON_SVG}<span>ذخیره</span>`;
+          btn.innerHTML = saveBtnLabelHtml();
         } else {
-          btn.textContent = "ذخیره";
+          btn.textContent = t("editor.ribbon.save");
         }
         if (canModify) btn.disabled = false;
       }
@@ -317,8 +343,8 @@
   }
 
   async function save() {
-    if (!canModify) return { ok: false, error: "ذخیره در حالت فقط‌مشاهده ممکن نیست." };
-    if (saving) return { ok: false, error: "ذخیرهٔ دیگری در حال انجام است — کمی بعد دوباره تلاش کنید." };
+    if (!canModify) return { ok: false, error: t("editor.status.saveReadOnly") };
+    if (saving) return { ok: false, error: t("editor.status.saveBusy") };
     saving = true;
     setSaveButtonsBusy(true);
     try {
@@ -333,7 +359,7 @@
       const groupCount = graph.nodes.filter((n) => n.kind === "group").length;
       const item = {
         id: Number(taskId),
-        title: graph.title || "فرآیند",
+        title: graph.title || t("editor.nodes.localProcess"),
         designOrigin: graph.designOrigin || "Manual",
         groupCount,
         stepCount,
@@ -346,10 +372,10 @@
       // Brief pause so the button loader is perceptible for local save.
       await new Promise((r) => setTimeout(r, 450));
       render();
-      setStatus("ذخیره شد.", "success");
+      setStatus(t("editor.status.saved"), "success");
       return { ok: true };
     } catch (err) {
-      const detail = err?.message || String(err) || "خطا در ذخیره";
+      const detail = err?.message || String(err) || t("editor.status.saveError");
       setStatus(detail, "error");
       console.error(err);
       return { ok: false, error: detail };
@@ -421,22 +447,22 @@
     ensureDefaultDataSource();
     const masterId = masterDataSourceId();
     if (!list.length) {
-      listEl.innerHTML = `<li class="ds-meta" style="background:transparent;padding:0">هنوز منبعی اضافه نشده — فایل اکسل را از بالا بیفزایید.</li>`;
+      listEl.innerHTML = `<li class="ds-meta" style="background:transparent;padding:0">${t("editor.ds.emptyList")}</li>`;
       return;
     }
     listEl.innerHTML = list.map((d) => {
       const keys = (d.columnKeys || (d.columns || []).map((c) => c.key || c.Key) || []).join("، ") || "—";
       const isMaster = Number(d.id) === Number(masterId);
-      const label = d.title || dataSourceFileTitle(d.fileName) || "منبع";
+      const label = d.title || dataSourceFileTitle(d.fileName) || t("editor.ds.removed");
       return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}">
-        <span class="ds-title">${esc(label)}${isMaster ? `<span class="ds-badge-master">پیش‌فرض</span>` : ""}</span>
-        <div class="ds-meta">${d.columnCount || 0} ستون · ${d.rowCount || 0} ردیف${d.fileName ? ` · ${esc(d.fileName)}` : ""}${isMaster ? " · تکرار فرآیند" : ""}</div>
+        <span class="ds-title">${esc(label)}${isMaster ? `<span class="ds-badge-master">${t("editor.ds.masterBadge")}</span>` : ""}</span>
+        <div class="ds-meta">${d.columnCount || 0} ${t("editor.ds.columns")} · ${d.rowCount || 0} ${t("editor.ds.rows")}${d.fileName ? ` · ${esc(d.fileName)}` : ""}${isMaster ? ` · ${t("editor.ds.masterLabel")}` : ""}</div>
         <div class="ds-keys">${esc(keys)}</div>
         ${canModify ? `<div class="ds-actions">
           ${isMaster
-            ? `<button type="button" class="btn-flow btn-ghost" disabled>منبع پیش‌فرض</button>`
-            : `<button type="button" class="btn-flow btn-ghost ds-set-master" data-id="${d.id}">تنظیم به‌عنوان پیش‌فرض</button>`}
-          <button type="button" class="btn-flow btn-ghost ds-del" data-id="${d.id}">حذف</button>
+            ? `<button type="button" class="btn-flow btn-ghost" disabled>${t("editor.ds.masterBadge")}</button>`
+            : `<button type="button" class="btn-flow btn-ghost ds-set-master" data-id="${d.id}">${t("editor.insp.gotoStart")}</button>`}
+          <button type="button" class="btn-flow btn-ghost ds-del" data-id="${d.id}">${t("common.delete")}</button>
         </div>` : ""}
       </li>`;
     }).join("");
@@ -471,7 +497,7 @@
   function dataSourceFileTitle(fileName) {
     return String(fileName || "")
       .replace(/\.(xlsx|xlsm)$/i, "")
-      .trim() || "منبع داده";
+      .trim() || t("editor.ds.viewerTitle");
   }
 
   function setDsProgress(pct, label) {
@@ -507,19 +533,19 @@
       fd.append("file", file);
       fd.append("title", title);
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/Tasks/ParseExcel");
+      xhr.open("POST", "/Panel/Tasks/ParseExcel");
       xhr.responseType = "json";
       xhr.upload.onprogress = (e) => {
         if (!e.lengthComputable) return;
         const ratio = e.total ? e.loaded / e.total : 0;
-        onProgress(8 + ratio * 62, "در حال ارسال و تبدیل اکسل به JSON…");
+        onProgress(8 + ratio * 62, t("editor.ds.uploadParsing"));
       };
       xhr.onload = () => {
         const data = xhr.response && typeof xhr.response === "object"
           ? xhr.response
           : (() => { try { return JSON.parse(xhr.responseText || "{}"); } catch { return {}; } })();
         if (xhr.status >= 200 && xhr.status < 300) {
-          onProgress(78, "تبدیل انجام شد — در حال اتصال به فرآیند…");
+          onProgress(78, t("editor.ds.uploadSaving"));
           resolve(data);
           return;
         }
@@ -529,9 +555,9 @@
           : `خطا در خواندن اکسل (کد ${xhr.status})`;
         reject(new Error(detail));
       };
-      xhr.onerror = () => reject(new Error("خطا در ارتباط با سرور هنگام تبدیل اکسل"));
-      xhr.onabort = () => reject(new Error("بارگذاری اکسل لغو شد"));
-      onProgress(4, "آماده‌سازی فایل…");
+      xhr.onerror = () => reject(new Error(t("editor.ds.networkError")));
+      xhr.onabort = () => reject(new Error(t("editor.ds.abortError")));
+      onProgress(4, t("editor.ds.progressStarting"));
       xhr.send(fd);
     });
   }
@@ -541,7 +567,7 @@
     const statusEl = document.getElementById("ds-status");
     const name = file.name || "";
     if (!/\.(xlsx|xlsm)$/i.test(name)) {
-      const msg = "فقط فایل .xlsx / .xlsm با جدول تمیز پذیرفته می‌شود.";
+      const msg = t("editor.ds.onlyXlsx");
       if (statusEl) {
         statusEl.textContent = msg;
         statusEl.classList.add("is-error");
@@ -551,7 +577,7 @@
     }
     setDsDropzoneBusy(true);
     if (statusEl) statusEl.classList.remove("is-error");
-    setDsProgress(2, `خواندن «${name}»…`);
+    setDsProgress(2, `${t("editor.ds.progressStarting")} «${name}»`);
 
     const prevSources = (graph.dataSources || []).slice();
     const prevMaster = masterDataSourceId();
@@ -6020,5 +6046,16 @@
   }
 
   initSidePanels();
+  document.addEventListener("da:locale", () => {
+    const cul = (window.DaI18n && DaI18n.culture) || document.documentElement.getAttribute("data-culture") || "fa";
+    const dir = cul === "en" ? "ltr" : "rtl";
+    document.documentElement.setAttribute("lang", cul);
+    document.documentElement.setAttribute("dir", dir);
+    document.documentElement.setAttribute("data-culture", cul);
+    document.documentElement.classList.toggle("flow-ltr", cul === "en");
+    document.documentElement.classList.toggle("flow-rtl", cul !== "en");
+    try { renderInspector(); } catch { /* ignore */ }
+    try { render(); } catch { /* ignore */ }
+  });
   load();
 })();

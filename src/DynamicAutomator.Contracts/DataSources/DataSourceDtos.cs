@@ -55,3 +55,12 @@ public class ParsedExcelDto
     public List<DataSourceCellDto> Cells { get; set; } = new();
     public List<string> ColumnKeys { get; set; } = new();
 }
+
+/// <summary>Local-first export: rebuild .xlsx from in-browser source JSON.</summary>
+public class ExportExcelRequest
+{
+    public string? Title { get; set; }
+    public List<DataSourceColumnDto> Columns { get; set; } = new();
+    public List<DataSourceCellDto> Cells { get; set; } = new();
+    public List<string>? ColumnKeys { get; set; }
+}

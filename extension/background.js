@@ -1,4 +1,4 @@
-importScripts("player/engine.js");
+﻿importScripts("player/engine.js");
 
 /** Single-app mode: portal hosts UI + /api/* — no separate API process. */
 const DEFAULT_PORTAL = "https://localhost:7201";
@@ -985,7 +985,7 @@ function ensureContextMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: CTX_COPY_SELECTOR,
-      title: "کپی سلکتور (اتوماتور پویا)",
+      title: "کپی سلکتور (مروبات)",
       contexts: ["all"]
     });
   });

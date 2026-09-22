@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Dynamic Automator Recorder",
-  "version": "0.9.0",
-  "description": "ضبط و اجرای فرآیند روی صفحات فریم‌تو‌فریم",
+  "name": "Morobot Recorder",
+  "version": "0.9.1",
+  "description": "ضبط و اجرای فرآیند مروبات روی صفحات فریم‌تو‌فریم",
   "permissions": ["storage", "cookies", "scripting", "webNavigation", "tabs", "activeTab", "windows", "contextMenus", "clipboardWrite"],
   "host_permissions": [
     "http://localhost/*",
@@ -12,12 +12,23 @@
     "http://*/*",
     "https://*/*"
   ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "background": {
     "service_worker": "background.js"
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "اتوماتور پویا"
+    "default_title": "مروبات",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
   },
   "content_scripts": [
     {

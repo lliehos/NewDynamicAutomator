@@ -1,4 +1,4 @@
-/** Portal handshake + local task sync — Player role. */
+/** Portal handshake + encrypted local task sync — Player role. */
 (function () {
   const ROLE = "player";
 
@@ -26,6 +26,35 @@
     return fromGraph || t?.stepCount || 0;
   }
 
+  async function readTasksDisk(user) {
+    const raw = localStorage.getItem(tasksKey(user));
+    if (!raw) return [];
+    if (window.DaCrypto && DaCrypto.looksEncrypted(raw)) {
+      try {
+        const data = await DaCrypto.decryptJson(raw);
+        return Array.isArray(data) ? data : [];
+      } catch {
+        return [];
+      }
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async function writeTasksDisk(user, list) {
+    localStorage.setItem("da_local_user", user);
+    if (window.DaCrypto) {
+      const enc = await DaCrypto.encryptJson(list);
+      localStorage.setItem(tasksKey(user), enc);
+    } else {
+      localStorage.setItem(tasksKey(user), JSON.stringify(list));
+    }
+  }
+
   function mark() {
     try {
       const version = chrome.runtime.getManifest().version;
@@ -42,11 +71,6 @@
     }
   }
 
-  mark();
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mark);
-  }
-
   try {
     const origin = location.origin;
     const user = currentUser();
@@ -56,14 +80,15 @@
     /* ignore */
   }
 
-  function applyTasks(user, tasks) {
+  async function applyTasks(user, tasks) {
     const u = user || currentUser();
     const list = Array.isArray(tasks) ? tasks : [];
     try {
-      const prev = JSON.parse(localStorage.getItem(tasksKey(u)) || "[]");
+      const prev = await readTasksDisk(u);
       if (list.length === 0 && prev.length > 0) return;
       const prevSteps = prev.reduce((s, t) => s + stepCountOf(t), 0);
       const nextSteps = list.reduce((s, t) => s + stepCountOf(t), 0);
+      let toSave = list;
       if (list.length && nextSteps === 0 && prevSteps > 0) {
         const byId = new Map(prev.map((t) => [String(t.id), t]));
         for (const t of list) {
@@ -74,14 +99,11 @@
             byId.set(String(t.id), t);
           }
         }
-        const merged = [...byId.values()];
-        localStorage.setItem("da_local_user", u);
-        localStorage.setItem(tasksKey(u), JSON.stringify(merged));
-        window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: u, tasks: merged } }));
-        return;
+        toSave = [...byId.values()];
       }
-      localStorage.setItem("da_local_user", u);
-      localStorage.setItem(tasksKey(u), JSON.stringify(list));
+      await writeTasksDisk(u, toSave);
+      window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: u, tasks: toSave } }));
+      return;
     } catch {
       /* ignore */
     }
@@ -111,14 +133,11 @@
 
   /** Player primarily reads portal localStorage into its own chrome.storage. */
   function pushPageTasksToExtension() {
-    try {
-      const user = currentUser();
-      const tasks = JSON.parse(localStorage.getItem(tasksKey(user)) || "[]");
+    const user = currentUser();
+    readTasksDisk(user).then((tasks) => {
       if (!Array.isArray(tasks) || !tasks.length) return;
       chrome.storage.local.set({ localUser: user, [`localTasks__${user}`]: tasks });
-    } catch {
-      /* ignore */
-    }
+    }).catch(() => {});
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -127,7 +146,13 @@
       return true;
     }
     if (message.type === "localTasksUpdated") {
-      applyTasks(message.user || currentUser(), message.tasks || []);
+      applyTasks(message.user || currentUser(), message.tasks || []).then(() => sendResponse({ ok: true }));
+      return true;
+    }
+    if (message.type === "dsCellEvent") {
+      try {
+        window.dispatchEvent(new CustomEvent("da-ds-cell-event", { detail: message.event || {} }));
+      } catch { /* ignore */ }
       sendResponse({ ok: true });
       return true;
     }
@@ -140,12 +165,15 @@
   });
   window.addEventListener("da-local-tasks", (ev) => {
     const d = ev.detail;
-    if (d && Array.isArray(d.tasks)) pushPageTasksToExtension();
+    if (d?.tasks) {
+      chrome.storage.local.set({
+        localUser: d.user || currentUser(),
+        [`localTasks__${d.user || currentUser()}`]: d.tasks
+      });
+    }
   });
 
-  pushPageTasksToExtension();
+  mark();
   pullFromExtension();
-  setTimeout(pushPageTasksToExtension, 400);
-  setTimeout(pullFromExtension, 500);
-  setTimeout(pushPageTasksToExtension, 1200);
+  pushPageTasksToExtension();
 })();

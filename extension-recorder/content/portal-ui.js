@@ -152,7 +152,7 @@
         payload: { newTaskTitle: title }
       }).catch((e) => ({ ok: false, error: e.message }));
       if (res?.ok) {
-        setPortalStatus(`ذخیره شد — ویرایش: /Tasks/Editor/${res.result?.taskId}`, "success");
+        setPortalStatus(`ذخیره شد — ویرایش: /Panel/Tasks/Editor/${res.result?.taskId}`, "success");
       } else {
         setPortalStatus(res?.error || "خطا در ذخیره ضبط", "error");
       }

@@ -98,6 +98,10 @@ async function handleMessage(message, sender) {
       return getPlayStatus();
     case "clearPlayLogs":
       return clearPlayLogs();
+    case "persistPlayDataSources":
+      return persistPlayDataSourcesMessage(message);
+    case "broadcastDsCellEvent":
+      return broadcastDsCellEventMessage(message);
     case "reloadPlayerNow":
       return reloadPlayerNow(message.pendingPlay || null);
     case "toggleRecord":
@@ -696,6 +700,30 @@ async function saveUserTasks(tasks) {
   // Never write a shared localTasks key — that leaked tasks across users.
   await chrome.storage.local.set({ [key]: tasks });
   await chrome.storage.local.remove("localTasks");
+}
+
+async function persistPlayDataSourcesMessage(message) {
+  const taskId = Number(message?.taskId);
+  const dataSources = message?.dataSources;
+  if (!taskId || !Array.isArray(dataSources)) return { ok: false, error: "داده ناقص" };
+  const tasks = await loadUserTasks();
+  const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
+  if (idx < 0 || !tasks[idx]?.graph) return { ok: false, error: "فرآیند پیدا نشد" };
+  tasks[idx].graph.dataSources = dataSources;
+  await saveUserTasks(tasks);
+  await pushTasksToPortalTabs(tasks);
+  return { ok: true };
+}
+
+async function broadcastDsCellEventMessage(message) {
+  const ev = message?.event;
+  if (!ev) return { ok: false };
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    chrome.tabs.sendMessage(tab.id, { type: "dsCellEvent", event: ev }).catch(() => {});
+  }
+  return { ok: true };
 }
 
 async function getLocalTaskGraph(taskId) {

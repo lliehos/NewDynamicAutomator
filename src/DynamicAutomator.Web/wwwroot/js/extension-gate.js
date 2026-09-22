@@ -14,22 +14,29 @@
   let pendingAction = null;
   let activeRole = "recorder";
 
-  const COPY = {
-    recorder: {
-      title: "افزونهٔ ضبط لازم است",
-      desc: "برای شروع یا اتمام ضبط، افزونهٔ Dynamic Automator Recorder را یک‌بار با Load unpacked نصب کنید. اگر فقط می‌خواهید اجرا کنید، به افزونهٔ Player نیاز دارید نه Recorder.",
-      pathLabel: "مسیر افزونهٔ ضبط (Recorder)",
-      missing: "برای ضبط، افزونهٔ Recorder لازم است.",
-      stillMissing: "هنوز افزونهٔ ضبط پیدا نشد — Load unpacked را برای مسیر Recorder انجام دهید."
-    },
-    player: {
-      title: "افزونهٔ اجرا لازم است",
-      desc: "برای اجرای فرآیند، توقف یا پاز، افزونهٔ Dynamic Automator Player را یک‌بار با Load unpacked نصب کنید. اگر فقط می‌خواهید ضبط کنید، به افزونهٔ Recorder نیاز دارید نه Player.",
-      pathLabel: "مسیر افزونهٔ اجرا (Player)",
-      missing: "برای اجرا / توقف، افزونهٔ Player لازم است.",
-      stillMissing: "هنوز افزونهٔ اجرا پیدا نشد — Load unpacked را برای مسیر Player انجام دهید."
+  function t(key, vars) {
+    if (window.DaI18n && typeof DaI18n.t === "function") return DaI18n.t(key, vars);
+    return key;
+  }
+
+  function copyFor(role) {
+    if (role === "player") {
+      return {
+        title: t("panel.extPlayerTitle"),
+        desc: t("panel.extPlayerDesc"),
+        pathLabel: t("panel.extPlayerPathLabel"),
+        missing: t("panel.extPlayerMissing"),
+        stillMissing: t("panel.extPlayerStillMissing")
+      };
     }
-  };
+    return {
+      title: t("panel.extModalTitle"),
+      desc: t("panel.extModalDesc"),
+      pathLabel: t("panel.extPathLabel"),
+      missing: t("panel.extMissing"),
+      stillMissing: t("panel.extStillMissing")
+    };
+  }
 
   function hasRecorder() {
     return document.documentElement.dataset.daRecorderExtension === "1"
@@ -84,9 +91,9 @@
   async function showGate(role, reason) {
     activeRole = role === "player" ? "player" : "recorder";
     modal.dataset.role = activeRole;
-    const copy = COPY[activeRole];
+    const copy = copyFor(activeRole);
     if (titleEl) titleEl.textContent = copy.title;
-    if (descEl) descEl.innerHTML = copy.desc;
+    if (descEl) descEl.textContent = copy.desc;
     if (pathLabelEl) pathLabelEl.textContent = copy.pathLabel;
     if (hintEl) hintEl.textContent = reason || copy.missing;
 
@@ -98,7 +105,7 @@
     if (pathEl) {
       pathEl.textContent = pack?.path
         || data?.path
-        || "مسیر آماده نشد — پرتال را رفرش کنید.";
+        || t("editor.ds.noPathReady");
     }
   }
 
@@ -113,7 +120,7 @@
     }
     pendingAction = opts?.pending || null;
     if (pendingAction) pendingAction.role = role;
-    await showGate(role, opts?.reason || COPY[role].missing);
+    await showGate(role, opts?.reason || copyFor(role).missing);
     return false;
   }
 
@@ -166,7 +173,7 @@
   function onRoleOk(role) {
     if (modal.classList.contains("open") && activeRole === role) {
       hideGate();
-      if (hintEl) hintEl.textContent = role === "player" ? "افزونهٔ اجرا متصل شد." : "افزونهٔ ضبط متصل شد.";
+      if (hintEl) hintEl.textContent = role === "player" ? t("panel.extPlayerConnected") : t("panel.extConnected");
     }
     if (pendingAction && (pendingAction.role || activeRole) === role) {
       retryPending();
@@ -180,7 +187,7 @@
       return true;
     }
     if (modal.classList.contains("open") && hintEl) {
-      hintEl.textContent = COPY[role].stillMissing;
+      hintEl.textContent = copyFor(role).stillMissing;
     }
     return false;
   }
@@ -215,8 +222,12 @@
     ev.preventDefault();
     ev.stopPropagation();
     pendingAction = { kind: "click", el, role };
-    showGate(role, COPY[role].missing);
+    showGate(role, copyFor(role).missing);
   }, true);
+
+  document.addEventListener("da:locale", () => {
+    if (modal.classList.contains("open")) showGate(activeRole);
+  });
 
   window.addEventListener("da-recorder-ready", () => onRoleOk("recorder"));
   window.addEventListener("da-player-ready", () => onRoleOk("player"));
@@ -238,7 +249,7 @@
   document.getElementById("da-ext-dismiss")?.addEventListener("click", dismiss);
   document.getElementById("da-ext-copy-path")?.addEventListener("click", copyPath);
   document.getElementById("da-ext-guide")?.addEventListener("click", () => {
-    window.location.href = "/Extension/Install";
+    window.location.href = "/Panel/Extension/Install";
   });
 
   hideGate();

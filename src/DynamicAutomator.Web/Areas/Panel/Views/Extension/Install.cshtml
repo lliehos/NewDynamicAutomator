@@ -1,0 +1,120 @@
+@{
+    ViewData["Title"] = "نصب افزونه‌های مروبات";
+    var recorderPath = ViewBag.RecorderPath as string ?? ViewBag.ExtensionPath as string ?? "";
+    var playerPath = ViewBag.PlayerPath as string ?? "";
+    var selectorPath = ViewBag.SelectorPath as string ?? "";
+    var recorderVer = ViewBag.RecorderVersion as string ?? ViewBag.Version as string ?? "";
+    var playerVer = ViewBag.PlayerVersion as string ?? "";
+    var selectorVer = ViewBag.SelectorVersion as string ?? "";
+}
+<div class="card mb-4">
+  <div class="card-body">
+    <h4 class="mb-3">سه افزونهٔ مروبات</h4>
+    <div class="alert alert-info mb-3">
+      <strong>ضبط</strong>، <strong>اجرا</strong> و <strong>سلکتور</strong> سه افزونهٔ Chrome جدا هستند.
+      سلکتور برای راست‌کلیک و کپی سلکتور به حافظه است؛ بعد در ویرایشگر با «خواندن از حافظه» استفاده می‌شود.
+    </div>
+
+    <div class="row g-3">
+      <div class="col-md-4">
+        <div class="border rounded p-3 h-100" style="border-top: 3px solid #ea5455 !important;">
+          <h5 class="mb-2">① ضبط (Recorder)</h5>
+          <p class="small text-muted">شروع/اتمام ضبط و ذخیرهٔ فرآیند.</p>
+          <div class="fw-semibold mb-1">مسیر</div>
+          <code id="da-ext-path-recorder" class="user-select-all d-block small mb-2">@recorderPath</code>
+          @if (!string.IsNullOrEmpty(recorderVer))
+          {
+            <div class="small text-muted mb-2">نسخه: <code>@recorderVer</code></div>
+          }
+          <button type="button" class="btn btn-sm btn-danger" data-copy="#da-ext-path-recorder">کپی مسیر</button>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="border rounded p-3 h-100" style="border-top: 3px solid #28c76f !important;">
+          <h5 class="mb-2">② اجرا (Player)</h5>
+          <p class="small text-muted">اجرا از نود شروع، پاز / توقف، نتایج.</p>
+          <div class="fw-semibold mb-1">مسیر</div>
+          <code id="da-ext-path-player" class="user-select-all d-block small mb-2">@playerPath</code>
+          @if (!string.IsNullOrEmpty(playerVer))
+          {
+            <div class="small text-muted mb-2">نسخه: <code>@playerVer</code></div>
+          }
+          <button type="button" class="btn btn-sm btn-success" data-copy="#da-ext-path-player">کپی مسیر</button>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="border rounded p-3 h-100" style="border-top: 3px solid #00cfe8 !important;">
+          <h5 class="mb-2">③ سلکتور (Selector)</h5>
+          <p class="small text-muted">راست‌کلیک → کپی سلکتور → خواندن از حافظه در ویرایشگر.</p>
+          <div class="fw-semibold mb-1">مسیر</div>
+          <code id="da-ext-path-selector" class="user-select-all d-block small mb-2">@selectorPath</code>
+          @if (!string.IsNullOrEmpty(selectorVer))
+          {
+            <div class="small text-muted mb-2">نسخه: <code>@selectorVer</code></div>
+          }
+          <button type="button" class="btn btn-sm btn-info" data-copy="#da-ext-path-selector">کپی مسیر</button>
+        </div>
+      </div>
+    </div>
+
+    <ol class="mb-4 mt-4">
+      <li class="mb-2"><code>chrome://extensions</code> یا <code>edge://extensions</code></li>
+      <li class="mb-2"><strong>Developer mode</strong> را روشن کنید.</li>
+      <li class="mb-2"><strong>Load unpacked</strong> → هر سه مسیر بالا را جداگانه یک‌بار انتخاب کنید.</li>
+      <li class="mb-2">پرتال را رفرش کنید. بعد از این، آپدیت خودکار است.</li>
+    </ol>
+
+    <div class="d-flex gap-2 flex-wrap">
+      <button type="button" class="btn btn-outline-primary" id="da-sync-now">همگام‌سازی همه</button>
+      <button type="button" class="btn btn-outline-secondary" data-da-action="check-recorder">بررسی ضبط</button>
+      <button type="button" class="btn btn-outline-secondary" data-da-action="check-player">بررسی اجرا</button>
+      <a class="btn btn-label-secondary" asp-area="Panel" asp-controller="Home" asp-action="Index">بازگشت</a>
+    </div>
+    <p class="mt-3 mb-0" id="da-sync-status"></p>
+    <p class="mt-1 mb-0" id="da-portal-status"></p>
+  </div>
+</div>
+
+@section Scripts {
+<script>
+(function () {
+  const status = document.getElementById("da-sync-status");
+  document.querySelectorAll("[data-copy]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const sel = btn.getAttribute("data-copy");
+      const t = document.querySelector(sel)?.textContent?.trim() || "";
+      try {
+        await navigator.clipboard.writeText(t);
+        if (status) status.textContent = "مسیر کپی شد.";
+      } catch {
+        if (status) status.textContent = "کپی نشد — مسیر را دستی بردارید.";
+      }
+    });
+  });
+  document.getElementById("da-sync-now")?.addEventListener("click", async () => {
+    if (status) status.textContent = "همگام‌سازی...";
+    try {
+      const res = await fetch("/extension/sync", { method: "POST" });
+      const data = await res.json();
+      if (data.recorder?.path) {
+        const el = document.getElementById("da-ext-path-recorder");
+        if (el) el.textContent = data.recorder.path;
+      }
+      if (data.player?.path) {
+        const el = document.getElementById("da-ext-path-player");
+        if (el) el.textContent = data.player.path;
+      }
+      if (data.selector?.path) {
+        const el = document.getElementById("da-ext-path-selector");
+        if (el) el.textContent = data.selector.path;
+      }
+      status.textContent = data.ok
+        ? "پوشه‌ها آماده‌اند. افزونه‌ها را یک‌بار Load unpacked کنید."
+        : (data.error || "خطا");
+    } catch (e) {
+      if (status) status.textContent = e.message || "خطا";
+    }
+  });
+})();
+</script>
+}

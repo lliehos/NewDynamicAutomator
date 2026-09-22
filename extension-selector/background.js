@@ -1,4 +1,4 @@
-/** Selector-only extension — context-menu copy + portal memory bridge. */
+﻿/** Selector-only extension — context-menu copy + portal memory bridge. */
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let answered = false;
@@ -100,7 +100,7 @@ function ensureContextMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: CTX_COPY_SELECTOR,
-      title: "کپی سلکتور (اتوماتور پویا)",
+      title: "کپی سلکتور (مروبات)",
       contexts: ["all"]
     });
   });

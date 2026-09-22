@@ -31,6 +31,9 @@ public class AppDbContext : DbContext
             e.Property(x => x.PasswordHash).HasMaxLength(500).IsRequired();
             e.Property(x => x.FirstName).HasMaxLength(50);
             e.Property(x => x.LastName).HasMaxLength(50);
+            e.Property(x => x.Email).HasMaxLength(120);
+            e.Property(x => x.Mobile).HasMaxLength(30);
+            e.Property(x => x.PreferredLanguage).HasMaxLength(10).HasDefaultValue("fa");
         });
 
         modelBuilder.Entity<AutomationTask>(e =>

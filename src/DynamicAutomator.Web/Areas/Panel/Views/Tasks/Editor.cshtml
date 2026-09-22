@@ -1,0 +1,204 @@
+@{
+  Layout = null;
+  var culture = L.Culture;
+  var dir = L.Dir;
+  var nextLang = L.IsRtl ? "en" : "fa";
+  var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
+  var langTitle = L.IsRtl ? L["common.switchLangTitle"] : L["common.switchLangTitleFa"];
+}
+<!doctype html>
+<html lang="@culture" dir="@dir" data-culture="@culture" data-i18n-title-key="editor.title" class="@(L.IsRtl ? "flow-rtl" : "flow-ltr")">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d9488" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="application-name" content="@L["brand.name"]" />
+  <title>@L["editor.title"]</title>
+  <link rel="icon" href="~/img/brand/morobot-mark.svg" type="image/svg+xml" />
+  <link rel="icon" type="image/png" sizes="32x32" href="~/img/brand/morobot-icon.png" />
+  <link rel="apple-touch-icon" href="~/img/brand/apple-touch-icon.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="~/css/da-notify.css?v=2" />
+  <link rel="stylesheet" href="~/editor/flow.css?v=morobot-i18n-1" />
+  <style>
+    html, body { margin: 0; direction: @dir; }
+    html.flow-rtl, html.flow-rtl body { font-family: Vazirmatn, Tahoma, sans-serif; }
+    html.flow-ltr, html.flow-ltr body { font-family: Syne, "Segoe UI", sans-serif; }
+  </style>
+</head>
+<body>
+  <div class="flow-shell" id="flow-app" data-task-id="@ViewBag.TaskId" data-can-modify="@(ViewBag.CanModify == true ? "true" : "false")">
+    <div class="flow-mobile-scrim" id="flow-mobile-scrim" hidden></div>
+    <div class="flow-ribbon">
+      <a class="btn-flow btn-ghost btn-with-ico" href="@Url.Action("Index","Home", new { area = "Panel" })" data-i18n-title="editor.ribbon.home" title="@L["editor.ribbon.home"]">
+        <img src="~/img/brand/morobot-mark.svg" width="18" height="18" alt="" style="border-radius:4px" />
+        <span data-i18n="brand.name">@L["brand.name"]</span>
+      </a>
+      <a class="btn-flow btn-ghost btn-with-ico" href="@Url.Action("Processes","Home", new { area = "Panel" })" data-i18n-title="editor.ribbon.processes" title="@L["editor.ribbon.processes"]">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z"/></svg>
+        <span data-i18n="editor.ribbon.processes">@L["editor.ribbon.processes"]</span>
+      </a>
+      <button class="btn-flow btn-ghost btn-with-ico" type="button" id="btn-back-group" hidden>
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
+        <span id="btn-back-group-label" data-i18n="editor.ribbon.backToDiagram">@L["editor.ribbon.backToDiagram"]</span>
+      </button>
+      <button class="btn-flow btn-ghost btn-with-ico" type="button" id="btn-fit">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M4 9V4h5v2H6v3H4zm10-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 3h-3v2h5v-5h-2v3z"/></svg>
+        <span data-i18n="editor.ribbon.fit">@L["editor.ribbon.fit"]</span>
+      </button>
+      <button class="btn-flow btn-ghost btn-with-ico" type="button" id="btn-auto-layout" data-i18n-title="editor.ribbon.autoLayoutTitle" title="@L["editor.ribbon.autoLayoutTitle"]">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M4 5h6v6H4V5zm10 0h6v6h-6V5zM4 15h6v6H4v-6zm10 0h6v6h-6v-6zM11 7h2v2h-2V7zm0 10h2v2h-2v-2zM7 11h2v2H7v-2zm10 0h2v2h-2v-2z"/></svg>
+        <span data-i18n="editor.ribbon.autoLayout">@L["editor.ribbon.autoLayout"]</span>
+      </button>
+      <h1 id="flow-title" data-i18n="editor.ribbon.workflow">@L["editor.ribbon.workflow"]</h1>
+      <span class="origin-badge" id="flow-origin"></span>
+      <span class="status" id="flow-status" data-i18n="editor.ribbon.loading">@L["editor.ribbon.loading"]</span>
+      <button type="button" class="btn-flow btn-ghost" data-lang-switch data-lang-next="@nextLang" data-i18n-title="@(L.IsRtl ? "common.switchLangTitle" : "common.switchLangTitleFa")" title="@langTitle">@langLabel</button>
+      <button class="btn-flow btn-play btn-with-ico" type="button" id="btn-play-task" data-i18n-title="editor.ribbon.playTitle" title="@L["editor.ribbon.playTitle"]">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg>
+        <span data-i18n="editor.ribbon.play">@L["editor.ribbon.play"]</span>
+      </button>
+      <button class="btn-flow btn-play-soft btn-with-ico" type="button" id="btn-play-selection" hidden data-i18n-title="editor.ribbon.playSelectionTitle" title="@L["editor.ribbon.playSelectionTitle"]">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg>
+        <span id="btn-play-selection-label" data-i18n="editor.ribbon.playSelection">@L["editor.ribbon.playSelection"]</span>
+      </button>
+      <button class="btn-flow btn-with-ico" type="button" id="btn-save">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>
+        <span data-i18n="editor.ribbon.save">@L["editor.ribbon.save"]</span>
+      </button>
+    </div>
+    <div class="flow-body" id="flow-body">
+      <aside class="flow-palette" id="flow-palette">
+        <div class="panel-head">
+          <h3 data-i18n="editor.palette.title">@L["editor.palette.title"]</h3>
+          <button type="button" class="btn-panel-toggle" id="btn-toggle-palette" data-i18n-title="editor.palette.collapse" data-i18n-aria="editor.palette.collapse" title="@L["editor.palette.collapse"]" aria-label="@L["editor.palette.collapse"]">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8.5 5.5L15 12l-6.5 6.5"/></svg>
+          </button>
+        </div>
+        <div id="palette-root">
+          <div class="stencil stencil-group" draggable="true" data-kind="group">
+            <span class="stencil-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </span>
+            <span class="stencil-body">
+              <span class="stencil-title" data-i18n="editor.palette.group">@L["editor.palette.group"]</span>
+              <span class="stencil-desc" data-i18n="editor.palette.groupDesc">@L["editor.palette.groupDesc"]</span>
+            </span>
+          </div>
+          <div class="stencil stencil-condition" draggable="true" data-kind="condition">
+            <span class="stencil-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 3l9 9-9 9-9-9 9-9z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 8v5M12 15.5v.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </span>
+            <span class="stencil-body">
+              <span class="stencil-title" data-i18n="editor.palette.condition">@L["editor.palette.condition"]</span>
+              <span class="stencil-desc" data-i18n="editor.palette.conditionDesc">@L["editor.palette.conditionDesc"]</span>
+            </span>
+          </div>
+          <div class="stencil stencil-action" draggable="true" data-kind="action">
+            <span class="stencil-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="6" width="16" height="12" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M8 12h8M14 9.5l2.5 2.5L14 14.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <span class="stencil-body">
+              <span class="stencil-title" data-i18n="editor.palette.action">@L["editor.palette.action"]</span>
+              <span class="stencil-desc" data-i18n="editor.palette.actionDesc">@L["editor.palette.actionDesc"]</span>
+            </span>
+          </div>
+          <p class="palette-hint" data-i18n="editor.palette.hint">@L["editor.palette.hint"]</p>
+        </div>
+        <div id="palette-group" hidden>
+          <button type="button" class="btn-flow" id="btn-add-step" style="width:100%;margin-bottom:8px" data-i18n="editor.palette.addStep">@L["editor.palette.addStep"]</button>
+          <p class="palette-hint" data-i18n="editor.palette.hintGroup">@L["editor.palette.hintGroup"]</p>
+        </div>
+        <p class="palette-hint" id="ds-palette-hint" data-i18n="editor.palette.dsHint">@Html.Raw(L["editor.palette.dsHint"])</p>
+        <div class="panel-resize" data-resize="palette" data-i18n-title="editor.palette.resize" title="@L["editor.palette.resize"]"></div>
+      </aside>
+      <div class="canvas-wrap" id="canvas-wrap">
+        <button type="button" class="btn-panel-peek peek-palette" id="btn-peek-palette" hidden data-i18n-title="editor.palette.peekToolbox" data-i18n-aria="editor.palette.peekToolbox" title="@L["editor.palette.peekToolbox"]" aria-label="@L["editor.palette.peekToolbox"]">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none">
+            <rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button type="button" class="btn-panel-peek peek-insp" id="btn-peek-inspector" hidden data-i18n-title="editor.palette.peekProps" data-i18n-aria="editor.palette.peekProps" title="@L["editor.palette.peekProps"]" aria-label="@L["editor.palette.peekProps"]">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none">
+            <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <div class="canvas-scroll" id="canvas-scroll">
+          <svg id="flow-svg" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+                <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#d8d6ea" stroke-width="1"/>
+              </pattern>
+              <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="strokeWidth">
+                <path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/>
+              </marker>
+            </defs>
+            <rect id="canvas-grid" width="100%" height="100%" fill="url(#grid)"></rect>
+            <g id="world"></g>
+          </svg>
+        </div>
+        <div class="list-wrap" id="list-wrap" hidden></div>
+        <div class="group-edit" id="group-edit" hidden>
+          <div class="group-edit-h">
+            <h2 id="group-edit-title" data-i18n="editor.groupEdit.title">@L["editor.groupEdit.title"]</h2>
+            <button type="button" class="btn-flow btn-ghost" id="btn-group-edit-close" data-i18n="editor.groupEdit.close">@L["editor.groupEdit.close"]</button>
+          </div>
+          <div id="group-steps"></div>
+        </div>
+        <div class="hint" id="flow-hint" data-i18n="editor.groupEdit.hint">@L["editor.groupEdit.hint"]</div>
+        <button type="button" class="btn-flow btn-canvas-save" id="btn-canvas-save" data-i18n-title="common.save" title="@L["common.save"]">
+          <svg class="btn-canvas-save-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/>
+          </svg>
+          <span data-i18n="editor.ribbon.save">@L["editor.ribbon.save"]</span>
+        </button>
+      </div>
+      <aside class="flow-inspector" id="flow-inspector">
+        <div class="panel-head">
+          <h3 id="insp-heading" data-i18n="editor.inspector.processProps">@L["editor.inspector.processProps"]</h3>
+          <button type="button" class="btn-panel-toggle" id="btn-toggle-inspector" data-i18n-title="editor.inspector.collapse" data-i18n-aria="editor.inspector.collapse" title="@L["editor.inspector.collapse"]" aria-label="@L["editor.inspector.collapse"]">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M15.5 5.5L9 12l6.5 6.5"/></svg>
+          </button>
+        </div>
+        <div id="inspector"><p style="color:#a8aaae" data-i18n="editor.inspector.loading">@L["editor.inspector.loading"]</p></div>
+        <div class="panel-resize" data-resize="inspector" data-i18n-title="editor.palette.resize" title="@L["editor.palette.resize"]"></div>
+      </aside>
+    </div>
+  </div>
+  <ul class="ctx-menu" id="ctx-menu" hidden></ul>
+  <div class="ds-viewer" id="ds-viewer" hidden>
+    <div class="ds-viewer-backdrop" data-ds-viewer-close="1"></div>
+    <div class="ds-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="ds-viewer-title">
+      <div class="ds-viewer-head">
+        <div>
+          <h2 id="ds-viewer-title" data-i18n="editor.ds.viewerTitle">@L["editor.ds.viewerTitle"]</h2>
+          <p class="ds-viewer-sub" id="ds-viewer-sub"></p>
+        </div>
+        <div class="ds-viewer-head-actions">
+          <span class="ds-viewer-live" id="ds-viewer-live" data-i18n="editor.ds.offline">@L["editor.ds.offline"]</span>
+          <button type="button" class="btn-flow btn-ghost" id="ds-viewer-refresh" data-i18n="editor.ds.refresh">@L["editor.ds.refresh"]</button>
+          <button type="button" class="btn-flow btn-ghost" data-ds-viewer-close="1" data-i18n="editor.ds.close">@L["editor.ds.close"]</button>
+        </div>
+      </div>
+      <div class="ds-viewer-legend">
+        <span class="ds-leg ds-leg-read" data-i18n="editor.ds.read">@L["editor.ds.read"]</span>
+        <span class="ds-leg ds-leg-write" data-i18n="editor.ds.write">@L["editor.ds.write"]</span>
+      </div>
+      <div class="ds-viewer-scroll" id="ds-viewer-scroll">
+        <table class="ds-viewer-table" id="ds-viewer-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="~/js/i18n.js?v=3"></script>
+  <script src="~/js/da-notify.js?v=2"></script>
+  <script src="~/js/da-crypto.js?v=3"></script>
+  <script src="~/js/da-secure-store.js?v=3"></script>
+  <script src="~/editor/flow.js?v=i18n-1"></script>
+</body>
+</html>

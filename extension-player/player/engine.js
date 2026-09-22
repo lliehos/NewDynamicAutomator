@@ -723,7 +723,7 @@ async function startPlay(taskId, tabId, runMode, options) {
   await ensurePlayMemory(graph);
 
   const lastPlayRequest = {
-    taskId: Number(graph.taskId || taskId),
+    taskId: String(graph.taskId || taskId || ""),
     runMode: runMode === RunMode.Learn ? RunMode.Learn : RunMode.Play,
     groupNodeId: opts.groupNodeId || null,
     stepNodeId: opts.stepNodeId || null,
@@ -1559,11 +1559,14 @@ function resolveDynamicSelector(step, graph, rowIndex, opts = {}) {
     const col = step[dynCol];
 
     if (hasPh) {
-      const val = (col && ds) ? (cellValue(ds, col, row) ?? "") : "";
+      const val = (col && ds)
+        ? (cellValue(ds, col, row, { emitRead: true, graph, stepTitle: step?.title }) ?? "")
+        : "";
       sel = sel.split(DYN_SEL_PLACEHOLDER).join(val);
     }
     if (/\{\{[^}]+\}\}/.test(sel)) {
-      sel = sel.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => cellValue(ds, key, row) ?? "");
+      sel = sel.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) =>
+        cellValue(ds, key, row, { emitRead: true, graph, stepTitle: step?.title }) ?? "");
     }
   }
   return appendAttributeFilter(sel, step, graph, rowIndex, opts);
@@ -1587,7 +1590,9 @@ function appendAttributeFilter(sel, step, graph, rowIndex, opts = {}) {
       ds = sources.find((d) => Number(d.id) === Number(step[dynDsKey])) || null;
     }
     if (!ds) ds = findDataSourceForStep(step, graph);
-    attrVal = cellValue(ds, step[dynColKey], rowIndex ?? 0) ?? "";
+    attrVal = cellValue(ds, step[dynColKey], rowIndex ?? 0, {
+      emitRead: true, graph, stepTitle: step?.title
+    }) ?? "";
   } else {
     attrVal = step[opts.attrValue || "attributeValue"] ?? "";
   }
@@ -1628,7 +1633,9 @@ function resolveStepParam(step, graph, rowIndex, opts = {}) {
   }
   if (cst === "DataSource" || step?.valueFromSource || (step?.dataSourceId && step?.dynamicSourceColumnName && cst !== "Memory" && cst !== "Elements" && cst !== "System")) {
     const ds = findDataSourceForValue(step, graph);
-    const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0);
+    const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0, {
+      emitRead: true, graph, stepTitle: step?.title
+    });
     if (v != null && String(v).trim() !== "") return String(v);
   }
   const raw = opts.preferUrl
@@ -1770,9 +1777,73 @@ async function storeCapturedContent(step, graph, text, rowIndex) {
     } else {
       ds.cells.push({ key: col, index: idx, cellValue: text });
     }
+    const rc = Number(ds.rowCount) || 0;
+    if (idx + 1 > rc) ds.rowCount = idx + 1;
+    emitDataSourceCellEvent(graph, ds, col, idx, "write", text, step?.title);
+    persistPlayDataSources(graph).catch(() => {});
     return { ok: true };
   }
   return setPlayMemoryVar(step.memoryVariableName || step.constantValue, text);
+}
+
+function cellValue(ds, columnKey, rowIndex, opts = {}) {
+  if (!ds || !columnKey) return null;
+  const key = String(columnKey).trim();
+  const cells = ds.cells || [];
+  const hit = cells.find((c) =>
+    (c.key === key || c.Key === key || c.columnName === key)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === Number(rowIndex)
+  );
+  const val = hit ? (hit.cellValue ?? hit.CellValue ?? hit.value ?? "") : null;
+  if (opts.emitRead && opts.graph && val != null) {
+    emitDataSourceCellEvent(opts.graph, ds, key, rowIndex, "read", val, opts.stepTitle);
+  }
+  return val;
+}
+
+async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellValue, stepTitle) {
+  try {
+    const taskId = String(graph?.taskId || playStatus.taskId || "").trim();
+    const dsId = Number(ds?.id || 0);
+    if (!taskId || !dsId || !columnKey) return;
+    const payload = {
+      taskId,
+      dataSourceId: dsId,
+      op: op === "write" ? "write" : "read",
+      columnKey: String(columnKey),
+      rowIndex: Number(rowIndex) || 0,
+      cellValue: cellValue == null ? null : String(cellValue),
+      stepTitle: stepTitle || null
+    };
+    // Fan-out to open portal/editor tabs (fast local path).
+    try {
+      chrome.runtime.sendMessage({ type: "broadcastDsCellEvent", event: payload }).catch(() => {});
+    } catch { /* ignore */ }
+    // SignalR path via portal HTTP.
+    const portal = typeof portalBase === "function"
+      ? await portalBase().catch(() => null)
+      : null;
+    const base = String(portal || "").replace(/\/$/, "");
+    if (!base) return;
+    fetch(`${base}/Panel/Tasks/NotifyCellEvent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+      credentials: "omit"
+    }).catch(() => {});
+  } catch { /* ignore */ }
+}
+
+async function persistPlayDataSources(graph) {
+  const taskId = String(graph?.taskId || playStatus.taskId || "").trim();
+  if (!taskId || !Array.isArray(graph?.dataSources)) return;
+  try {
+    await chrome.runtime.sendMessage({
+      type: "persistPlayDataSources",
+      taskId,
+      dataSources: graph.dataSources
+    });
+  } catch { /* ignore */ }
 }
 
 function findDataSourceForStep(step, graph) {
@@ -1799,7 +1870,9 @@ function resolveDynamicText(text, step, graph, rowIndex) {
     // Value-from-source without embedding token in constantValue
     if (step?.dynamicSourceColumnName) {
       const ds = findDataSourceForValue(step, graph);
-      const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0);
+      const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0, {
+        emitRead: true, graph, stepTitle: step?.title
+      });
       return v != null ? String(v) : "";
     }
     return text || "";
@@ -1807,7 +1880,8 @@ function resolveDynamicText(text, step, graph, rowIndex) {
   if (typeof text !== "string") return text || "";
   if (!/\{\{[^}]+\}\}/.test(text)) return text;
   const ds = findDataSourceForValue(step, graph) || findDataSourceForStep(step, graph);
-  return text.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => cellValue(ds, key, rowIndex ?? 0) ?? "");
+  return text.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) =>
+    cellValue(ds, key, rowIndex ?? 0, { emitRead: true, graph, stepTitle: step?.title }) ?? "");
 }
 
 function findDataSourceForValue(step, graph) {
@@ -1817,19 +1891,6 @@ function findDataSourceForValue(step, graph) {
     if (found) return found;
   }
   return findDataSourceForStep(step, graph);
-}
-
-function cellValue(ds, columnKey, rowIndex) {
-  if (!ds || !columnKey) return null;
-  const key = String(columnKey).trim();
-  const cells = ds.cells || [];
-  const hit = cells.find((c) =>
-    (c.key === key || c.Key === key || c.columnName === key)
-    && Number(c.index ?? c.Index ?? c.rowIndex) === Number(rowIndex)
-  );
-  if (hit) return hit.cellValue ?? hit.CellValue ?? hit.value ?? "";
-  // Fallback: columns-only ref without cells
-  return null;
 }
 
 /**
