@@ -1312,12 +1312,12 @@
    */
   function autoLayoutCurrentScope() {
     if (!canModify) {
-      setStatus("در حالت فقط‌مشاهده چینش ممکن نیست.", "warn");
+      setStatus(t("editor.status.notModifiable"), "warn");
       return false;
     }
     const nodes = scopedNodes();
     if (nodes.length < 2) {
-      setStatus("برای چینش به بیش از یک المان نیاز است.", "warn");
+      setStatus(t("editor.status.stepsHint", { steps: nodes.length }), "warn");
       return false;
     }
 
