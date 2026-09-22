@@ -2206,11 +2206,11 @@
     const e = graph.edges.find((x) => x.id === edgeId);
     if (!e || !canModify) return false;
     if (String(newToId) === String(e.from)) {
-      setStatus("نمی‌توان به خود وصل کرد.", "warn");
+      setStatus(t("editor.status.linkCycle"), "warn");
       return false;
     }
     if (String(newToId) === String(e.to)) {
-      setStatus("مقصد همان است.", "warn");
+      setStatus(t("editor.status.saved"), "warn");
       return true;
     }
     const snapshot = { id: e.id, from: e.from, to: e.to, kind: e.kind };
