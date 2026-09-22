@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Dynamic Automator Player",
-  "version": "1.0.16",
+  "version": "1.0.24",
   "description": "اجرای فرآیند روی صفحات — جدا از افزونهٔ ضبط",
   "permissions": ["storage", "cookies", "scripting", "webNavigation", "tabs", "activeTab", "windows"],
   "host_permissions": [

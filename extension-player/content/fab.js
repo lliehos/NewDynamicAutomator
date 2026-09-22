@@ -20,6 +20,7 @@
   root.id = "da-player-fab";
   root.innerHTML = `
     <div class="da-fab-panel" id="da-fab-panel" hidden>
+      <div class="da-fab-resize" id="da-fab-resize" title="تغییر اندازه" aria-label="تغییر اندازه پنل"></div>
       <div class="da-fab-status" id="da-fab-status">...</div>
       <div class="da-play-hud">
         <div class="da-play-hud-top">
@@ -49,6 +50,7 @@
   });
 
   const panel = root.querySelector("#da-fab-panel");
+  const resizeHandle = root.querySelector("#da-fab-resize");
   const status = root.querySelector("#da-fab-status");
   const playPauseBtn = root.querySelector("#da-fab-playpause");
   const stopBtn = root.querySelector("#da-fab-stop");
@@ -64,8 +66,141 @@
   let lastPlaySnapshot = null;
   let userCollapsed = false;
 
-  function setPlayPauseMode(mode) {
-    // mode: "play" | "pause"
+  const HUD_SIZE_KEY = "daPlayHudSize";
+  const HUD_MIN_W = 280;
+  const HUD_MIN_H = 220;
+  let hudPersistTimer = null;
+
+  function hudMaxSize() {
+    return {
+      w: Math.max(HUD_MIN_W, window.innerWidth - 24),
+      h: Math.max(HUD_MIN_H, window.innerHeight - 24)
+    };
+  }
+
+  function applyHudSize(w, h) {
+    const max = hudMaxSize();
+    const width = Math.min(max.w, Math.max(HUD_MIN_W, Math.round(Number(w) || HUD_MIN_W)));
+    const height = Math.min(max.h, Math.max(HUD_MIN_H, Math.round(Number(h) || HUD_MIN_H)));
+    panel.style.width = `${width}px`;
+    panel.style.height = `${height}px`;
+    panel.style.maxWidth = `${max.w}px`;
+    panel.style.maxHeight = `${max.h}px`;
+    panel.classList.add("is-sized");
+    return { w: width, h: height };
+  }
+
+  function persistHudSize(size, immediate) {
+    const payload = { w: size.w, h: size.h, at: Date.now() };
+    const write = () => {
+      try {
+        chrome.storage.local.set({ [HUD_SIZE_KEY]: payload }).catch(() => {});
+      } catch { /* ignore */ }
+    };
+    if (immediate) {
+      if (hudPersistTimer) clearTimeout(hudPersistTimer);
+      hudPersistTimer = null;
+      write();
+      return;
+    }
+    if (hudPersistTimer) clearTimeout(hudPersistTimer);
+    hudPersistTimer = setTimeout(write, 120);
+  }
+
+  async function restoreHudSize() {
+    try {
+      const data = await chrome.storage.local.get(HUD_SIZE_KEY);
+      const saved = data?.[HUD_SIZE_KEY];
+      if (saved && Number(saved.w) > 0 && Number(saved.h) > 0) {
+        applyHudSize(saved.w, saved.h);
+      } else {
+        panel.style.maxWidth = `${hudMaxSize().w}px`;
+        panel.style.maxHeight = `${hudMaxSize().h}px`;
+      }
+    } catch {
+      panel.style.maxWidth = `${hudMaxSize().w}px`;
+      panel.style.maxHeight = `${hudMaxSize().h}px`;
+    }
+  }
+
+  function bindHudResize() {
+    if (!resizeHandle || !panel) return;
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let startW = 0;
+    let startH = 0;
+    let lastSize = null;
+
+    const onMove = (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      // Panel anchored bottom-left: drag top-right corner → grow right / up
+      const dx = e.clientX - startX;
+      const dy = startY - e.clientY;
+      lastSize = applyHudSize(startW + dx, startH + dy);
+      persistHudSize(lastSize, false);
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      panel.classList.remove("is-resizing");
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onUp, true);
+      const rect = panel.getBoundingClientRect();
+      lastSize = applyHudSize(lastSize?.w || rect.width, lastSize?.h || rect.height);
+      persistHudSize(lastSize, true);
+    };
+
+    resizeHandle.addEventListener("pointerdown", (e) => {
+      if (e.button != null && e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragging = true;
+      panel.classList.add("is-resizing");
+      const rect = panel.getBoundingClientRect();
+      startX = e.clientX;
+      startY = e.clientY;
+      startW = rect.width;
+      startH = rect.height;
+      lastSize = { w: startW, h: startH };
+      document.body.style.cursor = "nesw-resize";
+      document.body.style.userSelect = "none";
+      window.addEventListener("pointermove", onMove, true);
+      window.addEventListener("pointerup", onUp, true);
+      window.addEventListener("pointercancel", onUp, true);
+      try { resizeHandle.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    });
+
+    window.addEventListener("resize", () => {
+      if (panel.hidden) return;
+      if (!panel.classList.contains("is-sized")) {
+        panel.style.maxWidth = `${hudMaxSize().w}px`;
+        panel.style.maxHeight = `${hudMaxSize().h}px`;
+        return;
+      }
+      const rect = panel.getBoundingClientRect();
+      const size = applyHudSize(rect.width, rect.height);
+      persistHudSize(size, true);
+    });
+  }
+
+  bindHudResize();
+  restoreHudSize();
+  // Re-apply after first show in case panel was hidden during restore
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes[HUD_SIZE_KEY]) return;
+    const saved = changes[HUD_SIZE_KEY].newValue;
+    if (saved?.w && saved?.h && !panel.classList.contains("is-resizing")) {
+      applyHudSize(saved.w, saved.h);
+    }
+  });
+
+  function setPlayPauseMode(mode, { paused = false } = {}) {
+    // mode: "play" | "pause"  — pause icon = currently running (click to pause)
     playPauseBtn.dataset.mode = mode;
     playPauseBtn.classList.toggle("da-fab-play", mode === "play");
     playPauseBtn.classList.toggle("da-fab-pause", mode === "pause");
@@ -75,8 +210,9 @@
       playPauseBtn.setAttribute("aria-label", "پاز");
       playPauseBtn.innerHTML = ICO_PAUSE;
     } else {
-      playPauseBtn.title = "اجرا";
-      playPauseBtn.setAttribute("aria-label", "اجرا");
+      const label = paused ? "ادامه" : "اجرا";
+      playPauseBtn.title = label;
+      playPauseBtn.setAttribute("aria-label", label);
       playPauseBtn.innerHTML = ICO_PLAY;
     }
   }
@@ -101,41 +237,70 @@
   playPauseBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (playPauseBtn.disabled) return;
     playPauseBtn.disabled = true;
     try {
-      const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({}));
-      const playing = !!(state.playing || state.play?.playing);
-      const paused = !!(state.play?.paused);
-
-      if (playing && !paused) {
-        // Running → pause
-        await chrome.runtime.sendMessage({ type: "pausePlay" });
-      } else if (playing && paused) {
-        // Paused → resume (continue)
-        await chrome.runtime.sendMessage({ type: "resumePlay" });
-      } else {
-        // Stopped / idle → start from beginning
-        const { lastPlayRequest } = await chrome.storage.local.get("lastPlayRequest");
-        const taskId = lastPlayRequest?.taskId || lastPlaySnapshot?.taskId || state.play?.taskId;
-        if (!taskId) {
-          status.textContent = "فرآیندی برای اجرا نیست — از پورتال اجرا کنید.";
-          return;
+      // Prefer button mode (what UI shows) over a possibly stale getState.
+      const mode = playPauseBtn.dataset.mode || "play";
+      if (mode === "pause") {
+        const res = await chrome.runtime.sendMessage({ type: "pausePlay" })
+          .catch((err) => ({ ok: false, error: err?.message || String(err) }));
+        if (res?.ok === false && res?.error) {
+          status.textContent = res.error;
+        } else {
+          setPlayPauseMode("play");
+          playPauseBtn.title = "ادامه";
+          playPauseBtn.setAttribute("aria-label", "ادامه");
+          if (playProgress) {
+            playProgress.textContent = playProgress.textContent.replace(/^▶/, "⏸ پاز —");
+          }
+          status.textContent = "پاز — اجرا=ادامه از همین‌جا · توقف=قطع و شروع از اول";
         }
-        const res = await chrome.runtime.sendMessage({
-          type: "startPlay",
-          taskId: Number(taskId),
-          runMode: lastPlayRequest?.runMode,
-          groupNodeId: lastPlayRequest?.groupNodeId || null,
-          stepNodeId: lastPlayRequest?.stepNodeId || null
-        }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
-        if (!res?.ok && !res?.reloading) {
-          status.textContent = res?.error || "خطا در شروع";
+      } else {
+        const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({}));
+        const playing = !!(state.playing || state.play?.playing || lastPlaySnapshot?.playing);
+        const paused = !!(state.play?.paused || lastPlaySnapshot?.paused || playPausedHint());
+
+        if (playing && paused) {
+          const res = await chrome.runtime.sendMessage({ type: "resumePlay" })
+            .catch((err) => ({ ok: false, error: err?.message || String(err) }));
+          if (res?.ok === false && res?.error) status.textContent = res.error;
+          else {
+            setPlayPauseMode("pause");
+            status.textContent = "در حال اجرا — پاز یا توقف";
+          }
+        } else if (playing && !paused) {
+          // Safety: UI said play but engine still running → pause
+          await chrome.runtime.sendMessage({ type: "pausePlay" }).catch(() => null);
+        } else {
+          const { lastPlayRequest } = await chrome.storage.local.get("lastPlayRequest");
+          const taskId = lastPlayRequest?.taskId || lastPlaySnapshot?.taskId || state.play?.taskId;
+          if (!taskId) {
+            status.textContent = "فرآیندی برای اجرا نیست — از پورتال اجرا کنید.";
+            return;
+          }
+          const res = await chrome.runtime.sendMessage({
+            type: "startPlay",
+            taskId: Number(taskId),
+            runMode: lastPlayRequest?.runMode,
+            groupNodeId: lastPlayRequest?.groupNodeId || null,
+            stepNodeId: lastPlayRequest?.stepNodeId || null
+          }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+          if (!res?.ok && !res?.reloading) {
+            status.textContent = res?.error || "خطا در شروع";
+          }
         }
       }
     } finally {
       await refresh();
     }
   });
+
+  function playPausedHint() {
+    return playPauseBtn.dataset.mode === "play"
+      && !!(lastPlaySnapshot?.playing)
+      && !!lastPlaySnapshot?.paused;
+  }
 
   stopBtn.addEventListener("click", async (e) => {
     e.preventDefault();
@@ -189,7 +354,9 @@
     const logs = Array.isArray(play.logs) ? play.logs.slice(-40) : [];
     const resultHtml = results.length
       ? results.map((r) => {
-          const cls = r.ok ? "ok" : "err";
+          const cls = r.severity === "warn" || r.ignoredError
+            ? "warn"
+            : (r.ok ? "ok" : "err");
           return `<div class="da-fab-res-line da-fab-res-${cls}">`
             + `<span class="da-fab-res-idx">L${r.loop}/${r.loopTotal} · S${r.step}</span>`
             + `<span class="da-fab-res-title">${escapeHtml(r.title || r.actionType || "—")}</span>`
@@ -198,9 +365,11 @@
         }).join("")
       : `<div class="da-fab-res-empty">هنوز نتیجه‌ای ثبت نشده</div>`;
     const logHtml = logs.length
-      ? `<div class="da-fab-log">${logs.map((entry) =>
-          `<div class="da-fab-log-line da-fab-log-${entry.level || "info"}">${escapeHtml(entry.text || "")}</div>`
-        ).join("")}</div>`
+      ? `<div class="da-fab-log">${logs.map((entry) => {
+          const lv = entry.level || "info";
+          const safe = ["error", "warn", "ok", "step", "info"].includes(lv) ? lv : "info";
+          return `<div class="da-fab-log-line da-fab-log-${safe}">${escapeHtml(entry.text || "")}</div>`;
+        }).join("")}</div>`
       : `<div class="da-fab-log"><div class="da-fab-res-empty">لاگی نیست</div></div>`;
     playResults.innerHTML = `
       <div class="da-fab-res-head">
@@ -251,6 +420,8 @@
 
     panel.hidden = false;
     toggleBtn.hidden = true;
+    // Ensure saved size is applied when HUD becomes visible
+    if (!panel.classList.contains("is-sized")) restoreHudSize();
 
     const title = play.title || lastPlayRequest?.title || (play.taskId ? `فرآیند #${play.taskId}` : "اجرا");
     if (playTitle) playTitle.textContent = title;
@@ -265,13 +436,12 @@
     }
     renderPlayResults(play);
 
-    // One toggle: Pause while running; Play when paused or stopped.
-    // Stop ends the run; next Play starts from the beginning.
+    // One toggle: Pause while running; Play/Resume when paused or stopped.
     if (playing && !paused) {
       setPlayPauseMode("pause");
       playPauseBtn.disabled = false;
     } else {
-      setPlayPauseMode("play");
+      setPlayPauseMode("play", { paused: !!(playing && paused) });
       playPauseBtn.disabled = playing ? false : !canRestart;
     }
     stopBtn.hidden = !playing;

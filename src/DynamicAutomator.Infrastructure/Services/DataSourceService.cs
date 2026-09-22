@@ -140,21 +140,42 @@ public class DataSourceService
     }
 
     /// <summary>
-    /// First worksheet, row 1 = headers (column keys), following rows = values.
-    /// Columns: key/value (key=header, title=header). Cells: key + index + cellValue.
+    /// First worksheet must be a clean table: no merges, contiguous header row (non-empty titles),
+    /// then data rows. Columns: key=header. Cells: key + index + cellValue.
     /// </summary>
     internal static (List<DataSourceColumnDto> Columns, List<DataSourceCellDto> Cells) ParseExcel(Stream stream)
     {
         using var book = new XLWorkbook(stream);
-        var sheet = book.Worksheets.First();
+        var sheet = book.Worksheets.FirstOrDefault()
+            ?? throw new InvalidOperationException("فایل اکسل برگه‌ای برای خواندن ندارد.");
         var range = sheet.RangeUsed();
         if (range is null)
-            return (new List<DataSourceColumnDto>(), new List<DataSourceCellDto>());
+            throw new InvalidOperationException("فایل اکسل خالی است یا جدولی برای تبدیل به منبع ندارد.");
+
+        // Clean table: merged cells break stable column keys / row mapping.
+        foreach (var merge in sheet.MergedRanges)
+        {
+            if (merge.Intersects(range))
+            {
+                throw new InvalidOperationException(
+                    "اکسل باید جدول تمیز باشد — سلول ادغام‌شده (Merge) مجاز نیست.");
+            }
+        }
 
         var firstRow = range.FirstRow().RowNumber();
         var lastRow = range.LastRow().RowNumber();
         var firstCol = range.FirstColumn().ColumnNumber();
         var lastCol = range.LastColumn().ColumnNumber();
+
+        // Trim trailing empty header cells so used-range padding does not invent columns.
+        while (lastCol >= firstCol)
+        {
+            var h = sheet.Cell(firstRow, lastCol).GetString()?.Trim() ?? "";
+            if (!string.IsNullOrWhiteSpace(h)) break;
+            lastCol--;
+        }
+        if (lastCol < firstCol)
+            throw new InvalidOperationException("سطر اول باید هدر ستون‌های معتبر داشته باشد.");
 
         var columns = new List<DataSourceColumnDto>();
         var usedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -163,7 +184,15 @@ public class DataSourceService
         {
             var raw = sheet.Cell(firstRow, c).GetString()?.Trim() ?? "";
             if (string.IsNullOrWhiteSpace(raw))
-                raw = $"Column{c}";
+            {
+                throw new InvalidOperationException(
+                    $"هدر ستون در موقعیت {c - firstCol + 1} خالی است — سطر اول باید عنوان همهٔ ستون‌ها را داشته باشد.");
+            }
+            if (raw.Length > 120)
+            {
+                throw new InvalidOperationException(
+                    $"عنوان ستون «{raw[..Math.Min(40, raw.Length)]}…» بیش از حد طولانی است.");
+            }
             var key = raw;
             var n = 2;
             while (!usedKeys.Add(key))
@@ -173,6 +202,12 @@ public class DataSourceService
             }
             columns.Add(new DataSourceColumnDto { Key = key, Title = raw });
         }
+
+        if (columns.Count == 0)
+            throw new InvalidOperationException("فایل اکسل ستون معتبری ندارد (ردیف اول باید هدر باشد).");
+
+        if (lastRow <= firstRow)
+            throw new InvalidOperationException("جدول فقط هدر دارد — حداقل یک سطر داده لازم است.");
 
         var cells = new List<DataSourceCellDto>();
         var dataIndex = 0;
@@ -199,6 +234,9 @@ public class DataSourceService
             }
             dataIndex++;
         }
+
+        if (dataIndex == 0)
+            throw new InvalidOperationException("هیچ سطر داده‌ای در جدول پیدا نشد.");
 
         return (columns, cells);
     }

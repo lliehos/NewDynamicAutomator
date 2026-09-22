@@ -2,6 +2,346 @@ function isActionNode(n) {
   return !!n && (n.kind === "action" || n.kind === "step");
 }
 
+/** Play-time graph validation — mirrors editor leaf rules; blocks start if any node is invalid. */
+const DYN_SEL_PLACEHOLDER = "{مقدار پویا}";
+
+function selectorHasDynPlaceholder(val) {
+  const s = String(val || "");
+  return s.includes(DYN_SEL_PLACEHOLDER) || /\{\{[^}]+\}\}/.test(s);
+}
+
+function stepIsCapture(actionType) {
+  return actionType === "TakeContent" || actionType === "SaveContent";
+}
+
+function stepIsUrlAction(actionType) {
+  return actionType === "GoToUrl" || actionType === "Navigate" || actionType === "NewPage";
+}
+
+function stepReceivesValue(actionType) {
+  return [
+    "InputContent", "InsertContent", "LoadContent",
+    "WaitTime", "GoToUrl", "Navigate", "NewPage"
+  ].includes(actionType || "");
+}
+
+function stepAllowsMemoryValue(actionType) {
+  return stepReceivesValue(actionType) || stepIsCapture(actionType);
+}
+
+function stepAllowsElementValue(actionType) {
+  if (actionType === "WaitTime") return false;
+  return actionType === "InputContent" || actionType === "InsertContent" || actionType === "LoadContent"
+    || stepIsUrlAction(actionType) || stepIsCapture(actionType);
+}
+
+function stepAllowsSystemValue(actionType) {
+  if (actionType === "WaitTime") return false;
+  return stepReceivesValue(actionType) || stepIsCapture(actionType);
+}
+
+function migrateCaptureNode(n) {
+  if (!n || !stepIsCapture(n.actionType)) return;
+  if (n.saveTargetType === "Memory" || n.saveTargetType === "DataSource") return;
+  if (n.contentSourceType === "Memory" || n.contentSourceType === "DataSource") {
+    n.saveTargetType = n.contentSourceType;
+    n.contentSourceType = "Elements";
+  } else {
+    n.saveTargetType = "Memory";
+  }
+}
+
+function normalizeSaveTarget(n) {
+  migrateCaptureNode(n);
+  let t = n.saveTargetType || "Memory";
+  if (t !== "DataSource") t = "Memory";
+  n.saveTargetType = t;
+  return t;
+}
+
+function normalizeStepValueSource(n) {
+  migrateCaptureNode(n);
+  let src = n.contentSourceType;
+  const at = n.actionType || "";
+  if (!src || src === "None") {
+    src = n.valueFromSource ? "DataSource"
+      : (stepIsCapture(at) ? "Elements" : "Constant");
+  }
+  const allowed = new Set(["Constant", "DataSource"]);
+  if (stepAllowsElementValue(at)) allowed.add("Elements");
+  if (stepAllowsMemoryValue(at)) allowed.add("Memory");
+  if (stepAllowsSystemValue(at)) allowed.add("System");
+  if (!allowed.has(src)) src = stepIsCapture(at) ? "Elements" : "Constant";
+  n.contentSourceType = src;
+  n.valueFromSource = src === "DataSource";
+  return src;
+}
+
+function stepShowsTargetSelector(n) {
+  const at = (n && n.actionType) || "";
+  if (stepIsUrlAction(at)) return false;
+  if (at === "WaitTime" || at === "CloseFirstTab" || at === "CloseLastTab"
+    || at === "Refresh" || at === "NoAction" || !at) {
+    return false;
+  }
+  if (stepIsCapture(at)) {
+    migrateCaptureNode(n);
+    return normalizeStepValueSource(n) === "Elements";
+  }
+  return [
+    "Click", "DoubleClick", "RightClick", "Hover", "Enter",
+    "InputContent", "InsertContent", "LoadContent",
+    "WaitForLoading"
+  ].includes(at);
+}
+
+function conditionNeedsCompare(ct) {
+  return ["Url", "ElementValue", "SourceValue", "FindElements", "DriverTabs"].includes(ct);
+}
+
+function conditionNeedsCompareOperand(ct, eq) {
+  if (!conditionNeedsCompare(ct)) return false;
+  if (eq === "HasValue" || eq === "HasNotValue") return false;
+  return true;
+}
+
+function validateSelectorBlock(n, opts = {}) {
+  const valueKey = opts.valueKey || "selectorValue";
+  const dynFlag = opts.dynFlag || "selectorIsDynamic";
+  const dynCol = opts.dynCol || "selectorDynamicColumn";
+  const hasAttr = opts.hasAttr || "hasAttribute";
+  const attrName = opts.attrName || "attributeName";
+  const attrDyn = opts.attrDynFlag || "attributeValueIsDynamic";
+  const attrCol = opts.attrDynCol || "attributeDynamicColumn";
+  const label = opts.label || "سلکتور";
+
+  const sel = String(n[valueKey] || "").trim();
+  if (!sel) return { ok: false, reason: `${label} خالی است` };
+  if (n[dynFlag] === true) {
+    if (!selectorHasDynPlaceholder(sel)) {
+      return { ok: false, reason: `${label} پویا باید «{مقدار پویا}» یا {{ستون}} داشته باشد` };
+    }
+    if (sel.includes(DYN_SEL_PLACEHOLDER) && !String(n[dynCol] || "").trim()) {
+      return { ok: false, reason: `ستون ${label} پویا مشخص نیست` };
+    }
+  }
+  if (n[hasAttr] === true) {
+    if (!String(n[attrName] || "").trim()) {
+      return { ok: false, reason: `نام اتریبیوت ${label} خالی است` };
+    }
+    if (n[attrDyn] === true && !String(n[attrCol] || "").trim()) {
+      return { ok: false, reason: `ستون اتریبیوت پویای ${label} مشخص نیست` };
+    }
+  }
+  return { ok: true };
+}
+
+function validateDataSourcePick(n, opts = {}) {
+  const dsKey = opts.dsKey || "dataSourceId";
+  const colKey = opts.colKey || "dynamicSourceColumnName";
+  const dsId = n[dsKey] || n.sourceId || n.dataSourceId;
+  if (dsId == null || dsId === "") return { ok: false, reason: opts.dsReason || "منبع داده انتخاب نشده" };
+  if (!String(n[colKey] || "").trim()) {
+    return { ok: false, reason: opts.colReason || "ستون منبع داده انتخاب نشده" };
+  }
+  return { ok: true };
+}
+
+function validateActionNodeForPlay(n) {
+  const reasons = [];
+  if (n.isActive === false) return { ok: true, reasons };
+  const at = n.actionType || "";
+  if (!at || at === "NoAction") return { ok: true, reasons };
+
+  if (stepShowsTargetSelector(n)) {
+    const v = validateSelectorBlock(n, { label: "سلکتور هدف" });
+    if (!v.ok) reasons.push(v.reason);
+  }
+
+  if (stepIsCapture(at)) {
+    migrateCaptureNode(n);
+    const src = normalizeStepValueSource(n);
+    if (src === "Constant") {
+      if (!String(n.constantValue || "").trim()) reasons.push("مقدار ثابت ذخیره خالی است");
+    } else if (src === "Elements") {
+      const v = validateSelectorBlock(n, { label: "سلکتور المان صفحه" });
+      if (!v.ok) reasons.push(v.reason);
+    } else if (src === "DataSource") {
+      const v = validateDataSourcePick(n);
+      if (!v.ok) reasons.push(v.reason);
+    } else if (src === "Memory") {
+      if (!String(n.sourceMemoryVariableName || "").trim()) {
+        reasons.push("متغیر منبع حافظه مشخص نیست");
+      }
+    } else if (src === "System") {
+      if (!String(n.systemValueType || "").trim()) {
+        reasons.push("نوع مقدار پیش‌فرض سیستم مشخص نیست");
+      }
+    }
+    const dest = normalizeSaveTarget(n);
+    if (dest === "Memory") {
+      if (!String(n.memoryVariableName || "").trim()) {
+        reasons.push("نام متغیر مقصد حافظه مشخص نیست");
+      }
+    } else {
+      const saveDs = n.saveDataSourceId != null ? n.saveDataSourceId : n.dataSourceId;
+      const saveCol = n.saveColumnName || (src === "DataSource" ? "" : n.dynamicSourceColumnName);
+      if (src === "DataSource") {
+        if (saveDs == null || saveDs === "") reasons.push("منبع مقصد ذخیره انتخاب نشده");
+        if (!String(n.saveColumnName || "").trim()) reasons.push("ستون مقصد ذخیره انتخاب نشده");
+      } else {
+        const v = validateDataSourcePick({
+          dataSourceId: saveDs,
+          dynamicSourceColumnName: saveCol || n.dynamicSourceColumnName
+        }, { dsReason: "منبع مقصد ذخیره انتخاب نشده", colReason: "ستون مقصد ذخیره انتخاب نشده" });
+        if (!v.ok) reasons.push(v.reason);
+      }
+    }
+  } else if (stepReceivesValue(at)) {
+    const src = normalizeStepValueSource(n);
+    if (src === "Constant") {
+      if (at === "WaitTime") {
+        const ms = Number(n.constantValue);
+        if (!Number.isFinite(ms) || ms < 0 || String(n.constantValue ?? "").trim() === "") {
+          reasons.push("زمان انتظار مشخص نیست");
+        }
+      } else if (stepIsUrlAction(at)) {
+        const url = String(n.navigateUrl || n.constantValue || "").trim();
+        if (!url) reasons.push("آدرس ثابت خالی است");
+      } else if (!String(n.constantValue || "").trim()) {
+        reasons.push("مقدار ثابت خالی است");
+      }
+    } else if (src === "Elements") {
+      const v = validateSelectorBlock(n, {
+        valueKey: "equalSelectorValue",
+        dynFlag: "equalSelectorIsDynamic",
+        dynCol: "equalSelectorDynamicColumn",
+        hasAttr: "equalHasAttribute",
+        attrName: "equalAttributeName",
+        attrDynFlag: "equalAttributeValueIsDynamic",
+        attrCol: "equalAttributeDynamicColumn",
+        label: stepIsUrlAction(at) ? "سلکتور آدرس" : "سلکتور منبع مقدار"
+      });
+      if (!v.ok) reasons.push(v.reason);
+    } else if (src === "DataSource") {
+      const v = validateDataSourcePick(n);
+      if (!v.ok) reasons.push(v.reason);
+    } else if (src === "Memory") {
+      if (!String(n.memoryVariableName || "").trim()) {
+        reasons.push("متغیر حافظه مشخص نیست");
+      }
+    } else if (src === "System") {
+      if (!String(n.systemValueType || "").trim()) {
+        reasons.push("نوع مقدار پیش‌فرض سیستم مشخص نیست");
+      }
+    }
+  }
+
+  return { ok: reasons.length === 0, reasons };
+}
+
+function validateConditionNodeForPlay(n) {
+  const reasons = [];
+  const ct = n.conditionType || "None";
+  if (!ct || ct === "None") {
+    reasons.push("نوع شرط انتخاب نشده");
+    return { ok: false, reasons };
+  }
+  const eq = n.equalityType || "equal";
+  const src = n.contentSourceType || "Constant";
+
+  if (["FindElement", "NotFindElement", "FindElements", "ElementValue"].includes(ct)) {
+    const v = validateSelectorBlock(n, { label: "سلکتور شرط" });
+    if (!v.ok) reasons.push(v.reason);
+  }
+  if (ct === "SourceValue") {
+    if (!n.sourceId && !n.dataSourceId) {
+      reasons.push("منبع مورد بررسی انتخاب نشده");
+    } else if (!String(n.dynamicSourceColumnName || "").trim()) {
+      reasons.push("ستون مورد بررسی انتخاب نشده");
+    }
+  }
+
+  if (conditionNeedsCompareOperand(ct, eq)) {
+    if (src === "Constant") {
+      const val = ct === "Url"
+        ? String(n.navigation || n.constantEqualValue || n.constantValue || "").trim()
+        : String(n.constantEqualValue ?? n.constantValue ?? n.navigation ?? "").trim();
+      if (ct === "FindElements" || ct === "DriverTabs") {
+        if (val === "" || !Number.isFinite(Number(val))) {
+          reasons.push("مقدار عددی مقایسه مشخص نیست");
+        }
+      } else if (!val) {
+        reasons.push("مقدار مقایسه خالی است");
+      }
+    } else if (src === "Elements") {
+      const v = validateSelectorBlock(n, {
+        valueKey: "equalSelectorValue",
+        dynFlag: "equalSelectorIsDynamic",
+        dynCol: "equalSelectorDynamicColumn",
+        hasAttr: "equalHasAttribute",
+        attrName: "equalAttributeName",
+        attrDynFlag: "equalAttributeValueIsDynamic",
+        attrCol: "equalAttributeDynamicColumn",
+        label: "سلکتور مقدار مقایسه"
+      });
+      if (!v.ok) reasons.push(v.reason);
+    } else if (src === "DataSource" && ct !== "SourceValue") {
+      const v = validateDataSourcePick(n);
+      if (!v.ok) reasons.push(v.reason);
+    } else if (src === "Memory") {
+      if (!String(n.memoryVariableName || n.sourceMemoryVariableName || "").trim()) {
+        reasons.push("متغیر حافظه مقایسه مشخص نیست");
+      }
+    } else if (src === "System") {
+      if (!String(n.systemValueType || "").trim()) {
+        reasons.push("نوع مقدار پیش‌فرض مقایسه مشخص نیست");
+      }
+    }
+  }
+
+  return { ok: reasons.length === 0, reasons };
+}
+
+function validateStartNodeForPlay(n, graph) {
+  const reasons = [];
+  const rst = n.repeatSourceType || (n.groupNodeId ? "None" : (graph.repeatSourceType || "None"));
+  if (rst === "Loops") {
+    const lc = Number(n.loopCount ?? n.constantValue);
+    if (!Number.isFinite(lc) || lc < 1) reasons.push("تعداد تکرار حلقه نامعتبر است");
+  } else if (rst === "DataSource") {
+    const id = n.dataSourceId ?? graph.dataSourceId;
+    const sources = graph.dataSources || [];
+    const exists = id != null && sources.some((d) => Number(d.id) === Number(id));
+    if (!exists) {
+      reasons.push("منبع پیش‌فرض برای تکرار مشخص نشده");
+    }
+  } else if (rst === "Elements") {
+    if (!n.groupNodeId) {
+      reasons.push("تکرار با المان صفحه فقط داخل گروه مجاز است");
+    } else {
+      const v = validateSelectorBlock(n, { label: "سلکتور تکرار" });
+      if (!v.ok) reasons.push(v.reason);
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+function validateNodeLeafForPlay(n, graph) {
+  if (!n) return { ok: true, reasons: [] };
+  if (isActionNode(n)) return validateActionNodeForPlay(n);
+  if (n.kind === "condition") return validateConditionNodeForPlay(n);
+  if (n.kind === "start") return validateStartNodeForPlay(n, graph);
+  return { ok: true, reasons: [] };
+}
+
+function graphHasInvalidNodesForPlay(graph) {
+  return (graph.nodes || []).some((n) => {
+    if (n.kind === "group") return false;
+    return !validateNodeLeafForPlay(n, graph).ok;
+  });
+}
+
 /** Play engine — imported by background via importScripts. */
 
 const RunMode = { Play: 0, Learn: 1 };
@@ -54,6 +394,10 @@ function appendPlayLog(level, text) {
   playLogs.push(entry);
   if (playLogs.length > 400) playLogs.splice(0, playLogs.length - 400);
   playStatus.logs = playLogs.slice(-80);
+  // Mirror warn/error to the player extension service-worker console.
+  const msg = `[DA Player] ${entry.text}`;
+  if (entry.level === "error") console.error(msg);
+  else if (entry.level === "warn") console.warn(msg);
   broadcastPlayState();
 }
 
@@ -156,12 +500,18 @@ function resolveIgnorePlayError(graph) {
 function handleStepFailureForLoop(graph, errorMsg) {
   const msg = errorMsg || "خطای اجرا";
   if (resolveIgnorePlayError(graph)) {
-    appendPlayLog("warn", `چشم‌پوشی از خطای اجرا — ادامه اندیس بعدی حلقه: ${msg}`);
+    appendPlayLog(
+      "warn",
+      `چشم‌پوشی از خطای اجرا (نود شروع روشن) — ادامه اندیس بعدی حلقه: ${msg}`
+    );
     playStatus.lastError = null;
     return { continueLoop: true };
   }
   playStatus.lastError = msg;
-  appendPlayLog("error", `توقف اجرا (چشم‌پوشی خطای اجرا خاموش): ${msg}`);
+  appendPlayLog(
+    "error",
+    `توقف اجرا — چشم‌پوشی از خطای اجرا (نود شروع) خاموش: ${msg}`
+  );
   return { continueLoop: false };
 }
 
@@ -172,7 +522,7 @@ async function stopPlay() {
   playStatus.paused = false;
   wakePlayResumeWaiters();
   appendPlayLog("warn", "اجرا توسط کاربر متوقف شد");
-  await chrome.storage.local.set({ playing: false, playTabId: null });
+  await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
   broadcastPlayState();
   return getPlayStatus();
 }
@@ -183,6 +533,7 @@ async function pausePlay() {
   playPaused = true;
   playStatus.paused = true;
   appendPlayLog("info", "اجرا موقتاً متوقف شد (پاز)");
+  try { await chrome.storage.local.set({ playPaused: true }); } catch { /* ignore */ }
   broadcastPlayState();
   return getPlayStatus();
 }
@@ -193,6 +544,7 @@ async function resumePlay() {
   playPaused = false;
   playStatus.paused = false;
   appendPlayLog("info", "ادامه اجرا");
+  try { await chrome.storage.local.set({ playPaused: false }); } catch { /* ignore */ }
   wakePlayResumeWaiters();
   broadcastPlayState();
   return getPlayStatus();
@@ -337,6 +689,10 @@ async function startPlay(taskId, tabId, runMode, options) {
     return { ok: false, error: "فرآیند در حافظهٔ محلی پیدا نشد." };
   }
 
+  if (graphHasInvalidNodesForPlay(graph)) {
+    return { ok: false, error: "در فرایند المان نامعتبر وجود دارد" };
+  }
+
   const opts = options || {};
   const entryId = resolvePlayEntryId(graph, opts);
   if (!entryId) {
@@ -402,7 +758,7 @@ async function startPlay(taskId, tabId, runMode, options) {
     logs: playLogs.slice(-80),
     results: priorResults
   };
-  await chrome.storage.local.set({ playing: true, playTabId: tabId });
+  await chrome.storage.local.set({ playing: true, playTabId: tabId, playPaused: false });
   // HUD (pause/stop + results) on the execution tab — including about:blank.
   await injectPlayFab(tabId);
   if (hadHistory) appendPlayLog("info", "──────── اجرای جدید ────────");
@@ -424,7 +780,7 @@ async function startPlay(taskId, tabId, runMode, options) {
     playStatus.paused = false;
     playPaused = false;
     appendPlayLog("error", playStatus.lastError);
-    chrome.storage.local.set({ playing: false, playTabId: null });
+    chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
     broadcastPlayState();
   });
 
@@ -500,7 +856,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
     playStatus.paused = false;
     playPaused = false;
     wakePlayResumeWaiters();
-    await chrome.storage.local.set({ playing: false, playTabId: null });
+    await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
     broadcastPlayState();
   }
 }
@@ -578,7 +934,14 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     }
 
     if (node.kind === "condition") {
-      const pass = await evaluateCondition(activeTabId, node, graph, rowIndex);
+      // Conditions never fail the run: any exception → false (fail branch).
+      let pass = false;
+      try {
+        pass = await evaluateCondition(activeTabId, node, graph, rowIndex);
+      } catch (err) {
+        appendPlayLog("warn", `شرط «${node.title || node.id}»: اکسپشن → fail — ${err?.message || err}`);
+        pass = false;
+      }
       appendPlayLog("info", `شرط «${node.title || node.id}»: ${pass ? "موفق (success)" : "ناموفق (fail)"}`);
       appendPlayResult({
         t: Date.now(),
@@ -648,6 +1011,9 @@ function findGroupEntryFallback(graph, groupId) {
 }
 
 async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, stepIndex, stepTotal) {
+  await waitIfPaused();
+  if (playAbort) return { ok: false, stepFailed: true, error: "اجرا متوقف شد", tabId };
+
   const label = step.title || step.actionType || `مرحله ${stepIndex}`;
   appendPlayLog("step", `[حلقه ${loopIndex}] ${stepIndex}/${stepTotal} — ${label}`);
   broadcastPlayState();
@@ -670,6 +1036,12 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
   }
 
   const outcome = await runStep(tabId, graph.taskId, step, playStatus.runMode, graph, rowIndex);
+  const failed = !outcome?.ok;
+  const ignored = failed && step.ignoreError === true;
+  const errMsg = outcome?.error || "توقف به‌خاطر واگرایی";
+  const reason = outcome?.reason || outcome?.unexpected?.reason || "";
+  const errDetail = reason ? `${errMsg} [${reason}]` : errMsg;
+
   const result = {
     t: Date.now(),
     loop: loopIndex,
@@ -679,23 +1051,24 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
     stepTotal,
     title: label,
     actionType: step.actionType || "",
-    ok: !!outcome?.ok,
-    detail: outcome?.ok
+    ok: !failed,
+    severity: failed ? (ignored ? "warn" : "error") : "ok",
+    ignoredError: ignored,
+    detail: !failed
       ? (outcome.waitMs ? `انتظار ${outcome.waitMs}ms` : "موفق")
-      : (outcome?.error || "خطا")
+      : (ignored ? `چشم‌پوشی از خطا: ${errDetail}` : errDetail)
   };
   appendPlayResult(result);
 
-  if (!outcome?.ok) {
-    const errMsg = outcome?.error || "توقف به‌خاطر واگرایی";
-    if (step.ignoreError === true) {
-      appendPlayLog("warn", `چشم‌پوشی از خطای مرحله «${label}»: ${errMsg}`);
+  if (failed) {
+    if (ignored) {
+      appendPlayLog("warn", `چشم‌پوشی از خطای مرحله «${label}»: ${errDetail}`);
       // Continue to next node in the diagram.
-      return { ok: true, ignoredError: true, error: errMsg, tabId };
+      return { ok: true, ignoredError: true, error: errDetail, tabId };
     }
-    appendPlayLog("error", errMsg);
+    appendPlayLog("error", `خطا در مرحله «${label}»: ${errDetail}`);
     // End current iteration (caller / loop decides continue vs abort).
-    return { ok: false, stepFailed: true, error: errMsg, tabId };
+    return { ok: false, stepFailed: true, error: errDetail, tabId };
   }
 
   let activeTabId = tabId;
@@ -719,17 +1092,28 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
     if (ct === "None") return true;
 
     if (ct === "Url") {
-      const tab = await chrome.tabs.get(tabId);
-      const actual = tab.url || "";
-      const expected = resolveStepParam(node, graph, rowIndex, { preferUrl: true })
-        || node.constantValue || node.navigation || "";
+      let actual = "";
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        actual = tab.url || "";
+      } catch {
+        return false;
+      }
+      const expected = await resolveConditionCompareValue(tabId, node, graph, rowIndex, { preferUrl: true });
       return compareConditionValues(actual, expected, node.equalityType || "equal");
     }
 
     if (ct === "DriverTabs") {
-      const tabs = await chrome.tabs.query({});
-      const count = tabs.filter((t) => t.id).length;
-      const expected = Number(node.constantValue ?? node.navigation) || 0;
+      let count = 0;
+      try {
+        const tabs = await chrome.tabs.query({});
+        count = tabs.filter((t) => t.id).length;
+      } catch {
+        return false;
+      }
+      const expected = Number(
+        node.constantEqualValue ?? node.constantValue ?? node.navigation
+      ) || 0;
       return compareConditionValues(count, expected, node.equalityType || "equal");
     }
 
@@ -740,50 +1124,143 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
         ? Math.max(0, Number(node.selectorWaitMs) || 10000)
         : 0;
       const found = await elementExistsInTab(tabId, selector, parseFramePath(node.framePathJson), waitMs);
-      return ct === "FindElement" ? found : !found;
+      return ct === "FindElement" ? !!found : !found;
     }
 
     if (ct === "FindElements") {
       const selector = resolveDynamicSelector(node, graph, rowIndex) || node.selectorValue || "";
       const count = selector ? await elementCountInTab(tabId, selector, parseFramePath(node.framePathJson)) : 0;
-      const expected = Number(node.constantValue ?? node.navigation) || 0;
+      const expected = Number(
+        node.constantEqualValue ?? node.constantValue ?? node.navigation
+      ) || 0;
       return compareConditionValues(count, expected, node.equalityType || "equal");
     }
 
     if (ct === "ElementValue" || ct === "SourceValue") {
-      // Best-effort: compare resolved subject vs compare value when available.
       const left = ct === "SourceValue"
         ? (resolveStepParam(node, graph, rowIndex) || "")
         : (await readElementText(tabId, node, graph, rowIndex));
-      const right = node.contentSourceType === "DataSource"
-        ? (resolveStepParam(node, graph, rowIndex) || node.constantValue || "")
-        : (node.constantValue || node.navigation || "");
+      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
       return compareConditionValues(left, right, node.equalityType || "equal");
     }
 
     // Unknown type — take success path so flow continues.
-    appendPlayLog("warn", `نوع شرط پشتیبانی‌نشده: ${ct} — شاخه success`);
+    appendPlayLog("info", `نوع شرط پشتیبانی‌نشده: ${ct} — شاخه success`);
     return true;
   } catch (err) {
-    appendPlayLog("warn", `خطا در ارزیابی شرط: ${err.message || err}`);
+    // Never surface as play error: exception ≡ fail branch; details as warning only.
+    const detail = err?.stack || err?.message || String(err);
+    appendPlayLog("warn", `ارزیابی شرط با اکسپشن → fail — ${detail}`);
     return false;
   }
 }
 
+/** Resolve the compare operand for a condition; failures yield "" (never throw as play error). */
+async function resolveConditionCompareValue(tabId, node, graph, rowIndex, opts = {}) {
+  try {
+    const src = node.contentSourceType || "Constant";
+    if (src === "System") {
+      return resolveSystemValue(node.systemValueType || "CurrentDateTime");
+    }
+    if (src === "Memory") {
+      const name = String(node.memoryVariableName || node.sourceMemoryVariableName || "").trim();
+      if (!name) return "";
+      const vars = await getPlayMemoryVars();
+      return vars[name] != null ? String(vars[name]) : "";
+    }
+    if (src === "DataSource") {
+      return resolveStepParam(node, graph, rowIndex) || node.constantEqualValue || node.constantValue || "";
+    }
+    if (src === "Elements") {
+      const sel = resolveDynamicSelector(node, graph, rowIndex, {
+        valueKey: "equalSelectorValue",
+        dynFlag: "equalSelectorIsDynamic",
+        dynDs: "equalSelectorDataSourceId",
+        dynCol: "equalSelectorDynamicColumn",
+        hasAttr: "equalHasAttribute",
+        attrName: "equalAttributeName",
+        attrDynFlag: "equalAttributeValueIsDynamic",
+        attrValue: "equalAttributeValue",
+        attrDynCol: "equalAttributeDynamicColumn",
+        attrDynDs: "equalAttributeDataSourceId"
+      }) || node.equalSelectorValue || "";
+      if (!sel) return "";
+      const framePath = parseFramePath(node.framePathJson);
+      try {
+        const frameId = await resolveFramePath(tabId, framePath);
+        const [{ result } = {}] = await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [frameId] },
+          func: (s) => {
+            try {
+              const el = document.querySelector(s);
+              if (!el) return "";
+              if (el.value != null) return String(el.value);
+              return (el.textContent || "").trim();
+            } catch {
+              return "";
+            }
+          },
+          args: [sel]
+        }) || [];
+        return result == null ? "" : String(result);
+      } catch {
+        return "";
+      }
+    }
+    if (opts.preferUrl) {
+      return node.navigation || node.constantEqualValue || node.constantValue || "";
+    }
+    return node.constantEqualValue || node.constantValue || node.navigation || "";
+  } catch {
+    return "";
+  }
+}
+
 function compareConditionValues(left, right, equalityType) {
-  const a = left == null ? "" : String(left);
-  const b = right == null ? "" : String(right);
-  const eq = String(equalityType || "equal").toLowerCase();
-  if (eq === "notequal" || eq === "not_equal" || eq === "!=") return a !== b;
-  if (eq === "contains") return a.includes(b);
-  if (eq === "notcontains") return !a.includes(b);
-  if (eq === "startswith") return a.startsWith(b);
-  if (eq === "endswith") return a.endsWith(b);
-  if (eq === "gt" || eq === ">") return Number(a) > Number(b);
-  if (eq === "lt" || eq === "<") return Number(a) < Number(b);
-  if (eq === "gte" || eq === ">=") return Number(a) >= Number(b);
-  if (eq === "lte" || eq === "<=") return Number(a) <= Number(b);
-  return a === b;
+  try {
+    const a = left == null ? "" : String(left);
+    const b = right == null ? "" : String(right);
+    const eqRaw = String(equalityType || "equal").trim();
+    const eq = eqRaw.toLowerCase().replace(/[_\s-]+/g, "");
+
+    if (eq === "hasvalue") return a.trim() !== "";
+    if (eq === "hasnotvalue") return a.trim() === "";
+
+    if (eq === "notequal" || eq === "!=") return a !== b;
+    if (eq === "contain" || eq === "contains") return a.includes(b);
+    if (eq === "notcontain" || eq === "notcontains") return !a.includes(b);
+    if (eq === "startswith") return a.startsWith(b);
+    if (eq === "endswith") return a.endsWith(b);
+
+    if (eq === "biggerthan" || eq === "gt" || eq === ">") {
+      const na = Number(a);
+      const nb = Number(b);
+      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+      return na > nb;
+    }
+    if (eq === "smallerthan" || eq === "lt" || eq === "<") {
+      const na = Number(a);
+      const nb = Number(b);
+      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+      return na < nb;
+    }
+    if (eq === "gte" || eq === ">=") {
+      const na = Number(a);
+      const nb = Number(b);
+      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+      return na >= nb;
+    }
+    if (eq === "lte" || eq === "<=") {
+      const na = Number(a);
+      const nb = Number(b);
+      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+      return na <= nb;
+    }
+
+    return a === b;
+  } catch {
+    return false;
+  }
 }
 
 async function elementExistsInTab(tabId, selector, framePath, waitTimeoutMs = 0) {
@@ -884,7 +1361,11 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   }
 
   if (actionType === "NewPage") {
-    const url = resolvedUrl || "about:blank";
+    let url = resolvedUrl || "about:blank";
+    const cst0 = step.contentSourceType || "";
+    if (cst0 === "Memory" || cst0 === "Elements" || cst0 === "System") {
+      url = (await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath })) || "about:blank";
+    }
     const created = await chrome.tabs.create({ url, active: true });
     const newId = created.id;
     if (newId) await waitTabComplete(newId);
@@ -892,7 +1373,11 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   }
 
   if (actionType === "GoToUrl" || actionType === "Navigate") {
-    const url = resolvedUrl;
+    let url = resolvedUrl;
+    const cst0 = step.contentSourceType || "";
+    if (cst0 === "Memory" || cst0 === "Elements" || cst0 === "System") {
+      url = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
+    }
     if (!url) {
       return onUnexpected(runMode, {
         taskId,
@@ -909,15 +1394,26 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   }
 
   if (actionType === "WaitTime") {
-    return { ok: true, waitMs: Number(resolvedValue) || 0 };
+    let ms = Number(resolvedValue) || 0;
+    const cst0 = step.contentSourceType || "";
+    if (cst0 === "Memory" || cst0 === "DataSource" || cst0 === "System") {
+      const v = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
+      ms = Number(v) || 0;
+    }
+    return { ok: true, waitMs: ms };
   }
 
-  // Insert/Load/Input from Memory or Elements need async lookup
+  // Insert/Load/Input value from Memory, Elements, or System
   let valueForAction = resolvedValue;
   const cst = step.contentSourceType || "";
   if ((actionType === "InsertContent" || actionType === "LoadContent" || actionType === "InputContent")
-    && (cst === "Memory" || cst === "Elements")) {
+    && (cst === "Memory" || cst === "Elements" || cst === "System")) {
     valueForAction = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
+  }
+
+  const isCapture = actionType === "TakeContent" || actionType === "SaveContent";
+  if (isCapture) {
+    return runCaptureStep(tabId, taskId, step, runMode, graph, rowIndex, framePath);
   }
 
   let frameId;
@@ -934,12 +1430,11 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     }, err.message);
   }
 
-  const isCapture = actionType === "TakeContent" || actionType === "SaveContent";
   const waitTimeoutMs = step.selectorWaitEnabled === true
     ? Math.max(0, Number(step.selectorWaitMs) || 10000)
     : 0;
   const payload = {
-    actionType: isCapture ? "TakeContent" : actionType,
+    actionType,
     selectorValue: resolvedSelector,
     constantValue: valueForAction,
     navigateUrl: step.navigateUrl,
@@ -966,26 +1461,82 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     }, result?.error);
   }
 
-  if (isCapture) {
-    const text = result.text != null ? String(result.text) : "";
-    const store = await storeCapturedContent(step, graph, text, rowIndex ?? 0);
-    if (!store.ok) {
-      return onUnexpected(runMode, {
-        taskId,
-        stepId: step.entityId,
-        reason: store.reason || "capture_store_failed",
-        expectedSelector: resolvedSelector,
-        actualUrl: null,
-        framePathJson: step.framePathJson
-      }, store.error);
-    }
-  }
-
   if (result.navigated) await waitTabComplete(tabId);
   return result;
 }
 
-const DYN_SEL_PLACEHOLDER = "{مقدار پویا}";
+/** Capture/save: resolve value from source, then store to Memory or DataSource. */
+async function runCaptureStep(tabId, taskId, step, runMode, graph, rowIndex, framePath) {
+  // Migrate legacy: contentSourceType was destination.
+  if (!step.saveTargetType && (step.contentSourceType === "Memory" || step.contentSourceType === "DataSource")) {
+    step.saveTargetType = step.contentSourceType;
+    step.contentSourceType = "Elements";
+  }
+  const src = step.contentSourceType || "Elements";
+  let text = "";
+
+  if (src === "Elements") {
+    const resolvedSelector = resolveDynamicSelector(step, graph, rowIndex ?? 0);
+    if (!resolvedSelector) {
+      return onUnexpected(runMode, {
+        taskId, stepId: step.entityId, reason: "missing_selector",
+        expectedSelector: "", actualUrl: null, framePathJson: step.framePathJson
+      }, "سلکتور المان خالی است");
+    }
+    let frameId;
+    try {
+      frameId = await resolveFramePath(tabId, framePath || []);
+    } catch (err) {
+      return onUnexpected(runMode, {
+        taskId, stepId: step.entityId, reason: "frame_resolve_failed",
+        expectedSelector: resolvedSelector, actualUrl: null,
+        framePathJson: step.framePathJson
+      }, err.message);
+    }
+    const waitTimeoutMs = step.selectorWaitEnabled === true
+      ? Math.max(0, Number(step.selectorWaitMs) || 10000)
+      : 0;
+    const payload = {
+      actionType: "TakeContent",
+      selectorValue: resolvedSelector,
+      constantValue: "",
+      highlightColor: resolveHighlightColor(graph),
+      waitTimeoutMs
+    };
+    let result = await chrome.tabs
+      .sendMessage(tabId, { type: "playExecute", payload }, { frameId })
+      .catch(() => null);
+    if (!result) result = await executeInFrame(tabId, frameId, payload);
+    if (!result || !result.ok) {
+      return onUnexpected(runMode, {
+        taskId, stepId: step.entityId,
+        reason: result?.reason || "action_failed",
+        expectedSelector: resolvedSelector,
+        actualUrl: result?.url || null,
+        framePathJson: step.framePathJson
+      }, result?.error);
+    }
+    text = result.text != null ? String(result.text) : "";
+  } else {
+    text = await resolveStepParamAsync(step, graph, rowIndex ?? 0, {
+      tabId,
+      framePath,
+      memoryNameKey: src === "Memory" ? "sourceMemoryVariableName" : "memoryVariableName"
+    });
+  }
+
+  const store = await storeCapturedContent(step, graph, text, rowIndex ?? 0);
+  if (!store.ok) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId,
+      reason: store.reason || "capture_store_failed",
+      expectedSelector: step.selectorValue || null,
+      actualUrl: null,
+      framePathJson: step.framePathJson
+    }, store.error);
+  }
+  return { ok: true, text, captured: true };
+}
 
 function resolveDynamicSelector(step, graph, rowIndex, opts = {}) {
   const valueKey = opts.valueKey || "selectorValue";
@@ -1045,9 +1596,37 @@ function appendAttributeFilter(sel, step, graph, rowIndex, opts = {}) {
   return `${sel}[${escapedName}="${escapedVal}"]`;
 }
 
+function resolveSystemValue(kind) {
+  const k = String(kind || "CurrentDateTime");
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  if (k === "CurrentDate") {
+    try { return d.toLocaleDateString("fa-IR"); } catch { return d.toISOString().slice(0, 10); }
+  }
+  if (k === "CurrentTime") {
+    try { return d.toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
+    catch { return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; }
+  }
+  if (k === "CurrentDateTime") {
+    try { return d.toLocaleString("fa-IR"); } catch { return d.toISOString(); }
+  }
+  if (k === "Timestamp") return String(Date.now());
+  if (k === "Uuid") {
+    try {
+      if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+    } catch { /* ignore */ }
+    return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+  if (k === "RandomInt") return String(Math.floor(Math.random() * 1e9));
+  return "";
+}
+
 function resolveStepParam(step, graph, rowIndex, opts = {}) {
   const cst = step.contentSourceType || "";
-  if (cst === "DataSource" || step?.valueFromSource || (step?.dataSourceId && step?.dynamicSourceColumnName && cst !== "Memory" && cst !== "Elements")) {
+  if (cst === "System") {
+    return resolveSystemValue(step.systemValueType || "CurrentDateTime");
+  }
+  if (cst === "DataSource" || step?.valueFromSource || (step?.dataSourceId && step?.dynamicSourceColumnName && cst !== "Memory" && cst !== "Elements" && cst !== "System")) {
     const ds = findDataSourceForValue(step, graph);
     const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0);
     if (v != null && String(v).trim() !== "") return String(v);
@@ -1060,8 +1639,12 @@ function resolveStepParam(step, graph, rowIndex, opts = {}) {
 
 async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
   const cst = step.contentSourceType || "";
+  if (cst === "System") {
+    return resolveSystemValue(step.systemValueType || "CurrentDateTime");
+  }
   if (cst === "Memory") {
-    const name = String(step.memoryVariableName || "").trim();
+    const nameKey = opts.memoryNameKey || "memoryVariableName";
+    const name = String(step[nameKey] || step.memoryVariableName || "").trim();
     if (!name) return "";
     const vars = await getPlayMemoryVars();
     return vars[name] != null ? String(vars[name]) : "";
@@ -1160,12 +1743,19 @@ async function setPlayMemoryVar(name, value) {
 }
 
 async function storeCapturedContent(step, graph, text, rowIndex) {
-  const cst = step.contentSourceType || "Memory";
-  if (cst === "DataSource") {
-    const ds = findDataSourceForValue(step, graph);
-    const col = step.dynamicSourceColumnName;
+  let dest = step.saveTargetType || "";
+  if (!dest) {
+    // Legacy: contentSourceType was destination before value-source split.
+    dest = (step.contentSourceType === "DataSource") ? "DataSource" : "Memory";
+  }
+  if (dest === "DataSource") {
+    const dsId = step.saveDataSourceId != null ? step.saveDataSourceId : step.dataSourceId;
+    const col = step.saveColumnName || step.dynamicSourceColumnName;
+    const sources = graph?.dataSources || [];
+    const ds = (dsId != null && sources.find((d) => Number(d.id) === Number(dsId)))
+      || findDataSourceForValue(step, graph);
     if (!ds || !col) {
-      return { ok: false, error: "منبع/ستون مقصد خواندن مشخص نیست.", reason: "missing_save_target" };
+      return { ok: false, error: "منبع/ستون مقصد ذخیره مشخص نیست.", reason: "missing_save_target" };
     }
     ds.cells = ds.cells || [];
     const idx = Number(rowIndex) || 0;

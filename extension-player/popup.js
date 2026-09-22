@@ -17,10 +17,12 @@ async function refresh() {
   if (playing && !paused) {
     playPauseBtn.textContent = "پاز";
     playPauseBtn.className = "mode-pause";
+    playPauseBtn.dataset.mode = "pause";
     playPauseBtn.disabled = false;
   } else {
-    playPauseBtn.textContent = "اجرا";
+    playPauseBtn.textContent = (playing && paused) ? "ادامه" : "اجرا";
     playPauseBtn.className = "mode-play";
+    playPauseBtn.dataset.mode = "play";
     playPauseBtn.disabled = playing ? false : !canStart;
   }
   stopBtn.hidden = !playing;
@@ -40,32 +42,43 @@ async function refresh() {
 document.getElementById("refresh").addEventListener("click", refresh);
 
 document.getElementById("playpause").addEventListener("click", async () => {
-  const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({}));
-  const playing = !!(state.playing || state.play?.playing);
-  const paused = !!(state.play?.paused);
+  const btn = document.getElementById("playpause");
+  const mode = btn.dataset.mode || (btn.classList.contains("mode-pause") ? "pause" : "play");
 
-  if (playing && !paused) {
-    await chrome.runtime.sendMessage({ type: "pausePlay" });
-  } else if (playing && paused) {
-    await chrome.runtime.sendMessage({ type: "resumePlay" });
-  } else {
-    const { lastPlayRequest } = await chrome.storage.local.get("lastPlayRequest").catch(() => ({}));
-    const taskId = lastPlayRequest?.taskId || state.play?.taskId;
-    if (!taskId) {
-      document.getElementById("status").textContent = "فرآیندی برای اجرا نیست — از پورتال اجرا کنید.";
-      return;
+  if (mode === "pause") {
+    const res = await chrome.runtime.sendMessage({ type: "pausePlay" })
+      .catch((err) => ({ ok: false, error: err?.message || String(err) }));
+    if (res?.ok === false && res?.error) {
+      document.getElementById("status").textContent = res.error;
     }
-    const [active] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
-    const res = await chrome.runtime.sendMessage({
-      type: "startPlay",
-      taskId: Number(taskId),
-      runMode: lastPlayRequest?.runMode,
-      groupNodeId: lastPlayRequest?.groupNodeId || null,
-      stepNodeId: lastPlayRequest?.stepNodeId || null,
-      tabId: active?.id || null
-    }).catch((e) => ({ ok: false, error: e.message }));
-    if (!res?.ok && !res?.reloading) {
-      document.getElementById("status").textContent = res?.error || "خطا در شروع";
+  } else {
+    const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({}));
+    const playing = !!(state.playing || state.play?.playing);
+    const paused = !!(state.play?.paused);
+
+    if (playing && paused) {
+      await chrome.runtime.sendMessage({ type: "resumePlay" });
+    } else if (playing && !paused) {
+      await chrome.runtime.sendMessage({ type: "pausePlay" });
+    } else {
+      const { lastPlayRequest } = await chrome.storage.local.get("lastPlayRequest").catch(() => ({}));
+      const taskId = lastPlayRequest?.taskId || state.play?.taskId;
+      if (!taskId) {
+        document.getElementById("status").textContent = "فرآیندی برای اجرا نیست — از پورتال اجرا کنید.";
+        return;
+      }
+      const [active] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+      const res = await chrome.runtime.sendMessage({
+        type: "startPlay",
+        taskId: Number(taskId),
+        runMode: lastPlayRequest?.runMode,
+        groupNodeId: lastPlayRequest?.groupNodeId || null,
+        stepNodeId: lastPlayRequest?.stepNodeId || null,
+        tabId: active?.id || null
+      }).catch((e) => ({ ok: false, error: e.message }));
+      if (!res?.ok && !res?.reloading) {
+        document.getElementById("status").textContent = res?.error || "خطا در شروع";
+      }
     }
   }
   await refresh();

@@ -76,9 +76,10 @@ public class TasksController : Controller
     [AllowAnonymous]
     [IgnoreAntiforgeryToken]
     [RequestSizeLimit(20_000_000)]
-    public IActionResult ParseExcel(IFormFile file, string? title = null)
+    public IActionResult ParseExcel(IFormFile file)
     {
         // Local-first: parse only — sources attach to process properties in the browser.
+        // Title is always the uploaded file name (no separate title field).
         if (file is null || file.Length == 0)
             return BadRequest(new { message = "فایل اکسل لازم است." });
         var name = file.FileName ?? "";
@@ -89,9 +90,7 @@ public class TasksController : Controller
         try
         {
             using var stream = file.OpenReadStream();
-            var suggested = string.IsNullOrWhiteSpace(title)
-                ? Path.GetFileNameWithoutExtension(name)
-                : title;
+            var suggested = Path.GetFileNameWithoutExtension(name);
             return Json(_dataSources.ParseExcelOnly(stream, suggested));
         }
         catch (InvalidOperationException ex)

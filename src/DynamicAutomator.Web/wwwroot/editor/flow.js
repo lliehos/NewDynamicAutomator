@@ -134,7 +134,23 @@
     try { return JSON.parse(localStorage.getItem(tasksKey()) || "[]"); } catch { return []; }
   }
   function writeLocalTasks(tasks) {
-    localStorage.setItem(tasksKey(), JSON.stringify(tasks));
+    try {
+      localStorage.setItem(tasksKey(), JSON.stringify(tasks));
+    } catch (err) {
+      const name = err?.name || "";
+      const msg = String(err?.message || err || "");
+      if (name === "QuotaExceededError" || /quota|exceeded|full/i.test(msg)) {
+        const err2 = new Error(
+          "حافظهٔ مرورگر پر است — فایل اکسل/منبع خیلی بزرگ است. حجم را کم کنید یا منابع بلااستفاده را حذف کنید."
+        );
+        err2.code = "QUOTA";
+        err2.cause = err;
+        throw err2;
+      }
+      const err2 = new Error(`ذخیره در مرورگر ناموفق بود: ${msg || "خطای ناشناخته"}`);
+      err2.cause = err;
+      throw err2;
+    }
     window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: currentUser(), tasks } }));
   }
   function findLocalTask(id) {
@@ -301,7 +317,8 @@
   }
 
   async function save() {
-    if (!canModify || saving) return;
+    if (!canModify) return { ok: false, error: "ذخیره در حالت فقط‌مشاهده ممکن نیست." };
+    if (saving) return { ok: false, error: "ذخیرهٔ دیگری در حال انجام است — کمی بعد دوباره تلاش کنید." };
     saving = true;
     setSaveButtonsBusy(true);
     try {
@@ -330,9 +347,12 @@
       await new Promise((r) => setTimeout(r, 450));
       render();
       setStatus("ذخیره شد.", "success");
+      return { ok: true };
     } catch (err) {
-      setStatus("خطا در ذخیره", "error");
+      const detail = err?.message || String(err) || "خطا در ذخیره";
+      setStatus(detail, "error");
       console.error(err);
+      return { ok: false, error: detail };
     } finally {
       saving = false;
       setSaveButtonsBusy(false);
@@ -405,11 +425,12 @@
       return;
     }
     listEl.innerHTML = list.map((d) => {
-      const keys = (d.columnKeys || (d.columns || []).map((c) => c.key) || []).join("، ") || "—";
+      const keys = (d.columnKeys || (d.columns || []).map((c) => c.key || c.Key) || []).join("، ") || "—";
       const isMaster = Number(d.id) === Number(masterId);
+      const label = d.title || dataSourceFileTitle(d.fileName) || "منبع";
       return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}">
-        <span class="ds-title">${esc(d.title)}${isMaster ? `<span class="ds-badge-master">پیش‌فرض</span>` : ""}</span>
-        <div class="ds-meta">${d.columnCount || 0} ستون · ${d.rowCount || 0} ردیف${isMaster ? " · تکرار فرآیند" : " · قابل استفاده در گروه‌ها/اقدام‌ها"}</div>
+        <span class="ds-title">${esc(label)}${isMaster ? `<span class="ds-badge-master">پیش‌فرض</span>` : ""}</span>
+        <div class="ds-meta">${d.columnCount || 0} ستون · ${d.rowCount || 0} ردیف${d.fileName ? ` · ${esc(d.fileName)}` : ""}${isMaster ? " · تکرار فرآیند" : ""}</div>
         <div class="ds-keys">${esc(keys)}</div>
         ${canModify ? `<div class="ds-actions">
           ${isMaster
@@ -447,55 +468,184 @@
     return id;
   }
 
-  async function uploadDataSource() {
-    if (!canModify) return;
-    const fileInp = document.getElementById("ds-file");
-    const titleInp = document.getElementById("ds-title");
+  function dataSourceFileTitle(fileName) {
+    return String(fileName || "")
+      .replace(/\.(xlsx|xlsm)$/i, "")
+      .trim() || "منبع داده";
+  }
+
+  function setDsProgress(pct, label) {
+    const wrap = document.getElementById("ds-progress");
+    const bar = document.getElementById("ds-progress-bar");
+    const txt = document.getElementById("ds-progress-text");
     const statusEl = document.getElementById("ds-status");
-    const file = fileInp?.files?.[0];
-    if (!file) {
-      if (statusEl) statusEl.textContent = "یک فایل اکسل انتخاب کنید.";
+    if (wrap) wrap.hidden = false;
+    const p = Math.max(0, Math.min(100, Math.round(pct)));
+    if (bar) bar.style.width = `${p}%`;
+    if (txt) txt.textContent = `${p}%`;
+    if (statusEl && label) statusEl.textContent = label;
+  }
+
+  function hideDsProgress() {
+    const wrap = document.getElementById("ds-progress");
+    if (wrap) wrap.hidden = true;
+    const bar = document.getElementById("ds-progress-bar");
+    if (bar) bar.style.width = "0%";
+  }
+
+  function setDsDropzoneBusy(busy) {
+    const zone = document.getElementById("ds-dropzone");
+    if (!zone) return;
+    zone.classList.toggle("is-busy", !!busy);
+    zone.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+
+  function parseExcelViaServer(file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const title = dataSourceFileTitle(file.name);
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("title", title);
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/Tasks/ParseExcel");
+      xhr.responseType = "json";
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const ratio = e.total ? e.loaded / e.total : 0;
+        onProgress(8 + ratio * 62, "در حال ارسال و تبدیل اکسل به JSON…");
+      };
+      xhr.onload = () => {
+        const data = xhr.response && typeof xhr.response === "object"
+          ? xhr.response
+          : (() => { try { return JSON.parse(xhr.responseText || "{}"); } catch { return {}; } })();
+        if (xhr.status >= 200 && xhr.status < 300) {
+          onProgress(78, "تبدیل انجام شد — در حال اتصال به فرآیند…");
+          resolve(data);
+          return;
+        }
+        const serverMsg = data?.message || data?.title || data?.error;
+        const detail = serverMsg
+          ? String(serverMsg)
+          : `خطا در خواندن اکسل (کد ${xhr.status})`;
+        reject(new Error(detail));
+      };
+      xhr.onerror = () => reject(new Error("خطا در ارتباط با سرور هنگام تبدیل اکسل"));
+      xhr.onabort = () => reject(new Error("بارگذاری اکسل لغو شد"));
+      onProgress(4, "آماده‌سازی فایل…");
+      xhr.send(fd);
+    });
+  }
+
+  async function ingestDataSourceFile(file) {
+    if (!canModify || !file) return;
+    const statusEl = document.getElementById("ds-status");
+    const name = file.name || "";
+    if (!/\.(xlsx|xlsm)$/i.test(name)) {
+      const msg = "فقط فایل .xlsx / .xlsm با جدول تمیز پذیرفته می‌شود.";
+      if (statusEl) {
+        statusEl.textContent = msg;
+        statusEl.classList.add("is-error");
+      }
+      notifyDsError(msg);
       return;
     }
-    if (statusEl) statusEl.textContent = "در حال خواندن اکسل...";
-    const fd = new FormData();
-    fd.append("file", file);
-    const title = (titleInp?.value || "").trim() || file.name.replace(/\.(xlsx|xlsm)$/i, "");
-    fd.append("title", title);
+    setDsDropzoneBusy(true);
+    if (statusEl) statusEl.classList.remove("is-error");
+    setDsProgress(2, `خواندن «${name}»…`);
+
+    const prevSources = (graph.dataSources || []).slice();
+    const prevMaster = masterDataSourceId();
+    let rolledBack = false;
+
     try {
-      const res = await fetch("/Tasks/ParseExcel", { method: "POST", body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        if (statusEl) statusEl.textContent = data.message || "خطا در خواندن اکسل";
-        return;
+      const data = await parseExcelViaServer(file, setDsProgress);
+      const title = data.suggestedTitle || dataSourceFileTitle(name);
+      const cols = data.columns || [];
+      const keys = data.columnKeys || cols.map((c) => c.key || c.Key).filter(Boolean);
+      if (!keys.length) {
+        throw new Error("فایل اکسل ستون معتبری ندارد (ردیف اول باید هدر باشد).");
       }
-      graph.dataSources = graph.dataSources || [];
+      if (!(data.rowCount > 0) && !(Array.isArray(data.cells) && data.cells.length)) {
+        throw new Error("هیچ سطر داده‌ای در جدول پیدا نشد.");
+      }
+
+      setDsProgress(88, "ذخیره در حافظهٔ مرورگر…");
       const entry = {
         id: nextDataSourceId(),
-        title: data.suggestedTitle || title,
-        columnCount: data.columnCount || 0,
+        title,
+        fileName: name,
+        columnCount: data.columnCount || keys.length,
         rowCount: data.rowCount || 0,
-        columnKeys: data.columnKeys || (data.columns || []).map((c) => c.key),
-        columns: data.columns || [],
+        columnKeys: keys,
+        columns: cols,
         cells: data.cells || []
       };
-      graph.dataSources.push(entry);
-      if (!masterDataSourceId()) setMasterDataSource(entry.id);
-      else ensureDefaultDataSource();
-      if (titleInp) titleInp.value = "";
-      if (fileInp) fileInp.value = "";
-      if (statusEl) {
-        const isDefault = Number(masterDataSourceId()) === Number(entry.id);
-        statusEl.textContent = isDefault
-          ? `منبع «${entry.title}» اضافه و به‌عنوان پیش‌فرض تنظیم شد (${entry.rowCount} ردیف).`
-          : `منبع «${entry.title}» اضافه شد (${entry.rowCount} ردیف).`;
+
+      // Attach only for the save attempt — rollback if persist fails.
+      graph.dataSources = prevSources.concat([entry]);
+      if (!prevMaster) setMasterDataSource(entry.id);
+      else {
+        setMasterDataSource(prevMaster);
+        ensureDefaultDataSource();
       }
-      await save();
+
+      setDsProgress(96, "چسباندن منبع به فرآیند…");
+      const saved = await save();
+      if (!saved?.ok) {
+        throw new Error(saved?.error || "ذخیرهٔ منبع در حافظهٔ مرورگر ناموفق بود.");
+      }
+
+      setDsProgress(100, "تمام");
+      const isDefault = Number(masterDataSourceId()) === Number(entry.id);
+      if (statusEl) {
+        statusEl.classList.remove("is-error");
+        statusEl.textContent = isDefault
+          ? `منبع «${entry.title}» اضافه و به‌عنوان پیش‌فرض تنظیم شد (${entry.rowCount} ردیف · ${entry.columnCount} ستون).`
+          : `منبع «${entry.title}» به فرآیند اضافه شد (${entry.rowCount} ردیف · ${entry.columnCount} ستون).`;
+      }
+      const fileInp = document.getElementById("ds-file");
+      if (fileInp) fileInp.value = "";
       renderInspector();
       render();
     } catch (e) {
-      if (statusEl) statusEl.textContent = e.message || "خطا در ارتباط با سرور";
+      // Never keep a half-added source box when persist/parse failed.
+      graph.dataSources = prevSources;
+      if (prevMaster != null) setMasterDataSource(prevMaster);
+      else setMasterDataSource(null);
+      ensureDefaultDataSource({ forceForRepeat: true });
+      rolledBack = true;
+
+      const detail = e?.message || String(e) || "خطا در بارگذاری منبع";
+      if (statusEl) {
+        statusEl.classList.add("is-error");
+        statusEl.textContent = detail;
+      }
+      notifyDsError(detail);
+      renderDataSources();
+    } finally {
+      setDsDropzoneBusy(false);
+      setTimeout(hideDsProgress, rolledBack ? 200 : 500);
     }
+  }
+
+  function notifyDsError(message) {
+    try {
+      window.dispatchEvent(new CustomEvent("da-notify", {
+        detail: { message: String(message || "خطا در بارگذاری منبع"), type: "error" }
+      }));
+    } catch { /* ignore */ }
+    try { setStatus(String(message || "خطا در بارگذاری منبع"), "error"); } catch { /* ignore */ }
+  }
+
+  async function uploadDataSource() {
+    const fileInp = document.getElementById("ds-file");
+    const file = fileInp?.files?.[0];
+    if (!file) {
+      const statusEl = document.getElementById("ds-status");
+      if (statusEl) statusEl.textContent = "فایل را بکشید یا برای انتخاب کلیک کنید.";
+      return;
+    }
+    await ingestDataSourceFile(file);
   }
 
   async function deleteDataSource(sourceId) {
@@ -507,6 +657,10 @@
       if (n.kind !== "start" && Number(n.dataSourceId) === Number(sourceId)) n.dataSourceId = null;
       if (Number(n.sourceId) === Number(sourceId)) n.sourceId = null;
       if (Number(n.selectorDataSourceId) === Number(sourceId)) n.selectorDataSourceId = null;
+      if (Number(n.equalSelectorDataSourceId) === Number(sourceId)) n.equalSelectorDataSourceId = null;
+      if (Number(n.attributeDataSourceId) === Number(sourceId)) n.attributeDataSourceId = null;
+      if (Number(n.equalAttributeDataSourceId) === Number(sourceId)) n.equalAttributeDataSourceId = null;
+      if (Number(n.saveDataSourceId) === Number(sourceId)) n.saveDataSourceId = null;
     });
     const statusEl = document.getElementById("ds-status");
     if (statusEl) statusEl.textContent = "منبع حذف شد — ذخیره شد.";
@@ -520,18 +674,25 @@
     return `
       <div class="insp-section-title">منابع داده فرآیند (${count})</div>
       <p class="palette-hint" style="margin:0 0 8px;line-height:1.7">
-        فرآیند می‌تواند چند منبع داشته باشد؛ یکی باید <b>پیش‌فرض</b> باشد
-        (برای تکرار بر اساس ردیف‌های منبع). بقیه در گروه‌ها و اقدام‌ها قابل انتخاب‌اند.
+        عنوان هر منبع همان نام فایل اکسل است. اکسل باید جدول تمیز باشد
+        (هدر در سطر اول، بدون Merge). منابع در همهٔ المان‌های فرآیند قابل انتخاب‌اند.
       </p>
-      <div class="insp-field">
-        <label>عنوان منبع</label>
-        <input type="text" id="ds-title" placeholder="مثلاً مشتریان" ${disabled} />
+      <div class="ds-dropzone${canModify ? "" : " is-disabled"}" id="ds-dropzone" tabindex="${canModify ? "0" : "-1"}" role="button" aria-label="بارگذاری اکسل منبع داده">
+        <input type="file" id="ds-file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ${disabled} hidden />
+        <div class="ds-dropzone-inner">
+          <span class="ds-dropzone-icon" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0l-4 4m4-4l4 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 14v4a2 2 0 002 2h12a2 2 0 002-2v-4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+          </span>
+          <span class="ds-dropzone-title">بکشید و رها کنید یا کلیک کنید</span>
+          <span class="ds-dropzone-hint">فقط .xlsx با هدر معتبر در سطر اول</span>
+        </div>
+        <div class="ds-progress" id="ds-progress" hidden>
+          <div class="ds-progress-track">
+            <div class="ds-progress-bar" id="ds-progress-bar"></div>
+          </div>
+          <span class="ds-progress-text" id="ds-progress-text">0%</span>
+        </div>
       </div>
-      <div class="insp-field">
-        <label>فایل اکسل</label>
-        <input type="file" id="ds-file" accept=".xlsx,.xlsm" ${disabled} />
-      </div>
-      <button type="button" class="btn-flow" id="btn-ds-upload" style="width:100%" ${disabled}>افزودن منبع از اکسل</button>
       <div id="ds-status" class="ds-status"></div>
       <ul class="ds-list" id="ds-list"></ul>
     `;
@@ -605,7 +766,48 @@
   }
 
   function bindDataSourcesPanel() {
-    document.getElementById("btn-ds-upload")?.addEventListener("click", uploadDataSource);
+    const zone = document.getElementById("ds-dropzone");
+    const fileInp = document.getElementById("ds-file");
+    if (zone && fileInp && canModify) {
+      const openPicker = () => {
+        if (zone.classList.contains("is-busy")) return;
+        fileInp.click();
+      };
+      zone.addEventListener("click", (e) => {
+        if (e.target === fileInp) return;
+        e.preventDefault();
+        openPicker();
+      });
+      zone.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openPicker();
+        }
+      });
+      ["dragenter", "dragover"].forEach((ev) => {
+        zone.addEventListener(ev, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          zone.classList.add("is-dragover");
+        });
+      });
+      ["dragleave", "drop"].forEach((ev) => {
+        zone.addEventListener(ev, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (ev === "dragleave") zone.classList.remove("is-dragover");
+        });
+      });
+      zone.addEventListener("drop", async (e) => {
+        zone.classList.remove("is-dragover");
+        const file = e.dataTransfer?.files?.[0];
+        if (file) await ingestDataSourceFile(file);
+      });
+      fileInp.addEventListener("change", async () => {
+        const file = fileInp.files?.[0];
+        if (file) await ingestDataSourceFile(file);
+      });
+    }
     renderDataSources();
   }
 
@@ -723,30 +925,84 @@
 
   const STEP_STROKE = "#ff9f43";
   const STEP_FILL = "#fff8f0";
+  /** Action with ignoreError ON — fill leans green */
+  const STEP_STROKE_IGNORE = "#28c76f";
+  const STEP_FILL_IGNORE = "#e8f6ee";
   const COND_STROKE = "#8b9098";
   const COND_FILL = "#eceff2";
-  /** Root process start — strong green */
+  /** Root process start — strong green (ignorePlayError ON / default) */
   const START_FILL_ROOT = "#159a55";
   const START_STROKE_ROOT = "#0d7a40";
+  /** Root start when ignorePlayError is OFF — lean orange */
+  const START_FILL_ROOT_WARN = "#e8943a";
+  const START_STROKE_ROOT_WARN = "#c66f18";
   /** Nested group start — softer / faded green */
   const START_FILL_NESTED = "#b7e5c8";
   const START_STROKE_NESTED = "#7bc99a";
+  const START_FILL_NESTED_WARN = "#ffe0c2";
+  const START_STROKE_NESTED_WARN = "#e0a060";
+
+  function startIgnoresPlayError(n) {
+    return n?.ignorePlayError !== false;
+  }
 
   function startFill(n) {
-    return n?.groupNodeId ? START_FILL_NESTED : START_FILL_ROOT;
+    const ok = startIgnoresPlayError(n);
+    if (n?.groupNodeId) return ok ? START_FILL_NESTED : START_FILL_NESTED_WARN;
+    return ok ? START_FILL_ROOT : START_FILL_ROOT_WARN;
   }
 
   function startStroke(n) {
-    return n?.groupNodeId ? START_STROKE_NESTED : START_STROKE_ROOT;
+    const ok = startIgnoresPlayError(n);
+    if (n?.groupNodeId) return ok ? START_STROKE_NESTED : START_STROKE_NESTED_WARN;
+    return ok ? START_STROKE_ROOT : START_STROKE_ROOT_WARN;
+  }
+
+  function startLabelFill(n) {
+    if (n?.groupNodeId) {
+      return startIgnoresPlayError(n) ? "#2f6b45" : "#8a4b12";
+    }
+    return "#fff";
+  }
+
+  function stepIgnoresError(n) {
+    return n?.ignoreError === true;
+  }
+
+  function stepFill(n) {
+    return stepIgnoresError(n) ? STEP_FILL_IGNORE : STEP_FILL;
+  }
+
+  function stepStroke(n) {
+    return stepIgnoresError(n) ? STEP_STROKE_IGNORE : STEP_STROKE;
   }
 
   function defaultStrokeFor(n) {
     if (!n) return "#e4e1f5";
     if (n.kind === "start") return startStroke(n);
     if (n.kind === "group") return "#9b92f8";
-    if (isActionNode(n)) return STEP_STROKE;
+    if (isActionNode(n)) return stepStroke(n);
     if (n.kind === "condition") return COND_STROKE;
     return "#e4e1f5";
+  }
+
+  /** Slightly deeper tone of a hex stroke — used as the “strong” end of the invalid blink. */
+  function intensifyStroke(hex) {
+    const s = String(hex || "").trim();
+    const m = /^#([0-9a-fA-F]{6})$/.exec(s);
+    if (!m) return s || "#7367f0";
+    const n = parseInt(m[1], 16);
+    let r = (n >> 16) & 255;
+    let g = (n >> 8) & 255;
+    let b = n & 255;
+    r = Math.max(0, Math.min(255, Math.round(r * 0.72)));
+    g = Math.max(0, Math.min(255, Math.round(g * 0.72)));
+    b = Math.max(0, Math.min(255, Math.round(b * 0.72)));
+    return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)}`;
+  }
+
+  function validityStrokeFor(n) {
+    return intensifyStroke(defaultStrokeFor(n));
   }
 
   /** Selection thickens the border only — never changes stroke color. */
@@ -762,11 +1018,12 @@
   }
 
   /** SVG path fragments (viewBox 0 0 24 24) for action-type icons on diagram boxes. */
-  function actionTypeIconSpec(at) {
-    const stroke = { fill: "none", stroke: STEP_STROKE, "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" };
+  function actionTypeIconSpec(at, strokeColor) {
+    const color = strokeColor || STEP_STROKE;
+    const stroke = { fill: "none", stroke: color, "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" };
     switch (at) {
       case "Click":
-        return [{ d: "M9 4l2 12 2.5-3.5L17 16l1.5-1.5-3.5-2.5L18 9z", ...stroke, fill: STEP_STROKE, "fill-opacity": .15 }];
+        return [{ d: "M9 4l2 12 2.5-3.5L17 16l1.5-1.5-3.5-2.5L18 9z", ...stroke, fill: color, "fill-opacity": .15 }];
       case "DoubleClick":
         return [
           { d: "M8 5l1.6 9 2-2.8L15 14l1.2-1.2-2.8-2L16 8z", ...stroke },
@@ -823,7 +1080,7 @@
     const tip = document.createElementNS(ns, "title");
     tip.textContent = actionTypeLabel(n.actionType);
     g.appendChild(tip);
-    actionTypeIconSpec(n.actionType || "Click").forEach((spec) => {
+    actionTypeIconSpec(n.actionType || "Click", stepStroke(n)).forEach((spec) => {
       const { d, ...attrs } = spec;
       g.appendChild(el("path", { d, ...attrs }));
     });
@@ -1536,12 +1793,62 @@
       if (e.to !== n.id || e.kind === "contains" || e.kind === "parent") continue;
       const src = nodeById(e.from);
       if (!src) continue;
-      const exit = roughExit(src, n, e.kind);
+      // Geometric exit only — avoid recursion with outgoingAnchor / conditionExitPoint.
+      const tc = centerOf(n);
+      const exit = src.kind === "condition"
+        ? nearestConditionCorner(src, tc.x, tc.y)
+        : attachPoint(src, tc.x, tc.y);
       const entry = attachPoint(n, exit.x, exit.y);
       if (n.kind === "condition") keys.add(conditionTipName(n, entry));
       else keys.add(detectSide(n, entry));
     }
     return keys;
+  }
+
+  /** Side of a rect node that best faces a world point. */
+  function sideTowardPoint(n, px, py) {
+    return detectSide(n, nearestSideMid(n, px, py));
+  }
+
+  /**
+   * Prefer an outgoing side that is NOT where an incoming arrow already lands.
+   * Still bias toward the target when that side is free.
+   */
+  function pickOutgoingSide(n, towardX, towardY) {
+    const occupied = occupiedIncomingKeys(n);
+    const ordered = [];
+    if (towardX != null && towardY != null) {
+      ordered.push(sideTowardPoint(n, towardX, towardY));
+    }
+    for (const s of ["right", "bottom", "top", "left"]) {
+      if (!ordered.includes(s)) ordered.push(s);
+    }
+    return ordered.find((s) => !occupied.has(s)) || ordered[0] || "right";
+  }
+
+  /** World anchor for a rect/start/group out-port / edge exit. */
+  function outgoingAnchor(n, towardX, towardY) {
+    const side = pickOutgoingSide(n, towardX, towardY);
+    return anchorOn(n, side);
+  }
+
+  /**
+   * Prefer a diamond tip that is NOT under an incoming arrow tip.
+   * Biases toward the target when that tip is free.
+   */
+  function pickOutgoingConditionTip(n, towardX, towardY, occupiedExtra) {
+    const occupied = new Set(occupiedIncomingKeys(n));
+    if (occupiedExtra) {
+      for (const k of occupiedExtra) occupied.add(k);
+    }
+    const prefer = [];
+    if (towardX != null && towardY != null) {
+      prefer.push(conditionTipName(n, nearestConditionCorner(n, towardX, towardY)));
+    }
+    for (const name of ["right", "bottom", "top", "left"]) {
+      if (!prefer.includes(name)) prefer.push(name);
+    }
+    return pickFreeConditionTip(n, occupied, prefer);
   }
 
   function pickFreeConditionTip(n, occupied, preferNames) {
@@ -1555,8 +1862,8 @@
   }
 
   /**
-   * Place success/fail exits toward their targets (nearest tip).
-   * If both resolve to the same tip, keep them side-by-side — never stacked.
+   * Place success/fail exits toward their targets, but never on an incoming tip
+   * when another tip is free. If both land on the same tip, keep them side-by-side.
    */
   function conditionBranchExits(n) {
     const c = centerOf(n);
@@ -1567,8 +1874,10 @@
     const okToward = okT ? centerOf(okT) : { x: c.x + 140, y: c.y - 28 };
     const failToward = failT ? centerOf(failT) : { x: c.x + 140, y: c.y + 28 };
 
-    let success = nearestConditionCorner(n, okToward.x, okToward.y);
-    let fail = nearestConditionCorner(n, failToward.x, failToward.y);
+    let success = pickOutgoingConditionTip(n, okToward.x, okToward.y);
+    let fail = pickOutgoingConditionTip(n, failToward.x, failToward.y, [
+      conditionTipName(n, success)
+    ]);
 
     if (sameAnchor(success, fail)) {
       success = offsetAlongTipTangent(success, -12);
@@ -1593,14 +1902,14 @@
       success = pair.success;
       occupied.add(conditionTipName(n, success));
     } else {
-      success = pickFreeConditionTip(n, occupied, ["top", "right", "bottom", "left"]);
+      success = pickOutgoingConditionTip(n, n.x + sizeOf(n).w + 80, n.y - 40, occupied);
       occupied.add(conditionTipName(n, success));
     }
     if (hasFail) {
       fail = pair.fail;
       occupied.add(conditionTipName(n, fail));
     } else {
-      fail = pickFreeConditionTip(n, occupied, ["bottom", "right", "top", "left"]);
+      fail = pickOutgoingConditionTip(n, n.x + sizeOf(n).w + 80, n.y + sizeOf(n).h + 40, occupied);
       occupied.add(conditionTipName(n, fail));
     }
     if (sameAnchor(success, fail)) {
@@ -1612,42 +1921,39 @@
 
   /**
    * Local (lx,ly) for rect/start out-port.
-   * Live → toward actual target side; idle → free side (avoid incoming tip).
+   * Always prefer a side without an incoming arrow tip.
    */
   function outPortLocal(n, edgeKind = "next") {
-    const live = portHasOutgoing(n.id, edgeKind);
-    if (live) {
-      const e = diagramEdges().find((x) => x.from === n.id && x.kind === edgeKind);
-      const to = e && nodeById(e.to);
-      if (to) {
-        const a = attachPoint(n, centerOf(to).x, centerOf(to).y);
-        return { lx: a.x - n.x, ly: a.y - n.y };
-      }
+    const e = diagramEdges().find((x) => x.from === n.id && x.kind === edgeKind);
+    const to = e && nodeById(e.to);
+    let towardX;
+    let towardY;
+    if (to) {
+      const c = centerOf(to);
+      towardX = c.x;
+      towardY = c.y;
+    } else {
+      const s = sizeOf(n);
+      towardX = n.x + s.w + 120;
+      towardY = n.y + s.h / 2;
     }
-    const occupied = occupiedIncomingKeys(n);
-    const prefer = ["right", "bottom", "top", "left"];
-    const side = prefer.find((s) => !occupied.has(s)) || "right";
-    const a = anchorOn(n, side);
+    const a = outgoingAnchor(n, towardX, towardY);
     return { lx: a.x - n.x, ly: a.y - n.y };
   }
 
   /** Exit tip for a condition branch — nearest toward target, ports may sit side-by-side. */
   function conditionExitPoint(n, edgeKind, towardX, towardY) {
     if (edgeKind !== "success" && edgeKind !== "fail") {
-      return nearestConditionCorner(n, towardX, towardY);
+      return pickOutgoingConditionTip(n, towardX, towardY);
     }
     const hasEdge = diagramEdges().some((e) => e.from === n.id && e.kind === edgeKind);
     // While dragging a new branch, follow the cursor tip; keep clear of the sibling port.
     if (!hasEdge && towardX != null && towardY != null) {
       const draw = conditionPortsForDraw(n);
       const other = edgeKind === "success" ? draw.fail : draw.success;
-      let tip = nearestConditionCorner(n, towardX, towardY);
-      // Prefer starting from the idle port's parked tip when cursor is near it;
-      // otherwise follow cursor but avoid landing on incoming tip / sibling.
-      const occupied = occupiedIncomingKeys(n);
-      if (occupied.has(conditionTipName(n, tip))) {
-        tip = edgeKind === "success" ? draw.success : draw.fail;
-      }
+      let tip = pickOutgoingConditionTip(n, towardX, towardY, [
+        conditionTipName(n, other)
+      ]);
       if (sameAnchor(tip, other)) {
         tip = offsetAlongTipTangent(tip, edgeKind === "success" ? -12 : 12);
       }
@@ -1699,7 +2005,7 @@
   /** Rough exit used only to classify which target side an edge would hit. */
   function roughExit(from, to, edgeKind) {
     const tc = centerOf(to);
-    if (from.kind === "condition") return conditionExitPoint(from, edgeKind, tc.x, tc.y);
+    if (from.kind === "condition") return nearestConditionCorner(from, tc.x, tc.y);
     return attachPoint(from, tc.x, tc.y);
   }
 
@@ -1736,18 +2042,19 @@
   /** Exit of a node toward a world point (rubber-band + routing). */
   function nearestSideToward(n, x, y, edgeKind) {
     if (n.kind === "condition") return conditionExitPoint(n, edgeKind, x, y);
-    return attachPoint(n, x, y);
+    return outgoingAnchor(n, x, y);
   }
 
   /**
    * Route: condition tips / group mid-sides; fan stacked arrivals on same side.
+   * Exit prefers a side/tip without an incoming arrow.
    */
   function nearestAnchors(from, to, edgeKind, edgeId) {
     const tc = centerOf(to);
     const fc = centerOf(from);
     const a = from.kind === "condition"
       ? conditionExitPoint(from, edgeKind, tc.x, tc.y)
-      : attachPoint(from, tc.x, tc.y);
+      : outgoingAnchor(from, tc.x, tc.y);
     let b = attachPoint(to, a.x, a.y);
     if (Math.hypot(b.x - a.x, b.y - a.y) < 1) {
       b = attachPoint(to, fc.x, fc.y);
@@ -2008,20 +2315,25 @@
     const g = el("g", { class: "node", "data-id": n.id, transform: `translate(${n.x},${n.y})` });
     if (selected.has(n.id)) g.classList.add("node-on");
     if (isActionNode(n) && n.isActive === false) g.classList.add("node-inactive");
+    const validity = validateNode(n);
+    if (!validity.ok) g.classList.add("node-invalid");
     const fill = n.kind === "start" ? startFill(n)
       : n.kind === "group" ? "#fff"
       : n.kind === "condition" ? COND_FILL
-      : isActionNode(n) ? STEP_FILL
+      : isActionNode(n) ? stepFill(n)
       : "#fff";
-    const stroke = defaultStrokeFor(n);
+    const baseStroke = defaultStrokeFor(n);
+    const stroke = validity.ok ? baseStroke : validityStrokeFor(n);
     const sw = strokeWidthFor(n, selected.has(n.id));
     if (n.kind === "condition") {
       const verts = conditionDiamondLocal(w, h);
       const pts = verts.map((v) => `${v.lx},${v.ly}`).join(" ");
-      g.appendChild(el("polygon", {
+      const poly = el("polygon", {
         points: pts, fill, stroke,
         "stroke-width": sw
-      }));
+      });
+      if (!validity.ok) poly.style.setProperty("--da-stroke", stroke);
+      g.appendChild(poly);
     } else {
       const rx = n.kind === "start" ? h / 2 : isActionNode(n) ? 8 : 14;
       const rectAttrs = {
@@ -2031,7 +2343,15 @@
       if (n.kind === "group") {
         rectAttrs["stroke-dasharray"] = "3.5 3.5";
       }
-      g.appendChild(el("rect", rectAttrs));
+      const rect = el("rect", rectAttrs);
+      if (!validity.ok) rect.style.setProperty("--da-stroke", stroke);
+      g.appendChild(rect);
+    }
+    if (!validity.ok) {
+      const tip = document.createElementNS(ns, "title");
+      tip.setAttribute("data-da-validity", "1");
+      tip.textContent = "نامعتبر: " + validity.reasons.join(" · ");
+      g.insertBefore(tip, g.firstChild);
     }
     let label = n.title;
     let fontSize = 12;
@@ -2090,7 +2410,7 @@
           : n.kind === "start" ? (n.groupNodeId ? h / 2 + 4 : 32)
           : h / 2 + fontSize * 0.35,
         "text-anchor": labelAnchor,
-        fill: n.kind === "start" ? (n.groupNodeId ? "#2f6b45" : "#fff") : "#4b465c",
+        fill: n.kind === "start" ? startLabelFill(n) : "#4b465c",
         "font-size": fontSize,
         "font-family": "Vazirmatn, Tahoma"
       });
@@ -2110,13 +2430,10 @@
       g.appendChild(makeOutPort(n.id, "fail", pair.fail.x - n.x, pair.fail.y - n.y, 7, "#ea5455"));
     } else if (n.kind === "start") {
       const p = outPortLocal(n, "next");
-      g.appendChild(makeOutPort(
-        n.id, "next", p.lx, p.ly, 7,
-        n.groupNodeId ? START_STROKE_NESTED : START_STROKE_ROOT
-      ));
+      g.appendChild(makeOutPort(n.id, "next", p.lx, p.ly, 7, startStroke(n)));
     } else if (isActionNode(n)) {
       const p = outPortLocal(n, "next");
-      g.appendChild(makeOutPort(n.id, "next", p.lx, p.ly, 6, STEP_STROKE));
+      g.appendChild(makeOutPort(n.id, "next", p.lx, p.ly, 6, stepStroke(n)));
     }
     if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify) {
       g.appendChild(makeCloneButton(w, h, n.kind === "condition" ? "condition" : n.kind === "group" ? "group" : "action"));
@@ -2865,7 +3182,8 @@
           }
         } else if (k === "dataSourceId" || k === "selectorDataSourceId" || k === "sourceId"
           || k === "equalSelectorDataSourceId"
-          || k === "attributeDataSourceId" || k === "equalAttributeDataSourceId") {
+          || k === "attributeDataSourceId" || k === "equalAttributeDataSourceId"
+          || k === "saveDataSourceId") {
           n[k] = inp.value ? Number(inp.value) : null;
           if (k === "dataSourceId" && n.kind === "start") setMasterDataSource(n.dataSourceId);
         } else if (k === "loopCount") {
@@ -2925,13 +3243,43 @@
         if (k === "repeatSourceType") {
           toggleInspFields(n.repeatSourceType);
           renderInspector();
+          syncNodeValidity(n);
           return;
         }
-        if (k === "actionType" || k === "conditionType" || k === "contentSourceType" || k === "equalityType") {
+        if (k === "actionType" || k === "conditionType" || k === "contentSourceType" || k === "equalityType"
+          || k === "saveTargetType" || k === "systemValueType") {
           if (k === "conditionType") {
             n.contentSourceType = n.contentSourceType || "Constant";
+            if (inp.value === "SourceValue") {
+              if (!n.sourceId && !n.dataSourceId) {
+                n.sourceId = masterDataSourceId() || (graph.dataSources || [])[0]?.id || null;
+              }
+              const cols = dataSourceColumnKeys(n.sourceId || n.dataSourceId);
+              if (cols.length && !cols.includes(n.dynamicSourceColumnName)) {
+                n.dynamicSourceColumnName = cols[0];
+              }
+            }
+          }
+          if (k === "contentSourceType" && inp.value === "DataSource") {
+            if (!n.dataSourceId) {
+              n.dataSourceId = masterDataSourceId() || (graph.dataSources || [])[0]?.id || null;
+            }
+            const cols = dataSourceColumnKeys(n.dataSourceId);
+            if (cols.length && !cols.includes(n.dynamicSourceColumnName)) {
+              n.dynamicSourceColumnName = cols[0];
+            }
+          }
+          if (k === "saveTargetType" && inp.value === "DataSource") {
+            if (!n.saveDataSourceId) {
+              n.saveDataSourceId = masterDataSourceId() || (graph.dataSources || [])[0]?.id || null;
+            }
+            const cols = dataSourceColumnKeys(n.saveDataSourceId);
+            if (cols.length && !cols.includes(n.saveColumnName)) {
+              n.saveColumnName = cols[0];
+            }
           }
           renderInspector();
+          syncNodeValidity(n);
           return;
         }
         if (k === "selectorIsDynamic" || k === "equalSelectorIsDynamic"
@@ -2939,11 +3287,32 @@
           || k === "sourceId" || k === "moveLoop" || k === "valueFromSource" || k === "dataSourceId"
           || k === "dynamicSourceColumnName" || k === "selectorDynamicColumn"
           || k === "equalSelectorDynamicColumn" || k === "memoryVariableName"
+          || k === "sourceMemoryVariableName" || k === "saveDataSourceId" || k === "saveColumnName"
           || k === "hasAttribute" || k === "equalHasAttribute"
           || k === "attributeValueIsDynamic" || k === "equalAttributeValueIsDynamic"
           || k === "attributeDataSourceId" || k === "equalAttributeDataSourceId"
           || k === "attributeDynamicColumn" || k === "equalAttributeDynamicColumn"
           || k === "selectorWaitEnabled" || k === "equalSelectorWaitEnabled") {
+          if (k === "saveDataSourceId" || k === "dataSourceId" || k === "sourceId"
+            || k === "selectorDataSourceId" || k === "equalSelectorDataSourceId"
+            || k === "attributeDataSourceId" || k === "equalAttributeDataSourceId") {
+            /* numeric ids already applied above when type matches; ensure number here if came via this branch */
+            const picked = n[k];
+            if (k === "dataSourceId" || k === "sourceId" || k === "saveDataSourceId") {
+              const colKey = k === "saveDataSourceId" ? "saveColumnName" : "dynamicSourceColumnName";
+              const cols = dataSourceColumnKeys(picked);
+              if (cols.length && !cols.includes(n[colKey])) n[colKey] = cols[0];
+              else if (!cols.length) n[colKey] = "";
+            }
+            if (k === "selectorDataSourceId" && n.selectorDynamicColumn) {
+              const cols = dataSourceColumnKeys(picked);
+              if (cols.length && !cols.includes(n.selectorDynamicColumn)) n.selectorDynamicColumn = cols[0];
+            }
+            if (k === "equalSelectorDataSourceId" && n.equalSelectorDynamicColumn) {
+              const cols = dataSourceColumnKeys(picked);
+              if (cols.length && !cols.includes(n.equalSelectorDynamicColumn)) n.equalSelectorDynamicColumn = cols[0];
+            }
+          }
           if (isActionNode(n) && (n.valueFromSource || n.contentSourceType === "DataSource")) {
             syncStepParamFromSource(n);
           }
@@ -2956,14 +3325,19 @@
           );
           if (isSwitch) {
             clearTimeout(window.__daInspSwitchT);
-            window.__daInspSwitchT = setTimeout(() => renderInspector(), 300);
+            window.__daInspSwitchT = setTimeout(() => {
+              renderInspector();
+              syncNodeValidity(n);
+            }, 300);
           } else {
             renderInspector();
+            syncNodeValidity(n);
           }
           return;
         }
         if (k === "selectorWaitMs" || k === "equalSelectorWaitMs") {
           n[k] = Math.max(0, Number(inp.value) || 0);
+          syncNodeValidity(n);
           return;
         }
         if (k === "navigateUrl" && isActionNode(n)) {
@@ -2991,19 +3365,52 @@
   const DYN_SEL_PLACEHOLDER = "{مقدار پویا}";
 
   function stepNeedsSelector(actionType) {
-    return [
-      "Click", "DoubleClick", "RightClick", "Hover", "Enter",
-      "InputContent", "InsertContent", "LoadContent", "SaveContent", "TakeContent",
-      "WaitForLoading"
-    ].includes(actionType || "");
+    // Legacy helper — prefer stepShowsTargetSelector(node).
+    return stepShowsTargetSelector({ actionType });
   }
 
-  /** Actions that consume a value (constant / element / datasource / …). */
+  /**
+   * Target selector ("هدف روی صفحه"): element the action acts on.
+   * Capture: only when value source is page element.
+   */
+  function stepShowsTargetSelector(n) {
+    const at = (n && n.actionType) || "";
+    if (stepIsUrlAction(at)) return false;
+    if (at === "WaitTime" || at === "CloseFirstTab" || at === "CloseLastTab"
+      || at === "Refresh" || at === "NoAction" || !at) {
+      return false;
+    }
+    if (stepIsCapture(at)) {
+      migrateCaptureNode(n);
+      return normalizeStepValueSource(n) === "Elements";
+    }
+    return [
+      "Click", "DoubleClick", "RightClick", "Hover", "Enter",
+      "InputContent", "InsertContent", "LoadContent",
+      "WaitForLoading"
+    ].includes(at);
+  }
+
+  /** Value-source selector: when مقدار comes from a page element (non-capture). */
+  function stepShowsValueSelector(n) {
+    if (!n) return false;
+    if (stepIsCapture(n.actionType)) return false; // capture Elements uses هدف سلکتور
+    if (!stepReceivesValue(n.actionType)) return false;
+    if (!stepAllowsElementValue(n.actionType)) return false;
+    return normalizeStepValueSource(n) === "Elements";
+  }
+
+  /** Actions that consume a value (constant / element / datasource / memory / system). */
   function stepReceivesValue(actionType) {
     return [
       "InputContent", "InsertContent", "LoadContent",
       "WaitTime", "GoToUrl", "Navigate", "NewPage"
     ].includes(actionType || "");
+  }
+
+  function stepNeedsValueSource(n) {
+    const at = n?.actionType || "";
+    return stepReceivesValue(at) || stepIsCapture(at);
   }
 
   function stepIsCapture(actionType) {
@@ -3014,37 +3421,396 @@
     return actionType === "GoToUrl" || actionType === "Navigate" || actionType === "NewPage";
   }
 
+  /** Memory variables available as value source wherever «نوع مقدار» exists. */
   function stepAllowsMemoryValue(actionType) {
-    return actionType === "InsertContent" || actionType === "LoadContent";
+    return stepReceivesValue(actionType) || stepIsCapture(actionType);
   }
 
   function stepAllowsElementValue(actionType) {
-    return actionType === "InputContent" || actionType === "InsertContent" || actionType === "LoadContent";
+    if (actionType === "WaitTime") return false;
+    return actionType === "InputContent" || actionType === "InsertContent" || actionType === "LoadContent"
+      || stepIsUrlAction(actionType) || stepIsCapture(actionType);
+  }
+
+  function stepAllowsSystemValue(actionType) {
+    if (actionType === "WaitTime") return false;
+    return stepReceivesValue(actionType) || stepIsCapture(actionType);
+  }
+
+  const SYSTEM_VALUE_OPTIONS = [
+    ["CurrentDateTime", "تاریخ و زمان جاری"],
+    ["CurrentDate", "تاریخ جاری"],
+    ["CurrentTime", "زمان جاری"],
+    ["Timestamp", "برچسب زمانی (میلی‌ثانیه)"],
+    ["Uuid", "شناسه یکتا (UUID)"],
+    ["RandomInt", "عدد تصادفی"]
+  ];
+
+  function systemValueOptionsHtml(cur) {
+    const c = cur || "CurrentDateTime";
+    return SYSTEM_VALUE_OPTIONS.map(([v, t]) =>
+      `<option value="${v}" ${c === v ? "selected" : ""}>${t}</option>`
+    ).join("");
+  }
+
+  /** Legacy capture used contentSourceType as destination (Memory/DataSource). */
+  function migrateCaptureNode(n) {
+    if (!n || !stepIsCapture(n.actionType)) return;
+    if (n.saveTargetType === "Memory" || n.saveTargetType === "DataSource") return;
+    if (n.contentSourceType === "Memory" || n.contentSourceType === "DataSource") {
+      n.saveTargetType = n.contentSourceType;
+      n.contentSourceType = "Elements";
+    } else {
+      n.saveTargetType = "Memory";
+    }
+  }
+
+  function normalizeSaveTarget(n) {
+    migrateCaptureNode(n);
+    let t = n.saveTargetType || "Memory";
+    if (t !== "DataSource") t = "Memory";
+    n.saveTargetType = t;
+    return t;
+  }
+
+  /** Leaf validity (no group-container recursion). */
+  function validateNodeLeaf(n) {
+    if (!n) return { ok: true, reasons: [] };
+    if (isActionNode(n)) return validateActionNode(n);
+    if (n.kind === "condition") return validateConditionNode(n);
+    if (n.kind === "start") return validateStartNode(n);
+    return { ok: true, reasons: [] };
+  }
+
+  /** True if any descendant inside this group (nested groups included) fails leaf validation. */
+  function groupHasInvalidContent(groupId) {
+    const kids = (graph.nodes || []).filter((x) => x.groupNodeId === groupId);
+    for (const kid of kids) {
+      if (kid.kind === "group") {
+        if (groupHasInvalidContent(kid.id)) return true;
+        continue;
+      }
+      if (!validateNodeLeaf(kid).ok) return true;
+    }
+    return false;
+  }
+
+  function validateGroupNode(n) {
+    const reasons = [];
+    if (n?.id && groupHasInvalidContent(n.id)) {
+      reasons.push("داخل گروه المان نامعتبر وجود دارد");
+    }
+    return { ok: reasons.length === 0, reasons };
+  }
+
+  function validateNode(n) {
+    if (!n) return { ok: true, reasons: [] };
+    if (isActionNode(n)) return validateActionNode(n);
+    if (n.kind === "condition") return validateConditionNode(n);
+    if (n.kind === "start") return validateStartNode(n);
+    if (n.kind === "group") return validateGroupNode(n);
+    return { ok: true, reasons: [] };
+  }
+
+  function applyNodeValidityClass(g, n) {
+    if (!g || !n) return;
+    const v = validateNode(n);
+    g.classList.toggle("node-invalid", !v.ok);
+    const shape = g.querySelector(":scope > rect, :scope > polygon");
+    if (shape) {
+      const stroke = v.ok ? defaultStrokeFor(n) : validityStrokeFor(n);
+      shape.setAttribute("stroke", stroke);
+      if (!v.ok) {
+        shape.setAttribute("data-invalid", "1");
+        shape.style.setProperty("--da-stroke", stroke);
+      } else {
+        shape.removeAttribute("data-invalid");
+        shape.style.removeProperty("--da-stroke");
+        shape.style.removeProperty("stroke-opacity");
+      }
+    }
+    let tip = null;
+    for (const t of g.querySelectorAll("title")) {
+      if (t.getAttribute("data-da-validity") === "1") tip = t;
+    }
+    if (!v.ok) {
+      if (!tip) {
+        tip = document.createElementNS(ns, "title");
+        tip.setAttribute("data-da-validity", "1");
+        g.insertBefore(tip, g.firstChild);
+      }
+      tip.textContent = "نامعتبر: " + v.reasons.join(" · ");
+    } else if (tip) {
+      tip.remove();
+    }
+  }
+
+  function syncAncestorGroupValidity(n) {
+    let gid = n?.groupNodeId || null;
+    const seen = new Set();
+    while (gid && !seen.has(gid)) {
+      seen.add(gid);
+      const gNode = nodeById(gid);
+      if (!gNode) break;
+      const elG = world.querySelector(`g.node[data-id="${CSS.escape(String(gNode.id))}"]`);
+      if (elG) applyNodeValidityClass(elG, gNode);
+      gid = gNode.groupNodeId || null;
+    }
+  }
+
+  function syncNodeValidity(n) {
+    if (!n) return;
+    const g = world.querySelector(`g.node[data-id="${CSS.escape(String(n.id))}"]`);
+    if (g) applyNodeValidityClass(g, n);
+    syncAncestorGroupValidity(n);
+  }
+  function validateSelectorBlock(n, opts = {}) {
+    const valueKey = opts.valueKey || "selectorValue";
+    const dynFlag = opts.dynFlag || "selectorIsDynamic";
+    const dynCol = opts.dynCol || "selectorDynamicColumn";
+    const hasAttr = opts.hasAttr || "hasAttribute";
+    const attrName = opts.attrName || "attributeName";
+    const attrDyn = opts.attrDynFlag || "attributeValueIsDynamic";
+    const attrCol = opts.attrDynCol || "attributeDynamicColumn";
+    const label = opts.label || "سلکتور";
+
+    const sel = String(n[valueKey] || "").trim();
+    if (!sel) return { ok: false, reason: `${label} خالی است` };
+    if (n[dynFlag] === true) {
+      if (!selectorHasDynPlaceholder(sel)) {
+        return { ok: false, reason: `${label} پویا باید «{مقدار پویا}» یا {{ستون}} داشته باشد` };
+      }
+      if (sel.includes(DYN_SEL_PLACEHOLDER) && !String(n[dynCol] || "").trim()) {
+        return { ok: false, reason: `ستون ${label} پویا مشخص نیست` };
+      }
+    }
+    if (n[hasAttr] === true) {
+      if (!String(n[attrName] || "").trim()) {
+        return { ok: false, reason: `نام اتریبیوت ${label} خالی است` };
+      }
+      if (n[attrDyn] === true && !String(n[attrCol] || "").trim()) {
+        return { ok: false, reason: `ستون اتریبیوت پویای ${label} مشخص نیست` };
+      }
+    }
+    return { ok: true };
+  }
+
+  function validateDataSourcePick(n, opts = {}) {
+    const dsKey = opts.dsKey || "dataSourceId";
+    const colKey = opts.colKey || "dynamicSourceColumnName";
+    const dsId = n[dsKey] || n.sourceId || n.dataSourceId;
+    if (dsId == null || dsId === "") return { ok: false, reason: opts.dsReason || "منبع داده انتخاب نشده" };
+    if (!String(n[colKey] || "").trim()) {
+      return { ok: false, reason: opts.colReason || "ستون منبع داده انتخاب نشده" };
+    }
+    return { ok: true };
+  }
+
+  function validateActionNode(n) {
+    const reasons = [];
+    if (n.isActive === false) return { ok: true, reasons };
+    const at = n.actionType || "";
+    if (!at || at === "NoAction") return { ok: true, reasons };
+
+    if (stepShowsTargetSelector(n)) {
+      const v = validateSelectorBlock(n, { label: "سلکتور هدف" });
+      if (!v.ok) reasons.push(v.reason);
+    }
+
+    if (stepIsCapture(at)) {
+      migrateCaptureNode(n);
+      const src = normalizeStepValueSource(n);
+      if (src === "Constant") {
+        if (!String(n.constantValue || "").trim()) reasons.push("مقدار ثابت ذخیره خالی است");
+      } else if (src === "Elements") {
+        const v = validateSelectorBlock(n, { label: "سلکتور المان صفحه" });
+        if (!v.ok) reasons.push(v.reason);
+      } else if (src === "DataSource") {
+        const v = validateDataSourcePick(n);
+        if (!v.ok) reasons.push(v.reason);
+      } else if (src === "Memory") {
+        if (!String(n.sourceMemoryVariableName || "").trim()) {
+          reasons.push("متغیر منبع حافظه مشخص نیست");
+        }
+      } else if (src === "System") {
+        if (!String(n.systemValueType || "").trim()) {
+          reasons.push("نوع مقدار پیش‌فرض سیستم مشخص نیست");
+        }
+      }
+      const dest = normalizeSaveTarget(n);
+      if (dest === "Memory") {
+        if (!String(n.memoryVariableName || "").trim()) {
+          reasons.push("نام متغیر مقصد حافظه مشخص نیست");
+        }
+      } else {
+        const saveDs = n.saveDataSourceId != null ? n.saveDataSourceId : n.dataSourceId;
+        const saveCol = n.saveColumnName || (src === "DataSource" ? "" : n.dynamicSourceColumnName);
+        // When value is also DataSource, destination must use save* fields
+        if (src === "DataSource") {
+          if (saveDs == null || saveDs === "") reasons.push("منبع مقصد ذخیره انتخاب نشده");
+          if (!String(n.saveColumnName || "").trim()) reasons.push("ستون مقصد ذخیره انتخاب نشده");
+        } else {
+          const v = validateDataSourcePick({
+            dataSourceId: saveDs,
+            dynamicSourceColumnName: saveCol || n.dynamicSourceColumnName
+          }, { dsReason: "منبع مقصد ذخیره انتخاب نشده", colReason: "ستون مقصد ذخیره انتخاب نشده" });
+          if (!v.ok) reasons.push(v.reason);
+        }
+      }
+    } else if (stepReceivesValue(at)) {
+      const src = normalizeStepValueSource(n);
+      if (src === "Constant") {
+        if (at === "WaitTime") {
+          const ms = Number(n.constantValue);
+          if (!Number.isFinite(ms) || ms < 0 || String(n.constantValue ?? "").trim() === "") {
+            reasons.push("زمان انتظار مشخص نیست");
+          }
+        } else if (stepIsUrlAction(at)) {
+          const url = String(n.navigateUrl || n.constantValue || "").trim();
+          if (!url) reasons.push("آدرس ثابت خالی است");
+        } else if (!String(n.constantValue || "").trim()) {
+          reasons.push("مقدار ثابت خالی است");
+        }
+      } else if (src === "Elements") {
+        const v = validateSelectorBlock(n, {
+          valueKey: "equalSelectorValue",
+          dynFlag: "equalSelectorIsDynamic",
+          dynCol: "equalSelectorDynamicColumn",
+          hasAttr: "equalHasAttribute",
+          attrName: "equalAttributeName",
+          attrDynFlag: "equalAttributeValueIsDynamic",
+          attrCol: "equalAttributeDynamicColumn",
+          label: stepIsUrlAction(at) ? "سلکتور آدرس" : "سلکتور منبع مقدار"
+        });
+        if (!v.ok) reasons.push(v.reason);
+      } else if (src === "DataSource") {
+        const v = validateDataSourcePick(n);
+        if (!v.ok) reasons.push(v.reason);
+      } else if (src === "Memory") {
+        if (!String(n.memoryVariableName || "").trim()) {
+          reasons.push("متغیر حافظه مشخص نیست");
+        }
+      } else if (src === "System") {
+        if (!String(n.systemValueType || "").trim()) {
+          reasons.push("نوع مقدار پیش‌فرض سیستم مشخص نیست");
+        }
+      }
+    }
+
+    return { ok: reasons.length === 0, reasons };
+  }
+
+  function validateConditionNode(n) {
+    const reasons = [];
+    const ct = n.conditionType || "None";
+    if (!ct || ct === "None") {
+      reasons.push("نوع شرط انتخاب نشده");
+      return { ok: false, reasons };
+    }
+    const eq = n.equalityType || "equal";
+    const src = n.contentSourceType || "Constant";
+
+    if (["FindElement", "NotFindElement", "FindElements", "ElementValue"].includes(ct)) {
+      const v = validateSelectorBlock(n, { label: "سلکتور شرط" });
+      if (!v.ok) reasons.push(v.reason);
+    }
+    if (ct === "SourceValue") {
+      if (!n.sourceId && !n.dataSourceId) {
+        reasons.push("منبع مورد بررسی انتخاب نشده");
+      } else if (!String(n.dynamicSourceColumnName || "").trim()) {
+        reasons.push("ستون مورد بررسی انتخاب نشده");
+      }
+    }
+
+    if (conditionNeedsCompareOperand(ct, eq)) {
+      if (src === "Constant") {
+        const val = ct === "Url"
+          ? String(n.navigation || n.constantEqualValue || n.constantValue || "").trim()
+          : String(n.constantEqualValue ?? n.constantValue ?? n.navigation ?? "").trim();
+        // FindElements / DriverTabs: "0" is valid
+        if (ct === "FindElements" || ct === "DriverTabs") {
+          if (val === "" || !Number.isFinite(Number(val))) {
+            reasons.push("مقدار عددی مقایسه مشخص نیست");
+          }
+        } else if (!val) {
+          reasons.push("مقدار مقایسه خالی است");
+        }
+      } else if (src === "Elements") {
+        const v = validateSelectorBlock(n, {
+          valueKey: "equalSelectorValue",
+          dynFlag: "equalSelectorIsDynamic",
+          dynCol: "equalSelectorDynamicColumn",
+          hasAttr: "equalHasAttribute",
+          attrName: "equalAttributeName",
+          attrDynFlag: "equalAttributeValueIsDynamic",
+          attrCol: "equalAttributeDynamicColumn",
+          label: "سلکتور مقدار مقایسه"
+        });
+        if (!v.ok) reasons.push(v.reason);
+      } else if (src === "DataSource" && ct !== "SourceValue") {
+        const v = validateDataSourcePick(n);
+        if (!v.ok) reasons.push(v.reason);
+      } else if (src === "Memory") {
+        if (!String(n.memoryVariableName || n.sourceMemoryVariableName || "").trim()) {
+          reasons.push("متغیر حافظه مقایسه مشخص نیست");
+        }
+      } else if (src === "System") {
+        if (!String(n.systemValueType || "").trim()) {
+          reasons.push("نوع مقدار پیش‌فرض مقایسه مشخص نیست");
+        }
+      }
+    }
+
+    return { ok: reasons.length === 0, reasons };
+  }
+
+  function validateStartNode(n) {
+    const reasons = [];
+    const rst = n.repeatSourceType || (n.groupNodeId ? "None" : (graph.repeatSourceType || "None"));
+    if (rst === "Loops") {
+      const lc = Number(n.loopCount ?? n.constantValue);
+      if (!Number.isFinite(lc) || lc < 1) reasons.push("تعداد تکرار حلقه نامعتبر است");
+    } else if (rst === "DataSource") {
+      const id = n.dataSourceId ?? graph.dataSourceId ?? masterDataSourceId();
+      const sources = graph.dataSources || [];
+      const exists = id != null && sources.some((d) => Number(d.id) === Number(id));
+      if (!exists) {
+        reasons.push("منبع پیش‌فرض برای تکرار مشخص نشده");
+      }
+    } else if (rst === "Elements") {
+      if (!n.groupNodeId) {
+        reasons.push("تکرار با المان صفحه فقط داخل گروه مجاز است");
+      } else {
+        const v = validateSelectorBlock(n, { label: "سلکتور تکرار" });
+        if (!v.ok) reasons.push(v.reason);
+      }
+    }
+    return { ok: reasons.length === 0, reasons };
   }
 
   function knownMemoryVariableNames() {
     const names = new Set();
     (graph.nodes || []).forEach((n) => {
-      if (n.kind !== "step") return;
-      if ((n.actionType === "TakeContent" || n.actionType === "SaveContent")
-        && (n.contentSourceType || "Memory") === "Memory"
-        && n.memoryVariableName) {
-        names.add(String(n.memoryVariableName).trim());
-      }
+      if (!isActionNode(n)) return;
+      if (n.memoryVariableName) names.add(String(n.memoryVariableName).trim());
+      if (n.sourceMemoryVariableName) names.add(String(n.sourceMemoryVariableName).trim());
     });
     return [...names].filter(Boolean).sort();
   }
 
   function normalizeStepValueSource(n) {
+    migrateCaptureNode(n);
     let src = n.contentSourceType;
-    if (!src || src === "None") {
-      src = n.valueFromSource ? "DataSource" : "Constant";
-    }
     const at = n.actionType || "";
+    if (!src || src === "None") {
+      src = n.valueFromSource ? "DataSource"
+        : (stepIsCapture(at) ? "Elements" : "Constant");
+    }
     const allowed = new Set(["Constant", "DataSource"]);
     if (stepAllowsElementValue(at)) allowed.add("Elements");
     if (stepAllowsMemoryValue(at)) allowed.add("Memory");
-    if (!allowed.has(src)) src = "Constant";
+    if (stepAllowsSystemValue(at)) allowed.add("System");
+    if (!allowed.has(src)) src = stepIsCapture(at) ? "Elements" : "Constant";
     n.contentSourceType = src;
     n.valueFromSource = src === "DataSource";
     return src;
@@ -3055,9 +3821,11 @@
     if (!body) return;
     body.classList.toggle("is-disabled", !active);
     body.querySelectorAll("input, select, textarea, button").forEach((el) => {
-      if (el.closest(".insp-active-field")) return;
+      if (el.closest(".insp-switches-row")) return;
       el.disabled = !active;
     });
+    const ignore = inspector.querySelector('.insp-switches-row [data-k="ignoreError"]');
+    if (ignore) ignore.disabled = !active;
   }
 
   function stepInspectorHtml(n) {
@@ -3068,18 +3836,7 @@
     const disabledAttr = active ? "" : "disabled";
 
     let body = field("عنوان", "title", n.title) +
-      `<div class="insp-field"><label>نوع اقدام</label><select data-k="actionType" ${disabledAttr}>${optActions(at)}</select></div>` +
-      `<div class="insp-field">
-        <label class="da-switch">
-          <input type="checkbox" data-k="ignoreError" ${ignoreError ? "checked" : ""} ${disabledAttr}/>
-          <span class="da-switch-ui" aria-hidden="true"></span>
-          <span class="da-switch-text">چشم‌پوشی از خطا</span>
-        </label>
-        <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">
-          خاموش (پیش‌فرض): با خطا، بقیهٔ این دور رد می‌شود و به تصمیم حلقه می‌رود.
-          روشن: خطا ثبت می‌شود و مرحلهٔ بعدی اجرا می‌شود.
-        </p>
-      </div>`;
+      `<div class="insp-field"><label>نوع اقدام</label><select data-k="actionType" ${disabledAttr}>${optActions(at)}</select></div>`;
 
     if (at === "NewPage") {
       body += `<p class="palette-hint">تب جدید باز می‌شود و به آدرس می‌رود.</p>`;
@@ -3088,23 +3845,32 @@
       body += `<p class="palette-hint">${at === "CloseFirstTab" ? "اولین تب پنجره بسته می‌شود." : "آخرین تب پنجره بسته می‌شود."}</p>`;
     }
 
+    if (stepNeedsValueSource(n)) body += stepValueSourceHtml(n);
     if (stepIsCapture(at)) body += stepCaptureTargetHtml(n);
-    if (stepReceivesValue(at)) body += stepValueSourceHtml(n);
 
-    if (stepNeedsSelector(at)) {
-      body += `<div class="insp-section-title">هدف روی صفحه</div>`;
+    // Target selector depends on action type (+ capture only when value = Elements).
+    if (stepShowsTargetSelector(n)) {
+      body += `<div class="insp-section-title">${stepIsCapture(at) ? "المان صفحه (مقدار)" : "هدف روی صفحه"}</div>`;
       body += selectorFieldHtml(n, "سلکتور", { includeFramePath: true });
     }
 
     return `
       <div class="insp-field insp-active-field">
-        <label class="da-switch">
-          <input type="checkbox" data-k="isActive" ${active ? "checked" : ""}/>
-          <span class="da-switch-ui" aria-hidden="true"></span>
-          <span class="da-switch-text">${active ? "فعال" : "غیرفعال"}</span>
-        </label>
+        <div class="insp-switches-row">
+          <label class="da-switch">
+            <input type="checkbox" data-k="isActive" ${active ? "checked" : ""}/>
+            <span class="da-switch-ui" aria-hidden="true"></span>
+            <span class="da-switch-text">${active ? "فعال" : "غیرفعال"}</span>
+          </label>
+          <label class="da-switch da-switch-end">
+            <input type="checkbox" data-k="ignoreError" ${ignoreError ? "checked" : ""} ${disabledAttr}/>
+            <span class="da-switch-ui" aria-hidden="true"></span>
+            <span class="da-switch-text">چشم‌پوشی از خطا</span>
+          </label>
+        </div>
         <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">
-          اگر غیرفعال باشد، در اجرا فقط در لاگ ثبت می‌شود و هیچ اقدامی روی صفحه انجام نمی‌شود.
+          غیرفعال: فقط در لاگ ثبت می‌شود.
+          چشم‌پوشی از خطا روشن: با خطا مرحلهٔ بعدی اجرا می‌شود.
         </p>
       </div>
       <div class="insp-step-body${active ? "" : " is-disabled"}" ${active ? "" : "aria-disabled=\"true\""}>
@@ -3113,33 +3879,36 @@
   }
 
   function stepCaptureTargetHtml(n) {
-    const cst = n.contentSourceType === "DataSource" ? "DataSource" : "Memory";
-    n.contentSourceType = cst;
-    const dsId = n.dataSourceId || null;
-    const dsOpts = processDataSourceOptions(dsId);
-    const cols = dataSourceColumnKeys(dsId);
+    migrateCaptureNode(n);
+    const dest = normalizeSaveTarget(n);
+    const src = normalizeStepValueSource(n);
+    const saveDsId = n.saveDataSourceId != null ? n.saveDataSourceId : (src === "DataSource" ? null : n.dataSourceId);
+    const saveCol = n.saveColumnName || "";
+    const dsOpts = processDataSourceOptions(saveDsId);
+    const cols = dataSourceColumnKeys(saveDsId);
     const colOpts = cols.map((c) =>
-      `<option value="${esc(c)}" ${n.dynamicSourceColumnName === c ? "selected" : ""}>${esc(c)}</option>`
+      `<option value="${esc(c)}" ${saveCol === c ? "selected" : ""}>${esc(c)}</option>`
     ).join("");
     return `
       <div class="insp-section-title">مقصد ذخیره</div>
       <div class="insp-field"><label>ذخیره در</label>
-        <select data-k="contentSourceType">
-          <option value="Memory" ${cst === "Memory" ? "selected" : ""}>حافظه (متغیر)</option>
-          <option value="DataSource" ${cst === "DataSource" ? "selected" : ""}>منبع داده</option>
+        <select data-k="saveTargetType">
+          <option value="Memory" ${dest === "Memory" ? "selected" : ""}>حافظه (متغیر)</option>
+          <option value="DataSource" ${dest === "DataSource" ? "selected" : ""}>منبع داده</option>
         </select>
       </div>
-      ${cst === "Memory" ? `
-        <div class="insp-field"><label>نام متغیر حافظه</label>
-          <input data-k="memoryVariableName" value="${esc(n.memoryVariableName || "")}" placeholder="مثلاً titleText" />
+      ${dest === "Memory" ? `
+        <div class="insp-field"><label>نام متغیر مقصد</label>
+          <input data-k="memoryVariableName" list="mem-var-list-dest" value="${esc(n.memoryVariableName || "")}" placeholder="مثلاً titleText" />
+          <datalist id="mem-var-list-dest">${knownMemoryVariableNames().map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
         </div>
-        <p class="palette-hint">بعداً در درج از حافظه همین نام را انتخاب کنید.</p>
+        <p class="palette-hint">مقدار خوانده‌شده در این متغیر ذخیره می‌شود و بعداً قابل استفاده است.</p>
       ` : `
-        <div class="insp-field"><label>منبع</label>
-          <select data-k="dataSourceId"><option value="">—</option>${dsOpts}</select>
+        <div class="insp-field"><label>منبع مقصد</label>
+          <select data-k="saveDataSourceId"><option value="">—</option>${dsOpts}</select>
         </div>
-        <div class="insp-field"><label>ستون</label>
-          <select data-k="dynamicSourceColumnName"><option value="">—</option>${colOpts}</select>
+        <div class="insp-field"><label>ستون مقصد</label>
+          <select data-k="saveColumnName"><option value="">—</option>${colOpts}</select>
         </div>
       `}`;
   }
@@ -3149,12 +3918,14 @@
     const src = normalizeStepValueSource(n);
     const isUrl = stepIsUrlAction(at);
     const isWait = at === "WaitTime";
-    const sectionTitle = isUrl ? "آدرس" : (isWait ? "زمان انتظار" : "مقدار");
+    const isCapture = stepIsCapture(at);
+    const sectionTitle = isCapture ? "مقدار برای ذخیره" : (isUrl ? "آدرس" : (isWait ? "زمان انتظار" : "مقدار"));
     const constLabel = isUrl ? "آدرس ثابت" : (isWait ? "میلی‌ثانیه (ثابت)" : "مقدار ثابت");
     const constKey = isUrl ? "navigateUrl" : "constantValue";
     const constVal = isUrl ? (n.navigateUrl || n.constantValue || "") : (n.constantValue || "");
 
-    const dsId = n.dataSourceId || null;
+    const dsId = n.dataSourceId || masterDataSourceId() || (graph.dataSources || [])[0]?.id || null;
+    if (src === "DataSource" && dsId && !n.dataSourceId) n.dataSourceId = dsId;
     const dsOpts = processDataSourceOptions(dsId);
     const cols = dataSourceColumnKeys(dsId);
     const colOpts = cols.map((c) =>
@@ -3164,6 +3935,7 @@
       ? `<p class="palette-hint">منبعی نیست — روی نود شروع اکسل اضافه کنید.</p>`
       : "";
     const memNames = knownMemoryVariableNames();
+    if (!n.systemValueType) n.systemValueType = "CurrentDateTime";
 
     let html = `<div class="insp-section-title">${sectionTitle}</div>
       <div class="insp-field"><label>نوع مقدار</label>
@@ -3172,6 +3944,7 @@
           ${stepAllowsElementValue(at) ? `<option value="Elements" ${src === "Elements" ? "selected" : ""}>عنصر صفحه</option>` : ""}
           <option value="DataSource" ${src === "DataSource" ? "selected" : ""}>منبع داده</option>
           ${stepAllowsMemoryValue(at) ? `<option value="Memory" ${src === "Memory" ? "selected" : ""}>حافظه (متغیر)</option>` : ""}
+          ${stepAllowsSystemValue(at) ? `<option value="System" ${src === "System" ? "selected" : ""}>پیش‌فرض سیستم</option>` : ""}
         </select>
       </div>`;
 
@@ -3179,8 +3952,8 @@
       html += `<div class="insp-field"><label>${constLabel}</label>
         <input data-k="${constKey}" value="${esc(constVal)}" placeholder="${isUrl ? "https://..." : (isWait ? "مثلاً 1000" : "")}" />
       </div>`;
-    } else if (src === "Elements") {
-      html += selectorFieldHtml(n, "سلکتور عنصر منبع مقدار", {
+    } else if (src === "Elements" && stepShowsValueSelector(n)) {
+      html += selectorFieldHtml(n, isUrl ? "سلکتور المان (آدرس)" : "سلکتور عنصر منبع مقدار", {
         valueKey: "equalSelectorValue",
         dynFlag: "equalSelectorIsDynamic",
         dynDs: "equalSelectorDataSourceId",
@@ -3192,8 +3965,14 @@
         attrDynCol: "equalAttributeDynamicColumn",
         attrDynDs: "equalAttributeDataSourceId",
         waitFlag: "equalSelectorWaitEnabled",
-        waitMsKey: "equalSelectorWaitMs"
+        waitMsKey: "equalSelectorWaitMs",
+        includeFramePath: true
       });
+      if (isUrl) {
+        html += `<p class="palette-hint">متن/مقدار این المان به‌عنوان آدرس استفاده می‌شود.</p>`;
+      }
+    } else if (src === "Elements" && isCapture) {
+      html += `<p class="palette-hint">سلکتور المان در بخش پایین («المان صفحه») تنظیم می‌شود.</p>`;
     } else if (src === "DataSource") {
       html += `
         <div class="insp-field"><label>منبع داده</label>
@@ -3205,23 +3984,35 @@
         ${emptyDs}
         <p class="palette-hint">در اجرا مقدار سلول ردیف جاری خوانده می‌شود.</p>`;
     } else if (src === "Memory") {
-      html += `<div class="insp-field"><label>متغیر حافظه</label>
-        <input data-k="memoryVariableName" list="mem-var-list" value="${esc(n.memoryVariableName || "")}" placeholder="نام متغیر" />
+      const memKey = isCapture ? "sourceMemoryVariableName" : "memoryVariableName";
+      const memVal = isCapture ? (n.sourceMemoryVariableName || "") : (n.memoryVariableName || "");
+      html += `<div class="insp-field"><label>متغیر حافظه${isCapture ? " (منبع)" : ""}</label>
+        <input data-k="${memKey}" list="mem-var-list" value="${esc(memVal)}" placeholder="نام متغیر" />
         <datalist id="mem-var-list">${memNames.map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
       </div>
       ${!memNames.length
-        ? `<p class="palette-hint">هنوز متغیری نیست — ابتدا Take/Save با مقصد حافظه بسازید.</p>`
-        : `<p class="palette-hint">مقدار ذخیره‌شده در این متغیر درج می‌شود.</p>`}`;
+        ? `<p class="palette-hint">هنوز متغیری نیست — ابتدا مقداری در حافظه ذخیره کنید.</p>`
+        : `<p class="palette-hint">مقدار ذخیره‌شده در این متغیر خوانده می‌شود.</p>`}`;
+    } else if (src === "System") {
+      html += `<div class="insp-field"><label>نوع پیش‌فرض</label>
+        <select data-k="systemValueType">${systemValueOptionsHtml(n.systemValueType)}</select>
+      </div>
+      <p class="palette-hint">مقدار در لحظهٔ اجرا توسط سیستم تولید می‌شود.</p>`;
     }
     return html;
   }
 
   function processDataSourceOptions(selectedId, { markMaster = true } = {}) {
     const masterId = masterDataSourceId();
-    return (graph.dataSources || []).map((d) => {
-      const meta = d.rowCount != null ? ` (${d.rowCount} ردیف)` : "";
+    const list = graph.dataSources || [];
+    if (!list.length) {
+      return `<option value="">— منبعی نیست (روی شروع اکسل اضافه کنید) —</option>`;
+    }
+    return list.map((d) => {
+      const label = d.title || dataSourceFileTitle(d.fileName) || `منبع ${d.id}`;
+      const meta = d.rowCount != null ? ` (${d.rowCount} ردیف · ${(d.columnKeys || d.columns || []).length || d.columnCount || 0} ستون)` : "";
       const tag = markMaster && Number(d.id) === Number(masterId) ? " — پیش‌فرض" : "";
-      return `<option value="${d.id}" ${Number(selectedId) === Number(d.id) ? "selected" : ""}>${esc(d.title)}${meta}${tag}</option>`;
+      return `<option value="${d.id}" ${Number(selectedId) === Number(d.id) ? "selected" : ""}>${esc(label)}${meta}${tag}</option>`;
     }).join("");
   }
 
@@ -3232,10 +4023,15 @@
   }
 
   function dataSourceColumnKeys(dsId) {
+    if (dsId == null || dsId === "") return [];
     const ds = (graph.dataSources || []).find((d) => Number(d.id) === Number(dsId));
     if (!ds) return [];
-    if (Array.isArray(ds.columnKeys) && ds.columnKeys.length) return ds.columnKeys;
-    if (Array.isArray(ds.columns)) return ds.columns.map((c) => c.key || c.Key).filter(Boolean);
+    if (Array.isArray(ds.columnKeys) && ds.columnKeys.length) {
+      return ds.columnKeys.map((k) => String(k)).filter(Boolean);
+    }
+    if (Array.isArray(ds.columns) && ds.columns.length) {
+      return ds.columns.map((c) => c.key || c.Key || c.title || c.Title).filter(Boolean).map(String);
+    }
     return [];
   }
 
@@ -3735,16 +4531,29 @@
     const needsOperand = conditionNeedsCompareOperand(ct, eq);
     const allowCompareDs = needsOperand && ct !== "SourceValue";
 
-    const subjectDsOpts = processDataSourceOptions(n.sourceId || n.dataSourceId);
-    const subjectDsId = n.sourceId || n.dataSourceId;
+    if (needsSubjectDs && !n.sourceId && !n.dataSourceId) {
+      const fallback = masterDataSourceId() || (graph.dataSources || [])[0]?.id || null;
+      if (fallback) n.sourceId = fallback;
+    }
+    const subjectDsId = n.sourceId || n.dataSourceId || masterDataSourceId() || (graph.dataSources || [])[0]?.id || null;
+    if (needsSubjectDs && subjectDsId && !n.sourceId) n.sourceId = subjectDsId;
+    const subjectDsOpts = processDataSourceOptions(subjectDsId);
     const subjectCols = dataSourceColumnKeys(subjectDsId);
+    if (needsSubjectDs && subjectCols.length && !subjectCols.includes(n.dynamicSourceColumnName)) {
+      n.dynamicSourceColumnName = subjectCols[0];
+    }
     const subjectColOpts = subjectCols.map((c) =>
       `<option value="${esc(c)}" ${n.dynamicSourceColumnName === c ? "selected" : ""}>${esc(c)}</option>`
     ).join("");
 
-    const compareDsId = n.dataSourceId || n.sourceId;
+    let compareDsId = n.dataSourceId || n.sourceId || masterDataSourceId() || (graph.dataSources || [])[0]?.id || null;
+    if (src === "DataSource" && allowCompareDs && compareDsId && !n.dataSourceId) n.dataSourceId = compareDsId;
+    compareDsId = n.dataSourceId || n.sourceId || compareDsId;
     const compareDsOpts = processDataSourceOptions(compareDsId);
     const compareCols = dataSourceColumnKeys(compareDsId);
+    if (src === "DataSource" && allowCompareDs && compareCols.length && !compareCols.includes(n.dynamicSourceColumnName)) {
+      n.dynamicSourceColumnName = compareCols[0];
+    }
     const compareColOpts = compareCols.map((c) =>
       `<option value="${esc(c)}" ${n.dynamicSourceColumnName === c ? "selected" : ""}>${esc(c)}</option>`
     ).join("");
@@ -3788,6 +4597,8 @@
             <option value="Constant" ${src === "Constant" ? "selected" : ""}>مقدار ثابت</option>
             <option value="Elements" ${src === "Elements" ? "selected" : ""}>مقدار المان صفحه</option>
             ${allowCompareDs ? `<option value="DataSource" ${src === "DataSource" ? "selected" : ""}>مقدار منبع داده</option>` : ""}
+            <option value="Memory" ${src === "Memory" ? "selected" : ""}>حافظه (متغیر)</option>
+            <option value="System" ${src === "System" ? "selected" : ""}>پیش‌فرض سیستم</option>
           </select>
         </div>`;
 
@@ -3821,6 +4632,16 @@
           <div class="insp-field"><label>ستون</label>
             <select data-k="dynamicSourceColumnName"><option value="">— انتخاب ستون —</option>${compareColOpts}</select>
           </div>`;
+      } else if (src === "Memory") {
+        html += `<div class="insp-field"><label>متغیر حافظه</label>
+          <input data-k="memoryVariableName" list="mem-var-list-cond" value="${esc(n.memoryVariableName || "")}" placeholder="نام متغیر" />
+          <datalist id="mem-var-list-cond">${knownMemoryVariableNames().map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
+        </div>`;
+      } else if (src === "System") {
+        if (!n.systemValueType) n.systemValueType = "CurrentDateTime";
+        html += `<div class="insp-field"><label>نوع پیش‌فرض</label>
+          <select data-k="systemValueType">${systemValueOptionsHtml(n.systemValueType)}</select>
+        </div>`;
       }
     }
 
@@ -4058,7 +4879,24 @@
     }
   }
 
+  function graphHasInvalidNodes() {
+    return (graph.nodes || []).some((n) => {
+      if (n.kind === "group") return false; // groups mirror descendants; leaf check is enough
+      return !validateNodeLeaf(n).ok;
+    });
+  }
+
   function requestPlay(scope) {
+    if (graphHasInvalidNodes()) {
+      const msg = "در فرایند المان نامعتبر وجود دارد";
+      setStatus(msg, "warn");
+      try {
+        window.dispatchEvent(new CustomEvent("da-notify", {
+          detail: { message: msg, type: "error" }
+        }));
+      } catch { /* ignore */ }
+      return;
+    }
     const detail = {
       taskId: Number(taskId),
       groupNodeId: scope?.groupNodeId || null,
@@ -4377,11 +5215,11 @@
       const id = g.getAttribute("data-id");
       const on = selected.has(id);
       g.classList.toggle("node-on", on);
-      const shape = g.querySelector("rect, polygon");
+      const shape = g.querySelector(":scope > rect, :scope > polygon");
       if (!shape) return;
       const n = nodeById(id);
       if (!n) return;
-      shape.setAttribute("stroke", defaultStrokeFor(n));
+      applyNodeValidityClass(g, n);
       shape.setAttribute("stroke-width", String(strokeWidthFor(n, on)));
     });
   }
