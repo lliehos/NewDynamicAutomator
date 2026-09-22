@@ -2286,7 +2286,7 @@
       style: "cursor:crosshair;pointer-events:all"
     });
     const tipTitle = document.createElementNS(ns, "title");
-    tipTitle.textContent = "بکشید تا مقصد عوض شود";
+    tipTitle.textContent = t("editor.status.tipDragRetarget");
     tipHit.appendChild(tipTitle);
 
     const nearTip = (ev) => {
