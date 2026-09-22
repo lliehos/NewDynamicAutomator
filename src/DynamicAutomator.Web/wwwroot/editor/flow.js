@@ -589,13 +589,13 @@
       const cols = data.columns || [];
       const keys = data.columnKeys || cols.map((c) => c.key || c.Key).filter(Boolean);
       if (!keys.length) {
-        throw new Error("فایل اکسل ستون معتبری ندارد (ردیف اول باید هدر باشد).");
+        throw new Error(t("editor.ds.tooManySheets"));
       }
       if (!(data.rowCount > 0) && !(Array.isArray(data.cells) && data.cells.length)) {
-        throw new Error("هیچ سطر داده‌ای در جدول پیدا نشد.");
+        throw new Error(t("editor.ds.emptySheet"));
       }
 
-      setDsProgress(88, "ذخیره در حافظهٔ مرورگر…");
+      setDsProgress(88, t("editor.ds.progressSaving"));
       const entry = {
         id: nextDataSourceId(),
         title,
@@ -615,19 +615,17 @@
         ensureDefaultDataSource();
       }
 
-      setDsProgress(96, "چسباندن منبع به فرآیند…");
+      setDsProgress(96, t("editor.ds.progressAttach"));
       const saved = await save();
       if (!saved?.ok) {
-        throw new Error(saved?.error || "ذخیرهٔ منبع در حافظهٔ مرورگر ناموفق بود.");
+        throw new Error(saved?.error || t("editor.ds.uploadSaveError"));
       }
 
-      setDsProgress(100, "تمام");
+      setDsProgress(100, t("editor.ds.uploadDone"));
       const isDefault = Number(masterDataSourceId()) === Number(entry.id);
       if (statusEl) {
         statusEl.classList.remove("is-error");
-        statusEl.textContent = isDefault
-          ? `منبع «${entry.title}» اضافه و به‌عنوان پیش‌فرض تنظیم شد (${entry.rowCount} ردیف · ${entry.columnCount} ستون).`
-          : `منبع «${entry.title}» به فرآیند اضافه شد (${entry.rowCount} ردیف · ${entry.columnCount} ستون).`;
+        statusEl.textContent = `«${entry.title}» — ${t("editor.insp.dsRowCount", { rows: entry.rowCount, cols: entry.columnCount })}${isDefault ? ` — ${t("editor.ds.masterBadge")}` : ""}`;
       }
       const fileInp = document.getElementById("ds-file");
       if (fileInp) fileInp.value = "";
@@ -641,7 +639,7 @@
       ensureDefaultDataSource({ forceForRepeat: true });
       rolledBack = true;
 
-      const detail = e?.message || String(e) || "خطا در بارگذاری منبع";
+      const detail = e?.message || String(e) || t("editor.status.dsLoadError");
       if (statusEl) {
         statusEl.classList.add("is-error");
         statusEl.textContent = detail;
@@ -657,10 +655,10 @@
   function notifyDsError(message) {
     try {
       window.dispatchEvent(new CustomEvent("da-notify", {
-        detail: { message: String(message || "خطا در بارگذاری منبع"), type: "error" }
+        detail: { message: String(message || t("editor.status.dsLoadError")), type: "error" }
       }));
     } catch { /* ignore */ }
-    try { setStatus(String(message || "خطا در بارگذاری منبع"), "error"); } catch { /* ignore */ }
+    try { setStatus(String(message || t("editor.status.dsLoadError")), "error"); } catch { /* ignore */ }
   }
 
   async function uploadDataSource() {
@@ -689,7 +687,7 @@
       if (Number(n.saveDataSourceId) === Number(sourceId)) n.saveDataSourceId = null;
     });
     const statusEl = document.getElementById("ds-status");
-    if (statusEl) statusEl.textContent = "منبع حذف شد — ذخیره شد.";
+    if (statusEl) statusEl.textContent = t("editor.status.saved");
     await save();
     renderInspector();
   }
