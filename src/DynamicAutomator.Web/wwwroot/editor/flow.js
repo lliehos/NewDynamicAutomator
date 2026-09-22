@@ -2118,13 +2118,13 @@
       const e = graph.edges.find((x) => x.id === edgeId);
       const a = e && nodeById(e.from);
       const b = e && nodeById(e.to);
-      const kindFa = e?.kind === "success" ? "موفقیت" : e?.kind === "fail" ? "شکست" : e?.kind === "parent" ? "والد" : "بعدی";
+      const kindLabel = e?.kind === "success" ? t("editor.edge.success") : e?.kind === "fail" ? t("editor.edge.fail") : e?.kind === "parent" ? t("editor.edge.parent") : t("editor.edge.other");
       inspector.innerHTML = `
         <p class="palette-hint" style="margin:0 0 10px;line-height:1.7">
-          اتصال <b>${kindFa}</b> از «${esc(a?.title || e?.from || "")}» به «${esc(b?.title || e?.to || "")}».
+          ${t("editor.edge.edgeDesc", { kind: kindLabel, from: esc(a?.title || e?.from || ""), to: esc(b?.title || e?.to || "") })}
         </p>
-        <p class="palette-hint" style="margin:0 0 10px">نوک فلش را بکشید تا مقصد عوض شود · <b>Delete</b> برای حذف.</p>
-        <button type="button" class="btn-flow" id="btn-del-edge" style="width:100%">حذف اتصال</button>`;
+        <p class="palette-hint" style="margin:0 0 10px">${t("editor.status.tipRetarget")} · <b>Delete</b></p>
+        <button type="button" class="btn-flow" id="btn-del-edge" style="width:100%">${t("common.delete")} ${t("editor.inspector.selectedEdge")}</button>`;
       document.getElementById("btn-del-edge")?.addEventListener("click", () => {
         deleteSelectedEdge();
       });
@@ -2137,7 +2137,7 @@
     if (!selectedEdgeId) return false;
     graph.edges = graph.edges.filter((e) => e.id !== selectedEdgeId);
     selectedEdgeId = null;
-    setStatus("اتصال حذف شد.", "info");
+    setStatus(t("editor.edge.saved"), "info");
     render();
     return true;
   }
@@ -2165,7 +2165,7 @@
       seq: ++linkGestureSeq
     };
     selectEdge(e.id);
-    status.textContent = "نوک را بکشید و روی مقصد جدید رها کنید";
+    status.textContent = t("editor.status.tipRetargetDrop");
   }
 
   function startRetargetEdge(e, startAnchor, ev, alreadyMoved = true) {
@@ -2198,7 +2198,7 @@
       wpt ? wpt.y : startAnchor.y + (startAnchor.dy || 0) * 28
     );
     wrap.classList.add("linking");
-    status.textContent = "نوک فلش را روی مقصد جدید رها کنید";
+    status.textContent = t("editor.status.tipRetarget");
   }
 
   /** Move an existing edge's tip to a new target node. */
