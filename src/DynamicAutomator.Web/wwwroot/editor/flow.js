@@ -696,19 +696,18 @@
     const count = (graph.dataSources || []).length;
     const disabled = canModify ? "" : "disabled";
     return `
-      <div class="insp-section-title">منابع داده فرآیند (${count})</div>
+      <div class="insp-section-title">${t("editor.ds.viewerTitle")} (${count})</div>
       <p class="palette-hint" style="margin:0 0 8px;line-height:1.7">
-        عنوان هر منبع همان نام فایل اکسل است. اکسل باید جدول تمیز باشد
-        (هدر در سطر اول، بدون Merge). منابع در همهٔ المان‌های فرآیند قابل انتخاب‌اند.
+        ${t("editor.insp.noSourceYet")}
       </p>
-      <div class="ds-dropzone${canModify ? "" : " is-disabled"}" id="ds-dropzone" tabindex="${canModify ? "0" : "-1"}" role="button" aria-label="بارگذاری اکسل منبع داده">
+      <div class="ds-dropzone${canModify ? "" : " is-disabled"}" id="ds-dropzone" tabindex="${canModify ? "0" : "-1"}" role="button" aria-label="${t("editor.ds.dropHint")}">
         <input type="file" id="ds-file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ${disabled} hidden />
         <div class="ds-dropzone-inner">
           <span class="ds-dropzone-icon" aria-hidden="true">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0l-4 4m4-4l4 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 14v4a2 2 0 002 2h12a2 2 0 002-2v-4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
           </span>
-          <span class="ds-dropzone-title">بکشید و رها کنید یا کلیک کنید</span>
-          <span class="ds-dropzone-hint">فقط .xlsx با هدر معتبر در سطر اول</span>
+          <span class="ds-dropzone-title">${t("editor.ds.dropHint")}</span>
+          <span class="ds-dropzone-hint">${t("editor.ds.onlyXlsx")}</span>
         </div>
         <div class="ds-progress" id="ds-progress" hidden>
           <div class="ds-progress-track">
@@ -729,27 +728,26 @@
     const master = (graph.dataSources || []).find((d) => Number(d.id) === Number(masterDataSourceId()));
     const count = (graph.dataSources || []).length;
     return `
-      <div class="insp-field"><label>عنوان فرآیند</label>
+      <div class="insp-field"><label>${t("editor.insp.title")}</label>
         <input data-task-k="title" value="${esc(graph.title || "")}" ${disabled} /></div>
-      <div class="insp-field"><label>تأخیر قبل (ms)</label>
+      <div class="insp-field"><label>${t("editor.insp.waitMaxMs")} (${t("editor.insp.constMs")})</label>
         <input type="number" min="0" data-task-k="delayBeforeMs" value="${Number(graph.delayBeforeMs) || 0}" ${disabled} /></div>
-      <div class="insp-field"><label>تأخیر بعد (ms)</label>
+      <div class="insp-field"><label>${t("editor.insp.waitMaxMs")}</label>
         <input type="number" min="0" data-task-k="delayAfterMs" value="${Number(graph.delayAfterMs) || 0}" ${disabled} /></div>
       <div class="insp-field">
-        <label>رنگ انتخابگر المان</label>
+        <label>${t("editor.insp.selectorLabel")}</label>
         <div class="insp-color-row">
           <input type="color" data-task-k="highlightColor" value="${esc(normalizeHighlightColor(start?.highlightColor || graph.highlightColor))}" ${disabled} />
           <input type="text" data-task-k="highlightColor" value="${esc(normalizeHighlightColor(start?.highlightColor || graph.highlightColor))}" maxlength="7" ${disabled} />
         </div>
-        <p class="palette-hint" style="margin:4px 0 0">هنگام اجرا، دور المان هدف با این رنگ بوردر کشیده می‌شود.</p>
+        <p class="palette-hint" style="margin:4px 0 0">${t("editor.insp.selectorHint")}</p>
       </div>
-      <div class="insp-section-title">منابع و تکرار</div>
+      <div class="insp-section-title">${t("editor.ds.viewerTitle")}</div>
       <p class="palette-hint" style="margin:0 0 8px;line-height:1.7">
-        مدیریت اکسل، منبع <b>پیش‌فرض</b> و تکرار فرآیند روی نود <b>شروع</b>
-        (فعلی: ${esc(repeatTypeLabel(rst))}
-        ${master ? ` · پیش‌فرض: «${esc(master.title)}»` : count ? " · پیش‌فرض انتخاب نشده" : ""} · ${count} منبع).
+        ${t("editor.ds.masterLabel")}: ${esc(repeatTypeLabel(rst))}
+        ${master ? ` · ${esc(master.title)}` : ""} · ${count}
       </p>
-      <button type="button" class="btn-flow" id="insp-goto-start" style="width:100%">باز کردن نود شروع</button>
+      <button type="button" class="btn-flow" id="insp-goto-start" style="width:100%">${t("editor.insp.gotoStart")}</button>
     `;
   }
 
@@ -759,7 +757,7 @@
         const k = inp.dataset.taskK;
         if (k === "title") {
           graph.title = inp.value;
-          titleEl.textContent = graph.title || "گردش کار";
+          titleEl.textContent = graph.title || t("editor.ribbon.workflow");
         } else if (k === "delayBeforeMs" || k === "delayAfterMs") {
           graph[k] = Math.max(0, Number(inp.value) || 0);
         } else if (k === "highlightColor") {
@@ -893,7 +891,7 @@
       s = {
         id: `gstart-${gid}`,
         kind: "start",
-        title: "شروع",
+        title: t("editor.nodes.start"),
         groupNodeId: gid,
         x: 48,
         y: 80,
@@ -2115,7 +2113,7 @@
     highlightSelection();
     redrawEdgesOnly();
     if (edgeId) ensureInspectorExpanded();
-    if (inspHeading) inspHeading.textContent = edgeId ? "اتصال انتخاب‌شده" : "ویژگی‌های فرآیند";
+    if (inspHeading) inspHeading.textContent = edgeId ? t("editor.inspector.selectedEdge") : t("editor.inspector.processProps");
     if (edgeId) {
       const e = graph.edges.find((x) => x.id === edgeId);
       const a = e && nodeById(e.from);
@@ -3156,18 +3154,18 @@
     const id = [...selected][0];
     const n = id && nodeById(id);
     if (!n) {
-      if (inspHeading) inspHeading.textContent = "ویژگی‌های فرآیند";
+      if (inspHeading) inspHeading.textContent = t("editor.inspector.processProps");
       inspector.innerHTML = processPropsHtml();
       bindProcessProps();
       return;
     }
     if (inspHeading) {
-      inspHeading.textContent = n.kind === "group" ? "ویژگی‌های گروه"
-        : isActionNode(n) ? "ویژگی‌های اقدام"
-        : n.kind === "condition" ? "ویژگی‌های شرط"
+      inspHeading.textContent = n.kind === "group" ? t("editor.inspector.groupProps")
+        : isActionNode(n) ? t("editor.inspector.actionProps")
+        : n.kind === "condition" ? t("editor.inspector.conditionProps")
         : n.kind === "start"
-          ? (n.groupNodeId ? "شروع گروه (تکرار)" : "شروع فرآیند (تکرار)")
-        : "ویژگی‌ها";
+          ? (n.groupNodeId ? t("editor.inspector.startGroupRepeat") : t("editor.inspector.startRepeat"))
+        : t("editor.inspector.props");
     }
     if (n.kind === "start") {
       inspector.innerHTML = startInspectorHtml(n);
