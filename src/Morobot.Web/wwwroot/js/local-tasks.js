@@ -611,27 +611,43 @@
 
       const raw = tasks || readTasks();
       const normalized = Array.isArray(raw) ? raw.map(normalizeTask) : [];
-      // Persist migrated ids / ownerUser without re-entering render via da-local-tasks.
-      const changed = normalized.some((n, i) => {
-        const o = raw[i];
-        return !o || String(o.id) !== String(n.id) || String(o.ownerUser || "") !== String(n.ownerUser || "");
+      // Persist list, but never wipe a richer local graph with a graph-less server row.
+      const existing = readTasks();
+      const byId = new Map(existing.map((t) => [String(t.id), t]));
+      const toStore = normalized.map((n) => {
+        const prev = byId.get(String(n.id));
+        if (prev?.graph?.nodes?.length && !(n.graph && n.graph.nodes && n.graph.nodes.length)) {
+          return { ...n, graph: prev.graph };
+        }
+        return n;
       });
+      const changed = toStore.length !== existing.length
+        || toStore.some((n) => {
+          const o = byId.get(String(n.id));
+          if (!o) return true;
+          return String(o.title || "") !== String(n.title || "")
+            || String(o.ownerUser || "") !== String(n.ownerUser || "")
+            || Number(o.stepCount) !== Number(n.stepCount)
+            || Number(o.groupCount) !== Number(n.groupCount)
+            || Number(o.dataSourceCount) !== Number(n.dataSourceCount)
+            || Number(o.sharedWithCount) !== Number(n.sharedWithCount)
+            || (!!o.graph?.nodes?.length) !== (!!n.graph?.nodes?.length);
+        });
       if (changed) {
         if (window.DaSecureStore) {
           const u = currentUser();
-          // write without event: update cache + persist only
-          DaSecureStore.writeTasks(normalized, u);
+          DaSecureStore.writeTasks(toStore, u);
         } else {
-          localStorage.setItem(tasksKey(), JSON.stringify(normalized));
+          localStorage.setItem(tasksKey(), JSON.stringify(toStore));
         }
       }
 
       if (body) {
         try {
-          if (!normalized.length) {
+          if (!toStore.length) {
             body.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-6">${t("tasks.empty")}</td></tr>`;
           } else {
-            body.innerHTML = normalized.map((row) => {
+            body.innerHTML = toStore.map((row) => {
               const { steps, groups, sources } = taskCounts(row);
               const tid = escapeHtml(String(row.id));
               return `<tr data-task-id="${tid}">
@@ -659,7 +675,7 @@
       }
 
       try {
-        renderCards(normalized);
+        renderCards(toStore);
       } catch (err) {
         console.warn("[local-tasks] renderCards", err);
       }
@@ -796,6 +812,66 @@
       canChangeDataSource: !!row.canChangeDataSource,
       graph: null
     }));
+  }
+
+  /** Keep local graphs when refreshing metadata from the server list (list API has no canvas). */
+  function mergeServerTasksWithLocal(serverRows) {
+    const local = readTasks();
+    const byId = new Map(local.map((t) => [String(t.id), t]));
+    return (serverRows || []).map((row) => {
+      const prev = byId.get(String(row.id));
+      const next = normalizeTask(row);
+      const prevGraph = prev?.graph;
+      const hasPrev = prevGraph && Array.isArray(prevGraph.nodes) && prevGraph.nodes.length;
+      const hasNext = next.graph && Array.isArray(next.graph.nodes) && next.graph.nodes.length;
+      if (hasPrev && !hasNext) next.graph = prevGraph;
+      return next;
+    });
+  }
+
+  /** Ensure the process canvas is in the local cache (player reads localStorage only). */
+  async function ensureTaskGraphCached(taskId) {
+    const id = String(taskId || "").trim();
+    if (!id) return null;
+    const tasks = readTasks();
+    let hit = findTask(tasks, id);
+    if (hit?.graph && Array.isArray(hit.graph.nodes) && hit.graph.nodes.length) {
+      return hit;
+    }
+    if (!/^\d+$/.test(id)) {
+      return hit || null;
+    }
+    const res = await fetch(`/api/tasks/${id}/canvas`, { credentials: "same-origin" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.message || `canvas ${res.status}`);
+    }
+    const canvas = await res.json();
+    const graph = canvas && typeof canvas === "object" ? canvas : null;
+    if (!graph || !Array.isArray(graph.nodes)) {
+      throw new Error(t("tasks.noGraph") || "گراف فرآیند پیدا نشد.");
+    }
+    graph.taskId = graph.taskId ?? Number(id) || id;
+    if (!hit) {
+      hit = normalizeTask({
+        id,
+        title: graph.title || `#${id}`,
+        designOrigin: graph.designOrigin || "Manual",
+        createdAt: graph.updatedAtUtc || null,
+        createdBy: currentUser(),
+        graph
+      });
+      tasks.push(hit);
+    } else {
+      hit.graph = graph;
+      if (graph.title) hit.title = graph.title;
+      const counts = taskCounts(hit);
+      hit.groupCount = counts.groups;
+      hit.stepCount = counts.steps;
+      hit.dataSourceCount = counts.sources;
+    }
+    writeTasks(tasks);
+    return hit;
   }
 
   const createModalEl = document.getElementById("da-create-task-modal");
@@ -945,9 +1021,16 @@
     };
     setTimeout(() => document.addEventListener("click", playMenuCloser, true), 0);
 
-    const startPlay = (scope) => {
+    const startPlay = async (scope) => {
       closePlayTargetMenu();
       setTasksBusy(true, "آماده‌سازی افزونهٔ اجرا…");
+      try {
+        await ensureTaskGraphCached(taskId);
+      } catch (e) {
+        setTasksBusy(false);
+        notifyHome(String(e.message || e), "error");
+        return;
+      }
       window.dispatchEvent(new CustomEvent("da-play", {
         detail: { taskId, ...(scope || {}) }
       }));
@@ -1039,7 +1122,9 @@
       if (isServerMode()) {
         try {
           const rows = await loadServerTasks();
-          render(rows);
+          const merged = mergeServerTasksWithLocal(rows);
+          writeTasks(merged);
+          render(merged);
           return;
         } catch (e) {
           console.warn(e);
