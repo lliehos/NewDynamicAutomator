@@ -15,11 +15,13 @@ public class TaskService
 {
     private readonly AppDbContext _db;
     private readonly EntitlementService _entitlements;
+    private readonly DataSourceService _dataSources;
 
-    public TaskService(AppDbContext db, EntitlementService entitlements)
+    public TaskService(AppDbContext db, EntitlementService entitlements, DataSourceService dataSources)
     {
         _db = db;
         _entitlements = entitlements;
+        _dataSources = dataSources;
     }
 
     public async Task<List<TaskListItemDto>> ListForUserAsync(int userId, CancellationToken ct = default)
@@ -45,7 +47,8 @@ public class TaskService
                 a.CanDelete,
                 a.CanExecute,
                 a.CanChangeDataSource,
-                SharedWithCount = a.Process.Shares.Count(x => x.UserId != a.Process.CreatorUserId)
+                SharedWithCount = a.Process.Shares.Count(x => x.UserId != a.Process.CreatorUserId),
+                DataSourceCount = a.Process.DataSourceLinks.Count
             })
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
@@ -62,7 +65,7 @@ public class TaskService
                 CreatedAtUtc = a.CreatedAtUtc,
                 GroupCount = groups,
                 StepCount = steps,
-                DataSourceCount = GraphJsonHelper.CountSources(a.GraphJson),
+                DataSourceCount = a.DataSourceCount,
                 IsOwner = isOwner,
                 CanView = true,
                 CanEdit = canEdit,
@@ -88,7 +91,8 @@ public class TaskService
                 t.CreatedAtUtc,
                 t.GraphJson,
                 t.DesignOrigin,
-                OwnerUserName = t.Creator != null ? t.Creator.UserName : null
+                OwnerUserName = t.Creator != null ? t.Creator.UserName : null,
+                DataSourceCount = t.DataSourceLinks.Count
             })
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
@@ -103,7 +107,7 @@ public class TaskService
                 CreatedAtUtc = t.CreatedAtUtc,
                 GroupCount = groups,
                 StepCount = steps,
-                DataSourceCount = GraphJsonHelper.CountSources(t.GraphJson),
+                DataSourceCount = t.DataSourceCount,
                 CanModify = true,
                 DesignOrigin = t.DesignOrigin.ToString(),
                 OwnerUserName = t.OwnerUserName
@@ -113,49 +117,19 @@ public class TaskService
 
     public async Task<List<AdminCanvasSourceRow>> ListCanvasSourcesForAdminAsync(CancellationToken ct = default)
     {
-        var tasks = await _db.Processes.AsNoTracking()
-            .Include(t => t.Creator)
-            .Select(t => new { t.Id, t.Title, Owner = t.Creator != null ? t.Creator.UserName : "—", t.GraphJson })
-            .ToListAsync(ct);
-        var rows = new List<AdminCanvasSourceRow>();
-        foreach (var t in tasks)
+        var lib = await _dataSources.ListAllForAdminAsync(ct);
+        return lib.Select(d => new AdminCanvasSourceRow
         {
-            if (string.IsNullOrWhiteSpace(t.GraphJson)) continue;
-            try
-            {
-                using var doc = JsonDocument.Parse(t.GraphJson);
-                if (!doc.RootElement.TryGetProperty("dataSources", out var arr)
-                    && !doc.RootElement.TryGetProperty("DataSources", out arr))
-                    continue;
-                if (arr.ValueKind != JsonValueKind.Array) continue;
-                foreach (var el in arr.EnumerateArray())
-                {
-                    var id = el.TryGetProperty("id", out var idEl) ? idEl.ToString()
-                        : el.TryGetProperty("Id", out var idEl2) ? idEl2.ToString() : "?";
-                    var title = el.TryGetProperty("title", out var te) ? te.GetString()
-                        : el.TryGetProperty("Title", out var te2) ? te2.GetString() : null;
-                    title ??= el.TryGetProperty("fileName", out var fn) ? fn.GetString() : "منبع";
-                    var cols = 0;
-                    if (el.TryGetProperty("columnCount", out var cc) && cc.TryGetInt32(out var cci)) cols = cci;
-                    else if (el.TryGetProperty("columnKeys", out var ck) && ck.ValueKind == JsonValueKind.Array)
-                        cols = ck.GetArrayLength();
-                    var rowCount = 0;
-                    if (el.TryGetProperty("rowCount", out var rc) && rc.TryGetInt32(out var rci)) rowCount = rci;
-                    rows.Add(new AdminCanvasSourceRow
-                    {
-                        SourceId = id ?? "?",
-                        Title = title ?? "منبع",
-                        TaskId = t.Id,
-                        TaskTitle = t.Title,
-                        Owner = t.Owner ?? "—",
-                        ColumnCount = cols,
-                        RowCount = rowCount
-                    });
-                }
-            }
-            catch { /* ignore bad json */ }
-        }
-        return rows.OrderByDescending(r => r.TaskId).ToList();
+            SourceId = d.Id.ToString(),
+            Title = d.Title,
+            TaskId = 0,
+            TaskTitle = d.LinkedProcessCount == 0
+                ? "— (کتابخانه)"
+                : d.LinkedProcessTitles,
+            Owner = d.OwnerUserName,
+            ColumnCount = d.ColumnCount,
+            RowCount = d.RowCount
+        }).ToList();
     }
 
     public async Task<Process> CreateAsync(int userId, CreateTaskRequest request, CancellationToken ct = default)
@@ -264,7 +238,8 @@ public class TaskService
             .FirstOrDefaultAsync(ct);
         if (row is null) return null;
         var updated = row.UpdatedAtUtc == default ? row.CreatedAtUtc : row.UpdatedAtUtc;
-        return (row.GraphJson, DateTime.SpecifyKind(updated, DateTimeKind.Utc));
+        var hydrated = await _dataSources.HydrateCanvasAsync(taskId, row.GraphJson, ct);
+        return (hydrated, DateTime.SpecifyKind(updated, DateTimeKind.Utc));
     }
 
     public async Task<string?> GetCanvasJsonAsync(int userId, int taskId, CancellationToken ct = default)
@@ -279,7 +254,9 @@ public class TaskService
     {
         if (!await CanModifyAsync(userId, taskId, ct))
             return (false, "forbidden", null);
-        var process = await _db.Processes.FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        var process = await _db.Processes
+            .Include(p => p.DataSourceLinks)
+            .FirstOrDefaultAsync(t => t.Id == taskId, ct);
         if (process is null) return (false, "notfound", null);
 
         var currentUpdated = process.UpdatedAtUtc == default ? process.CreatedAtUtc : process.UpdatedAtUtc;
@@ -301,22 +278,51 @@ public class TaskService
 
         if (entitlements.MaxDataSources is int maxSrc)
         {
-            var otherJsons = await _db.Processes
-                .Where(t => t.Id != taskId && (t.CreatorUserId == userId || t.Shares.Any(a => a.UserId == userId)))
-                .Select(t => t.GraphJson)
-                .ToListAsync(ct);
-            var other = otherJsons.Sum(GraphJsonHelper.CountSources);
-            var inThis = GraphJsonHelper.CountSources(canvasJson);
-            if (other + inThis > maxSrc)
+            var ownerId = process.CreatorUserId ?? userId;
+            var libraryCount = await _entitlements.CountLibraryDataSourcesAsync(ownerId, ct);
+            var newOnes = await CountUnknownSourcesInCanvasAsync(canvasJson, ct);
+            if (libraryCount + newOnes > maxSrc)
                 return (false, $"Data source limit reached ({maxSrc}).", null);
         }
 
-        process.GraphJson = canvasJson;
+        // Sync embedded canvas sources into the user library + process links (detach ≠ delete library).
+        var synced = await _dataSources.SyncFromCanvasAsync(process, canvasJson, userId, ct);
+
+        process.GraphJson = synced;
         if (!string.IsNullOrWhiteSpace(title))
             process.Title = title.Trim();
         process.UpdatedAtUtc = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
         return (true, null, DateTime.SpecifyKind(process.UpdatedAtUtc, DateTimeKind.Utc));
+    }
+
+    private async Task<int> CountUnknownSourcesInCanvasAsync(string canvasJson, CancellationToken ct)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(canvasJson);
+            if (!doc.RootElement.TryGetProperty("dataSources", out var arr)
+                && !doc.RootElement.TryGetProperty("DataSources", out arr))
+                return 0;
+            if (arr.ValueKind != JsonValueKind.Array) return 0;
+            var ids = new List<int>();
+            foreach (var el in arr.EnumerateArray())
+            {
+                if (el.TryGetProperty("id", out var idEl) && idEl.TryGetInt32(out var id) && id > 0)
+                    ids.Add(id);
+                else if (el.TryGetProperty("Id", out var idEl2) && idEl2.TryGetInt32(out var id2) && id2 > 0)
+                    ids.Add(id2);
+                else
+                    ids.Add(-1); // brand-new without id
+            }
+            if (ids.Count == 0) return 0;
+            var known = await _db.DataSources.AsNoTracking()
+                .Where(d => ids.Contains(d.Id))
+                .Select(d => d.Id)
+                .ToListAsync(ct);
+            return ids.Count(id => id < 0 || !known.Contains(id));
+        }
+        catch { return 0; }
     }
 
     private static DateTime AsUtcWallClock(DateTime dt) =>

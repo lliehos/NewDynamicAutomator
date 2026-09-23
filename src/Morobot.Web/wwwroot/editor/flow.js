@@ -682,7 +682,7 @@
         ${dsIconBtn("js-ds-dl", t("editor.ds.downloadExcel"), DS_ICO_DL, `data-id="${sid}"`)}
         ${dsIconBtn("js-ds-cloud", t("editor.ds.saveServerSoon"), DS_ICO_CLOUD, `data-id="${sid}"`)}
         ${masterBtn}
-        ${canModify ? dsIconBtn("js-ds-del is-danger", t("common.delete"), DS_ICO_DEL, `data-id="${sid}"`) : ""}
+        ${canModify ? dsIconBtn("js-ds-del is-danger", t("editor.ds.detach"), DS_ICO_DEL, `data-id="${sid}"`) : ""}
       `;
       return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}">
         <div class="ds-row-top">
@@ -701,7 +701,7 @@
       btn.addEventListener("click", () => downloadDataSource(Number(btn.dataset.id), btn));
     });
     listEl.querySelectorAll(".js-ds-cloud").forEach((btn) => {
-      btn.addEventListener("click", () => setStatus(t("editor.ds.saveServerSoon"), "info"));
+      btn.addEventListener("click", () => setStatus(t("editor.ds.inLibrary"), "info"));
     });
     listEl.querySelectorAll(".js-ds-del").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -710,11 +710,23 @@
     });
     listEl.querySelectorAll(".js-ds-master").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        setMasterDataSource(Number(btn.dataset.id));
+        const newId = Number(btn.dataset.id);
+        const prevId = masterDataSourceId();
+        setMasterDataSource(newId);
         const start = processStart();
         if (start && (start.repeatSourceType || graph.repeatSourceType) !== "DataSource") {
           start.repeatSourceType = "DataSource";
           graph.repeatSourceType = "DataSource";
+        }
+        if (prevId != null && Number(prevId) !== Number(newId)) {
+          const ask = window.DaNotify?.confirm
+            ? await DaNotify.confirm(t("editor.ds.remapSelectorsConfirm"), {
+                title: t("editor.ds.setMaster"),
+                okText: t("common.yes"),
+                cancelText: t("common.no")
+              })
+            : window.confirm(t("editor.ds.remapSelectorsConfirm"));
+          if (ask) remapSelectorsToSource(newId);
         }
         await save();
         renderInspector();
@@ -1112,8 +1124,15 @@
   async function ingestDataSourceFile(file) {
     if (!canModify || !file) return;
     const entitlements = window.DaEntitlements ? DaEntitlements.get() : null;
-    const currentCount = (graph.dataSources || []).length;
-    if (entitlements && entitlements.maxDataSources != null && currentCount >= entitlements.maxDataSources) {
+    let libraryCount = (graph.dataSources || []).length;
+    try {
+      const cr = await fetch("/api/datasources/count", { credentials: "same-origin" });
+      if (cr.ok) {
+        const cj = await cr.json();
+        if (typeof cj.count === "number") libraryCount = cj.count;
+      }
+    } catch { /* offline / local */ }
+    if (entitlements && entitlements.maxDataSources != null && libraryCount >= entitlements.maxDataSources) {
       const msg = t("plan.limitSources", { max: entitlements.maxDataSources });
       notifyDsError(msg);
       return;
@@ -1150,7 +1169,7 @@
       }
 
       setDsProgress(88, t("editor.ds.progressSaving"));
-      const entry = {
+      let entry = {
         id: nextDataSourceId(),
         title,
         fileName: name,
@@ -1160,6 +1179,48 @@
         columns: cols,
         cells: data.cells || []
       };
+
+      // Persist into user library first (independent entity), then attach to this process.
+      try {
+        const createRes = await fetch("/api/datasources", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: entry.title,
+            fileName: entry.fileName,
+            columns: entry.columns,
+            cells: entry.cells,
+            columnKeys: entry.columnKeys,
+            columnCount: entry.columnCount,
+            rowCount: entry.rowCount
+          })
+        });
+        if (createRes.ok) {
+          const created = await createRes.json();
+          entry = {
+            ...entry,
+            id: created.id,
+            title: created.title || entry.title,
+            fileName: created.fileName || entry.fileName,
+            columnCount: created.columnCount ?? entry.columnCount,
+            rowCount: created.rowCount ?? entry.rowCount,
+            columns: created.columns || entry.columns,
+            columnKeys: created.columnKeys || entry.columnKeys,
+            cells: created.cells || entry.cells
+          };
+          await fetch(`/api/tasks/${taskId}/datasources/${entry.id}/attach?setDefault=${prevMaster ? "false" : "true"}`, {
+            method: "POST",
+            credentials: "same-origin"
+          });
+        } else if (createRes.status === 400) {
+          const err = await createRes.json().catch(() => ({}));
+          throw new Error(err.message || t("plan.limitSources", { max: entitlements?.maxDataSources ?? "?" }));
+        }
+      } catch (apiErr) {
+        if (apiErr?.message) throw apiErr;
+        // Fall through: SyncFromCanvas on save still materializes the library row.
+      }
 
       // Attach only for the save attempt — rollback if persist fails.
       graph.dataSources = prevSources.concat([entry]);
@@ -1228,10 +1289,13 @@
 
   async function deleteDataSource(sourceId) {
     if (!canModify || !sourceId) return;
-    graph.dataSources = (graph.dataSources || []).filter((d) => d.id !== sourceId);
+    // Detach from this process only — library row stays. Keep selector column names.
+    const prevMaster = masterDataSourceId();
+    graph.dataSources = (graph.dataSources || []).filter((d) => Number(d.id) !== Number(sourceId));
     if (Number(masterDataSourceId()) === Number(sourceId)) setMasterDataSource(null);
-    ensureDefaultDataSource({ forceForRepeat: true });
+    const newMaster = ensureDefaultDataSource({ forceForRepeat: true });
     graph.nodes.forEach((n) => {
+      // Clear DS id refs only — column name fields (selectorDynamicColumn, etc.) stay.
       if (n.kind !== "start" && Number(n.dataSourceId) === Number(sourceId)) n.dataSourceId = null;
       if (Number(n.sourceId) === Number(sourceId)) n.sourceId = null;
       if (Number(n.selectorDataSourceId) === Number(sourceId)) n.selectorDataSourceId = null;
@@ -1240,10 +1304,61 @@
       if (Number(n.equalAttributeDataSourceId) === Number(sourceId)) n.equalAttributeDataSourceId = null;
       if (Number(n.saveDataSourceId) === Number(sourceId)) n.saveDataSourceId = null;
     });
+    try {
+      await fetch(`/api/tasks/${taskId}/datasources/${sourceId}`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+    } catch { /* canvas save still syncs links */ }
+
+    if (newMaster && Number(prevMaster) === Number(sourceId) && Number(newMaster) !== Number(sourceId)) {
+      const ask = window.DaNotify?.confirm
+        ? await DaNotify.confirm(t("editor.ds.remapSelectorsConfirm"), {
+            title: t("editor.ds.setMaster"),
+            okText: t("common.yes"),
+            cancelText: t("common.no")
+          })
+        : window.confirm(t("editor.ds.remapSelectorsConfirm"));
+      if (ask) remapSelectorsToSource(newMaster);
+    }
+
     const statusEl = document.getElementById("ds-status");
-    if (statusEl) statusEl.textContent = t("editor.status.saved");
+    if (statusEl) statusEl.textContent = t("editor.ds.detached");
     await save();
     renderInspector();
+  }
+
+  /** Point selector/dynamic DS ids at sourceId when the stored column key exists on that source. */
+  function remapSelectorsToSource(sourceId) {
+    const ds = findDataSourceById(sourceId);
+    if (!ds) return 0;
+    const keySet = new Set(
+      (ds.columnKeys || (ds.columns || []).map((c) => c.key || c.Key) || [])
+        .map((k) => String(k || "").trim())
+        .filter(Boolean)
+    );
+    if (!keySet.size) return 0;
+    let updated = 0;
+    const pairs = [
+      ["selectorDynamicColumn", "selectorDataSourceId"],
+      ["equalSelectorDynamicColumn", "equalSelectorDataSourceId"],
+      ["attributeDynamicColumn", "attributeDataSourceId"],
+      ["equalAttributeDynamicColumn", "equalAttributeDataSourceId"],
+      ["dynamicSourceColumnName", "dataSourceId"],
+      ["dynamicSourceColumnName", "sourceId"],
+      ["saveColumnName", "saveDataSourceId"]
+    ];
+    (graph.nodes || []).forEach((n) => {
+      pairs.forEach(([colProp, dsProp]) => {
+        const col = n[colProp];
+        if (!col || !keySet.has(String(col).trim())) return;
+        if (dsProp === "dataSourceId" && n.kind === "start") return;
+        if (Number(n[dsProp]) === Number(sourceId)) return;
+        n[dsProp] = Number(sourceId);
+        updated += 1;
+      });
+    });
+    return updated;
   }
 
   function dataSourcesPanelHtml() {

@@ -1,35 +1,34 @@
-@model IEnumerable<Morobot.Infrastructure.Services.AdminCanvasSourceRow>
-@{
-  ViewData["Title"] = L["admin.nav.sources"];
-}
-<p class="text-muted small mb-3">منابع تعبیه‌شده در بوم فرآیندها (Canvas JSON)</p>
-<table class="admin-table">
-  <thead>
-    <tr>
-      <th>Source Id</th>
-      <th>Title</th>
-      <th>Process</th>
-      <th>Owner</th>
-      <th>Columns</th>
-      <th>Rows</th>
-    </tr>
-  </thead>
-  <tbody>
-  @foreach (var s in Model)
-  {
-    <tr>
-      <td>@s.SourceId</td>
-      <td>@s.Title</td>
-      <td>#@s.TaskId — @s.TaskTitle</td>
-      <td>@s.Owner</td>
-      <td>@s.ColumnCount</td>
-      <td>@s.RowCount</td>
-    </tr>
-  }
-  @if (!Model.Any())
-  {
-    <tr><td colspan="6" class="text-muted">منبعی در بوم فرآیندها نیست.</td></tr>
-  }
-  </tbody>
-</table>
-
+@model IEnumerable<Morobot.Infrastructure.Services.AdminCanvasSourceRow>
+@{
+  ViewData["Title"] = L["admin.nav.sources"];
+}
+<p class="text-muted small mb-3">کتابخانه منابع کاربران (موجودیت مستقل — حذف فرآیند منبع را پاک نمی‌کند)</p>
+<table class="admin-table">
+  <thead>
+    <tr>
+      <th>Id</th>
+      <th>Title</th>
+      <th>Linked processes</th>
+      <th>Owner</th>
+      <th>Columns</th>
+      <th>Rows</th>
+    </tr>
+  </thead>
+  <tbody>
+  @foreach (var s in Model)
+  {
+    <tr>
+      <td>@s.SourceId</td>
+      <td>@s.Title</td>
+      <td>@s.TaskTitle</td>
+      <td>@s.Owner</td>
+      <td>@s.ColumnCount</td>
+      <td>@s.RowCount</td>
+    </tr>
+  }
+  @if (!Model.Any())
+  {
+    <tr><td colspan="6" class="text-muted">منبعی در کتابخانه نیست.</td></tr>
+  }
+  </tbody>
+</table>

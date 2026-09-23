@@ -15,11 +15,12 @@ public class Process
     public DateTime? LastExecutedAtUtc { get; set; }
     public int? LastExecuteUserId { get; set; }
 
-    /// <summary>Full editor/player graph (nodes, edges, dataSources, viewport).</summary>
+    /// <summary>Full editor/player graph (nodes, edges, viewport). Linked sources hydrate into dataSources at load.</summary>
     public string? GraphJson { get; set; }
 
     public TaskDesignOrigin DesignOrigin { get; set; } = TaskDesignOrigin.Manual;
 
     public AppUser? Creator { get; set; }
     public ICollection<ProcessShare> Shares { get; set; } = new List<ProcessShare>();
+    public ICollection<ProcessDataSource> DataSourceLinks { get; set; } = new List<ProcessDataSource>();
 }

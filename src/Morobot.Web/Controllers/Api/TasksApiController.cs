@@ -326,27 +326,47 @@ public class RecordingsApiController : ControllerBase
     }
 }
 
-/// <summary>Relational datasources API retired — sources live in GraphJson via /canvas.</summary>
+/// <summary>Attach / detach library sources to a process (detach does not delete the library row).</summary>
 [ApiController]
 [Authorize]
 [Route("api/tasks/{taskId:int}/datasources")]
 public class TaskDataSourcesApiController : ControllerBase
 {
-    [HttpGet]
-    public IActionResult List(int taskId) =>
-        StatusCode(StatusCodes.Status410Gone, new
-        {
-            message = "Relational datasources retired. Use process canvas dataSources.",
-            code = "gone"
-        });
+    private readonly DataSourceService _sources;
+    private readonly CatalogLiveService _catalog;
 
-    [HttpPost("upload")]
-    public IActionResult Upload(int taskId) =>
-        StatusCode(StatusCodes.Status410Gone, new
-        {
-            message = "Upload into canvas via editor ParseExcel + PUT /canvas.",
-            code = "gone"
-        });
+    public TaskDataSourcesApiController(DataSourceService sources, CatalogLiveService catalog)
+    {
+        _sources = sources;
+        _catalog = catalog;
+    }
+
+    private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+    [HttpPost("{dataSourceId:int}/attach")]
+    public async Task<IActionResult> Attach(int taskId, int dataSourceId, [FromQuery] bool setDefault = false, CancellationToken ct = default)
+    {
+        var (ok, error) = await _sources.AttachAsync(UserId, taskId, dataSourceId, setDefault, ct);
+        if (!ok)
+            return error switch
+            {
+                "forbidden" => Forbid(),
+                "sourcenotfound" or "notfound" => NotFound(),
+                _ => BadRequest(new { message = error })
+            };
+        await _catalog.SourceChangedAsync(taskId, new { id = dataSourceId }, "attached", User.Identity?.Name, ct);
+        return Ok(new { ok = true });
+    }
+
+    [HttpDelete("{dataSourceId:int}")]
+    public async Task<IActionResult> Detach(int taskId, int dataSourceId, CancellationToken ct = default)
+    {
+        var (ok, error) = await _sources.DetachAsync(UserId, taskId, dataSourceId, ct);
+        if (!ok)
+            return error == "forbidden" ? Forbid() : BadRequest(new { message = error });
+        await _catalog.SourceChangedAsync(taskId, new { id = dataSourceId }, "detached", User.Identity?.Name, ct);
+        return Ok(new { ok = true });
+    }
 }
 
 [ApiController]
@@ -354,11 +374,53 @@ public class TaskDataSourcesApiController : ControllerBase
 [Route("api/datasources")]
 public class DataSourcesApiController : ControllerBase
 {
+    private readonly DataSourceService _sources;
+    private readonly EntitlementService _entitlements;
+
+    public DataSourcesApiController(DataSourceService sources, EntitlementService entitlements)
+    {
+        _sources = sources;
+        _entitlements = entitlements;
+    }
+
+    private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+    [HttpGet]
+    public async Task<ActionResult<List<Morobot.Contracts.DataSources.DataSourceListItemDto>>> List(CancellationToken ct)
+        => Ok(await _sources.ListForUserAsync(UserId, ct));
+
     [HttpGet("{id:int}")]
-    public IActionResult Get(int id) =>
-        StatusCode(StatusCodes.Status410Gone, new { message = "Relational datasources retired.", code = "gone" });
+    public async Task<IActionResult> Get(int id, CancellationToken ct)
+    {
+        var dto = await _sources.GetAsync(UserId, id, ct);
+        return dto is null ? NotFound() : Ok(dto);
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] Morobot.Contracts.DataSources.CreateDataSourceRequest req, CancellationToken ct)
+    {
+        try
+        {
+            var created = await _sources.CreateAsync(UserId, req, ct: ct);
+            return Ok(created);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message, code = "limit" });
+        }
+    }
 
     [HttpDelete("{id:int}")]
-    public IActionResult Delete(int id) =>
-        StatusCode(StatusCodes.Status410Gone, new { message = "Relational datasources retired.", code = "gone" });
+    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    {
+        var ok = await _sources.DeleteLibraryAsync(UserId, id, ct);
+        return ok ? Ok(new { ok = true }) : NotFound();
+    }
+
+    [HttpGet("count")]
+    public async Task<IActionResult> Count(CancellationToken ct)
+    {
+        var n = await _entitlements.CountLibraryDataSourcesAsync(UserId, ct);
+        return Ok(new { count = n });
+    }
 }

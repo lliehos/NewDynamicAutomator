@@ -63,6 +63,36 @@
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
   }
 
+  async function fetchLibrarySources() {
+    try {
+      const res = await fetch("/api/datasources", { credentials: "same-origin" });
+      if (!res.ok) return null;
+      const list = await res.json();
+      if (!Array.isArray(list)) return null;
+      return list.map((d) => ({
+        taskId: null,
+        taskTitle: (d.linkedProcessTitles && d.linkedProcessTitles.length)
+          ? d.linkedProcessTitles.join("، ")
+          : (d.linkedProcessCount ? `${d.linkedProcessCount} فرآیند` : "— (کتابخانه)"),
+        ds: {
+          id: d.id,
+          title: d.title,
+          fileName: d.fileName,
+          columnCount: d.columnCount,
+          rowCount: d.rowCount,
+          columnKeys: d.columnKeys || [],
+          columns: d.columns || [],
+          cells: d.cells || []
+        },
+        isMaster: false,
+        fromLibrary: true,
+        linkedProcessCount: d.linkedProcessCount || 0
+      }));
+    } catch {
+      return null;
+    }
+  }
+
   function collectSources() {
     const tasks = readTasks();
     const rows = [];
@@ -76,7 +106,8 @@
           taskId: task.id,
           taskTitle: task.title || "بدون عنوان",
           ds,
-          isMaster: masterId != null && Number(ds.id) === Number(masterId)
+          isMaster: masterId != null && Number(ds.id) === Number(masterId),
+          fromLibrary: false
         });
       });
     });
@@ -222,11 +253,26 @@
     render();
   }
 
-  function deleteSource(taskId, sourceId) {
+  async function deleteSource(taskId, sourceId) {
     const entry = findEntry(taskId, sourceId);
+    // Library-mode row (no task): hard-delete from user library
+    if (!entry && (taskId == null || taskId === "null" || taskId === "")) {
+      const label = String(sourceId);
+      if (!confirm(t("sources.delete") + ` #${label}؟`)) return;
+      try {
+        const res = await fetch(`/api/datasources/${sourceId}`, { method: "DELETE", credentials: "same-origin" });
+        if (!res.ok) throw new Error("delete failed");
+        notify(t("sources.delete"), "success");
+        await renderAsync();
+      } catch {
+        notify("حذف ناموفق بود.", "error");
+      }
+      return;
+    }
     if (!entry) return;
     const label = entry.ds.title || entry.ds.fileName || "منبع";
-    if (!confirm(`منبع «${label}» از فرآیند «${entry.task.title || ""}» حذف شود؟`)) return;
+    // Detach from process only (local mirror)
+    if (!confirm(`${t("sources.detach")}: «${label}» از «${entry.task.title || ""}»؟`)) return;
     const { tasks, task } = entry;
     task.graph.dataSources = (task.graph.dataSources || []).filter((d) => Number(d.id) !== Number(sourceId));
     const start = (task.graph.nodes || []).find((n) => n.kind === "start");
@@ -240,10 +286,20 @@
         delete task.graph.masterDataSourceId;
       }
     }
+    // Keep column name fields on nodes — only clear matching DS ids
+    (task.graph.nodes || []).forEach((n) => {
+      if (Number(n.dataSourceId) === Number(sourceId) && n.kind !== "start") n.dataSourceId = null;
+      if (Number(n.sourceId) === Number(sourceId)) n.sourceId = null;
+      if (Number(n.selectorDataSourceId) === Number(sourceId)) n.selectorDataSourceId = null;
+      if (Number(n.saveDataSourceId) === Number(sourceId)) n.saveDataSourceId = null;
+    });
     task.dataSourceCount = (task.graph.dataSources || []).length;
     writeTasks(tasks);
+    try {
+      await fetch(`/api/tasks/${taskId}/datasources/${sourceId}`, { method: "DELETE", credentials: "same-origin" });
+    } catch { /* local-only ok */ }
     closeViewer();
-    notify(`منبع «${label}» حذف شد.`, "success");
+    notify(t("sources.detach"), "success");
     render();
   }
 
@@ -436,18 +492,24 @@
   }
 
   function actionButtons(row) {
-    const tid = escapeHtml(String(row.taskId));
+    const tid = row.taskId != null ? escapeHtml(String(row.taskId)) : "";
     const sid = Number(row.ds.id);
-    const master = row.isMaster
-      ? iconBtn("is-master", t("sources.master"), ICO_STAR, "disabled")
-      : iconBtn("js-master", t("sources.setMaster"), ICO_STAR_OUT, `data-task="${tid}" data-id="${sid}"`);
+    const master = row.fromLibrary
+      ? ""
+      : (row.isMaster
+        ? iconBtn("is-master", t("sources.master"), ICO_STAR, "disabled")
+        : iconBtn("js-master", t("sources.setMaster"), ICO_STAR_OUT, `data-task="${tid}" data-id="${sid}"`));
+    const delLabel = row.fromLibrary ? t("sources.delete") : t("sources.detach");
+    const openBtn = row.taskId != null
+      ? iconBtn("js-open", t("sources.openProcess"), ICO_OPEN, `data-task="${tid}"`)
+      : "";
     return `
-      ${iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `data-task="${tid}" data-id="${sid}"`)}
-      ${iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`)}
-      ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-task="${tid}" data-id="${sid}"`)}
+      ${row.taskId != null ? iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `data-task="${tid}" data-id="${sid}"`) : ""}
+      ${row.taskId != null ? iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`) : ""}
+      ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-id="${sid}"`)}
       ${master}
-      ${iconBtn("js-del is-danger", t("sources.delete"), ICO_DEL, `data-task="${tid}" data-id="${sid}"`)}
-      ${iconBtn("js-open", t("sources.openProcess"), ICO_OPEN, `data-task="${tid}"`)}
+      ${iconBtn("js-del is-danger", delLabel, ICO_DEL, `data-task="${tid}" data-id="${sid}" data-lib="${row.fromLibrary ? "1" : "0"}"`)}
+      ${openBtn}
     `;
   }
 
@@ -460,13 +522,16 @@
       btn.addEventListener("click", () => downloadSource(btn.dataset.task, btn.dataset.id, btn));
     });
     root.querySelectorAll(".js-cloud").forEach((btn) => {
-      btn.addEventListener("click", () => notify(t("sources.saveServerSoonToast"), "info"));
+      btn.addEventListener("click", () => notify(t("sources.saveServerSoonToast") || t("sources.libraryHint"), "info"));
     });
     root.querySelectorAll(".js-master").forEach((btn) => {
       btn.addEventListener("click", () => setMaster(btn.dataset.task, btn.dataset.id));
     });
     root.querySelectorAll(".js-del").forEach((btn) => {
-      btn.addEventListener("click", () => deleteSource(btn.dataset.task, btn.dataset.id));
+      btn.addEventListener("click", () => {
+        if (btn.dataset.lib === "1") deleteSource(null, btn.dataset.id);
+        else deleteSource(btn.dataset.task, btn.dataset.id);
+      });
     });
     root.querySelectorAll(".js-open").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -475,15 +540,14 @@
     });
   }
 
-  function render() {
+  function paintRows(rows) {
     const rowsEl = document.getElementById("da-source-rows");
     const cardsEl = document.getElementById("da-source-cards");
     const status = document.getElementById("da-sources-status");
-    const rows = collectSources();
     if (status) {
       status.textContent = rows.length
-        ? `${rows.length.toLocaleString("fa-IR")} منبع در فرآیندهای شما`
-        : "هنوز منبعی به فرآیندها پیوست نشده است.";
+        ? `${rows.length.toLocaleString("fa-IR")} منبع — ${t("sources.libraryHint")}`
+        : t("sources.libraryHint");
     }
     if (rowsEl) {
       if (!rows.length) {
@@ -497,11 +561,11 @@
             <td>
               <div class="fw-semibold">${escapeHtml(label)}${r.isMaster ? ` <span class="ds-badge-master">پیش‌فرض</span>` : ""}</div>
             </td>
-            <td><a href="/Panel/Tasks/Editor/${encodeURIComponent(r.taskId)}">${escapeHtml(r.taskTitle)}</a></td>
-            <td>${Number(cols).toLocaleString("fa-IR")}</td>
-            <td>${Number(rowCount).toLocaleString("fa-IR")}</td>
-            <td class="text-muted small">${escapeHtml(r.ds.fileName || "—")}</td>
-            <td><div class="ds-actions da-source-actions">${actionButtons(r)}</div></td>
+            <td>${escapeHtml(r.taskTitle)}</td>
+            <td>${cols}</td>
+            <td>${rowCount}</td>
+            <td>${escapeHtml(r.ds.fileName || "—")}</td>
+            <td class="text-nowrap"><div class="ds-actions">${actionButtons(r)}</div></td>
           </tr>`;
         }).join("");
       }
@@ -509,30 +573,32 @@
     }
     if (cardsEl) {
       if (!rows.length) {
-        cardsEl.innerHTML = `<div class="da-task-empty text-muted">منبعی یافت نشد. از ویرایشگر فرآیند فایل اکسل اضافه کنید.</div>`;
+        cardsEl.innerHTML = `<div class="da-task-empty text-muted">منبعی نیست.</div>`;
       } else {
         cardsEl.innerHTML = rows.map((r) => {
           const label = r.ds.title || r.ds.fileName || "منبع";
-          const cols = (r.ds.columnCount ?? (r.ds.columnKeys || r.ds.columns || []).length) || 0;
-          const rowCount = r.ds.rowCount ?? 0;
-          return `<article class="da-task-card da-source-card">
-            <div class="da-task-card-top">
-              <h3 class="da-task-card-title">${escapeHtml(label)}${r.isMaster ? ` <span class="ds-badge-master">پیش‌فرض</span>` : ""}</h3>
-            </div>
-            <ul class="da-task-card-meta">
-              <li><i class="ti ti-git-branch"></i>${escapeHtml(r.taskTitle)}</li>
-              <li><i class="ti ti-file"></i>${escapeHtml(r.ds.fileName || "بدون فایل")}</li>
-            </ul>
-            <div class="da-task-stats">
-              <div class="da-task-stat"><b>${Number(cols).toLocaleString("fa-IR")}</b><span>ستون</span></div>
-              <div class="da-task-stat"><b>${Number(rowCount).toLocaleString("fa-IR")}</b><span>ردیف</span></div>
-            </div>
-            <div class="da-source-card-actions ds-actions">${actionButtons(r)}</div>
-          </article>`;
+          return `<div class="da-source-card card mb-2"><div class="card-body">
+            <div class="fw-semibold mb-1">${escapeHtml(label)}</div>
+            <div class="text-muted small mb-2">${escapeHtml(r.taskTitle)}</div>
+            <div class="ds-actions">${actionButtons(r)}</div>
+          </div></div>`;
         }).join("");
       }
       bindActions(cardsEl);
     }
+  }
+
+  function render() {
+    paintRows(collectSources());
+  }
+
+  async function renderAsync() {
+    const lib = await fetchLibrarySources();
+    if (lib !== null) {
+      paintRows(lib);
+      return;
+    }
+    render();
   }
 
   document.querySelectorAll("[data-portal-ds-close]").forEach((el) => {
@@ -549,7 +615,7 @@
   });
 
   window.addEventListener("da-local-tasks", () => {
-    render();
+    renderAsync();
     if (viewerState.taskId != null && viewerState.sourceId != null) {
       const entry = findEntry(viewerState.taskId, viewerState.sourceId);
       if (entry) renderViewerTable(entry.ds);
@@ -562,9 +628,9 @@
   function scheduleRender() {
     const run = () => {
       if (window.DaSecureStore && typeof DaSecureStore.whenReady === "function") {
-        DaSecureStore.whenReady(render);
+        DaSecureStore.whenReady(() => renderAsync());
       } else {
-        render();
+        renderAsync();
       }
     };
     if (window.DaI18n && DaI18n.ready && typeof DaI18n.ready.then === "function") {

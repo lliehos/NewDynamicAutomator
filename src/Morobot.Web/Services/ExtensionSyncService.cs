@@ -72,7 +72,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
             foreach (var name in new[]
                      {
                          "extension-recorder", "extension-player", "extension-selector",
-                         "extension-smart-recorder", "extension"
+                         "extension-smart-recorder"
                      })
             {
                 var from = Path.Combine(legacy, name);

@@ -21,28 +21,50 @@ public class DataSourceListItemDto
 {
     public int Id { get; set; }
     public string Title { get; set; } = string.Empty;
+    public string? FileName { get; set; }
     public int ColumnCount { get; set; }
     public int RowCount { get; set; }
     public List<DataSourceColumnDto> Columns { get; set; } = new();
+    public List<string> ColumnKeys { get; set; } = new();
+    /// <summary>Processes currently linked to this library source.</summary>
+    public int LinkedProcessCount { get; set; }
+    public List<string> LinkedProcessTitles { get; set; } = new();
 }
 
 public class DataSourceDetailDto
 {
     public int Id { get; set; }
     public string Title { get; set; } = string.Empty;
+    public string? FileName { get; set; }
     public List<DataSourceColumnDto> Columns { get; set; } = new();
+    public List<string> ColumnKeys { get; set; } = new();
     /// <summary>Flattened cells as key/index/value.</summary>
     public List<DataSourceCellDto> Cells { get; set; } = new();
+    public int ColumnCount { get; set; }
     public int RowCount { get; set; }
+}
+
+public class CreateDataSourceRequest
+{
+    public string? Title { get; set; }
+    public string? FileName { get; set; }
+    public List<DataSourceColumnDto> Columns { get; set; } = new();
+    public List<DataSourceCellDto> Cells { get; set; } = new();
+    public List<string>? ColumnKeys { get; set; }
+    public int? ColumnCount { get; set; }
+    public int? RowCount { get; set; }
 }
 
 public class UploadDataSourceResponse
 {
     public int Id { get; set; }
     public string Title { get; set; } = string.Empty;
+    public string? FileName { get; set; }
     public int ColumnCount { get; set; }
     public int RowCount { get; set; }
     public List<DataSourceColumnDto> Columns { get; set; } = new();
+    public List<string> ColumnKeys { get; set; } = new();
+    public List<DataSourceCellDto> Cells { get; set; } = new();
 }
 
 /// <summary>Parsed Excel without persisting — for local-first process properties.</summary>

@@ -1,12 +1,35 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClosedXML.Excel;
+using Morobot.Contracts.Auth;
 using Morobot.Contracts.DataSources;
+using Morobot.Domain.Entities;
+using Morobot.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Morobot.Infrastructure.Services;
 
-/// <summary>Excel parse/export only — data sources live inside Process.GraphJson.</summary>
+/// <summary>User library of Excel data sources + Excel parse/export. Process links are independent of library lifetime.</summary>
 public class DataSourceService
 {
-    /// <summary>Parse .xlsx into columns/cells without persisting.</summary>
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true
+    };
+
+    private readonly AppDbContext _db;
+    private readonly EntitlementService _entitlements;
+    private readonly ILogger<DataSourceService> _log;
+
+    public DataSourceService(AppDbContext db, EntitlementService entitlements, ILogger<DataSourceService> log)
+    {
+        _db = db;
+        _entitlements = entitlements;
+        _log = log;
+    }
+
     public ParsedExcelDto ParseExcelOnly(Stream excelStream, string? suggestedTitle = null)
     {
         var (columns, cells) = ParseExcel(excelStream);
@@ -27,7 +50,6 @@ public class DataSourceService
         };
     }
 
-    /// <summary>Rebuild a clean .xlsx from columns + flattened cells.</summary>
     public byte[] BuildExcel(IReadOnlyList<DataSourceColumnDto> columns, IReadOnlyList<DataSourceCellDto> cells)
     {
         if (columns is null || columns.Count == 0)
@@ -72,6 +94,659 @@ public class DataSourceService
         using var ms = new MemoryStream();
         book.SaveAs(ms);
         return ms.ToArray();
+    }
+
+    public async Task<List<DataSourceListItemDto>> ListForUserAsync(int userId, CancellationToken ct = default)
+    {
+        var rows = await _db.DataSources.AsNoTracking()
+            .Where(d => d.OwnerUserId == userId)
+            .OrderByDescending(d => d.UpdatedAtUtc)
+            .Select(d => new
+            {
+                d.Id,
+                d.Title,
+                d.FileName,
+                d.ColumnCount,
+                d.RowCount,
+                d.ColumnsJson,
+                Links = d.ProcessLinks.Select(l => l.Process!.Title).ToList()
+            })
+            .ToListAsync(ct);
+
+        return rows.Select(d =>
+        {
+            var cols = DeserializeColumns(d.ColumnsJson);
+            return new DataSourceListItemDto
+            {
+                Id = d.Id,
+                Title = d.Title,
+                FileName = d.FileName,
+                ColumnCount = d.ColumnCount,
+                RowCount = d.RowCount,
+                Columns = cols,
+                ColumnKeys = cols.Select(c => c.Key).ToList(),
+                LinkedProcessCount = d.Links.Count,
+                LinkedProcessTitles = d.Links
+            };
+        }).ToList();
+    }
+
+    public async Task<List<AdminLibrarySourceRow>> ListAllForAdminAsync(CancellationToken ct = default)
+    {
+        var rows = await _db.DataSources.AsNoTracking()
+            .OrderByDescending(d => d.UpdatedAtUtc)
+            .Select(d => new
+            {
+                d.Id,
+                d.Title,
+                OwnerUserName = d.Owner != null ? d.Owner.UserName : "—",
+                d.ColumnCount,
+                d.RowCount,
+                d.FileName,
+                LinkedProcessCount = d.ProcessLinks.Count,
+                Titles = d.ProcessLinks.Select(l => l.Process != null ? l.Process.Title : "?").ToList()
+            })
+            .ToListAsync(ct);
+
+        return rows.Select(d => new AdminLibrarySourceRow
+        {
+            Id = d.Id,
+            Title = d.Title,
+            OwnerUserName = d.OwnerUserName,
+            ColumnCount = d.ColumnCount,
+            RowCount = d.RowCount,
+            FileName = d.FileName,
+            LinkedProcessCount = d.LinkedProcessCount,
+            LinkedProcessTitles = string.Join("، ", d.Titles)
+        }).ToList();
+    }
+
+    public async Task<DataSourceDetailDto?> GetAsync(int userId, int id, CancellationToken ct = default)
+    {
+        var d = await _db.DataSources.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id && x.OwnerUserId == userId, ct);
+        return d is null ? null : ToDetail(d);
+    }
+
+    public async Task<UploadDataSourceResponse> CreateAsync(
+        int userId, CreateDataSourceRequest req, EntitlementsDto? entitlements = null, CancellationToken ct = default)
+    {
+        entitlements ??= await ResolveEntitlements(userId, ct);
+        await _entitlements.EnsureCanCreateDataSourceAsync(userId, entitlements, ct);
+
+        var columns = NormalizeColumns(req.Columns, req.ColumnKeys);
+        if (columns.Count == 0)
+            throw new InvalidOperationException("منبع ستون معتبری ندارد.");
+        var cells = req.Cells ?? new List<DataSourceCellDto>();
+        var rowCount = req.RowCount ?? (cells.Count == 0 ? 0 : cells.Max(c => c.Index) + 1);
+        var title = string.IsNullOrWhiteSpace(req.Title)
+            ? $"منبع {DateTime.UtcNow:yyyy-MM-dd HH:mm}"
+            : req.Title.Trim();
+        if (title.Length > 200) title = title[..200];
+
+        var entity = new DataSource
+        {
+            OwnerUserId = userId,
+            Title = title,
+            FileName = Trunc(req.FileName, 260),
+            ColumnCount = req.ColumnCount ?? columns.Count,
+            RowCount = rowCount,
+            ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts),
+            CellsJson = JsonSerializer.Serialize(cells, JsonOpts),
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow
+        };
+        _db.DataSources.Add(entity);
+        await _db.SaveChangesAsync(ct);
+        return ToUploadResponse(entity, columns, cells);
+    }
+
+    public async Task<bool> DeleteLibraryAsync(int userId, int id, CancellationToken ct = default)
+    {
+        var entity = await _db.DataSources
+            .Include(d => d.ProcessLinks)
+            .FirstOrDefaultAsync(d => d.Id == id && d.OwnerUserId == userId, ct);
+        if (entity is null) return false;
+
+        var processIds = entity.ProcessLinks.Select(l => l.ProcessId).Distinct().ToList();
+        _db.ProcessDataSources.RemoveRange(entity.ProcessLinks);
+        _db.DataSources.Remove(entity);
+        await _db.SaveChangesAsync(ct);
+
+        // Scrub snapshot from linked process graphs (keep selector column names on nodes).
+        foreach (var pid in processIds)
+        {
+            try { await ScrubSourceFromProcessGraphAsync(pid, id, ct); }
+            catch (Exception ex) { _log.LogWarning(ex, "Scrub source {Ds} from process {P}", id, pid); }
+        }
+        return true;
+    }
+
+    public async Task<(bool ok, string? error)> AttachAsync(
+        int userId, int processId, int dataSourceId, bool setDefault = false, CancellationToken ct = default)
+    {
+        var process = await _db.Processes.Include(p => p.DataSourceLinks)
+            .FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null) return (false, "notfound");
+
+        var canChange = await _db.ProcessShares.AnyAsync(a =>
+            a.UserId == userId && a.ProcessId == processId
+            && (a.CanChangeDataSource || a.CanEdit || a.Process.CreatorUserId == userId), ct);
+        if (!canChange) return (false, "forbidden");
+
+        var ds = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == dataSourceId, ct);
+        if (ds is null) return (false, "sourcenotfound");
+        // Owner or already shared via another process of this user — require owner for attach from library
+        if (ds.OwnerUserId != userId && process.CreatorUserId != userId
+            && ds.OwnerUserId != process.CreatorUserId)
+            return (false, "forbidden");
+
+        if (process.DataSourceLinks.Any(l => l.DataSourceId == dataSourceId))
+        {
+            if (setDefault)
+            {
+                foreach (var l in process.DataSourceLinks) l.IsDefault = l.DataSourceId == dataSourceId;
+                await _db.SaveChangesAsync(ct);
+                await PatchMasterInGraphAsync(processId, dataSourceId, ct);
+            }
+            return (true, null);
+        }
+
+        var sort = process.DataSourceLinks.Count == 0 ? 0 : process.DataSourceLinks.Max(l => l.SortOrder) + 1;
+        var makeDefault = setDefault || process.DataSourceLinks.Count == 0;
+        if (makeDefault)
+            foreach (var l in process.DataSourceLinks) l.IsDefault = false;
+
+        process.DataSourceLinks.Add(new ProcessDataSource
+        {
+            ProcessId = processId,
+            DataSourceId = dataSourceId,
+            IsDefault = makeDefault,
+            SortOrder = sort
+        });
+        await _db.SaveChangesAsync(ct);
+        await EnsureGraphHasSourceSnapshotAsync(processId, ds, makeDefault, ct);
+        return (true, null);
+    }
+
+    public async Task<(bool ok, string? error)> DetachAsync(
+        int userId, int processId, int dataSourceId, CancellationToken ct = default)
+    {
+        var canChange = await _db.ProcessShares.AnyAsync(a =>
+            a.UserId == userId && a.ProcessId == processId
+            && (a.CanChangeDataSource || a.CanEdit || a.Process.CreatorUserId == userId), ct);
+        if (!canChange) return (false, "forbidden");
+
+        var link = await _db.ProcessDataSources
+            .FirstOrDefaultAsync(l => l.ProcessId == processId && l.DataSourceId == dataSourceId, ct);
+        if (link is null)
+        {
+            // Still scrub graph snapshot if present
+            await ScrubSourceFromProcessGraphAsync(processId, dataSourceId, ct);
+            return (true, null);
+        }
+
+        var wasDefault = link.IsDefault;
+        _db.ProcessDataSources.Remove(link);
+        await _db.SaveChangesAsync(ct);
+
+        if (wasDefault)
+        {
+            var next = await _db.ProcessDataSources
+                .Where(l => l.ProcessId == processId)
+                .OrderBy(l => l.SortOrder)
+                .FirstOrDefaultAsync(ct);
+            if (next != null)
+            {
+                next.IsDefault = true;
+                await _db.SaveChangesAsync(ct);
+                await PatchMasterInGraphAsync(processId, next.DataSourceId, ct);
+            }
+            else
+                await PatchMasterInGraphAsync(processId, null, ct);
+        }
+
+        await ScrubSourceFromProcessGraphAsync(processId, dataSourceId, ct);
+        return (true, null);
+    }
+
+    /// <summary>
+    /// On canvas save: upsert library rows for embedded sources, sync process links.
+    /// Detached library rows are never deleted. Returns possibly remapped GraphJson.
+    /// </summary>
+    public async Task<string> SyncFromCanvasAsync(
+        Process process, string canvasJson, int actingUserId, CancellationToken ct = default)
+    {
+        JsonNode? root;
+        try { root = JsonNode.Parse(canvasJson); }
+        catch { return canvasJson; }
+        if (root is not JsonObject obj) return canvasJson;
+
+        var arr = obj["dataSources"] as JsonArray ?? obj["DataSources"] as JsonArray;
+        if (arr is null)
+        {
+            arr = new JsonArray();
+            obj["dataSources"] = arr;
+        }
+
+        var ownerId = process.CreatorUserId ?? actingUserId;
+        var links = await _db.ProcessDataSources
+            .Where(l => l.ProcessId == process.Id)
+            .ToListAsync(ct);
+        var keepIds = new HashSet<int>();
+        var masterId = ReadMasterId(obj);
+        var order = 0;
+
+        foreach (var node in arr.ToList())
+        {
+            if (node is not JsonObject dsObj) continue;
+            var parsed = ParseEmbedded(dsObj);
+            if (parsed.columns.Count == 0 && parsed.cells.Count == 0 && string.IsNullOrWhiteSpace(parsed.title))
+                continue;
+
+            DataSource? entity = null;
+            if (parsed.id is int existingId && existingId > 0)
+                entity = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == existingId, ct);
+
+            if (entity is null)
+            {
+                entity = new DataSource
+                {
+                    OwnerUserId = ownerId,
+                    Title = Trunc(parsed.title, 200) ?? $"منبع {DateTime.UtcNow:yyyy-MM-dd}",
+                    FileName = Trunc(parsed.fileName, 260),
+                    ColumnCount = parsed.columnCount,
+                    RowCount = parsed.rowCount,
+                    ColumnsJson = JsonSerializer.Serialize(parsed.columns, JsonOpts),
+                    CellsJson = JsonSerializer.Serialize(parsed.cells, JsonOpts),
+                    CreatedAtUtc = DateTime.UtcNow,
+                    UpdatedAtUtc = DateTime.UtcNow
+                };
+                _db.DataSources.Add(entity);
+                await _db.SaveChangesAsync(ct);
+                dsObj["id"] = entity.Id;
+            }
+            else if (entity.OwnerUserId == ownerId || entity.OwnerUserId == actingUserId)
+            {
+                entity.Title = Trunc(parsed.title, 200) ?? entity.Title;
+                entity.FileName = Trunc(parsed.fileName, 260) ?? entity.FileName;
+                entity.ColumnCount = parsed.columnCount;
+                entity.RowCount = parsed.rowCount;
+                entity.ColumnsJson = JsonSerializer.Serialize(parsed.columns, JsonOpts);
+                entity.CellsJson = JsonSerializer.Serialize(parsed.cells, JsonOpts);
+                entity.UpdatedAtUtc = DateTime.UtcNow;
+                dsObj["id"] = entity.Id;
+            }
+
+            keepIds.Add(entity.Id);
+            var link = links.FirstOrDefault(l => l.DataSourceId == entity.Id);
+            if (link is null)
+            {
+                link = new ProcessDataSource
+                {
+                    ProcessId = process.Id,
+                    DataSourceId = entity.Id,
+                    SortOrder = order
+                };
+                _db.ProcessDataSources.Add(link);
+                links.Add(link);
+            }
+            link.SortOrder = order++;
+            link.IsDefault = masterId is int mid && mid == entity.Id;
+        }
+
+        // If no master flagged, first link is default
+        if (!links.Any(l => keepIds.Contains(l.DataSourceId) && l.IsDefault) && keepIds.Count > 0)
+        {
+            var first = links.Where(l => keepIds.Contains(l.DataSourceId)).OrderBy(l => l.SortOrder).First();
+            first.IsDefault = true;
+            obj["dataSourceId"] = first.DataSourceId;
+            if (obj["nodes"] is JsonArray nodes)
+            {
+                foreach (var n in nodes)
+                {
+                    if (n is JsonObject no && string.Equals(no["kind"]?.GetValue<string>(), "start", StringComparison.OrdinalIgnoreCase))
+                    {
+                        no["dataSourceId"] = first.DataSourceId;
+                        break;
+                    }
+                }
+            }
+        }
+
+        foreach (var orphan in links.Where(l => !keepIds.Contains(l.DataSourceId)).ToList())
+            _db.ProcessDataSources.Remove(orphan);
+
+        await _db.SaveChangesAsync(ct);
+        return obj.ToJsonString(JsonOpts);
+    }
+
+    /// <summary>Hydrate process graph dataSources from library links (fallback to embedded).</summary>
+    public async Task<string?> HydrateCanvasAsync(int processId, string? graphJson, CancellationToken ct = default)
+    {
+        var links = await _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.ProcessId == processId)
+            .OrderBy(l => l.SortOrder)
+            .Include(l => l.DataSource)
+            .ToListAsync(ct);
+
+        if (links.Count == 0)
+        {
+            // Lazy extract: if graph has embedded sources, leave as-is (SyncFromCanvas on next save).
+            return graphJson;
+        }
+
+        JsonObject obj;
+        try
+        {
+            obj = string.IsNullOrWhiteSpace(graphJson)
+                ? new JsonObject()
+                : (JsonNode.Parse(graphJson) as JsonObject) ?? new JsonObject();
+        }
+        catch
+        {
+            obj = new JsonObject();
+        }
+
+        var arr = new JsonArray();
+        int? defaultId = null;
+        foreach (var link in links)
+        {
+            if (link.DataSource is null) continue;
+            if (link.IsDefault) defaultId = link.DataSourceId;
+            arr.Add(ToGraphNode(link.DataSource));
+        }
+        obj["dataSources"] = arr;
+        if (defaultId is int did)
+        {
+            obj["dataSourceId"] = did;
+            if (obj["nodes"] is JsonArray nodes)
+            {
+                foreach (var n in nodes)
+                {
+                    if (n is JsonObject no &&
+                        string.Equals(no["kind"]?.GetValue<string>(), "start", StringComparison.OrdinalIgnoreCase))
+                    {
+                        no["dataSourceId"] = did;
+                        break;
+                    }
+                }
+            }
+        }
+        return obj.ToJsonString(JsonOpts);
+    }
+
+    private async Task EnsureGraphHasSourceSnapshotAsync(int processId, DataSource ds, bool makeDefault, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null) return;
+        JsonObject obj;
+        try
+        {
+            obj = string.IsNullOrWhiteSpace(process.GraphJson)
+                ? new JsonObject { ["nodes"] = new JsonArray(), ["edges"] = new JsonArray() }
+                : (JsonNode.Parse(process.GraphJson) as JsonObject)
+                  ?? new JsonObject { ["nodes"] = new JsonArray(), ["edges"] = new JsonArray() };
+        }
+        catch
+        {
+            obj = new JsonObject { ["nodes"] = new JsonArray(), ["edges"] = new JsonArray() };
+        }
+
+        var arr = obj["dataSources"] as JsonArray ?? new JsonArray();
+        obj["dataSources"] = arr;
+        var exists = false;
+        foreach (var n in arr)
+        {
+            if (n is JsonObject o && o["id"]?.GetValue<int?>() == ds.Id) { exists = true; break; }
+        }
+        if (!exists) arr.Add(ToGraphNode(ds));
+        if (makeDefault) ApplyMaster(obj, ds.Id);
+        process.GraphJson = obj.ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    private async Task ScrubSourceFromProcessGraphAsync(int processId, int dataSourceId, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return;
+        JsonObject? obj;
+        try { obj = JsonNode.Parse(process.GraphJson) as JsonObject; }
+        catch { return; }
+        if (obj is null) return;
+
+        if (obj["dataSources"] is JsonArray arr)
+        {
+            for (var i = arr.Count - 1; i >= 0; i--)
+            {
+                if (arr[i] is JsonObject o && o["id"]?.GetValue<int?>() == dataSourceId)
+                    arr.RemoveAt(i);
+            }
+        }
+        // Clear DS id refs on nodes — keep column name fields.
+        if (obj["nodes"] is JsonArray nodes)
+        {
+            foreach (var n in nodes)
+            {
+                if (n is not JsonObject no) continue;
+                ClearIdIfMatch(no, "dataSourceId", dataSourceId);
+                ClearIdIfMatch(no, "sourceId", dataSourceId);
+                ClearIdIfMatch(no, "selectorDataSourceId", dataSourceId);
+                ClearIdIfMatch(no, "equalSelectorDataSourceId", dataSourceId);
+                ClearIdIfMatch(no, "attributeDataSourceId", dataSourceId);
+                ClearIdIfMatch(no, "equalAttributeDataSourceId", dataSourceId);
+                ClearIdIfMatch(no, "saveDataSourceId", dataSourceId);
+            }
+        }
+        if (obj["dataSourceId"]?.GetValue<int?>() == dataSourceId)
+            obj.Remove("dataSourceId");
+
+        process.GraphJson = obj.ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    private async Task PatchMasterInGraphAsync(int processId, int? dataSourceId, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return;
+        JsonObject? obj;
+        try { obj = JsonNode.Parse(process.GraphJson) as JsonObject; }
+        catch { return; }
+        if (obj is null) return;
+        ApplyMaster(obj, dataSourceId);
+        process.GraphJson = obj.ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    private static void ApplyMaster(JsonObject obj, int? dataSourceId)
+    {
+        if (dataSourceId is int id)
+            obj["dataSourceId"] = id;
+        else
+            obj.Remove("dataSourceId");
+        if (obj["nodes"] is not JsonArray nodes) return;
+        foreach (var n in nodes)
+        {
+            if (n is JsonObject no &&
+                string.Equals(no["kind"]?.GetValue<string>(), "start", StringComparison.OrdinalIgnoreCase))
+            {
+                if (dataSourceId is int mid) no["dataSourceId"] = mid;
+                else no.Remove("dataSourceId");
+                break;
+            }
+        }
+    }
+
+    private static void ClearIdIfMatch(JsonObject no, string prop, int id)
+    {
+        if (no[prop]?.GetValue<int?>() == id)
+            no[prop] = null;
+    }
+
+    private async Task<EntitlementsDto> ResolveEntitlements(int userId, CancellationToken ct)
+    {
+        var dbUser = await _db.Users.AsNoTracking().Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == userId, ct);
+        return dbUser is null
+            ? EntitlementService.LocalDefaults()
+            : await _entitlements.ResolveForUserAsync(dbUser, ct);
+    }
+
+    private static JsonObject ToGraphNode(DataSource d)
+    {
+        var cols = DeserializeColumns(d.ColumnsJson);
+        var cells = DeserializeCells(d.CellsJson);
+        return new JsonObject
+        {
+            ["id"] = d.Id,
+            ["title"] = d.Title,
+            ["fileName"] = d.FileName,
+            ["columnCount"] = d.ColumnCount,
+            ["rowCount"] = d.RowCount,
+            ["columnKeys"] = new JsonArray(cols.Select(c => (JsonNode?)JsonValue.Create(c.Key)).ToArray()),
+            ["columns"] = JsonNode.Parse(JsonSerializer.Serialize(cols, JsonOpts))!.AsArray(),
+            ["cells"] = JsonNode.Parse(JsonSerializer.Serialize(cells, JsonOpts))!.AsArray()
+        };
+    }
+
+    private static DataSourceDetailDto ToDetail(DataSource d)
+    {
+        var cols = DeserializeColumns(d.ColumnsJson);
+        var cells = DeserializeCells(d.CellsJson);
+        return new DataSourceDetailDto
+        {
+            Id = d.Id,
+            Title = d.Title,
+            FileName = d.FileName,
+            Columns = cols,
+            ColumnKeys = cols.Select(c => c.Key).ToList(),
+            Cells = cells,
+            ColumnCount = d.ColumnCount,
+            RowCount = d.RowCount
+        };
+    }
+
+    private static UploadDataSourceResponse ToUploadResponse(
+        DataSource d, List<DataSourceColumnDto> cols, List<DataSourceCellDto> cells) => new()
+    {
+        Id = d.Id,
+        Title = d.Title,
+        FileName = d.FileName,
+        ColumnCount = d.ColumnCount,
+        RowCount = d.RowCount,
+        Columns = cols,
+        ColumnKeys = cols.Select(c => c.Key).ToList(),
+        Cells = cells
+    };
+
+    private static List<DataSourceColumnDto> NormalizeColumns(
+        List<DataSourceColumnDto>? columns, List<string>? keys)
+    {
+        if (columns is { Count: > 0 })
+            return columns.Where(c => !string.IsNullOrWhiteSpace(c.Key))
+                .Select(c => new DataSourceColumnDto
+                {
+                    Key = c.Key.Trim(),
+                    Title = string.IsNullOrWhiteSpace(c.Title) ? c.Key.Trim() : c.Title.Trim()
+                }).ToList();
+        return (keys ?? new List<string>())
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Select(k => new DataSourceColumnDto { Key = k.Trim(), Title = k.Trim() })
+            .ToList();
+    }
+
+    private static List<DataSourceColumnDto> DeserializeColumns(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try { return JsonSerializer.Deserialize<List<DataSourceColumnDto>>(json, JsonOpts) ?? new(); }
+        catch { return new(); }
+    }
+
+    private static List<DataSourceCellDto> DeserializeCells(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try { return JsonSerializer.Deserialize<List<DataSourceCellDto>>(json, JsonOpts) ?? new(); }
+        catch { return new(); }
+    }
+
+    private static int? ReadMasterId(JsonObject obj)
+    {
+        if (obj["dataSourceId"] is JsonValue v && v.TryGetValue<int>(out var id)) return id;
+        if (obj["nodes"] is JsonArray nodes)
+        {
+            foreach (var n in nodes)
+            {
+                if (n is JsonObject no &&
+                    string.Equals(no["kind"]?.GetValue<string>(), "start", StringComparison.OrdinalIgnoreCase)
+                    && no["dataSourceId"] is JsonValue sv && sv.TryGetValue<int>(out var sid))
+                    return sid;
+            }
+        }
+        return null;
+    }
+
+    private static (int? id, string? title, string? fileName, int columnCount, int rowCount,
+        List<DataSourceColumnDto> columns, List<DataSourceCellDto> cells) ParseEmbedded(JsonObject dsObj)
+    {
+        int? id = null;
+        if (dsObj["id"] is JsonValue idv)
+        {
+            if (idv.TryGetValue<int>(out var i)) id = i;
+            else if (int.TryParse(idv.ToString(), out var i2)) id = i2;
+        }
+        var title = dsObj["title"]?.GetValue<string>() ?? dsObj["Title"]?.GetValue<string>();
+        var fileName = dsObj["fileName"]?.GetValue<string>() ?? dsObj["FileName"]?.GetValue<string>();
+        var columns = new List<DataSourceColumnDto>();
+        if (dsObj["columns"] is JsonArray colsArr)
+        {
+            foreach (var c in colsArr)
+            {
+                if (c is not JsonObject co) continue;
+                var key = co["key"]?.GetValue<string>() ?? co["Key"]?.GetValue<string>() ?? "";
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                columns.Add(new DataSourceColumnDto
+                {
+                    Key = key,
+                    Title = co["title"]?.GetValue<string>() ?? co["Title"]?.GetValue<string>() ?? key
+                });
+            }
+        }
+        if (columns.Count == 0 && dsObj["columnKeys"] is JsonArray keys)
+        {
+            foreach (var k in keys)
+            {
+                var key = k?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                columns.Add(new DataSourceColumnDto { Key = key, Title = key });
+            }
+        }
+        var cells = new List<DataSourceCellDto>();
+        if (dsObj["cells"] is JsonArray cellsArr)
+        {
+            foreach (var c in cellsArr)
+            {
+                if (c is not JsonObject co) continue;
+                cells.Add(new DataSourceCellDto
+                {
+                    Key = co["key"]?.GetValue<string>() ?? co["Key"]?.GetValue<string>() ?? "",
+                    Index = co["index"]?.GetValue<int?>() ?? co["Index"]?.GetValue<int?>() ?? 0,
+                    CellValue = co["cellValue"]?.GetValue<string>() ?? co["CellValue"]?.GetValue<string>() ?? ""
+                });
+            }
+        }
+        var columnCount = dsObj["columnCount"]?.GetValue<int?>() ?? columns.Count;
+        var rowCount = dsObj["rowCount"]?.GetValue<int?>()
+                       ?? (cells.Count == 0 ? 0 : cells.Max(x => x.Index) + 1);
+        return (id, title, fileName, columnCount, rowCount, columns, cells);
+    }
+
+    private static string? Trunc(string? s, int max)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        s = s.Trim();
+        return s.Length <= max ? s : s[..max];
     }
 
     internal static (List<DataSourceColumnDto> Columns, List<DataSourceCellDto> Cells) ParseExcel(Stream stream)
@@ -169,4 +844,16 @@ public class DataSourceService
 
         return (columns, cells);
     }
+}
+
+public class AdminLibrarySourceRow
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = "";
+    public string OwnerUserName { get; set; } = "";
+    public int ColumnCount { get; set; }
+    public int RowCount { get; set; }
+    public string? FileName { get; set; }
+    public int LinkedProcessCount { get; set; }
+    public string LinkedProcessTitles { get; set; } = "";
 }

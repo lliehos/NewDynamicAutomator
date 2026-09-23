@@ -14,6 +14,8 @@ public class AppDbContext : DbContext
     public DbSet<PlanPrice> PlanPrices => Set<PlanPrice>();
     public DbSet<Process> Processes => Set<Process>();
     public DbSet<ProcessShare> ProcessShares => Set<ProcessShare>();
+    public DbSet<DataSource> DataSources => Set<DataSource>();
+    public DbSet<ProcessDataSource> ProcessDataSources => Set<ProcessDataSource>();
     public DbSet<DeviceSession> DeviceSessions => Set<DeviceSession>();
     public DbSet<AppEventLog> EventLogs => Set<AppEventLog>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
@@ -138,6 +140,35 @@ public class AppDbContext : DbContext
                 .WithMany(x => x.Shares)
                 .HasForeignKey(x => x.ProcessId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DataSource>(e =>
+        {
+            e.ToTable("DataSources");
+            e.Property(x => x.Title).HasMaxLength(200).IsRequired();
+            e.Property(x => x.FileName).HasMaxLength(260);
+            e.Property(x => x.ColumnsJson).IsRequired();
+            e.Property(x => x.CellsJson).IsRequired();
+            e.HasIndex(x => x.OwnerUserId);
+            e.HasOne(x => x.Owner)
+                .WithMany()
+                .HasForeignKey(x => x.OwnerUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProcessDataSource>(e =>
+        {
+            e.ToTable("ProcessDataSources");
+            e.HasKey(x => new { x.ProcessId, x.DataSourceId });
+            e.HasOne(x => x.Process)
+                .WithMany(x => x.DataSourceLinks)
+                .HasForeignKey(x => x.ProcessId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.DataSource)
+                .WithMany(x => x.ProcessLinks)
+                .HasForeignKey(x => x.DataSourceId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => x.DataSourceId);
         });
     }
 }
