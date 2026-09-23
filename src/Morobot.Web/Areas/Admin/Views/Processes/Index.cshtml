@@ -1,34 +1,79 @@
 @model IEnumerable<Morobot.Contracts.Tasks.TaskListItemDto>
 @{
-  ViewData["Title"] = "Processes";
+  ViewData["Title"] = L["admin.processes.title"];
+  var playingJson = (string)(ViewBag.PlayingJson ?? "[]");
 }
-<table class="admin-table">
+<div class="admin-live-bar" id="admin-live-bar">
+  <span class="admin-live-dot" id="admin-live-dot" title="@L["admin.live.offline"]"></span>
+  <span id="admin-live-status">@L["admin.live.connecting"]</span>
+  <span class="admin-live-feed" id="admin-live-feed" aria-live="polite"></span>
+</div>
+
+<table class="admin-table" id="admin-process-table">
   <thead>
     <tr>
-      <th>Id</th>
-      <th>Title</th>
-      <th>Owner</th>
-      <th>Origin</th>
-      <th>Created</th>
+      <th>@L["admin.processes.colId"]</th>
+      <th>@L["admin.processes.colTitle"]</th>
+      <th>@L["admin.processes.colOwner"]</th>
+      <th>@L["admin.processes.colOrigin"]</th>
+      <th>@L["admin.processes.colCounts"]</th>
+      <th>@L["admin.processes.colCreated"]</th>
+      <th>@L["admin.processes.colChange"]</th>
+      <th>@L["admin.processes.colPlay"]</th>
       <th></th>
     </tr>
   </thead>
-  <tbody>
+  <tbody id="admin-process-rows">
   @foreach (var t in Model)
   {
-    <tr>
+    <tr data-task-id="@t.Id" data-flash="row">
       <td>@t.Id</td>
-      <td>@t.Title</td>
+      <td data-flash="title">@t.Title</td>
       <td>@(t.OwnerUserName ?? "—")</td>
       <td>@t.DesignOrigin</td>
+      <td data-flash="counts">@t.GroupCount / @t.StepCount / @t.DataSourceCount</td>
       <td>@t.CreatedAtUtc.ToString("u")</td>
+      <td class="admin-change-cell" data-flash="change"><span class="admin-change-badge is-idle">—</span></td>
+      <td class="admin-play-cell" data-flash="play">
+        <span class="admin-play-ico" hidden title="@L["admin.processes.playing"]" aria-label="@L["admin.processes.playing"]">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg>
+        </span>
+      </td>
       <td>
-        <form method="post" asp-action="Delete" asp-route-id="@t.Id" onsubmit="return confirm('Delete process #@t.Id?');">
+        <form method="post" asp-action="Delete" asp-route-id="@t.Id" onsubmit="return confirm('@L["admin.processes.deleteConfirm"]');">
           @Html.AntiForgeryToken()
-          <button type="submit" class="btn-admin danger">Delete</button>
+          <button type="submit" class="btn-admin danger">@L["admin.processes.delete"]</button>
         </form>
       </td>
     </tr>
   }
+  @if (!Model.Any())
+  {
+    <tr class="admin-empty-row"><td colspan="9" class="text-muted">@L["admin.processes.empty"]</td></tr>
+  }
   </tbody>
 </table>
+
+@section Scripts {
+<script>
+  window.__ADMIN_PLAYING__ = @Html.Raw(playingJson);
+  window.__ADMIN_I18N__ = {
+    offline: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.offline"])),
+    live: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.live"])),
+    connecting: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.connecting"])),
+    byUser: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.byUser"])),
+    actions: {
+      created: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.created"])),
+      updated: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.updated"])),
+      deleted: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.deleted"])),
+      renamed: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.renamed"])),
+      attached: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.attached"])),
+      detached: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.detached"])),
+      shared: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.shared"]))
+    },
+    playing: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.processes.playing"])),
+    playingBy: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.processes.playingBy"]))
+  };
+</script>
+<script src="~/js/admin-processes.js?v=1"></script>
+}
