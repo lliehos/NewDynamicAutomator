@@ -307,7 +307,8 @@
     "start-record", "finish-record", "save-draft", "rerecord", "clear-draft", "check-recorder", "resume-record"
   ]);
   const PLAYER_ACTIONS = new Set([
-    "play-task", "play-task-menu", "play-group", "play-step", "stop-play", "check-player"
+    "play-task", "play-task-menu", "play-group", "play-step",
+    "stop-play", "pause-play", "resume-play", "check-player"
   ]);
   const SELECTOR_ACTIONS = new Set(["check-selector"]);
   const SMART_ACTIONS = new Set(["start-smart-record", "check-smart"]);
@@ -315,12 +316,13 @@
   function isPlayButton(el) {
     if (!el) return false;
     const id = el.id || "";
-    return id === "btn-play-task" || id === "btn-play-selection" || id === "btn-stop-play";
+    return id === "btn-play-task" || id === "btn-play-selection"
+      || id === "btn-stop-play" || id === "btn-play-pause";
   }
 
   document.addEventListener("click", (ev) => {
     const el = ev.target instanceof Element
-      ? ev.target.closest("[data-da-action], #btn-play-task, #btn-play-selection, #btn-stop-play")
+      ? ev.target.closest("[data-da-action], #btn-play-task, #btn-play-selection, #btn-stop-play, #btn-play-pause")
       : null;
     if (!el) return;
 

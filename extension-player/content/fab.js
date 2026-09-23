@@ -264,11 +264,23 @@
   }
 
   chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === "playStateChanged") {
-      lastPlaySnapshot = message;
-      if (message.playing) userCollapsed = false;
-      refresh(message);
+    if (message?.type !== "playStateChanged") return;
+    lastPlaySnapshot = message;
+    if (message.playing) {
+      userCollapsed = false;
+      // Apply controls immediately — don't wait for async getState (can flake / wake SW late).
+      try {
+        root.hidden = false;
+        panel.hidden = false;
+        toggleBtn.hidden = true;
+        stopBtn.hidden = false;
+        stopBtn.disabled = false;
+        playPauseBtn.disabled = false;
+        if (message.paused) setPlayPauseMode("play", { paused: true });
+        else setPlayPauseMode("pause");
+      } catch { /* ignore */ }
     }
+    refresh(message).catch(() => {});
   });
 
   toggleBtn.addEventListener("click", (e) => {
@@ -330,7 +342,9 @@
             taskId: String(taskId),
             runMode: lastPlayRequest?.runMode,
             groupNodeId: lastPlayRequest?.groupNodeId || null,
-            stepNodeId: lastPlayRequest?.stepNodeId || null
+            stepNodeId: lastPlayRequest?.stepNodeId || null,
+            conditionNodeId: lastPlayRequest?.conditionNodeId || null,
+            playScope: lastPlayRequest?.playScope || null
           }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
           if (!res?.ok && !res?.reloading) {
             status.textContent = res?.error || t("play.startError");
@@ -338,7 +352,9 @@
         }
       }
     } finally {
-      await refresh();
+      await refresh().catch(() => {});
+      // Never leave the toggle stuck disabled after a failed/racy action.
+      if (!playPauseBtn.hidden) playPauseBtn.disabled = false;
     }
   });
 
@@ -351,20 +367,40 @@
   stopBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (stopBtn.disabled) return;
     stopBtn.disabled = true;
     try {
-      await chrome.runtime.sendMessage({ type: "stopPlay" });
+      await chrome.runtime.sendMessage({ type: "stopPlay" }).catch(() => null);
     } finally {
-      await refresh();
+      await refresh().catch(() => {});
+      // If still playing after stop attempt, re-enable so user is never stuck.
+      if (!stopBtn.hidden) stopBtn.disabled = false;
     }
   });
 
   clearBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    const res = await chrome.runtime.sendMessage({ type: "clearPlayLogs" }).catch(() => null);
-    lastPlaySnapshot = res || { playing: false, logs: [], results: [] };
-    await refresh(lastPlaySnapshot);
+    clearBtn.disabled = true;
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "clearPlayLogs" }).catch(() => null);
+      const keepPlaying = !!(res?.playing || lastPlaySnapshot?.playing);
+      const keepPaused = !!(res?.paused || lastPlaySnapshot?.paused);
+      // Always clear UI logs; never force playing=false on a failed response.
+      lastPlaySnapshot = {
+        ...(lastPlaySnapshot || {}),
+        ...(res && typeof res === "object" ? res : {}),
+        playing: keepPlaying,
+        paused: keepPaused,
+        logs: Array.isArray(res?.logs) ? res.logs : [],
+        results: Array.isArray(res?.results) ? res.results : [],
+        lastError: res?.lastError ?? null
+      };
+      renderPlayResults(lastPlaySnapshot);
+      await refresh(lastPlaySnapshot);
+    } finally {
+      clearBtn.disabled = false;
+    }
   });
 
   status.addEventListener("dblclick", (e) => {
@@ -375,8 +411,18 @@
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && (changes.playing || changes.lastPlayRequest)) refresh();
+    if (area !== "local") return;
+    if (changes.playing || changes.playPaused || changes.lastPlayRequest) {
+      refresh().catch(() => {});
+    }
   });
+
+  // Soft heartbeat: recover if a playStateChanged was missed (SW sleep / nav race).
+  setInterval(() => {
+    if (!document.getElementById("da-player-fab")) return;
+    if (document.hidden) return;
+    refresh().catch(() => {});
+  }, 2000);
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"'`]/g, (c) =>
@@ -450,14 +496,34 @@
     const session = await chrome.runtime.sendMessage({ type: "session" }).catch(() => ({
       userName: "test", version: "?"
     }));
-    const { lastPlayRequest } = await chrome.storage.local.get("lastPlayRequest").catch(() => ({}));
+    let lastPlayRequest = null;
+    let storagePlaying = false;
+    let storagePaused = false;
+    try {
+      const st = await chrome.storage.local.get(["playing", "playPaused", "lastPlayRequest"]);
+      storagePlaying = !!st.playing;
+      storagePaused = !!st.playPaused;
+      lastPlayRequest = st.lastPlayRequest || null;
+    } catch { /* ignore */ }
 
+    if (playHint && typeof playHint === "object") {
+      lastPlaySnapshot = { ...(lastPlaySnapshot || {}), ...playHint };
+    }
+
+    const snap = lastPlaySnapshot || {};
     const play = playHint && (playHint.logs != null || playHint.playing != null || playHint.paused != null)
-      ? { ...(state.play || {}), ...playHint }
-      : (lastPlaySnapshot || state.play || {});
+      ? { ...(state.play || {}), ...snap, ...playHint }
+      : { ...(state.play || {}), ...snap };
 
-    const playing = !!(state.playing || state.play?.playing || (playHint && playHint.playing));
-    const paused = !!(state.play?.paused || play.paused);
+    // Prefer live engine/storage; fall back to last snapshot so a flaky getState cannot disable Stop mid-run.
+    const playing = !!(
+      state.playing
+      || state.play?.playing
+      || storagePlaying
+      || playHint?.playing
+      || snap.playing
+    );
+    const paused = !!(state.play?.paused || play.paused || storagePaused || playHint?.paused);
     const ver = session?.version || chrome.runtime.getManifest().version;
     const user = session?.userName || "test";
     const canRestart = !!(lastPlayRequest?.taskId || play.taskId);
@@ -474,6 +540,8 @@
       panel.hidden = true;
       toggleBtn.hidden = true;
       root.hidden = true;
+      stopBtn.hidden = true;
+      stopBtn.disabled = true;
       return;
     }
 

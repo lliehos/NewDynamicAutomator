@@ -20,7 +20,7 @@
   <link rel="apple-touch-icon" href="~/img/brand/apple-touch-icon.png" />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="~/css/da-notify.css?v=cond-alert-1" />
-  <link rel="stylesheet" href="~/editor/flow.css?v=play-node-pulse-1" />
+  <link rel="stylesheet" href="~/editor/flow.css?v=play-ctrl-2" />
   <style>
     html, body { margin: 0; direction: @dir; }
     html.flow-rtl, html.flow-rtl body { font-family: Vazirmatn, Tahoma, sans-serif; }
@@ -140,6 +140,16 @@
           <div id="group-steps"></div>
         </div>
         <div class="hint" id="flow-hint" data-i18n="editor.groupEdit.hint">@L["editor.groupEdit.hint"]</div>
+        <div class="flow-play-controls" id="flow-play-controls" hidden>
+          <button type="button" class="btn-flow btn-with-ico btn-play-pause" id="btn-play-pause" data-da-action="pause-play" data-mode="pause" data-i18n-title="editor.ribbon.pauseTitle" title="@L["editor.ribbon.pauseTitle"]">
+            <svg class="btn-play-ctrl-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>
+            <span id="btn-play-pause-label" data-i18n="editor.ribbon.pause">@L["editor.ribbon.pause"]</span>
+          </button>
+          <button type="button" class="btn-flow btn-with-ico btn-stop-play" id="btn-stop-play" data-da-action="stop-play" data-i18n-title="editor.ribbon.stopTitle" title="@L["editor.ribbon.stopTitle"]">
+            <svg class="btn-play-ctrl-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>
+            <span data-i18n="editor.ribbon.stop">@L["editor.ribbon.stop"]</span>
+          </button>
+        </div>
         <button type="button" class="btn-flow btn-canvas-save" id="btn-canvas-save" data-i18n-title="common.save" title="@L["common.save"]">
           <svg class="btn-canvas-save-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/>
@@ -187,10 +197,10 @@
     </div>
   </div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script src="~/js/i18n.js?v=3"></script>
+  <script src="~/js/i18n.js?v=4"></script>
   <script src="~/js/da-notify.js?v=cond-alert-1"></script>
   <script src="~/js/da-crypto.js?v=3"></script>
   <script src="~/js/da-secure-store.js?v=4"></script>
-  <script src="~/editor/flow.js?v=sel-state-at-end-1"></script>
+  <script src="~/editor/flow.js?v=ds-icons-1"></script>
 </body>
 </html>

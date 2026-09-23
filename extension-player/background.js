@@ -983,6 +983,11 @@ async function startPlayWithAutoReload(message, sender) {
     groupNodeId: message.groupNodeId || null,
     stepNodeId: message.stepNodeId || null,
     conditionNodeId: message.conditionNodeId || null,
+    playScope: message.playScope
+      || (message.conditionNodeId ? "condition"
+        : message.stepNodeId ? "step"
+          : message.groupNodeId ? "group"
+            : "task"),
     // New blank tab ONLY when Start is pressed from our portal web app.
     // When an explicit target tab is set, never open a new tab.
     openNewTab: hasExplicitTab || isConditionCheck ? false : (message.openNewTab === true)
@@ -992,6 +997,7 @@ async function startPlayWithAutoReload(message, sender) {
     groupNodeId: pendingPlay.groupNodeId,
     stepNodeId: pendingPlay.stepNodeId,
     conditionNodeId: pendingPlay.conditionNodeId,
+    playScope: pendingPlay.playScope,
     openNewTab: pendingPlay.openNewTab,
     activateTab: isConditionCheck ? false : undefined
   };
@@ -1169,6 +1175,7 @@ async function resumePendingPlayAfterReload() {
         groupNodeId: pendingPlayRequest.groupNodeId || null,
         stepNodeId: pendingPlayRequest.stepNodeId || null,
         conditionNodeId: pendingPlayRequest.conditionNodeId || null,
+        playScope: pendingPlayRequest.playScope || null,
         openNewTab: pendingPlayRequest.openNewTab === true
       }
     ).then((res) => {

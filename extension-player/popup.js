@@ -99,6 +99,8 @@ async function refresh() {
           runMode: lastPlayRequest?.runMode,
           groupNodeId: lastPlayRequest?.groupNodeId || null,
           stepNodeId: lastPlayRequest?.stepNodeId || null,
+          conditionNodeId: lastPlayRequest?.conditionNodeId || null,
+          playScope: lastPlayRequest?.playScope || null,
           tabId: active?.id || null
         }).catch((e) => ({ ok: false, error: e.message }));
         if (!res?.ok && !res?.reloading) {

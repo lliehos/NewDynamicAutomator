@@ -2,6 +2,16 @@ function isActionNode(n) {
   return !!n && (n.kind === "action" || n.kind === "step");
 }
 
+function sameNodeId(a, b) {
+  if (a == null || b == null) return false;
+  return String(a) === String(b);
+}
+
+function findGraphNode(graph, id) {
+  if (id == null || id === "") return null;
+  return (graph?.nodes || []).find((n) => sameNodeId(n.id, id)) || null;
+}
+
 /** Play-time graph validation — mirrors editor leaf rules; blocks start if any node is invalid. */
 const DYN_SEL_PLACEHOLDER = "{مقدار پویا}";
 
@@ -470,6 +480,16 @@ function notifyPortalTabs(message) {
 async function injectPlayFab(tabId) {
   if (!tabId) return false;
   try {
+    // If HUD already mounted, just push fresh state — do not re-init (would no-op / race).
+    const [{ result: existing } = {}] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => !!(window.__daFabInit && document.getElementById("da-player-fab"))
+    }).catch(() => [{ result: false }]);
+    if (existing) {
+      notifyTab(tabId, { type: "playStateChanged", ...getPlayStatus() });
+      return true;
+    }
+
     // Never mount Player HUD over an active Recorder session on this page.
     const [{ result: blocked } = {}] = await chrome.scripting.executeScript({
       target: { tabId },
@@ -858,12 +878,25 @@ async function startPlay(taskId, tabId, runMode, options) {
   }
   // Estimate steps along the happy-path (success) for HUD totals; runtime may branch.
   const steps = collectPlaySteps(graph, opts);
-  const singleCond = opts.conditionNodeId
-    ? (graph.nodes || []).find((n) => n.id === opts.conditionNodeId && n.kind === "condition")
+  const singleCondRaw = opts.conditionNodeId
+    ? findGraphNode(graph, opts.conditionNodeId)
     : null;
+  const singleCond = singleCondRaw && singleCondRaw.kind === "condition" ? singleCondRaw : null;
   const singleStep = opts.stepNodeId
-    ? (graph.nodes || []).find((n) => n.id === opts.stepNodeId)
+    ? findGraphNode(graph, opts.stepNodeId)
     : null;
+  const playScope = opts.playScope
+    || (opts.conditionNodeId || (singleStep && singleStep.kind === "condition")
+      ? "condition"
+      : opts.stepNodeId
+        ? "step"
+        : opts.groupNodeId
+          ? "group"
+          : "task");
+  opts.playScope = playScope;
+  // Never walk the full diagram for a scoped step/condition play.
+  const scopedSingle = playScope === "step" || playScope === "condition"
+    || !!(opts.stepNodeId || opts.conditionNodeId);
   if (steps.length === 0 && !opts.stepNodeId && !singleCond) {
     // Still allow walk — conditions/groups may expand at runtime; but warn if no actions exist at all.
     const anyAction = (graph.nodes || []).some((n) => isActionNode(n));
@@ -914,6 +947,7 @@ async function startPlay(taskId, tabId, runMode, options) {
     groupNodeId: opts.groupNodeId || null,
     stepNodeId: opts.stepNodeId || null,
     conditionNodeId: opts.conditionNodeId || null,
+    playScope: opts.playScope || null,
     title: graph.title || null
   };
   await chrome.storage.local.set({ lastPlayRequest });
@@ -924,14 +958,14 @@ async function startPlay(taskId, tabId, runMode, options) {
   // Keep prior logs/results until the user clears them.
   const hadHistory = playLogs.length > 0 || (playStatus.results || []).length > 0;
   playTabId = tabId;
-  const limited = !!(opts.groupNodeId || opts.stepNodeId || opts.conditionNodeId);
+  const limited = scopedSingle || !!(opts.groupNodeId || opts.stepNodeId || opts.conditionNodeId);
   const iterations = limited
     ? { type: "None", indices: [0], total: 1, label: "اجرای محدود (بدون تکرار فرآیند)" }
     : resolveProcessIterations(graph);
   const priorResults = Array.isArray(playStatus.results) ? playStatus.results.slice() : [];
-  const scopeLabel = opts.conditionNodeId || (singleStep && singleStep.kind === "condition")
+  const scopeLabel = playScope === "condition" || (singleStep && singleStep.kind === "condition")
     ? "condition"
-    : opts.stepNodeId
+    : playScope === "step" || opts.stepNodeId
       ? "step"
       : opts.groupNodeId
         ? "group"
@@ -942,7 +976,7 @@ async function startPlay(taskId, tabId, runMode, options) {
     taskId: graph.taskId || taskId,
     title: graph.title,
     stepIndex: 0,
-    stepTotal: Math.max(steps.length, 1),
+    stepTotal: scopedSingle ? 1 : Math.max(steps.length, 1),
     loopIndex: 0,
     loopTotal: iterations.total,
     repeatType: iterations.type,
@@ -1017,10 +1051,12 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
       appendPlayLog("info", `──── حلقه ${li + 1} / ${iters.total} (اندیس ${rowIndex}) ────`);
       broadcastPlayState();
 
-      // Single-step scope: run only that action — or evaluate one condition.
-      if (opts.conditionNodeId || opts.stepNodeId) {
+      // Single-step / single-condition scope: never continue along diagram edges.
+      const scopedSingle = opts.playScope === "step" || opts.playScope === "condition"
+        || !!(opts.conditionNodeId || opts.stepNodeId);
+      if (scopedSingle) {
         const nodeId = opts.conditionNodeId || opts.stepNodeId;
-        const step = (graph.nodes || []).find((n) => n.id === nodeId);
+        const step = findGraphNode(graph, nodeId);
         if (!step) {
           playStatus.lastError = "نود پیدا نشد.";
           break;
@@ -1029,7 +1065,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
         playStatus.stepTotal = 1;
         playStatus.currentNodeId = step.id;
         broadcastPlayState();
-        if (step.kind === "condition") {
+        if (step.kind === "condition" || opts.playScope === "condition") {
           const title = step.title || step.conditionType || step.id;
           const checkId = Date.now();
           appendPlayLog("info", `بررسی شرط «${title}»…`);
@@ -1082,6 +1118,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
               : "نتیجه شرط: برقرار نیست (ناموفق)"
           });
         } else if (isActionNode(step)) {
+          appendPlayLog("info", `اجرای تک‌اقدام «${step.title || step.actionType || step.id}» (بدون ادامهٔ دیاگرام)`);
           const outcome = await runOneAction(activeTabId, graph, step, rowIndex, li + 1, iters.total, 1, 1);
           if (outcome.tabId) activeTabId = outcome.tabId;
           if (!outcome.ok) {
@@ -1089,6 +1126,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
             if (decision.continueLoop) continue;
             break;
           }
+          // Explicit stop — do not follow next/success edges after a scoped action.
         } else {
           playStatus.lastError = "این نود قابل اجرا در مرورگر نیست.";
           break;
@@ -1121,9 +1159,12 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
 }
 
 function resolvePlayEntryId(graph, opts = {}) {
-  if (opts.stepNodeId) return opts.stepNodeId;
+  if (opts.stepNodeId) {
+    const n = findGraphNode(graph, opts.stepNodeId);
+    return n?.id || opts.stepNodeId;
+  }
   if (opts.groupNodeId) {
-    const gStart = (graph.nodes || []).find((n) => n.kind === "start" && n.groupNodeId === opts.groupNodeId);
+    const gStart = (graph.nodes || []).find((n) => n.kind === "start" && sameNodeId(n.groupNodeId, opts.groupNodeId));
     return gStart?.id || opts.groupNodeId;
   }
   return processStartNode(graph)?.id || null;
@@ -2452,14 +2493,19 @@ function collectPlaySteps(graph, opts = {}) {
   }
 
   if (opts.conditionNodeId) {
-    const n = nodes.get(opts.conditionNodeId);
+    const n = findGraphNode(graph, opts.conditionNodeId);
     return n && n.kind === "condition" ? [] : [];
   }
   if (opts.stepNodeId) {
-    const n = nodes.get(opts.stepNodeId);
+    const n = findGraphNode(graph, opts.stepNodeId);
     if (n && isActionNode(n)) return [n];
     // Condition via stepNodeId — handled in runPlayLoop, not as action steps
     if (n && n.kind === "condition") return [];
+    return [];
+  }
+
+  // Guard: never walk the full graph when a scoped play was requested.
+  if (opts.playScope === "step" || opts.playScope === "condition") {
     return [];
   }
 

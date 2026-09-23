@@ -1,4 +1,4 @@
-/** Player portal UI — play / stop only. */
+/** Player portal UI — play / pause / resume / stop. */
 (function () {
   function playerOk() {
     return document.documentElement.dataset.daPlayerExtension === "1";
@@ -19,10 +19,11 @@
   }
 
   function emitPlayUi(phase, text, extra) {
+    const detail = { phase, text: text || "", ...(extra || {}) };
     try {
-      window.dispatchEvent(new CustomEvent("da-play-ui", {
-        detail: { phase, text: text || "", ...(extra || {}) }
-      }));
+      // postMessage reaches the page world (editor); CustomEvent stays in the content-script world.
+      window.postMessage({ source: "da-player-ext", type: "play-ui", ...detail }, "*");
+      window.dispatchEvent(new CustomEvent("da-play-ui", { detail }));
     } catch {
       /* ignore */
     }
@@ -182,6 +183,11 @@
       groupNodeId: scope?.groupNodeId || null,
       stepNodeId: scope?.stepNodeId || null,
       conditionNodeId: scope?.conditionNodeId || null,
+      playScope: scope?.playScope
+        || (scope?.conditionNodeId ? "condition"
+          : scope?.stepNodeId ? "step"
+            : scope?.groupNodeId ? "group"
+              : "task"),
       tabId: hasTargetTab ? rawTab : null,
       // Portal Start → new blank tab; ctx check/run → never open a new tab.
       openNewTab: hasTargetTab ? false : (isConditionCheck ? false : (scope?.openNewTab !== false))
@@ -275,6 +281,26 @@
     return res;
   }
 
+  async function pausePlayFromPortal() {
+    const res = await chrome.runtime.sendMessage({ type: "pausePlay" }).catch((e) => ({ ok: false, error: e.message }));
+    if (res?.ok === false && res?.error) {
+      setPortalStatus(res.error, "error");
+    } else {
+      setPortalStatus("اجرا موقتاً متوقف شد", "info");
+    }
+    return res;
+  }
+
+  async function resumePlayFromPortal() {
+    const res = await chrome.runtime.sendMessage({ type: "resumePlay" }).catch((e) => ({ ok: false, error: e.message }));
+    if (res?.ok === false && res?.error) {
+      setPortalStatus(res.error, "error");
+    } else {
+      setPortalStatus("ادامه اجرا", "info");
+    }
+    return res;
+  }
+
   document.addEventListener("click", async (ev) => {
     const t = ev.target instanceof Element ? ev.target.closest("[data-da-action]") : null;
     if (!t) return;
@@ -308,6 +334,14 @@
       ev.preventDefault();
       await stopPlay();
     }
+    if (action === "pause-play") {
+      ev.preventDefault();
+      await pausePlayFromPortal();
+    }
+    if (action === "resume-play") {
+      ev.preventDefault();
+      await resumePlayFromPortal();
+    }
   });
 
   // postMessage path for ctx «اجرا/بررسی در مرورگر» (reliable tabId)
@@ -321,9 +355,22 @@
         groupNodeId: d.groupNodeId,
         stepNodeId: d.stepNodeId,
         conditionNodeId: d.conditionNodeId,
+        playScope: d.playScope || null,
         tabId: d.tabId,
         openNewTab: d.openNewTab
       });
+      return;
+    }
+    if (d.type === "stop") {
+      await stopPlay();
+      return;
+    }
+    if (d.type === "pause") {
+      await pausePlayFromPortal();
+      return;
+    }
+    if (d.type === "resume") {
+      await resumePlayFromPortal();
       return;
     }
     if (d.type === "list-open-tabs") {
@@ -343,6 +390,7 @@
       groupNodeId: d.groupNodeId,
       stepNodeId: d.stepNodeId,
       conditionNodeId: d.conditionNodeId,
+      playScope: d.playScope || null,
       tabId: d.tabId,
       openNewTab: d.openNewTab
     });
@@ -358,6 +406,14 @@
 
   window.addEventListener("da-stop-play", async () => {
     await stopPlay();
+  });
+
+  window.addEventListener("da-pause-play", async () => {
+    await pausePlayFromPortal();
+  });
+
+  window.addEventListener("da-resume-play", async () => {
+    await resumePlayFromPortal();
   });
 
   function maybeAnnounceFromPlayState(message) {

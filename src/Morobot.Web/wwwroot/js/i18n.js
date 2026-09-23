@@ -125,7 +125,7 @@
 
   async function load(nextCulture) {
     culture = normalize(nextCulture || detect());
-    const res = await fetch(`/locales/${culture}.json?v=3`, { cache: "no-cache" });
+    const res = await fetch(`/locales/${culture}.json?v=4`, { cache: "no-cache" });
     if (!res.ok) throw new Error("locale load failed");
     const json = await res.json();
     dict = {};

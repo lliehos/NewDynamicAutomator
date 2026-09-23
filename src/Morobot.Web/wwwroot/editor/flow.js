@@ -116,6 +116,10 @@
   let editingGroupId = null;
   /** Node currently executing in Player — pulse on diagram when editor is open. */
   let playFocusNodeId = null;
+  let playSessionActive = false;
+  let playSessionPaused = false;
+  const PLAY_PAUSE_ICO = `<svg class="btn-play-ctrl-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>`;
+  const PLAY_RESUME_ICO = `<svg class="btn-play-ctrl-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>`;
   /** Stack of parent group ids when drilling into nested group designers. */
   let editStack = [];
   /** Per-scope viewport: "root" | groupId → {x,y,zoom} */
@@ -469,24 +473,44 @@
       const keys = (d.columnKeys || (d.columns || []).map((c) => c.key || c.Key) || []).join("، ") || "—";
       const isMaster = Number(d.id) === Number(masterId);
       const label = d.title || dataSourceFileTitle(d.fileName) || t("editor.ds.removed");
+      const sid = Number(d.id);
+      const masterBtn = isMaster
+        ? dsIconBtn("is-master", t("editor.ds.masterBadge"), DS_ICO_STAR, "disabled")
+        : (canModify
+          ? dsIconBtn("js-ds-master", t("editor.ds.setMaster"), DS_ICO_STAR_OUT, `data-id="${sid}"`)
+          : "");
+      const actions = `
+        ${dsIconBtn("js-ds-view", t("editor.ds.viewTable"), DS_ICO_VIEW, `data-id="${sid}"`)}
+        ${dsIconBtn("js-ds-dl", t("editor.ds.downloadExcel"), DS_ICO_DL, `data-id="${sid}"`)}
+        ${dsIconBtn("js-ds-cloud", t("editor.ds.saveServerSoon"), DS_ICO_CLOUD, `data-id="${sid}"`)}
+        ${masterBtn}
+        ${canModify ? dsIconBtn("js-ds-del is-danger", t("common.delete"), DS_ICO_DEL, `data-id="${sid}"`) : ""}
+      `;
       return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}">
-        <span class="ds-title">${esc(label)}${isMaster ? `<span class="ds-badge-master">${t("editor.ds.masterBadge")}</span>` : ""}</span>
-        <div class="ds-meta">${d.columnCount || 0} ${t("editor.ds.columns")} · ${d.rowCount || 0} ${t("editor.ds.rows")}${d.fileName ? ` · ${esc(d.fileName)}` : ""}${isMaster ? ` · ${t("editor.ds.masterLabel")}` : ""}</div>
+        <div class="ds-row-top">
+          <span class="ds-title">${esc(label)}${isMaster ? `<span class="ds-badge-master">${t("editor.ds.masterBadge")}</span>` : ""}</span>
+          <div class="ds-actions">${actions}</div>
+        </div>
+        <div class="ds-meta">${d.columnCount || 0} ${t("editor.ds.columns")} · ${d.rowCount || 0} ${t("editor.ds.rows")}${d.fileName ? ` · ${esc(d.fileName)}` : ""}</div>
         <div class="ds-keys">${esc(keys)}</div>
-        ${canModify ? `<div class="ds-actions">
-          ${isMaster
-            ? `<button type="button" class="btn-flow btn-ghost" disabled>${t("editor.ds.masterBadge")}</button>`
-            : `<button type="button" class="btn-flow btn-ghost ds-set-master" data-id="${d.id}">${t("editor.insp.gotoStart")}</button>`}
-          <button type="button" class="btn-flow btn-ghost ds-del" data-id="${d.id}">${t("common.delete")}</button>
-        </div>` : ""}
       </li>`;
     }).join("");
-    listEl.querySelectorAll(".ds-del").forEach((btn) => {
+
+    listEl.querySelectorAll(".js-ds-view").forEach((btn) => {
+      btn.addEventListener("click", () => openDsViewer(Number(btn.dataset.id)));
+    });
+    listEl.querySelectorAll(".js-ds-dl").forEach((btn) => {
+      btn.addEventListener("click", () => downloadDataSource(Number(btn.dataset.id), btn));
+    });
+    listEl.querySelectorAll(".js-ds-cloud").forEach((btn) => {
+      btn.addEventListener("click", () => setStatus(t("editor.ds.saveServerSoon"), "info"));
+    });
+    listEl.querySelectorAll(".js-ds-del").forEach((btn) => {
       btn.addEventListener("click", async () => {
         await deleteDataSource(Number(btn.dataset.id));
       });
     });
-    listEl.querySelectorAll(".ds-set-master").forEach((btn) => {
+    listEl.querySelectorAll(".js-ds-master").forEach((btn) => {
       btn.addEventListener("click", async () => {
         setMasterDataSource(Number(btn.dataset.id));
         const start = processStart();
@@ -500,6 +524,316 @@
       });
     });
   }
+
+  const DS_ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
+  const DS_ICO_DL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.4-3.4 1.4 1.4L12 17l-4.8-5.8 1.4-1.4L11 13.2V3h1zM5 19h14v2H5v-2z"/></svg>`;
+  const DS_ICO_CLOUD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17.5 19H8a5 5 0 0 1-.7-9.95A6.5 6.5 0 0 1 20 12.5a3.5 3.5 0 0 1-2.5 6.5zM12 8v6.2l2.4-2.4 1.2 1.2L12 17l-3.6-3.999 1.2-1.2L11 14.2V8h1z"/></svg>`;
+  const DS_ICO_STAR = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
+  const DS_ICO_STAR_OUT = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
+  const DS_ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
+
+  function dsIconBtn(cls, title, iconHtml, extra = "") {
+    return `<button type="button" class="ds-icon-btn ${cls}" title="${esc(title)}" aria-label="${esc(title)}" ${extra}>${iconHtml}</button>`;
+  }
+
+  function findDataSourceById(sourceId) {
+    return (graph.dataSources || []).find((d) => Number(d.id) === Number(sourceId)) || null;
+  }
+
+  function dataSourceTableRows(ds) {
+    const keys = Array.isArray(ds?.columnKeys) && ds.columnKeys.length
+      ? ds.columnKeys.map(String)
+      : (ds?.columns || []).map((c) => String(c.key || c.Key || "")).filter(Boolean);
+    const cols = Array.isArray(ds?.columns) && ds.columns.length
+      ? ds.columns.map((c) => ({
+          key: String(c.key || c.Key || ""),
+          title: String(c.title || c.Title || c.key || c.Key || "")
+        })).filter((c) => c.key)
+      : keys.map((k) => ({ key: k, title: k }));
+    const headers = cols.map((c) => c.title || c.key);
+    const colKeys = cols.map((c) => c.key);
+    const cells = Array.isArray(ds?.cells) ? ds.cells : [];
+    const byRow = new Map();
+    cells.forEach((cell) => {
+      const idx = Number(cell.index ?? cell.Index ?? 0);
+      if (!Number.isFinite(idx)) return;
+      if (!byRow.has(idx)) byRow.set(idx, {});
+      const key = String(cell.key || cell.Key || "");
+      byRow.get(idx)[key] = cell.cellValue ?? cell.CellValue ?? "";
+    });
+    const indexes = [...byRow.keys()].sort((a, b) => a - b);
+    const rows = indexes.map((idx) => {
+      const map = byRow.get(idx) || {};
+      return colKeys.map((k) => map[k] ?? "");
+    });
+    return { headers, colKeys, columns: cols, rows };
+  }
+
+  function downloadBlobFile(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  function dataSourceSafeFileName(ds) {
+    const raw = (ds?.fileName && String(ds.fileName).replace(/\.(xlsx|xlsm|csv)$/i, ""))
+      || ds?.title
+      || "data-source";
+    return String(raw).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "data-source";
+  }
+
+  function downloadAsCsv(ds) {
+    const { headers, rows } = dataSourceTableRows(ds);
+    const escCsv = (v) => {
+      const s = String(v ?? "");
+      if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const lines = [headers.map(escCsv).join(",")].concat(rows.map((r) => r.map(escCsv).join(",")));
+    downloadBlobFile(new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" }), `${dataSourceSafeFileName(ds)}.csv`);
+  }
+
+  async function downloadDataSource(sourceId, btn) {
+    const ds = findDataSourceById(sourceId);
+    if (!ds) {
+      setStatus(t("editor.ds.notFound"), "error");
+      return;
+    }
+    const table = dataSourceTableRows(ds);
+    if (!table.colKeys.length) {
+      setStatus(t("editor.ds.noColumns"), "error");
+      return;
+    }
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add("is-busy");
+    }
+    try {
+      const payload = {
+        title: dataSourceSafeFileName(ds),
+        columns: table.columns.map((c) => ({ key: c.key, title: c.title })),
+        columnKeys: table.colKeys,
+        cells: (ds.cells || []).map((c) => ({
+          key: c.key || c.Key || "",
+          index: Number(c.index ?? c.Index ?? 0),
+          cellValue: c.cellValue ?? c.CellValue ?? ""
+        }))
+      };
+      const res = await fetch("/Panel/Tasks/ExportExcel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/octet-stream" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `خطا در ساخت اکسل (کد ${res.status})`);
+      }
+      downloadBlobFile(await res.blob(), `${dataSourceSafeFileName(ds)}.xlsx`);
+      setStatus(t("editor.ds.downloadDone", { name: dataSourceSafeFileName(ds) }), "success");
+    } catch (e) {
+      try {
+        downloadAsCsv(ds);
+        setStatus(t("editor.ds.downloadCsvFallback", { err: e.message || "" }), "info");
+      } catch (e2) {
+        setStatus(e.message || e2.message || t("editor.ds.downloadFail"), "error");
+      }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove("is-busy");
+      }
+    }
+  }
+
+  const dsViewerState = { sourceId: null, connection: null, blinkTimers: new Map() };
+
+  function setDsViewerLive(on, text) {
+    const el = document.getElementById("ds-viewer-live");
+    if (!el) return;
+    el.classList.toggle("is-on", !!on);
+    el.textContent = text || (on ? t("editor.ds.live") : t("editor.ds.offline"));
+  }
+
+  function flashDsCell(td, op) {
+    if (!td) return;
+    const cls = op === "write" ? "ds-flash-write" : "ds-flash-read";
+    td.classList.remove("ds-flash-read", "ds-flash-write");
+    void td.offsetWidth;
+    td.classList.add(cls);
+    const key = `${td.dataset.row}:${td.dataset.col}`;
+    const prev = dsViewerState.blinkTimers.get(key);
+    if (prev) clearTimeout(prev);
+    dsViewerState.blinkTimers.set(key, setTimeout(() => {
+      td.classList.remove(cls);
+      dsViewerState.blinkTimers.delete(key);
+    }, 2800));
+  }
+
+  function applyDsCellEventToGraph(ev) {
+    if (!ev) return null;
+    const sourceId = Number(ev.dataSourceId ?? ev.DataSourceId ?? ev.sourceId ?? ev.SourceId);
+    if (!Number.isFinite(sourceId)) return null;
+    const ds = findDataSourceById(sourceId);
+    if (!ds) return null;
+    const col = String(ev.columnKey ?? ev.ColumnKey ?? "").trim();
+    const idx = Number(ev.rowIndex ?? ev.RowIndex ?? 0) || 0;
+    if (!col) return ds;
+    const op = String(ev.op || ev.Op || "read").toLowerCase();
+    if (op.includes("write")) {
+      ds.cells = Array.isArray(ds.cells) ? ds.cells : [];
+      const hit = ds.cells.find((c) =>
+        (c.key === col || c.Key === col)
+        && Number(c.index ?? c.Index ?? c.rowIndex) === idx
+      );
+      const val = ev.cellValue == null && ev.CellValue == null ? "" : String(ev.cellValue ?? ev.CellValue ?? "");
+      if (hit) {
+        if (hit.cellValue !== undefined) hit.cellValue = val;
+        else if (hit.CellValue !== undefined) hit.CellValue = val;
+        else hit.value = val;
+      } else {
+        ds.cells.push({ key: col, index: idx, cellValue: val });
+      }
+      const rc = Number(ds.rowCount) || 0;
+      if (idx + 1 > rc) ds.rowCount = idx + 1;
+    }
+    return ds;
+  }
+
+  function handleDsCellEvent(ev) {
+    if (!ev) return;
+    const sid = Number(ev.dataSourceId ?? ev.DataSourceId ?? ev.sourceId ?? ev.SourceId);
+    const modal = document.getElementById("ds-viewer");
+    const viewing = modal && !modal.hidden && Number(dsViewerState.sourceId) === sid;
+    const ds = applyDsCellEventToGraph(ev);
+    if (!viewing) return;
+    const op = String(ev.op || ev.Op || "read").toLowerCase();
+    const col = String(ev.columnKey ?? ev.ColumnKey ?? "");
+    const idx = Number(ev.rowIndex ?? ev.RowIndex ?? 0) || 0;
+    const table = document.getElementById("ds-viewer-table");
+    if (op.includes("write") && ds) {
+      let td = table?.querySelector(`td[data-row="${idx}"][data-col="${CSS.escape(col)}"]`);
+      if (!td) {
+        renderDsViewerTable(ds);
+        td = table?.querySelector(`td[data-row="${idx}"][data-col="${CSS.escape(col)}"]`);
+      } else if (ev.cellValue != null || ev.CellValue != null) {
+        td.textContent = String(ev.cellValue ?? ev.CellValue ?? "");
+      }
+      flashDsCell(td, "write");
+    } else {
+      const td = table?.querySelector(`td[data-row="${idx}"][data-col="${CSS.escape(col)}"]`);
+      flashDsCell(td, "read");
+    }
+  }
+
+  async function ensureDsViewerHub() {
+    if (typeof signalR === "undefined") {
+      setDsViewerLive(false, t("editor.ds.noSignalR"));
+      return;
+    }
+    const joinId = String(taskId || graph.taskId || "").trim();
+    if (!joinId) {
+      setDsViewerLive(false, t("editor.ds.offline"));
+      return;
+    }
+    try {
+      if (dsViewerState.connection) {
+        await dsViewerState.connection.stop().catch(() => {});
+        dsViewerState.connection = null;
+      }
+      const conn = new signalR.HubConnectionBuilder()
+        .withUrl("/hubs/play-data")
+        .withAutomaticReconnect([0, 1000, 3000, 8000])
+        .configureLogging(signalR.LogLevel.None)
+        .build();
+      conn.on("cellEvent", handleDsCellEvent);
+      conn.onreconnecting(() => setDsViewerLive(false, t("editor.ds.reconnecting")));
+      conn.onreconnected(async () => {
+        await conn.invoke("JoinTask", joinId).catch(() => {});
+        setDsViewerLive(true, t("editor.ds.live"));
+      });
+      conn.onclose(() => setDsViewerLive(false));
+      await conn.start();
+      await conn.invoke("JoinTask", joinId);
+      dsViewerState.connection = conn;
+      setDsViewerLive(true, t("editor.ds.live"));
+    } catch {
+      setDsViewerLive(false, t("editor.ds.disconnected"));
+    }
+  }
+
+  function renderDsViewerTable(ds) {
+    const table = document.getElementById("ds-viewer-table");
+    const titleEl = document.getElementById("ds-viewer-title");
+    const subEl = document.getElementById("ds-viewer-sub");
+    if (!table || !ds) return;
+    const { headers, colKeys, rows } = dataSourceTableRows(ds);
+    if (titleEl) titleEl.textContent = ds.title || dataSourceSafeFileName(ds);
+    if (subEl) {
+      subEl.textContent = `${colKeys.length} ${t("editor.ds.columns")} · ${rows.length} ${t("editor.ds.rows")}`
+        + (ds.fileName ? ` · ${ds.fileName}` : "")
+        + " — " + t("editor.ds.liveHint");
+    }
+    const thead = table.querySelector("thead");
+    const tbody = table.querySelector("tbody");
+    thead.innerHTML = `<tr><th class="ds-row-idx">#</th>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>`;
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="${headers.length + 1}" class="ds-viewer-empty">${t("editor.ds.noRows")}</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = rows.map((r, i) =>
+      `<tr><th class="ds-row-idx">${i + 1}</th>${r.map((v, ci) =>
+        `<td data-row="${i}" data-col="${esc(colKeys[ci])}">${esc(v)}</td>`
+      ).join("")}</tr>`
+    ).join("");
+  }
+
+  async function openDsViewer(sourceId) {
+    const ds = findDataSourceById(sourceId);
+    if (!ds) {
+      setStatus(t("editor.ds.notFound"), "error");
+      return;
+    }
+    dsViewerState.sourceId = Number(sourceId);
+    renderDsViewerTable(ds);
+    const modal = document.getElementById("ds-viewer");
+    if (modal) modal.hidden = false;
+    setDsViewerLive(false, t("editor.ds.connecting"));
+    await ensureDsViewerHub();
+  }
+
+  async function closeDsViewer() {
+    const modal = document.getElementById("ds-viewer");
+    if (modal) modal.hidden = true;
+    dsViewerState.sourceId = null;
+    setDsViewerLive(false);
+    if (dsViewerState.connection) {
+      try { await dsViewerState.connection.stop(); } catch { /* ignore */ }
+      dsViewerState.connection = null;
+    }
+  }
+
+  function bindDsViewerChrome() {
+    document.querySelectorAll("[data-ds-viewer-close]").forEach((el) => {
+      el.addEventListener("click", () => closeDsViewer());
+    });
+    document.getElementById("ds-viewer-refresh")?.addEventListener("click", () => {
+      const ds = findDataSourceById(dsViewerState.sourceId);
+      if (ds) renderDsViewerTable(ds);
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") {
+        const modal = document.getElementById("ds-viewer");
+        if (modal && !modal.hidden) closeDsViewer();
+      }
+    });
+  }
+  bindDsViewerChrome();
 
   function nextDataSourceId() {
     const ids = (graph.dataSources || []).map((d) => Number(d.id) || 0);
@@ -901,18 +1235,32 @@
   function applyPlayFocusHighlight() {
     if (!world) return;
     const focusId = playFocusVisibleId();
+    const playing = !!focusId;
+    world.classList.toggle("is-play-focus", playing);
+    svg?.classList.toggle("is-play-focus", playing);
     world.querySelectorAll("g.node").forEach((g) => {
       const id = g.getAttribute("data-id");
-      g.classList.toggle("node-playing", !!focusId && id === focusId);
+      const isFocus = playing && id === focusId;
+      g.classList.toggle("node-playing", isFocus);
+      g.classList.toggle("node-play-dim", playing && !isFocus);
+    });
+    world.querySelectorAll("path.edge, path.edge-hit").forEach((el) => {
+      el.classList.toggle("edge-play-dim", playing);
     });
     listWrap?.querySelectorAll(".list-step[data-id]").forEach((row) => {
       const id = row.getAttribute("data-id");
-      row.classList.toggle("list-step-playing", !!playFocusNodeId && id === playFocusNodeId);
+      const isFocus = !!playFocusNodeId && id === playFocusNodeId;
+      row.classList.toggle("list-step-playing", isFocus);
+      row.classList.toggle("list-step-play-dim", !!playFocusNodeId && !isFocus);
     });
   }
 
   function setPlayFocusFromProgress(detail) {
     const playing = !!detail?.playing;
+    const paused = !!detail?.paused;
+    playSessionActive = playing;
+    playSessionPaused = playing && paused;
+    updatePlayControlsUi();
     const nodeId = playing ? (detail.nodeId || null) : null;
     if (playFocusNodeId === nodeId && (playing || !playFocusNodeId)) {
       applyPlayFocusHighlight();
@@ -920,6 +1268,59 @@
     }
     playFocusNodeId = nodeId;
     applyPlayFocusHighlight();
+  }
+
+  function updatePlayControlsUi() {
+    const bar = document.getElementById("flow-play-controls");
+    const btn = document.getElementById("btn-play-pause");
+    if (!bar) return;
+    bar.hidden = !playSessionActive;
+    if (!btn) return;
+    if (!playSessionActive) {
+      btn.dataset.mode = "pause";
+      btn.setAttribute("data-da-action", "pause-play");
+      return;
+    }
+    if (playSessionPaused) {
+      btn.dataset.mode = "play";
+      btn.setAttribute("data-da-action", "resume-play");
+      btn.title = t("editor.ribbon.resumeTitle");
+      btn.setAttribute("aria-label", t("editor.ribbon.resume"));
+      btn.innerHTML = `${PLAY_RESUME_ICO}<span id="btn-play-pause-label">${t("editor.ribbon.resume")}</span>`;
+    } else {
+      btn.dataset.mode = "pause";
+      btn.setAttribute("data-da-action", "pause-play");
+      btn.title = t("editor.ribbon.pauseTitle");
+      btn.setAttribute("aria-label", t("editor.ribbon.pause"));
+      btn.innerHTML = `${PLAY_PAUSE_ICO}<span id="btn-play-pause-label">${t("editor.ribbon.pause")}</span>`;
+    }
+  }
+
+  function requestEditorPauseResume() {
+    const btn = document.getElementById("btn-play-pause");
+    const mode = btn?.dataset?.mode || "pause";
+    const type = mode === "play" ? "resume" : "pause";
+    // Optimistic UI — playStateChanged will confirm.
+    playSessionPaused = type === "pause";
+    updatePlayControlsUi();
+    try {
+      window.postMessage({ source: "da-editor", type }, "*");
+    } catch {
+      window.dispatchEvent(new CustomEvent(type === "pause" ? "da-pause-play" : "da-resume-play"));
+    }
+  }
+
+  function requestEditorStopPlay() {
+    playSessionActive = false;
+    playSessionPaused = false;
+    playFocusNodeId = null;
+    updatePlayControlsUi();
+    applyPlayFocusHighlight();
+    try {
+      window.postMessage({ source: "da-editor", type: "stop" }, "*");
+    } catch {
+      window.dispatchEvent(new CustomEvent("da-stop-play"));
+    }
   }
 
   function scopedEdges() {
@@ -2387,6 +2788,10 @@
       "pointer-events": "stroke"
     });
     if (e.kind === "parent") p.setAttribute("stroke-dasharray", "8 5");
+    if (playFocusVisibleId()) {
+      p.classList.add("edge-play-dim");
+      hit.classList.add("edge-play-dim");
+    }
     if (on) {
       p.setAttribute("filter", "none");
       const glow = el("path", {
@@ -2553,7 +2958,11 @@
     const actionLayout = isActionNode(n) ? stepBoxSize(n) : null;
     const g = el("g", { class: "node", "data-id": n.id, transform: `translate(${n.x},${n.y})` });
     if (selected.has(n.id)) g.classList.add("node-on");
-    if (playFocusVisibleId() === n.id) g.classList.add("node-playing");
+    const focusId = playFocusVisibleId();
+    if (focusId) {
+      if (focusId === n.id) g.classList.add("node-playing");
+      else g.classList.add("node-play-dim");
+    }
     if (isActionNode(n) && n.isActive === false) g.classList.add("node-inactive");
     const validity = validateNode(n);
     if (!validity.ok) g.classList.add("node-invalid");
@@ -3357,6 +3766,13 @@
       groupNodeId: scope?.groupNodeId || null,
       stepNodeId: scope?.stepNodeId || null,
       conditionNodeId: scope?.conditionNodeId || null,
+      playScope: scope?.conditionNodeId
+        ? "condition"
+        : scope?.stepNodeId
+          ? "step"
+          : scope?.groupNodeId
+            ? "group"
+            : "task",
       tabId: hasTab ? rawTab : null,
       openNewTab: false
     };
@@ -3375,6 +3791,10 @@
             ? `اجرای اقدام در تب #${rawTab}…`
             : `اجرای فرآیند در تب #${rawTab}…`;
       setStatus(msg, "info");
+      // Show pause/stop on diagram for any play (including condition checks).
+      playSessionActive = true;
+      playSessionPaused = false;
+      updatePlayControlsUi();
     };
     if (typeof window.daRequirePlayer === "function") {
       window.daRequirePlayer({
@@ -3405,6 +3825,10 @@
       setPlayFocusFromProgress(d);
       return;
     }
+    if (d.type === "play-ui") {
+      applyPlayUiPhase(d.phase);
+      return;
+    }
     if (d.type !== "condition-result") return;
     const msg = d.message || (d.pass ? "نتیجه شرط: برقرار (موفق)" : "نتیجه شرط: برقرار نیست (ناموفق)");
     setStatus(msg, d.pass ? "success" : "error");
@@ -3415,14 +3839,67 @@
   window.addEventListener("da-play-progress", (ev) => {
     setPlayFocusFromProgress(ev.detail || {});
   });
-  window.addEventListener("da-play-ui", (ev) => {
-    const phase = ev.detail?.phase;
+  function applyPlayUiPhase(phase) {
+    if (phase === "started" || phase === "preparing" || phase === "reloading") {
+      playSessionActive = true;
+      playSessionPaused = false;
+      updatePlayControlsUi();
+      return;
+    }
     if (phase === "done" || phase === "error") {
+      playSessionActive = false;
+      playSessionPaused = false;
       playFocusNodeId = null;
+      updatePlayControlsUi();
       applyPlayFocusHighlight();
     }
+  }
+  window.addEventListener("da-play-ui", (ev) => {
+    applyPlayUiPhase(ev.detail?.phase);
   });
   window.addEventListener("click", () => { if (ctxMenu) ctxMenu.hidden = true; });
+
+  document.getElementById("btn-play-pause")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (!playSessionActive) return;
+    requestEditorPauseResume();
+  });
+  document.getElementById("btn-stop-play")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    requestEditorStopPlay();
+  });
+  // Ensure controls exist even if the view was cached without them.
+  if (!document.getElementById("flow-play-controls")) {
+    const wrap = document.querySelector(".canvas-wrap");
+    if (wrap) {
+      const bar = document.createElement("div");
+      bar.className = "flow-play-controls";
+      bar.id = "flow-play-controls";
+      bar.hidden = true;
+      bar.innerHTML = `
+        <button type="button" class="btn-flow btn-with-ico btn-play-pause" id="btn-play-pause" data-da-action="pause-play" data-mode="pause" title="${t("editor.ribbon.pauseTitle")}">
+          ${PLAY_PAUSE_ICO}<span id="btn-play-pause-label">${t("editor.ribbon.pause")}</span>
+        </button>
+        <button type="button" class="btn-flow btn-with-ico btn-stop-play" id="btn-stop-play" data-da-action="stop-play" title="${t("editor.ribbon.stopTitle")}">
+          <svg class="btn-play-ctrl-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>
+          <span>${t("editor.ribbon.stop")}</span>
+        </button>`;
+      wrap.appendChild(bar);
+      document.getElementById("btn-play-pause")?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (!playSessionActive) return;
+        requestEditorPauseResume();
+      });
+      document.getElementById("btn-stop-play")?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        requestEditorStopPlay();
+      });
+    }
+  }
 
   function renderGroupEdit() {
     return;
