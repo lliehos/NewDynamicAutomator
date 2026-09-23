@@ -233,6 +233,7 @@
       "plans": "Plans",
       "prices": "Prices",
       "processes": "Processes",
+      "migrate": "Migrate from legacy",
       "sources": "Sources",
       "users": "Users",
       "events": "Events",
@@ -322,6 +323,8 @@
     "langEn": "English",
     "saved": "Settings saved.",
     "saveProfile": "Save profile",
+    "errorRequired": "First name, last name, email, and mobile are required.",
+    "errorNotFound": "User not found.",
     "noteLocal": "Until full server sync, the profile stays in this browser for the current user; language is stored in a cookie."
   },
   "tasks": {

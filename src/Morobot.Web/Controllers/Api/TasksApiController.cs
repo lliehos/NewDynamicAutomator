@@ -252,10 +252,11 @@ public class TasksApiController : ControllerBase
     {
         if (!await _tasks.CanDeleteAsync(UserId, id, ct))
             return Forbid();
+        var recipients = await _catalog.ResolveAccessUserIdsAsync(id, ct);
         var ok = await _tasks.DeleteAsync(id, ct);
         if (ok)
         {
-            await _catalog.TaskDeletedAsync(id, User.Identity?.Name, ct);
+            await _catalog.TaskDeletedAsync(id, recipients, User.Identity?.Name, ct);
             await _events.LogAsync(
                 "Audit", "Task", "TaskDelete",
                 $"Deleted task #{id}",

@@ -10,6 +10,9 @@
   var isSettings = ctrl.Equals("Settings", StringComparison.OrdinalIgnoreCase);
   var nextLang = L.IsRtl ? "en" : "fa";
   var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
+  var displayName = User.FindFirst("display_name")?.Value;
+  if (string.IsNullOrWhiteSpace(displayName))
+    displayName = User.Identity?.Name;
 }
 <!doctype html>
 <html
@@ -143,7 +146,7 @@
                 <a class="nav-link text-muted" href="/" data-i18n="common.site" title="@L["common.site"]">@L["common.site"]</a>
               </li>
               <li class="nav-item me-3 d-none d-sm-block">
-                <a class="nav-link" asp-area="Panel" asp-controller="Settings" asp-action="Index">@User.Identity?.Name</a>
+                <a class="nav-link" asp-area="Panel" asp-controller="Settings" asp-action="Index">@displayName</a>
               </li>
               <li class="nav-item">
                 <a class="nav-link" asp-area="Panel" asp-controller="Account" asp-action="Logout" data-i18n="common.logout">@L["common.logout"]</a>

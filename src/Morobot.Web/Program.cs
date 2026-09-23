@@ -16,6 +16,7 @@ builder.Services.AddScoped<ILocaleService, LocaleService>();
 builder.Services.AddControllersWithViews(o =>
     {
         o.Filters.Add<Morobot.Web.Filters.BlockAdminFromPanelFilter>();
+        o.Filters.Add<Morobot.Web.Filters.RequireProfileCompleteFilter>();
     })
     .AddJsonOptions(o =>
     {

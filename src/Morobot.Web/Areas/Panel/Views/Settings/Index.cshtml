@@ -2,7 +2,10 @@
   Layout = "_Layout";
   ViewData["Title"] = L["settings.title"];
   var culture = L.Culture;
-  var userName = User.Identity?.Name ?? "";
+  var userName = (string)(ViewBag.UserName ?? User.Identity?.Name ?? "");
+  var incomplete = ViewBag.Incomplete == true;
+  var errKey = TempData["ProfileError"] as string;
+  var okKey = TempData["ProfileOk"] as string;
 }
 <div class="da-home da-settings">
   <header class="da-home-head">
@@ -13,6 +16,19 @@
     </div>
   </header>
 
+  @if (incomplete)
+  {
+    <div class="alert alert-warning">برای ادامه کار با پنل، نام، نام خانوادگی، ایمیل و موبایل را تکمیل کنید.</div>
+  }
+  @if (!string.IsNullOrEmpty(errKey))
+  {
+    <div class="alert alert-danger">@L[errKey]</div>
+  }
+  @if (!string.IsNullOrEmpty(okKey))
+  {
+    <div class="alert alert-success">@L[okKey]</div>
+  }
+
   <div class="row g-4">
     <div class="col-12 col-lg-7">
       <div class="card">
@@ -20,33 +36,32 @@
           <h5 class="mb-0" data-i18n="settings.profile">@L["settings.profile"]</h5>
         </div>
         <div class="card-body">
-          <form id="da-profile-form" autocomplete="on">
+          <form method="post" asp-area="Panel" asp-controller="Settings" asp-action="SaveProfile" autocomplete="on">
+            @Html.AntiForgeryToken()
             <div class="mb-3">
               <label class="form-label" for="da-prof-user" data-i18n="settings.userName">@L["settings.userName"]</label>
               <input class="form-control" id="da-prof-user" type="text" value="@userName" readonly />
             </div>
             <div class="row">
               <div class="col-md-6 mb-3">
-                <label class="form-label" for="da-prof-first" data-i18n="settings.firstName">@L["settings.firstName"]</label>
-                <input class="form-control" id="da-prof-first" name="firstName" type="text" />
+                <label class="form-label" for="firstName" data-i18n="settings.firstName">@L["settings.firstName"] *</label>
+                <input class="form-control" id="firstName" name="firstName" type="text" required value="@ViewBag.FirstName" />
               </div>
               <div class="col-md-6 mb-3">
-                <label class="form-label" for="da-prof-last" data-i18n="settings.lastName">@L["settings.lastName"]</label>
-                <input class="form-control" id="da-prof-last" name="lastName" type="text" />
+                <label class="form-label" for="lastName" data-i18n="settings.lastName">@L["settings.lastName"] *</label>
+                <input class="form-control" id="lastName" name="lastName" type="text" required value="@ViewBag.LastName" />
               </div>
             </div>
             <div class="mb-3">
-              <label class="form-label" for="da-prof-email" data-i18n="settings.email">@L["settings.email"]</label>
-              <input class="form-control" id="da-prof-email" name="email" type="email" />
+              <label class="form-label" for="email" data-i18n="settings.email">@L["settings.email"] *</label>
+              <input class="form-control" id="email" name="email" type="email" required value="@ViewBag.Email" />
             </div>
             <div class="mb-3">
-              <label class="form-label" for="da-prof-mobile" data-i18n="settings.mobile">@L["settings.mobile"]</label>
-              <input class="form-control" id="da-prof-mobile" name="mobile" type="tel" />
+              <label class="form-label" for="mobile" data-i18n="settings.mobile">@L["settings.mobile"] *</label>
+              <input class="form-control" id="mobile" name="mobile" type="tel" required value="@ViewBag.Mobile" />
             </div>
             <button type="submit" class="btn btn-primary" data-i18n="settings.saveProfile">@L["settings.saveProfile"]</button>
-            <div class="text-success small mt-2" id="da-prof-saved" hidden data-i18n="settings.saved">@L["settings.saved"]</div>
           </form>
-          <p class="text-muted small mt-3 mb-0" data-i18n="settings.noteLocal">@L["settings.noteLocal"]</p>
           <hr class="my-4" />
           <a class="btn btn-label-primary" asp-area="Panel" asp-controller="Account" asp-action="Upgrade" data-i18n="plan.upgradeTitle">@L["plan.upgradeTitle"]</a>
         </div>
@@ -76,55 +91,3 @@
     </div>
   </div>
 </div>
-
-@section Scripts {
-<script>
-(function () {
-  const user = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(userName));
-  const form = document.getElementById("da-profile-form");
-  const saved = document.getElementById("da-prof-saved");
-
-  async function load() {
-    let p = null;
-    try {
-      if (window.DaSecureStore) p = await DaSecureStore.readProfile(user);
-      else {
-        const raw = localStorage.getItem(`da_user_profile__${user || "guest"}`);
-        if (raw) p = JSON.parse(raw);
-      }
-    } catch { /* ignore */ }
-    if (!p) return;
-    if (p.firstName) document.getElementById("da-prof-first").value = p.firstName;
-    if (p.lastName) document.getElementById("da-prof-last").value = p.lastName;
-    if (p.email) document.getElementById("da-prof-email").value = p.email;
-    if (p.mobile) document.getElementById("da-prof-mobile").value = p.mobile;
-  }
-
-  form?.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const profile = {
-      userName: user,
-      firstName: document.getElementById("da-prof-first").value.trim(),
-      lastName: document.getElementById("da-prof-last").value.trim(),
-      email: document.getElementById("da-prof-email").value.trim(),
-      mobile: document.getElementById("da-prof-mobile").value.trim(),
-      preferredLanguage: document.documentElement.getAttribute("data-culture") || "fa",
-      updatedAt: new Date().toISOString()
-    };
-    try {
-      if (window.DaSecureStore) await DaSecureStore.writeProfile(profile, user);
-      else localStorage.setItem(`da_user_profile__${user || "guest"}`, JSON.stringify(profile));
-      if (saved) {
-        saved.hidden = false;
-        setTimeout(() => { saved.hidden = true; }, 2500);
-      }
-    } catch (e) {
-      alert(e.message || "save failed");
-    }
-  });
-
-  if (window.DaSecureStore?.whenReady) DaSecureStore.whenReady(() => load());
-  else load();
-})();
-</script>
-}

@@ -23,6 +23,7 @@ public static class DependencyInjection
         services.AddScoped<TaskShareService>();
         services.AddScoped<RecordingService>();
         services.AddScoped<DataSourceService>();
+        services.AddScoped<LegacyImportService>();
         services.AddSingleton<SmartLearningService>();
         return services;
     }

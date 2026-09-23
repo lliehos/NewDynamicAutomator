@@ -103,7 +103,7 @@ public class AuthService
             Token = token,
             UserId = user.Id,
             UserName = user.UserName,
-            DisplayName = $"{user.FirstName} {user.LastName}".Trim(),
+            DisplayName = FormatDisplayName(user),
             Role = user.Role.ToString(),
             Entitlements = entitlements
         }, null);
@@ -169,7 +169,7 @@ public class AuthService
             Token = token,
             UserId = user.Id,
             UserName = user.UserName,
-            DisplayName = $"{user.FirstName} {user.LastName}".Trim(),
+            DisplayName = FormatDisplayName(user),
             Role = user.Role.ToString(),
             Entitlements = entitlements
         }, null);
@@ -217,7 +217,7 @@ public class AuthService
             Token = token,
             UserId = user.Id,
             UserName = user.UserName,
-            DisplayName = $"{user.FirstName} {user.LastName}".Trim(),
+            DisplayName = FormatDisplayName(user),
             Role = user.Role.ToString(),
             Entitlements = entitlements
         }, null);
@@ -330,8 +330,14 @@ public class AuthService
             new(EntitlementService.ClaimCanSmart, entitlements.CanSmart ? "1" : "0"),
             new(EntitlementService.ClaimCanShare, entitlements.CanShare ? "1" : "0"),
             new(EntitlementService.ClaimMaxTasks, entitlements.MaxTasks?.ToString() ?? "*"),
-            new(EntitlementService.ClaimMaxSources, entitlements.MaxDataSources?.ToString() ?? "*")
+            new(EntitlementService.ClaimMaxSources, entitlements.MaxDataSources?.ToString() ?? "*"),
+            new("display_name", FormatDisplayName(user)),
+            new("profile_complete", IsProfileComplete(user) ? "1" : "0")
         };
+        if (!string.IsNullOrWhiteSpace(user.FirstName))
+            claims.Add(new Claim(ClaimTypes.GivenName, user.FirstName));
+        if (!string.IsNullOrWhiteSpace(user.LastName))
+            claims.Add(new Claim(ClaimTypes.Surname, user.LastName));
 
         var creds = new SigningCredentials(
             new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)),
@@ -345,5 +351,54 @@ public class AuthService
             signingCredentials: creds);
 
         return new JwtSecurityTokenHandler().WriteToken(jwt);
+    }
+
+    public async Task<AppUser?> GetUserAsync(int userId, CancellationToken ct = default)
+        => await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+    public static bool IsProfileComplete(AppUser user) =>
+        !string.IsNullOrWhiteSpace(user.FirstName)
+        && !string.IsNullOrWhiteSpace(user.LastName)
+        && !string.IsNullOrWhiteSpace(user.Email)
+        && !string.IsNullOrWhiteSpace(user.Mobile);
+
+    public static string FormatDisplayName(AppUser user)
+    {
+        var full = $"{user.FirstName} {user.LastName}".Trim();
+        return string.IsNullOrWhiteSpace(full) ? user.UserName : full;
+    }
+
+    public async Task<(LoginResponse? result, string? errorKey)> UpdateProfileAsync(
+        int userId, string? firstName, string? lastName, string? email, string? mobile, CancellationToken ct = default)
+    {
+        var user = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == userId, ct);
+        if (user is null) return (null, "settings.errorNotFound");
+
+        firstName = Trunc(firstName?.Trim(), 50);
+        lastName = Trunc(lastName?.Trim(), 50);
+        email = Trunc(email?.Trim(), 120);
+        mobile = Trunc(mobile?.Trim(), 30);
+
+        if (string.IsNullOrWhiteSpace(firstName) || string.IsNullOrWhiteSpace(lastName)
+            || string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(mobile))
+            return (null, "settings.errorRequired");
+
+        user.FirstName = firstName;
+        user.LastName = lastName;
+        user.Email = email;
+        user.Mobile = mobile;
+        await _db.SaveChangesAsync(ct);
+
+        var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
+        var token = CreateToken(user, entitlements);
+        return (new LoginResponse
+        {
+            Token = token,
+            UserId = user.Id,
+            UserName = user.UserName,
+            DisplayName = FormatDisplayName(user),
+            Role = user.Role.ToString(),
+            Entitlements = entitlements
+        }, null);
     }
 }

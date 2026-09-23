@@ -483,6 +483,69 @@ public static class CanvasBackfillService
         return arr;
     }
 
+    /// <summary>Build Graph JSON for one task from a legacy relational DB (mid-schema or Windows V2-style).</summary>
+    public static async Task<string?> ExportTaskGraphJsonAsync(
+        string connectionString, int taskId, CancellationToken ct = default)
+    {
+        await using var conn = new SqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+        return await ExportTaskGraphJsonAsync(conn, taskId, ct);
+    }
+
+    public static async Task<string?> ExportTaskGraphJsonAsync(
+        SqlConnection conn, int taskId, CancellationToken ct = default)
+    {
+        string? title = null;
+        string? canvas = null;
+        string designOrigin = "Manual";
+
+        if (await TableExistsAsync(conn, "Tasks", ct))
+        {
+            var hasCanvas = await ColumnExistsAsync(conn, "Tasks", "CanvasJson", ct);
+            var hasOrigin = await ColumnExistsAsync(conn, "Tasks", "DesignOrigin", ct);
+            var sql = hasCanvas
+                ? (hasOrigin
+                    ? "SELECT Title, CanvasJson, CAST(DesignOrigin AS nvarchar(40)) FROM Tasks WHERE Id=@id"
+                    : "SELECT Title, CanvasJson, NULL FROM Tasks WHERE Id=@id")
+                : "SELECT Title, NULL, NULL FROM Tasks WHERE Id=@id";
+            await using var cmd = new SqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@id", taskId);
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            if (!await r.ReadAsync(ct)) return null;
+            title = r.GetString(0);
+            canvas = r.IsDBNull(1) ? null : r.GetString(1);
+            if (!r.IsDBNull(2)) designOrigin = r.GetString(2) ?? "Manual";
+        }
+        else
+            return null;
+
+        if (HasUsefulGraph(canvas))
+            return canvas;
+
+        if (!await TableExistsAsync(conn, "Groups", ct))
+        {
+            // Minimal empty process
+            return new JsonObject
+            {
+                ["taskId"] = taskId,
+                ["title"] = title ?? "",
+                ["designOrigin"] = designOrigin,
+                ["viewport"] = new JsonObject { ["x"] = 80, ["y"] = 40, ["zoom"] = 1 },
+                ["nodes"] = new JsonArray
+                {
+                    new JsonObject { ["id"] = "start", ["kind"] = "start", ["title"] = "شروع", ["x"] = 40, ["y"] = 220 }
+                },
+                ["edges"] = new JsonArray(),
+                ["dataSources"] = new JsonArray()
+            }.ToJsonString(JsonOpts);
+        }
+
+        return await BuildGraphFromRelationalAsync(conn, taskId, title ?? "", designOrigin, canvas, ct);
+    }
+
+    public static Task<bool> LegacyTableExistsAsync(SqlConnection conn, string name, CancellationToken ct)
+        => TableExistsAsync(conn, name, ct);
+
     private static async Task<bool> TableExistsAsync(SqlConnection conn, string name, CancellationToken ct)
     {
         await using var cmd = new SqlCommand(
