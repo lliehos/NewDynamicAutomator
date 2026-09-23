@@ -1,0 +1,176 @@
+@{
+  var culture = L.Culture;
+  var dir = L.Dir;
+  var cssPrefix = L.IsRtl ? "rtl/" : "";
+  var ctrl = ViewContext.RouteData.Values["controller"]?.ToString() ?? "";
+  var act = ViewContext.RouteData.Values["action"]?.ToString() ?? "";
+  var isHome = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("Index", StringComparison.OrdinalIgnoreCase);
+  var isProcesses = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("Processes", StringComparison.OrdinalIgnoreCase);
+  var isSources = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("DataSources", StringComparison.OrdinalIgnoreCase);
+  var isSettings = ctrl.Equals("Settings", StringComparison.OrdinalIgnoreCase);
+  var nextLang = L.IsRtl ? "en" : "fa";
+  var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
+}
+<!doctype html>
+<html
+  lang="@culture"
+  class="light-style layout-navbar-fixed layout-menu-fixed layout-compact"
+  dir="@dir"
+  data-culture="@culture"
+  data-theme="theme-default"
+  data-assets-path="~/assets/"
+  data-template="vertical-menu-template-starter"
+  data-style="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
+  <title>@(ViewData["Title"] ?? L["brand.name"])</title>
+  <link rel="icon" href="~/img/brand/morobot-mark.svg" type="image/svg+xml" />
+  <link rel="icon" type="image/png" sizes="32x32" href="~/img/brand/morobot-icon.png" />
+  <link rel="apple-touch-icon" href="~/img/brand/apple-touch-icon.png" />
+  <meta name="theme-color" content="#0d9488" />
+  <meta name="application-name" content="@L["brand.name"]" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/@(cssPrefix)core.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/@(cssPrefix)theme-default.css" />
+  <link rel="stylesheet" href="~/assets/css/demo.css" />
+  <link rel="stylesheet" href="~/assets/vendor/libs/node-waves/node-waves.css" />
+  <link rel="stylesheet" href="~/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.css" />
+  <link rel="stylesheet" href="~/css/portal-app.css?v=play-tab-menu-1" />
+  <link rel="stylesheet" href="~/css/da-notify.css?v=3" />
+  <link rel="stylesheet" href="~/css/extension-gate.css?v=smart-path-1" />
+  <style>
+    body, .menu, .layout-navbar, .card, input, button { font-family: Vazirmatn, "Public Sans", sans-serif !important; }
+  </style>
+  <script src="~/assets/vendor/js/helpers.js"></script>
+  <script src="~/assets/js/config.js"></script>
+</head>
+<body>
+  <div id="da-ext-modal" role="dialog" aria-modal="true" aria-labelledby="da-ext-title" data-role="recorder" hidden>
+    <div class="da-ext-card">
+      <h2 id="da-ext-title">@L["panel.extModalTitle"]</h2>
+      <p id="da-ext-desc">@L["panel.extModalDesc"]</p>
+      <div class="da-ext-path-box">
+        <div class="da-ext-path-label" id="da-ext-path-label">@L["panel.extPathLabel"]</div>
+        <code id="da-ext-modal-path">@L["panel.extPathPreparing"]</code>
+      </div>
+      <ol>
+        <li data-i18n="panel.extStep1">@L["panel.extStep1"]</li>
+        <li data-i18n="panel.extStep2">@L["panel.extStep2"]</li>
+        <li data-i18n="panel.extStep3">@L["panel.extStep3"]</li>
+      </ol>
+      <p class="da-ext-note" data-i18n="panel.extNote">@L["panel.extNote"]</p>
+      <div class="da-ext-actions">
+        <button type="button" class="btn-da btn-da-primary" id="da-ext-copy-path" data-i18n="panel.extCopy">@L["panel.extCopy"]</button>
+        <button type="button" class="btn-da btn-da-ghost" id="da-ext-recheck" data-i18n="panel.extRecheck">@L["panel.extRecheck"]</button>
+        <button type="button" class="btn-da btn-da-ghost" id="da-ext-guide" data-i18n="panel.extGuide">@L["panel.extGuide"]</button>
+        <button type="button" class="btn-da btn-da-ghost" id="da-ext-dismiss" data-i18n="panel.extLater">@L["panel.extLater"]</button>
+      </div>
+      <div class="da-ext-hint" id="da-ext-modal-hint"></div>
+    </div>
+  </div>
+  <div class="layout-wrapper layout-content-navbar">
+    <div class="layout-container">
+      <aside id="layout-menu" class="layout-menu menu-vertical menu bg-menu-theme">
+        <div class="app-brand demo">
+          <a asp-area="Panel" asp-controller="Home" asp-action="Index" class="app-brand-link morobot-brand-link">
+            <img class="morobot-brand-mark" src="~/img/brand/morobot-mark.svg" width="32" height="32" alt="" />
+            <span class="app-brand-text demo menu-text fw-bold ms-2" data-i18n="brand.name">@L["brand.name"]</span>
+          </a>
+        </div>
+        <div class="menu-inner-shadow"></div>
+        <ul class="menu-inner py-1">
+          <li class="menu-item @(isHome ? "active" : null)">
+            <a asp-area="Panel" asp-controller="Home" asp-action="Index" class="menu-link">
+              <i class="menu-icon tf-icons ti ti-home"></i>
+              <div data-i18n="panel.navHome">@L["panel.navHome"]</div>
+            </a>
+          </li>
+          <li class="menu-item @(isProcesses ? "active" : null)">
+            <a asp-area="Panel" asp-controller="Home" asp-action="Processes" class="menu-link">
+              <i class="menu-icon tf-icons ti ti-list"></i>
+              <div data-i18n="panel.navProcesses">@L["panel.navProcesses"]</div>
+            </a>
+          </li>
+          <li class="menu-item @(isSources ? "active" : null)">
+            <a asp-area="Panel" asp-controller="Home" asp-action="DataSources" class="menu-link">
+              <i class="menu-icon tf-icons ti ti-database"></i>
+              <div data-i18n="panel.navResources">@L["panel.navResources"]</div>
+            </a>
+          </li>
+          <li class="menu-item @(isSettings ? "active" : null)">
+            <a asp-area="Panel" asp-controller="Settings" asp-action="Index" class="menu-link">
+              <i class="menu-icon tf-icons ti ti-settings"></i>
+              <div data-i18n="panel.navSettings">@L["panel.navSettings"]</div>
+            </a>
+          </li>
+        </ul>
+        <div class="da-menu-foot px-4 pb-3 mt-auto">
+          <small class="text-muted d-block" data-i18n="brand.copyright">@L["brand.copyright"]</small>
+        </div>
+      </aside>
+      <div class="layout-page">
+        <nav class="layout-navbar container-xxl navbar navbar-expand-xl navbar-detached align-items-center bg-navbar-theme"
+             id="layout-navbar">
+          <div class="layout-menu-toggle navbar-nav align-items-xl-center me-3 me-xl-0 d-xl-none">
+            <a class="nav-item nav-link px-0 me-xl-4" href="javascript:void(0)">
+              <i class="ti ti-menu-2 ti-md"></i>
+            </a>
+          </div>
+          <div class="navbar-nav-right d-flex align-items-center w-100" id="navbar-collapse">
+            <div class="d-xl-none fw-semibold text-heading me-auto d-flex align-items-center gap-2">
+              <img src="~/img/brand/morobot-mark.svg" width="22" height="22" alt="" />
+              <span>@L["brand.name"]</span>
+            </div>
+            <ul class="navbar-nav flex-row align-items-center ms-auto">
+              <li class="nav-item me-2">
+                <button type="button" class="btn btn-sm btn-label-primary rounded-pill px-3 da-lang-chip"
+                        data-lang-switch data-lang-next="@nextLang" title="@langLabel">@langLabel</button>
+              </li>
+              <li class="nav-item me-3 d-none d-sm-block">
+                <a class="nav-link text-muted" href="/" data-i18n="common.site" title="@L["common.site"]">@L["common.site"]</a>
+              </li>
+              <li class="nav-item me-3 d-none d-sm-block">
+                <a class="nav-link" asp-area="Panel" asp-controller="Settings" asp-action="Index">@User.Identity?.Name</a>
+              </li>
+              <li class="nav-item">
+                <a class="nav-link" asp-area="Panel" asp-controller="Account" asp-action="Logout" data-i18n="common.logout">@L["common.logout"]</a>
+              </li>
+            </ul>
+          </div>
+        </nav>
+        <div class="content-wrapper">
+          <div class="container-xxl flex-grow-1 container-p-y">
+            @RenderBody()
+          </div>
+          <footer class="content-footer footer bg-footer-theme">
+            <div class="container-xxl">
+              <div class="footer-container d-flex align-items-center justify-content-center py-3">
+                <div class="text-muted small" data-i18n="brand.copyright">@L["brand.copyright"]</div>
+              </div>
+            </div>
+          </footer>
+        </div>
+      </div>
+    </div>
+    <div class="layout-overlay layout-menu-toggle"></div>
+    <div class="drag-target"></div>
+  </div>
+  <script src="~/js/i18n.js?v=4"></script>
+  <script src="~/js/da-crypto.js?v=3"></script>
+  <script src="~/js/da-secure-store.js?v=4"></script>
+  <script src="~/assets/vendor/libs/jquery/jquery.js"></script>
+  <script src="~/assets/vendor/libs/popper/popper.js"></script>
+  <script src="~/assets/vendor/js/bootstrap.js"></script>
+  <script src="~/assets/vendor/libs/node-waves/node-waves.js"></script>
+  <script src="~/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.js"></script>
+  <script src="~/assets/vendor/js/menu.js"></script>
+  <script src="~/assets/js/main.js"></script>
+  <script src="~/js/da-notify.js?v=2"></script>
+  <script src="~/js/extension-gate.js?v=play-tab-menu-1"></script>
+  @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

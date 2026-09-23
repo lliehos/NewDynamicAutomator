@@ -1,4 +1,4 @@
-/** Track right-clicked element and return its CSS selector for context-menu copy. */
+/** Track right-clicked element and return CSS selector (unique or relative). */
 (function () {
   let lastCtxEl = null;
 
@@ -18,9 +18,19 @@
         sendResponse({ ok: false, error: "عنصری انتخاب نشده است." });
         return;
       }
+      const mode = message.mode === "relative" ? "relative" : "unique";
+      const selector = mode === "relative"
+        ? cssPathRelative(el)
+        : cssPathUnique(el);
+      const matchCount = (() => {
+        try { return document.querySelectorAll(selector).length; } catch { return 0; }
+      })();
       sendResponse({
         ok: true,
-        selector: cssPath(el),
+        selector,
+        mode,
+        matchCount,
+        unique: matchCount === 1,
         tag: el.tagName?.toLowerCase() || "",
         url: location.href
       });

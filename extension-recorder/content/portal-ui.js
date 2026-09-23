@@ -1,4 +1,4 @@
-/** Recorder portal UI — record actions only. */
+/** Recorder portal UI — start from process list; session controls on target FAB. */
 (function () {
   function recorderOk() {
     return document.documentElement.dataset.daRecorderExtension === "1"
@@ -19,47 +19,37 @@
     }
   }
 
-  function tabOptionLabel(t) {
-    const title = (t.title || "بدون عنوان").trim();
-    let host = "";
+  function portalUser() {
+    if (window.DaSecureStore && typeof DaSecureStore.currentUser === "function") {
+      return DaSecureStore.currentUser() || "test";
+    }
+    return localStorage.getItem("da_local_user") || "test";
+  }
+
+  /** Always decrypt from disk — sync DaSecureStore.readTasks() can be [] before bootstrap. */
+  async function readPortalTasksAsync() {
+    const user = portalUser();
+    if (window.DaSecureStore) {
+      try {
+        if (typeof DaSecureStore.bootstrap === "function") {
+          await DaSecureStore.bootstrap(user);
+        }
+      } catch { /* ignore */ }
+      const cached = DaSecureStore.readTasks(user);
+      if (Array.isArray(cached) && cached.length) return cached;
+    }
     try {
-      if (t.url && /^https?:/i.test(t.url)) host = new URL(t.url).host;
-      else if (t.isBlank) host = "خالی";
+      const raw = localStorage.getItem("da_local_tasks__" + user);
+      if (!raw) return [];
+      if (window.DaCrypto && DaCrypto.looksEncrypted(raw)) {
+        const data = await DaCrypto.decryptJson(raw);
+        return Array.isArray(data) ? data : [];
+      }
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
-      /* ignore */
+      return [];
     }
-    const mark = t.active ? " [فعال]" : "";
-    return host ? `${title}${mark} — ${host}` : `${title}${mark}`;
-  }
-
-  function fillRecordTabSelectFromList(sel, tabs) {
-    if (!sel) return;
-    const prev = sel.value;
-    sel.innerHTML = `<option value="">تب جدید (خالی)</option>`;
-    for (const t of tabs || []) {
-      if (t.isPortal) continue;
-      const opt = document.createElement("option");
-      opt.value = String(t.id);
-      opt.textContent = tabOptionLabel(t);
-      sel.appendChild(opt);
-    }
-    if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
-  }
-
-  async function fillRecordTabSelect(sel) {
-    if (!sel) return;
-    const res = await chrome.runtime.sendMessage({ type: "listOpenTabs" }).catch(() => null);
-    fillRecordTabSelectFromList(sel, res?.ok ? res.tabs : []);
-  }
-
-  async function loadPortalRecordTabs(fromBroadcast) {
-    if (fromBroadcast?.tabs) {
-      fillRecordTabSelectFromList(document.getElementById("da-record-tab"), fromBroadcast.tabs);
-      fillRecordTabSelectFromList(document.getElementById("da-page-record-tab"), fromBroadcast.tabs);
-      return;
-    }
-    await fillRecordTabSelect(document.getElementById("da-record-tab"));
-    await fillRecordTabSelect(document.getElementById("da-page-record-tab"));
   }
 
   function syncRecordPageFab() {
@@ -73,7 +63,7 @@
     fab.hidden = !ok;
     if (msg) {
       msg.innerHTML = ok
-        ? "افزونهٔ <strong>ضبط</strong> متصل است. دکمهٔ قرمز <strong>REC</strong> پایین‌چپ را بزنید."
+        ? "افزونهٔ <strong>ضبط</strong> متصل است. ضبط را از <strong>لیست فرآیندها</strong> شروع کنید؛ کنترل‌ها روی تب هدف ظاهر می‌شوند."
         : "افزونهٔ <strong>ضبط (Recorder)</strong> نصب نیست. در Chrome/Edge با Load unpacked نصب کنید.";
     }
     if (!ok) {
@@ -92,11 +82,11 @@
       if (rec) rec.hidden = phase !== "recording";
       if (review) review.hidden = phase !== "review";
       if (status) {
-        if (phase === "recording") status.textContent = `در حال ضبط — ${state.count} اکشن (موقت)`;
-        else if (phase === "review") status.textContent = `${state.count || 0} اکشن آماده — ارسال / انصراف / مجدد`;
-        else status.textContent = "آماده برای شروع ضبط";
+        const title = state?.targetTitle || (state?.targetTaskId ? `#${state.targetTaskId}` : "");
+        if (phase === "recording") status.textContent = `در حال ضبط ${title} — ${state.count || 0} مورد`;
+        else if (phase === "review") status.textContent = `بازبینی — ${state.count || 0} مورد · ذخیره از FAB تب هدف`;
+        else status.textContent = "آماده — از لیست فرآیندها ضبط را شروع کنید";
       }
-      if (phase === "idle") loadPortalRecordTabs();
     }).catch(() => {});
   }
 
@@ -107,15 +97,37 @@
 
     if (action === "start-record") {
       ev.preventDefault();
-      const payload = { type: "startRecordSession" };
       const taskId = t.getAttribute("data-task-id");
-      if (taskId) payload.taskId = Number(taskId);
+      if (!taskId) {
+        setPortalStatus("ضبط باید از روی یک فرآیند در لیست شروع شود.", "error");
+        return;
+      }
+      // Push portal process list into the extension BEFORE starting (append-only).
+      const tasks = await readPortalTasksAsync();
+      const user = portalUser();
+      if (!tasks.length) {
+        setPortalStatus("در پورتال فرآیندی نیست — اول یک فرآیند بسازید، بعد ضبط را از همان ردیف شروع کنید.", "error");
+        return;
+      }
+      const sync = await chrome.runtime.sendMessage({
+        type: "syncTasksFromPortal",
+        tasks,
+        user
+      }).catch((e) => ({ ok: false, error: e.message }));
+      if (!sync?.ok) {
+        setPortalStatus(sync?.error || "همگام‌سازی فرآیندها با افزونه ناموفق بود.", "error");
+        return;
+      }
+      const payload = {
+        type: "startRecordSession",
+        // Keep UUID/string ids — Number(uuid) becomes NaN and breaks start.
+        taskId: String(taskId).trim(),
+        taskTitle: t.getAttribute("data-task-title") || null
+      };
       const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
       if (res?.ok) {
         setPortalStatus(
-          taskId
-            ? `ضبط روی فرآیند #${taskId} در تب جدید شروع شد — بعد از اتمام، در FAB ذخیره کنید.`
-            : "تب جدید خالی باز شد — کار کنید، بعد از FAB «اتمام ضبط» را بزنید.",
+          `ضبط روی فرآیند #${taskId} شروع شد — پنل ضبط روی تب هدف است.`,
           "success"
         );
       } else {
@@ -138,21 +150,29 @@
       await chrome.runtime.sendMessage({ type: "finishRecord" }).catch(() => {});
       syncRecordPageFab();
     }
-    if (action === "rerecord") {
+    if (action === "resume-record") {
       ev.preventDefault();
-      await chrome.runtime.sendMessage({ type: "rerecord" }).catch(() => {});
+      await chrome.runtime.sendMessage({ type: "resumeRecord" }).catch(() => {});
       syncRecordPageFab();
     }
     if (action === "save-draft") {
       ev.preventDefault();
-      const title = prompt("عنوان فرآیند", "فرآیند ضبط‌شده");
-      if (title == null) return;
+      const def = "گروه ضبط";
+      const groupTitle = window.prompt("نام گروه ضبط", def);
+      if (groupTitle == null) return;
+      if (!String(groupTitle).trim()) {
+        setPortalStatus("نام گروه لازم است.", "error");
+        return;
+      }
       const res = await chrome.runtime.sendMessage({
         type: "saveDraft",
-        payload: { newTaskTitle: title }
+        payload: { continueRecording: true, groupTitle: String(groupTitle).trim() }
       }).catch((e) => ({ ok: false, error: e.message }));
       if (res?.ok) {
-        setPortalStatus(`ذخیره شد — ویرایش: /Panel/Tasks/Editor/${res.result?.taskId}`, "success");
+        setPortalStatus(
+          `ذخیره شد در فرآیند #${res.result?.taskId} — گروه «${res.result?.groupTitle || groupTitle}» · می‌توانید ادامه دهید`,
+          "success"
+        );
       } else {
         setPortalStatus(res?.error || "خطا در ذخیره ضبط", "error");
       }
@@ -182,28 +202,19 @@
   setTimeout(hidePortalExtFab, 400);
   setTimeout(hidePortalExtFab, 1200);
 
-  window.addEventListener("da-recorder-ready", () => {
-    syncRecordPageFab();
-    loadPortalRecordTabs();
-  });
+  window.addEventListener("da-recorder-ready", () => syncRecordPageFab());
   window.addEventListener("da-extension-ready", (ev) => {
     if (ev.detail?.role && ev.detail.role !== "recorder") return;
     syncRecordPageFab();
-    loadPortalRecordTabs();
   });
-  window.addEventListener("da-extension-recheck", () => {
-    syncRecordPageFab();
-    loadPortalRecordTabs();
-  });
+  window.addEventListener("da-extension-recheck", () => syncRecordPageFab());
 
   chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === "openTabsChanged") {
-      loadPortalRecordTabs(message);
+    if (message.type === "recordingChanged" || message.type === "draftUpdated") {
+      syncRecordPageFab();
     }
   });
 
   syncRecordPageFab();
-  loadPortalRecordTabs();
   setTimeout(syncRecordPageFab, 500);
-  setTimeout(loadPortalRecordTabs, 600);
 })();

@@ -102,9 +102,15 @@ async function handleMessage(message, sender) {
     case "finishRecord":
       return finishRecord();
     case "discardRecord":
-      return discardRecord();
+      return discardRecord({ closeTab: message.closeTab !== false });
+    case "resumeRecord":
+      return resumeRecord();
+    case "syncTasksFromPortal":
+      return syncTasksFromPortal(message);
+    case "setRecordOptions":
+      return setRecordOptions(message.options);
     case "rerecord":
-      return startRecordSession({ ...message, rerecord: true });
+      return resumeRecord();
     case "getCopiedSelector":
     case "setCopiedSelector":
     case "clearCopiedSelector":
@@ -119,17 +125,68 @@ async function handleMessage(message, sender) {
 
 async function broadcastRecordState() {
   const state = await getState();
+  const payload = {
+    type: "recordingChanged",
+    recording: state.recording,
+    recordPhase: state.recordPhase,
+    count: state.count,
+    steps: state.steps,
+    options: state.options,
+    targetTaskId: state.targetTaskId,
+    targetTitle: state.targetTitle
+  };
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
     if (!tab.id) continue;
-    chrome.tabs.sendMessage(tab.id, {
-      type: "recordingChanged",
-      recording: state.recording,
-      recordPhase: state.recordPhase,
-      count: state.count
-    }).catch(() => {});
+    chrome.tabs.sendMessage(tab.id, payload).catch(() => {});
   }
+  chrome.runtime.sendMessage(payload).catch(() => {});
   return state;
+}
+
+async function broadcastDraftUpdated() {
+  const state = await getState();
+  const payload = {
+    type: "draftUpdated",
+    recording: state.recording,
+    recordPhase: state.recordPhase,
+    count: state.count,
+    steps: state.steps
+  };
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    chrome.tabs.sendMessage(tab.id, payload).catch(() => {});
+  }
+  chrome.runtime.sendMessage(payload).catch(() => {});
+  return state;
+}
+
+function defaultRecordOptions(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  return {
+    trackInputClicks: !!src.trackInputClicks,
+    trackMouse: src.trackMouse !== false
+  };
+}
+
+async function setRecordOptions(options) {
+  const next = defaultRecordOptions(options);
+  await chrome.storage.local.set({ recordOptions: next });
+  const tabs = await chrome.tabs.query({});
+  const msg = { type: "recordOptionsChanged", options: next };
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    chrome.tabs.sendMessage(tab.id, msg).catch(() => {});
+  }
+  return { ok: true, options: next };
+}
+
+function currentStepsFromStorage(recordingGroups, draft) {
+  const groups = Array.isArray(recordingGroups) ? recordingGroups : [];
+  const flat = flattenGroupSteps(groups);
+  if (flat.length) return flat;
+  return Array.isArray(draft) ? draft.slice() : [];
 }
 
 async function isPortalTabUrl(url) {
@@ -210,43 +267,102 @@ async function broadcastOpenTabsChanged(reason) {
   return list;
 }
 
+async function pullTasksFromPortalTabs() {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    const url = tab.url || "";
+    if (!(await isPortalTabUrl(url))) continue;
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: "requestPortalTasks" });
+      if (res?.ok && Array.isArray(res.tasks) && res.tasks.length) {
+        if (res.user) await chrome.storage.local.set({ localUser: res.user });
+        await saveUserTasks(res.tasks);
+        return res.tasks;
+      }
+    } catch {
+      /* tab may not have bridge yet */
+    }
+  }
+  return null;
+}
+
+/** Portal pushes its task list into the extension before record/save. */
+async function syncTasksFromPortal(message = {}) {
+  const tasks = Array.isArray(message.tasks) ? message.tasks : null;
+  if (!tasks || !tasks.length) {
+    // Keep whatever we already have — empty push used to wipe a good session.
+    const existing = await loadUserTasks();
+    if (existing.length) {
+      if (message.user) await chrome.storage.local.set({ localUser: String(message.user) });
+      return { ok: true, count: existing.length, keptExisting: true };
+    }
+    return {
+      ok: false,
+      error: "لیست فرآیند از پورتال خالی است. صفحهٔ فرآیندها را رفرش کنید یا یک فرآیند بسازید."
+    };
+  }
+  if (message.user) await chrome.storage.local.set({ localUser: String(message.user) });
+  await saveUserTasks(tasks);
+  return { ok: true, count: tasks.length };
+}
+
+function findTaskIndex(tasks, targetId) {
+  if (targetId == null || targetId === "") return -1;
+  const key = String(targetId);
+  return (tasks || []).findIndex((t) => String(t.id) === key);
+}
+
+/** Process ids are UUID/string (not always numeric). Never Number()-coerce. */
+function normalizeTaskId(value) {
+  if (value == null || value === "") return null;
+  const s = String(value).trim();
+  return s || null;
+}
+
 async function startRecordSession(message = {}) {
-  // V2 FormRecord: Start creates an empty Group; events append Steps to the last Group.
+  // Record ONLY appends into an existing portal process — never creates one.
   await checkSession();
-  const { playing } = await chrome.storage.local.get("playing");
+  const { playing, recordOptions: prevOpts } = await chrome.storage.local.get(["playing", "recordOptions"]);
   if (playing) return { ok: false, error: "هنگام پخش نمی‌توان ضبط کرد." };
 
-  let recordingGroups = [];
-  if (message.newGroup && !message.rerecord) {
-    // Like V2 Pause→Start: another empty group in the same session
-    const prev = await chrome.storage.local.get("recordingGroups");
-    recordingGroups = Array.isArray(prev.recordingGroups) ? prev.recordingGroups.slice() : [];
+  const targetTaskId = normalizeTaskId(message.taskId);
+  if (!targetTaskId) {
+    return { ok: false, error: "ضبط فقط روی فرآیند موجود — از دکمهٔ ضبط همان فرآیند شروع کنید." };
   }
-  recordingGroups.push({
-    id: `group-${recordingGroups.length + 1}`,
+
+  // Prefer tasks just pushed from portal; otherwise pull.
+  let tasks = await loadUserTasks();
+  let existing = tasks.find((t) => String(t.id) === String(targetTaskId));
+  if (!existing) {
+    const pulled = await pullTasksFromPortalTabs().catch(() => null);
+    if (pulled) tasks = pulled;
+    existing = tasks.find((t) => String(t.id) === String(targetTaskId));
+  }
+  if (!existing) {
+    return {
+      ok: false,
+      error: "فرآیند هدف در پورتال پیدا نشد. ضبط فرآیند جدید نمی‌سازد — فقط به فرآیند موجود اقدام اضافه می‌کند."
+    };
+  }
+
+  const targetTitle = existing.title || message.taskTitle || `فرآیند #${targetTaskId}`;
+  const recordingGroups = [{
+    id: "group-1",
     title: message.groupTitle || "گروه ضبط",
     steps: []
-  });
-
-  const targetTaskId = message.taskId != null && message.taskId !== ""
-    ? Number(message.taskId)
-    : null;
-  let targetTitle = null;
-  if (targetTaskId && Number.isFinite(targetTaskId)) {
-    const tasks = await loadUserTasks();
-    const existing = tasks.find((t) => String(t.id) === String(targetTaskId));
-    targetTitle = existing?.title || null;
-  }
+  }];
 
   await chrome.storage.local.set({
     recording: true,
     recordPhase: "recording",
-    draft: flattenGroupSteps(recordingGroups),
+    draft: [],
     recordingGroups,
     recordTabId: null,
     lastNavUrl: null,
-    recordTargetTaskId: targetTaskId && Number.isFinite(targetTaskId) ? targetTaskId : null,
-    recordTargetTitle: targetTitle
+    recordTargetTaskId: targetTaskId,
+    recordTargetTitle: targetTitle,
+    recordOptions: defaultRecordOptions(prevOpts)
   });
 
   const requestedTabId = message.tabId != null && message.tabId !== ""
@@ -268,25 +384,71 @@ async function startRecordSession(message = {}) {
       return { ok: false, error: "تب انتخاب‌شده پیدا نشد یا بسته شده است." };
     }
   } else {
-    tab = await chrome.tabs.create({ url: "about:blank", active: true });
+    // Extension blank page — FAB loads immediately (about:blank cannot run content scripts).
+    tab = await chrome.tabs.create({ url: chrome.runtime.getURL("blank.html"), active: true });
   }
 
   if (tab?.id) {
     await chrome.storage.local.set({ recordTabId: tab.id });
-    // If continuing on an open page, seed GoToUrl so playback starts there.
     const url = tab.url || tab.pendingUrl || "";
     if (reused && isTrackableNavUrl(url)) {
       await appendNavStep(url, tab.id);
     }
+    // blank.html embeds FAB; inject again as safety for reused http(s) tabs.
+    await injectRecordFab(tab.id).catch(() => false);
   }
   await broadcastRecordState();
   return {
     ok: true,
     tabId: tab?.id,
-    startUrl: tab?.url || "about:blank",
+    startUrl: tab?.url || chrome.runtime.getURL("blank.html"),
     reused,
-    groupCount: recordingGroups.length
+    groupCount: recordingGroups.length,
+    targetTaskId,
+    targetTitle
   };
+}
+
+/** Inject recorder HUD (+ capture scripts) into a tab — works on about:blank / http(s). */
+async function injectRecordFab(tabId, attempt = 0) {
+  if (!tabId) return false;
+  try {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    const url = tab?.url || "";
+    // blank.html already loads scripts via <script> tags.
+    if (url.startsWith("chrome-extension://") && url.includes("/blank.html")) {
+      await broadcastRecordState();
+      return true;
+    }
+    // Mark page as recording BEFORE scripts so Player content-script skips its HUD.
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => { document.documentElement.dataset.daMorobotMode = "record"; }
+    }).catch(() => {});
+    await chrome.scripting.insertCSS({
+      target: { tabId },
+      files: ["styles/fab.css"]
+    }).catch(() => {});
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: [
+        "lib/ext-i18n.js",
+        "content/selector.js",
+        "content/frames.js",
+        "content/recorder.js",
+        "content/fab.js"
+      ]
+    });
+    await broadcastRecordState();
+    return true;
+  } catch (err) {
+    if (attempt < 8) {
+      await new Promise((r) => setTimeout(r, 100 + attempt * 50));
+      return injectRecordFab(tabId, attempt + 1);
+    }
+    console.warn("[recorder] injectRecordFab failed", tabId, err?.message || err);
+    return false;
+  }
 }
 
 function flattenGroupSteps(groups) {
@@ -315,7 +477,9 @@ async function finishRecord() {
   return { ok: true, count: countRecordedSteps(recordingGroups, draft), ...state };
 }
 
-async function discardRecord() {
+async function discardRecord(opts = {}) {
+  const closeTab = opts.closeTab !== false;
+  const { recordTabId } = await chrome.storage.local.get(["recordTabId"]);
   await chrome.storage.local.set({
     recording: false,
     recordPhase: "idle",
@@ -326,16 +490,45 @@ async function discardRecord() {
     recordTargetTaskId: null,
     recordTargetTitle: null
   });
+  if (closeTab && recordTabId) {
+    try { await chrome.tabs.remove(recordTabId); } catch { /* already closed */ }
+  }
   const state = await broadcastRecordState();
   setTimeout(() => pollDevReload(), 400);
   return state;
 }
 
+/** Discard current batch and continue recording on the same process/tab. */
+async function resumeRecord() {
+  const data = await chrome.storage.local.get([
+    "recordTargetTaskId", "recordTargetTitle", "recordTabId", "recordOptions"
+  ]);
+  if (data.recordTargetTaskId == null && !data.recordTabId) {
+    return discardRecord();
+  }
+  const recordingGroups = [{
+    id: "group-1",
+    title: "گروه ضبط",
+    steps: []
+  }];
+  await chrome.storage.local.set({
+    recording: true,
+    recordPhase: "recording",
+    draft: [],
+    recordingGroups,
+    lastNavUrl: null,
+    recordOptions: defaultRecordOptions(data.recordOptions)
+  });
+  return broadcastRecordState();
+}
+
 async function getState() {
   const data = await chrome.storage.local.get([
-    "recording", "draft", "recordingGroups", "token", "playing", "recordPhase", "recordTabId", "localUser"
+    "recording", "draft", "recordingGroups", "token", "playing", "recordPhase",
+    "recordTabId", "localUser", "recordOptions", "recordTargetTaskId", "recordTargetTitle"
   ]);
-  const count = countRecordedSteps(data.recordingGroups, data.draft);
+  const steps = currentStepsFromStorage(data.recordingGroups, data.draft);
+  const count = steps.length;
   const phase = data.recording
     ? "recording"
     : (data.recordPhase || (count ? "review" : "idle"));
@@ -345,10 +538,14 @@ async function getState() {
     recordPhase: phase,
     playing: false,
     count,
+    steps,
+    options: defaultRecordOptions(data.recordOptions),
     groupCount: Array.isArray(data.recordingGroups) ? data.recordingGroups.length : 0,
     signedIn: true,
     localUser: data.localUser || "test",
     recordTabId: data.recordTabId || null,
+    targetTaskId: data.recordTargetTaskId ?? null,
+    targetTitle: data.recordTargetTitle || null,
     play: { playing: false }
   };
 }
@@ -391,6 +588,63 @@ async function syncPortalSession() {
   return checkSession();
 }
 
+/** Persian verb for recorded action types (short form for titles). */
+function recordedActionVerbFa(actionType) {
+  const t = String(actionType || "Click");
+  switch (t) {
+    case "Click": return "کلیک";
+    case "DoubleClick": return "دبل‌کلیک";
+    case "RightClick": return "کلیک‌راست";
+    case "Hover": return "هاور";
+    case "InputContent":
+    case "InsertContent":
+    case "LoadContent": return "متن";
+    case "TakeContent":
+    case "SaveContent": return "خواندن";
+    case "GoToUrl":
+    case "Navigate": return "رفتن به";
+    case "NewPage": return "تب جدید";
+    case "Refresh": return "رفرش";
+    case "WaitTime": return "انتظار";
+    case "WaitForLoading": return "انتظار لود";
+    default: return t;
+  }
+}
+
+function cleanRecordedLabel(s, maxLen) {
+  const t = String(s || "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  const max = maxLen == null ? 40 : maxLen;
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
+/**
+ * e.g. Click + "ورود" → "کلیک ورود"
+ *      InputContent + "نام کاربری" → "متن نام کاربری"
+ *      GoToUrl → "رفتن به example.com"
+ */
+function buildRecordedActionTitle(step, index) {
+  if (!step) return `اقدام ${Number(index) + 1 || 1}`;
+  if (step.title && String(step.title).trim()) return String(step.title).trim();
+
+  const at = step.actionType || "Click";
+  const verb = recordedActionVerbFa(at);
+  const label = cleanRecordedLabel(step.elementLabel || "");
+
+  if (String(at).toLowerCase() === "gotourl" || at === "Navigate") {
+    let host = "";
+    try {
+      host = new URL(String(step.url || step.value || "")).hostname || "";
+    } catch { /* ignore */ }
+    const short = host || cleanRecordedLabel(step.url || step.value || "", 36);
+    return short ? `${verb} ${short}` : verb;
+  }
+
+  if (label) return `${verb} ${label}`;
+  const n = (Number(index) >= 0 ? Number(index) : 0) + 1;
+  return `${verb} ${n}`;
+}
+
 async function onRecordedEvent(payload, sender) {
   const { recording, playing, recordingGroups } = await chrome.storage.local.get([
     "recording", "playing", "recordingGroups"
@@ -413,14 +667,18 @@ async function onRecordedEvent(payload, sender) {
     url: payload.url,
     elementBy: "CssSelector",
     elementValue: payload.elementValue,
+    elementLabel: String(payload.elementLabel || "").trim() || null,
+    title: null,
     framePath,
     recordedAt: new Date().toISOString()
   };
+  item.title = buildRecordedActionTitle(item);
 
   const last = groups[groups.length - 1];
   last.steps = (last.steps || []).concat(item);
   const draft = flattenGroupSteps(groups);
   await chrome.storage.local.set({ recordingGroups: groups, draft });
+  await broadcastDraftUpdated();
   return { ok: true, count: draft.length, groupCount: groups.length };
 }
 
@@ -481,107 +739,212 @@ function describeIframe(childUrl, indexInParent) {
   if (!el && indexInParent >= 0 && indexInParent < nodes.length) el = nodes[indexInParent];
   if (!el) return null;
 
+  const esc = (s) => {
+    try { return CSS.escape(String(s)); } catch {
+      return String(s).replace(/([^\w-])/g, "\\$1");
+    }
+  };
+  const count = (sel) => {
+    try { return document.querySelectorAll(sel).length; } catch { return 0; }
+  };
+
+  function uniqueCss(element) {
+    if (element.id) {
+      const sel = `#${esc(element.id)}`;
+      if (count(sel) === 1) return sel;
+    }
+    const tag = element.tagName.toLowerCase();
+    const frameName = element.getAttribute("name");
+    if (frameName) {
+      const sel = `${tag}[name="${esc(frameName)}"]`;
+      if (count(sel) === 1) return sel;
+    }
+    const parts = [];
+    let node = element;
+    let guard = 0;
+    while (node && node.nodeType === 1 && guard++ < 64) {
+      if (node.id && count(`#${esc(node.id)}`) === 1) {
+        parts.unshift(`#${esc(node.id)}`);
+        break;
+      }
+      const t = node.tagName.toLowerCase();
+      if (t === "body" || t === "html") {
+        parts.unshift(t);
+        break;
+      }
+      const parent = node.parentElement;
+      if (!parent) {
+        parts.unshift(t);
+        break;
+      }
+      const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
+      parts.unshift(`${t}:nth-of-type(${same.indexOf(node) + 1})`);
+      node = parent;
+    }
+    return parts.join(" > ");
+  }
+
   const css = uniqueCss(el);
   return {
     by: "CssSelector",
     value: css,
     srcHint: el.getAttribute("src") || childUrl,
-    indexInParent
+    indexInParent,
+    unique: true
   };
-
-  function uniqueCss(element) {
-    if (element.id) return `#${CSS.escape(element.id)}`;
-    const name = element.tagName.toLowerCase();
-    const parent = element.parentElement;
-    if (!parent) return name;
-    const same = Array.from(parent.children).filter((c) => c.tagName === element.tagName);
-    const i = same.indexOf(element) + 1;
-    const parentSel = parent === document.body ? "body" : uniqueCss(parent);
-    return `${parentSel} > ${name}:nth-of-type(${i})`;
-  }
 }
 
 async function saveDraft(payload) {
-  const { draft, recordingGroups, recordTargetTaskId, recordTargetTitle } = await chrome.storage.local.get([
-    "draft", "recordingGroups", "recordTargetTaskId", "recordTargetTitle"
+  const {
+    draft,
+    recordingGroups,
+    recordTargetTaskId,
+    recordTargetTitle,
+    recordTabId,
+    recordOptions
+  } = await chrome.storage.local.get([
+    "draft", "recordingGroups", "recordTargetTaskId", "recordTargetTitle", "recordTabId", "recordOptions"
   ]);
-  let groups = Array.isArray(recordingGroups) ? recordingGroups : [];
-  // Legacy flat draft → one group
-  if (!groups.length && Array.isArray(draft) && draft.length) {
-    groups = [{ id: "group-1", title: payload?.groupTitle || "ضبط‌شده", steps: draft }];
+
+  let allSteps = currentStepsFromStorage(recordingGroups, draft);
+  const indexes = Array.isArray(payload?.selectedIndexes) ? payload.selectedIndexes : null;
+  if (indexes != null) {
+    if (!indexes.length) {
+      return { ok: false, error: "هیچ موردی برای ذخیره انتخاب نشده است." };
+    }
+    const pick = new Set(indexes.map(Number).filter((n) => Number.isFinite(n)));
+    allSteps = allSteps.filter((_, i) => pick.has(i));
   }
-  // V2: Start always created a Group — allow save of empty group
-  if (!groups.length) {
-    groups = [{ id: "group-1", title: payload?.groupTitle || "گروه خالی", steps: [] }];
+  if (!allSteps.length) {
+    return { ok: false, error: "هیچ موردی برای ذخیره انتخاب نشده است." };
   }
 
-  const tasks = await loadUserTasks();
-  const targetId = payload?.taskId != null
-    ? Number(payload.taskId)
-    : (recordTargetTaskId != null ? Number(recordTargetTaskId) : null);
-  const existingIdx = targetId && Number.isFinite(targetId)
-    ? tasks.findIndex((t) => String(t.id) === String(targetId))
-    : -1;
+  const groupTitle = (payload?.groupTitle || "").trim();
+  if (!groupTitle) {
+    return { ok: false, error: "نام گروه ضبط لازم است." };
+  }
 
-  let id;
-  let title;
-  let graph;
-  let stepCount = flattenGroupSteps(groups).length;
-  let groupCount = groups.length;
+  // Refresh from portal, then require the EXISTING process — never create a new one.
+  let pulled = await pullTasksFromPortalTabs().catch(() => null);
+  let tasks = (pulled && pulled.length) ? pulled : await loadUserTasks();
 
-  if (existingIdx >= 0) {
-    const existing = tasks[existingIdx];
-    id = existing.id;
-    title = (payload?.newTaskTitle || "").trim()
-      || recordTargetTitle
-      || existing.title
-      || `ضبط ${new Date().toLocaleString("fa-IR")}`;
-    graph = mergeRecordingGroupsIntoGraph(existing.graph, groups, id, title);
-    const nodes = graph.nodes || [];
-    stepCount = nodes.filter((n) => n.kind === "action" || n.kind === "step").length;
-    groupCount = nodes.filter((n) => n.kind === "group").length;
-    tasks[existingIdx] = {
-      ...existing,
-      title,
-      designOrigin: existing.designOrigin || "Recorded",
-      groupCount,
-      stepCount,
-      dataSourceCount: Array.isArray(graph.dataSources) ? graph.dataSources.length : 0,
-      graph
+  const targetId = normalizeTaskId(payload?.taskId) || normalizeTaskId(recordTargetTaskId);
+
+  if (!targetId) {
+    return {
+      ok: false,
+      error: "فرآیند هدف مشخص نیست. ضبط را از دکمهٔ ضبط همان فرآیند در پورتال شروع کنید."
     };
-  } else {
-    title = (payload?.newTaskTitle || "").trim() || `ضبط ${new Date().toLocaleString("fa-IR")}`;
-    id = Number(`${Date.now() % 1e9}${Math.floor(Math.random() * 90 + 10)}`);
-    graph = buildGraphFromRecordingGroups(id, title, groups);
-    tasks.push({
-      id,
-      title,
-      designOrigin: "Recorded",
-      groupCount,
-      stepCount,
-      dataSourceCount: 0,
-      createdAt: new Date().toISOString(),
-      createdBy: await currentLocalUser(),
-      sharedUsers: [],
-      graph
-    });
+  }
+
+  let existingIdx = findTaskIndex(tasks, targetId);
+  // One more pull if target missing (portal tab may have finished decrypting late).
+  if (existingIdx < 0) {
+    await new Promise((r) => setTimeout(r, 250));
+    pulled = await pullTasksFromPortalTabs().catch(() => null);
+    if (pulled && pulled.length) {
+      tasks = pulled;
+      existingIdx = findTaskIndex(tasks, targetId);
+    }
+  }
+  if (existingIdx < 0) {
+    return {
+      ok: false,
+      error: "فرآیند هدف در پورتال پیدا نشد. تب پورتال را باز نگه دارید، لیست فرآیندها را رفرش کنید و دوباره ذخیره کنید."
+    };
+  }
+
+  const existing = tasks[existingIdx];
+  if (!existing.graph || typeof existing.graph !== "object") {
+    return {
+      ok: false,
+      error: "گراف فرآیند هدف خالی/نامعتبر است. ابتدا فرآیند را در ویرایشگر باز کنید."
+    };
+  }
+
+  const existingGroups = (existing.graph?.nodes || []).filter((n) => n.kind === "group");
+  const nextGroupOrdinal = existingGroups.length + 1;
+  const groups = [{ id: `group-${nextGroupOrdinal}`, title: groupTitle, steps: allSteps }];
+
+  const id = existing.id;
+  const title = existing.title || recordTargetTitle || `فرآیند #${id}`;
+  const graph = mergeRecordingGroupsIntoGraph(existing.graph, groups, id, title);
+  const nodes = graph.nodes || [];
+  const stepCount = nodes.filter((n) => n.kind === "action" || n.kind === "step").length;
+  const groupCount = nodes.filter((n) => n.kind === "group").length;
+
+  tasks[existingIdx] = {
+    ...existing,
+    title,
+    designOrigin: existing.designOrigin || "Recorded",
+    groupCount,
+    stepCount,
+    dataSourceCount: Array.isArray(graph.dataSources) ? graph.dataSources.length : 0,
+    graph
+  };
+
+  const beforeSteps = (existing.graph?.nodes || []).filter((n) => n.kind === "action" || n.kind === "step").length;
+  if (stepCount < beforeSteps + allSteps.length) {
+    console.warn("[recorder] merge produced fewer steps than expected", { beforeSteps, stepCount, added: allSteps.length });
+  }
+  if (stepCount <= beforeSteps) {
+    return {
+      ok: false,
+      error: "گروه جدید به فرآیند اضافه نشد. تب پورتال را رفرش کنید و دوباره ذخیره کنید."
+    };
   }
 
   await saveUserTasks(tasks);
-  await chrome.storage.local.set({
-    recording: false,
-    recordPhase: "idle",
-    draft: [],
-    recordingGroups: [],
-    recordTabId: null,
-    lastNavUrl: null,
-    recordTargetTaskId: null,
-    recordTargetTitle: null
-  });
-  await pushTasksToPortalTabs(tasks);
+  const pushed = await pushTasksToPortalTabs(tasks);
+  if (!pushed) {
+    return {
+      ok: false,
+      error: "ذخیره در افزونه انجام شد ولی پورتال به‌روز نشد — تب پورتال را باز نگه دارید و دوباره ذخیره کنید."
+    };
+  }
+
+  const continueRecording = payload?.continueRecording !== false;
+  if (continueRecording) {
+    await chrome.storage.local.set({
+      recording: true,
+      recordPhase: "recording",
+      draft: [],
+      recordingGroups: [{ id: "group-1", title: "گروه ضبط", steps: [] }],
+      lastNavUrl: null,
+      recordTabId: recordTabId || null,
+      recordTargetTaskId: id,
+      recordTargetTitle: title,
+      recordOptions: defaultRecordOptions(recordOptions)
+    });
+  } else {
+    await chrome.storage.local.set({
+      recording: false,
+      recordPhase: "idle",
+      draft: [],
+      recordingGroups: [],
+      recordTabId: null,
+      lastNavUrl: null,
+      recordTargetTaskId: null,
+      recordTargetTitle: null
+    });
+    setTimeout(() => pollDevReload(), 400);
+  }
+
   await broadcastRecordState();
-  setTimeout(() => pollDevReload(), 400);
-  return { ok: true, result: { taskId: id, groupId: 1, stepCount, groupCount, merged: existingIdx >= 0 } };
+  await broadcastDraftUpdated();
+  return {
+    ok: true,
+    result: {
+      taskId: id,
+      groupId: nextGroupOrdinal,
+      groupTitle,
+      stepCount,
+      groupCount,
+      merged: true,
+      continued: continueRecording,
+      pushed: true
+    }
+  };
 }
 
 /** Append newly recorded groups/steps onto an existing task graph. */
@@ -640,13 +1003,14 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
         id: sid,
         kind: "action",
         entityId: maxEntity,
-        title: `${a.actionType || "Click"} ${i + 1}`,
+        title: buildRecordedActionTitle(a, i),
         groupNodeId: gid,
         actionType: a.actionType || "Click",
         selectorValue: a.elementValue || "",
         constantValue: isNav ? "" : (a.value || ""),
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         framePathJson: JSON.stringify(a.framePath || []),
+        ignoreError: true,
         isActive: true,
         x: 40,
         y: i * 90
@@ -708,10 +1072,42 @@ async function getLocalTaskGraph(taskId) {
 async function pushTasksToPortalTabs(tasks) {
   const user = await currentLocalUser();
   const tabs = await chrome.tabs.query({});
+  let ok = false;
   for (const tab of tabs) {
     if (!tab.id) continue;
-    chrome.tabs.sendMessage(tab.id, { type: "localTasksUpdated", user, tasks }).catch(() => {});
+    const url = tab.url || "";
+    if (!(await isPortalTabUrl(url))) continue;
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: "localTasksUpdated", user, tasks });
+      if (res?.ok) ok = true;
+    } catch {
+      /* portal tab without bridge */
+    }
+    // MAIN-world write — content-script isolated world cannot touch page DaSecureStore.
+    try {
+      const [{ result } = {}] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: "MAIN",
+        func: (u, list) => {
+          try {
+            if (window.DaSecureStore && typeof DaSecureStore.writeTasks === "function") {
+              DaSecureStore.writeTasks(list, u);
+              return true;
+            }
+            window.postMessage({ source: "da-ext-bridge", type: "write-tasks", user: u, tasks: list }, "*");
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        args: [user, tasks]
+      });
+      if (result) ok = true;
+    } catch {
+      /* scripting may fail on restricted pages */
+    }
   }
+  return ok;
 }
 
 /** V2 FormRecord: one graph Group per record Group; Steps only inside their Group. No spare empty group. */
@@ -749,13 +1145,14 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
         id: sid,
         kind: "action",
         entityId: stepEntity,
-        title: `${a.actionType || "Click"} ${i + 1}`,
+        title: buildRecordedActionTitle(a, i),
         groupNodeId: gid,
         actionType: a.actionType || "Click",
         selectorValue: a.elementValue || "",
         constantValue: isNav ? "" : (a.value || ""),
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         framePathJson: JSON.stringify(a.framePath || []),
+        ignoreError: true,
         isActive: true,
         x: 40,
         y: i * 90
@@ -811,9 +1208,11 @@ async function appendNavStep(url, tabId) {
     url,
     elementBy: "CssSelector",
     elementValue: "",
+    elementLabel: null,
     framePath: [],
     recordedAt: new Date().toISOString()
   };
+  item.title = buildRecordedActionTitle(item);
   const last = groups[groups.length - 1];
   last.steps = (last.steps || []).concat(item);
   await chrome.storage.local.set({
@@ -821,6 +1220,7 @@ async function appendNavStep(url, tabId) {
     draft: flattenGroupSteps(groups),
     lastNavUrl: url
   });
+  await broadcastDraftUpdated();
 }
 
 chrome.webNavigation.onCommitted.addListener(async (details) => {
@@ -835,10 +1235,15 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.url || changeInfo.title || changeInfo.status === "complete" || changeInfo.status === "loading") {
     scheduleOpenTabsBroadcast(changeInfo.url ? "url" : "update");
   }
-  if (!changeInfo.url) return;
   const { recording, recordTabId } = await chrome.storage.local.get(["recording", "recordTabId"]);
   if (!recording || !recordTabId || tabId !== recordTabId) return;
-  await appendNavStep(changeInfo.url, tabId);
+  if (changeInfo.status === "complete") {
+    // about:blank has no content_scripts; http(s) pages get them automatically — still safe (idempotent).
+    injectRecordFab(tabId).catch(() => {});
+  }
+  if (changeInfo.url) {
+    await appendNavStep(changeInfo.url, tabId);
+  }
 });
 
 chrome.tabs.onCreated.addListener(() => scheduleOpenTabsBroadcast("created"));

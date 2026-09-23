@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "Morobot Smart Recorder",
+  "version": "1.0.3",
+  "description": "هوشمندسازی فرآیند — تب خالی + soft API (Microsoft LM بعداً)",
+  "permissions": ["storage", "cookies", "scripting", "webNavigation", "tabs", "activeTab", "windows"],
+  "host_permissions": [
+    "http://localhost/*",
+    "https://localhost/*",
+    "http://127.0.0.1/*",
+    "https://127.0.0.1/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Smart Recorder — مروبات",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content/selector.js", "content/capture.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://localhost/*",
+        "https://localhost/*",
+        "http://127.0.0.1/*",
+        "https://127.0.0.1/*"
+      ],
+      "js": ["content/portal-bridge.js", "content/portal-ui.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/mark.svg", "icons/*"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ]
+}

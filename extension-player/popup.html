@@ -18,14 +18,15 @@
   <body>
     <h4 style="display:flex;align-items:center;gap:8px">
       <img src="icons/icon32.png" width="22" height="22" alt="" style="border-radius:5px" />
-      اجرا — مروبات
+      <span data-i18n="play.title">اجرا — مروبات</span>
     </h4>
-    <div id="status" class="muted">در حال بررسی...</div>
-    <button id="refresh">تازه‌سازی</button>
-    <button id="playpause" class="mode-play">اجرا</button>
-    <button id="stop" hidden>توقف (از اول)</button>
-    <button id="clear">پاکسازی لاگ‌ها</button>
-    <p class="muted">اجرا بعد از پاز = ادامه · توقف سپس اجرا = از اول. اولین اجرا را از پورتال بزنید.</p>
+    <div id="status" class="muted" data-i18n="play.checking">در حال بررسی...</div>
+    <button id="refresh" data-i18n="play.refresh">تازه‌سازی</button>
+    <button id="playpause" class="mode-play" data-i18n="play.play">اجرا</button>
+    <button id="stop" hidden data-i18n="play.stop">توقف (از اول)</button>
+    <button id="clear" data-i18n="play.clear">پاکسازی لاگ‌ها</button>
+    <p class="muted" data-i18n="play.popupHint">اجرا بعد از پاز = ادامه · توقف سپس اجرا = از اول.</p>
+    <script src="lib/ext-i18n.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

@@ -1,6 +1,6 @@
 # وضعیت پروژه — برای باز کردن این پوشه
 
-مسیر: `D:\Projects\Web\NewDaynamicAutomator\NewDynamicAutomator`  
+مسیر: `C:\Projects\MorobotV3`  
 ریموت: https://github.com/lliehos/NewDynamicAutomator
 
 ## حالت فعلی: Local-first + Panel Area + i18n + رمزنگاری محلی
@@ -11,13 +11,13 @@
 - کلید سراسری MVP در `wwwroot/js/da-crypto.js` — عوض کردن کلید همهٔ داده‌های قبلی را نامعتبر می‌کند
 - UI دو زبانه FA/EN (`wwwroot/locales/*.json` + `DaI18n` + `LocaleService`)؛ پیش‌فرض فارسی؛ بدون برند دوزبانه روی یک صفحه
 - پرتال داخل Area: `/Panel/...` — لندینگ عمومی: `/`
-- فقط یک اپ: `dotnet run --project src/DynamicAutomator.Web`
+- فقط یک اپ: `dotnet run --project src/Morobot.Web`
 
 پرتال: `https://localhost:7201`  
-افزونه‌ها: مسیر sync در `%LocalAppData%\DynamicAutomator\extension-{recorder|player|selector}`
+افزونه‌ها: مسیر sync در `%LocalAppData%\morobot.soras.ir\extension-{recorder|player|selector|smart-recorder}`
 
 ```bash
-dotnet run --project src/DynamicAutomator.Web --launch-profile https
+dotnet run --project src/Morobot.Web --launch-profile https
 ```
 
 ## مستندات مرتبط

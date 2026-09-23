@@ -22,8 +22,42 @@
   }
 
   function stepCountOf(t) {
-    const fromGraph = t?.graph?.nodes?.filter((n) => isActionNode(n)).length;
-    return fromGraph || t?.stepCount || 0;
+    const fromGraph = t?.graph?.nodes?.filter((n) => isActionNode(n)).length || 0;
+    return Math.max(fromGraph, Number(t?.stepCount) || 0);
+  }
+
+  function richnessOf(t) {
+    const nodes = Array.isArray(t?.graph?.nodes) ? t.graph.nodes.length : 0;
+    return nodes * 1000 + stepCountOf(t);
+  }
+
+  /** When a stale extension copy is poorer, keep the richer graph per task id. */
+  function mergePreferRicherPerId(prev, incoming) {
+    const prevById = new Map((prev || []).map((t) => [String(t.id), t]));
+    return (incoming || []).map((t) => {
+      const old = prevById.get(String(t.id));
+      if (!old) return t;
+      if (richnessOf(t) >= richnessOf(old)) {
+        return {
+          ...old,
+          ...t,
+          graph: t.graph?.nodes?.length ? t.graph : old.graph
+        };
+      }
+      return {
+        ...t,
+        graph: old.graph,
+        stepCount: old.stepCount ?? stepCountOf(old),
+        groupCount: old.groupCount
+      };
+    });
+  }
+
+  /** Page world (DaSecureStore) is not visible from this isolated content-script world. */
+  function writeTasksToPage(user, tasks) {
+    try {
+      window.postMessage({ source: "da-ext-bridge", type: "write-tasks", user, tasks }, "*");
+    } catch { /* ignore */ }
   }
 
   async function readTasksDisk(user) {
@@ -74,11 +108,38 @@
   try {
     const origin = location.origin;
     const user = currentUser();
-    chrome.storage.local.set({ portalBase: origin, apiBase: origin, localUser: user, extensionRole: ROLE });
+    const culture = (readCookie("da_culture") || localStorage.getItem("da_culture") || "fa").toLowerCase() === "en"
+      ? "en"
+      : "fa";
+    chrome.storage.local.set({
+      portalBase: origin,
+      apiBase: origin,
+      localUser: user,
+      extensionRole: ROLE,
+      uiCulture: culture
+    });
     chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
   } catch {
     /* ignore */
   }
+
+  function syncCultureFromPortal() {
+    try {
+      const culture = (readCookie("da_culture") || localStorage.getItem("da_culture") || "fa").toLowerCase() === "en"
+        ? "en"
+        : "fa";
+      chrome.storage.local.set({ uiCulture: culture });
+    } catch { /* ignore */ }
+  }
+  document.addEventListener("da:locale", (ev) => {
+    const c = ev?.detail?.culture;
+    if (c) chrome.storage.local.set({ uiCulture: c === "en" ? "en" : "fa" });
+    else syncCultureFromPortal();
+  });
+  window.addEventListener("storage", (ev) => {
+    if (ev.key === "da_culture") syncCultureFromPortal();
+  });
+  setInterval(syncCultureFromPortal, 5000);
 
   async function applyTasks(user, tasks) {
     const u = user || currentUser();
@@ -86,28 +147,19 @@
     try {
       const prev = await readTasksDisk(u);
       if (list.length === 0 && prev.length > 0) return;
-      const prevSteps = prev.reduce((s, t) => s + stepCountOf(t), 0);
-      const nextSteps = list.reduce((s, t) => s + stepCountOf(t), 0);
-      let toSave = list;
-      if (list.length && nextSteps === 0 && prevSteps > 0) {
-        const byId = new Map(prev.map((t) => [String(t.id), t]));
-        for (const t of list) {
-          const old = byId.get(String(t.id));
-          if (old?.graph?.nodes?.length) {
-            byId.set(String(t.id), { ...t, graph: old.graph, stepCount: stepCountOf(old) });
-          } else {
-            byId.set(String(t.id), t);
-          }
-        }
-        toSave = [...byId.values()];
-      }
-      await writeTasksDisk(u, toSave);
-      window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: u, tasks: toSave } }));
+      const prevRich = prev.reduce((s, t) => s + richnessOf(t), 0);
+      const nextRich = list.reduce((s, t) => s + richnessOf(t), 0);
+      // Never let a stale chrome.storage copy wipe a richer portal graph after Recorder save.
+      const toSave = (list.length && nextRich < prevRich)
+        ? mergePreferRicherPerId(prev, list)
+        : list;
+      // Always notify the PAGE world — DaSecureStore is not in this isolated world.
+      writeTasksToPage(u, toSave);
       return;
     } catch {
       /* ignore */
     }
-    window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: u, tasks: list } }));
+    writeTasksToPage(u, list);
   }
 
   function pullFromExtension() {

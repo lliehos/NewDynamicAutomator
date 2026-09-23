@@ -82,6 +82,8 @@ async function handleMessage(message, sender) {
       return listTasks();
     case "getLocalTasks":
       return listTasks();
+    case "syncTasksFromPortal":
+      return syncTasksFromPortal(message);
     case "listOpenTabs":
       return listOpenTabs();
     case "getTaskGraph":
@@ -143,12 +145,14 @@ async function broadcastRecordState() {
 async function isPortalTabUrl(url) {
   if (!url) return false;
   const portal = await portalBase();
+  const base = String(portal || "").replace(/\/$/, "");
   try {
-    if (url.startsWith(portal)) return true;
+    if (base && url.startsWith(base)) return true;
   } catch {
     /* ignore */
   }
-  return /:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
+  // Only Morobot portal app URLs — NOT every localhost site (those are valid play targets).
+  return isPortalAppUrl(url);
 }
 
 async function listOpenTabs() {
@@ -555,7 +559,9 @@ async function saveDraft(payload) {
     };
   } else {
     title = (payload?.newTaskTitle || "").trim() || `ضبط ${new Date().toLocaleString("fa-IR")}`;
-    id = Number(`${Date.now() % 1e9}${Math.floor(Math.random() * 90 + 10)}`);
+    id = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
+      ? crypto.randomUUID()
+      : `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
     graph = buildGraphFromRecordingGroups(id, title, groups);
     tasks.push({
       id,
@@ -651,6 +657,7 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
         constantValue: isNav ? "" : (a.value || ""),
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         framePathJson: JSON.stringify(a.framePath || []),
+        ignoreError: true,
         isActive: true,
         x: 40,
         y: i * 90
@@ -702,8 +709,29 @@ async function saveUserTasks(tasks) {
   await chrome.storage.local.remove("localTasks");
 }
 
+/** Portal pushes its task list into the Player before play. */
+async function syncTasksFromPortal(message = {}) {
+  const tasks = Array.isArray(message.tasks) ? message.tasks : null;
+  if (!tasks || !tasks.length) {
+    const existing = await loadUserTasks();
+    if (existing.length) {
+      if (message.user) await chrome.storage.local.set({ localUser: String(message.user) });
+      return { ok: true, count: existing.length, keptExisting: true };
+    }
+    return {
+      ok: false,
+      error: "لیست فرآیند از پورتال خالی است. صفحهٔ فرآیندها را رفرش کنید."
+    };
+  }
+  if (message.user) await chrome.storage.local.set({ localUser: String(message.user) });
+  await saveUserTasks(tasks);
+  return { ok: true, count: tasks.length };
+}
+
 async function persistPlayDataSourcesMessage(message) {
-  const taskId = Number(message?.taskId);
+  const taskId = message?.taskId != null && message.taskId !== ""
+    ? String(message.taskId).trim()
+    : null;
   const dataSources = message?.dataSources;
   if (!taskId || !Array.isArray(dataSources)) return { ok: false, error: "داده ناقص" };
   const tasks = await loadUserTasks();
@@ -784,6 +812,7 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
         constantValue: isNav ? "" : (a.value || ""),
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         framePathJson: JSON.stringify(a.framePath || []),
+        ignoreError: true,
         isActive: true,
         x: 40,
         y: i * 90
@@ -859,21 +888,65 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
   await appendNavStep(details.url, details.tabId);
 });
 
+/** Re-mount play HUD after refresh/navigation (storage-aware; retries for blank tabs). */
+async function reinjectPlayHudForTab(tabId, reason) {
+  if (!tabId) return;
+  try {
+    let playing = !!(typeof playStatus !== "undefined" && playStatus?.playing);
+    let activePlayTab = (typeof playTabId !== "undefined" && playTabId) || null;
+    if (!playing || !activePlayTab) {
+      const st = await chrome.storage.local.get(["playing", "playTabId"]);
+      if (st.playing && st.playTabId) {
+        // SW may have restarted — in-memory loop is dead; clear ghost play flag.
+        if (!playing) {
+          console.warn("[DA Player] stale playing after SW wake — clearing", reason);
+          await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
+          if (typeof playStatus !== "undefined") {
+            playStatus.playing = false;
+            playStatus.paused = false;
+            playStatus.lastError = "اجرا قطع شد (ریستارت افزونه). دوباره اجرا کنید.";
+          }
+          if (typeof broadcastPlayState === "function") broadcastPlayState();
+          return;
+        }
+        activePlayTab = Number(st.playTabId) || activePlayTab;
+      }
+    }
+    if (!playing || !activePlayTab || Number(tabId) !== Number(activePlayTab)) return;
+    if (typeof injectPlayFab !== "function") return;
+
+    // Retry: document may not accept scripting on the first complete tick.
+    for (let i = 0; i < 4; i++) {
+      const ok = await injectPlayFab(tabId);
+      if (ok) {
+        if (typeof notifyTab === "function" && typeof getPlayStatus === "function") {
+          notifyTab(tabId, { type: "playStateChanged", ...getPlayStatus() });
+        }
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 150 + i * 120));
+    }
+  } catch (err) {
+    console.warn("[DA Player] reinjectPlayHudForTab", reason, err?.message || err);
+  }
+}
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.url || changeInfo.title || changeInfo.status === "complete" || changeInfo.status === "loading") {
     scheduleOpenTabsBroadcast(changeInfo.url ? "url" : "update");
   }
-  // Keep play HUD (pause/stop + results) on the execution tab after navigations.
-  if (changeInfo.status === "complete" && typeof playStatus !== "undefined" && playStatus?.playing) {
-    const activePlayTab = (typeof playTabId !== "undefined" && playTabId) || null;
-    if (activePlayTab && tabId === activePlayTab && typeof injectPlayFab === "function") {
-      injectPlayFab(tabId).catch(() => {});
-    }
+  if (changeInfo.status === "complete") {
+    reinjectPlayHudForTab(tabId, "tabs.onUpdated").catch(() => {});
   }
   if (!changeInfo.url) return;
   const { recording, recordTabId } = await chrome.storage.local.get(["recording", "recordTabId"]);
   if (!recording || !recordTabId || tabId !== recordTabId) return;
   await appendNavStep(changeInfo.url, tabId);
+});
+
+chrome.webNavigation.onCompleted.addListener((details) => {
+  if (details.frameId !== 0) return;
+  reinjectPlayHudForTab(details.tabId, "webNavigation.onCompleted").catch(() => {});
 });
 
 chrome.tabs.onCreated.addListener(() => scheduleOpenTabsBroadcast("created"));
@@ -896,20 +969,31 @@ const DEV_STAMP_URLS = [
  * Never call chrome.runtime.reload() before sendResponse — that closes the channel.
  */
 async function startPlayWithAutoReload(message, sender) {
+  const rawTab = message.tabId != null && message.tabId !== "" ? Number(message.tabId) : NaN;
+  const hasExplicitTab = Number.isFinite(rawTab);
+  const isConditionCheck = !!message.conditionNodeId;
   const pendingPlay = {
     taskId: message.taskId,
-    tabId: sender.tab?.id ?? message.tabId ?? null,
+    // Explicit tab from editor ctx menu must win — never fall back to portal tab.
+    // Condition-only without a picked tab → null (engine evaluates without focusing).
+    tabId: hasExplicitTab
+      ? rawTab
+      : (isConditionCheck ? null : (sender.tab?.id ?? null)),
     runMode: message.runMode || null,
     groupNodeId: message.groupNodeId || null,
     stepNodeId: message.stepNodeId || null,
+    conditionNodeId: message.conditionNodeId || null,
     // New blank tab ONLY when Start is pressed from our portal web app.
-    openNewTab: message.openNewTab === true
+    // When an explicit target tab is set, never open a new tab.
+    openNewTab: hasExplicitTab || isConditionCheck ? false : (message.openNewTab === true)
   };
 
   const playOpts = {
     groupNodeId: pendingPlay.groupNodeId,
     stepNodeId: pendingPlay.stepNodeId,
-    openNewTab: pendingPlay.openNewTab
+    conditionNodeId: pendingPlay.conditionNodeId,
+    openNewTab: pendingPlay.openNewTab,
+    activateTab: isConditionCheck ? false : undefined
   };
 
   const { resumePlayAfterReload } = await chrome.storage.local.get("resumePlayAfterReload");
@@ -931,8 +1015,16 @@ async function startPlayWithAutoReload(message, sender) {
   }
 
   // First run or unchanged code → play immediately (no reload).
+  // Also skip reload for ctx-menu tab/condition play — reload races lose the target tab.
   const needsReload = !!(prev && stampInfo?.stamp && prev !== stampInfo.stamp);
-  if (!needsReload) {
+  if (!needsReload || hasExplicitTab || isConditionCheck) {
+    if (hasExplicitTab || isConditionCheck) {
+      console.info("[DA Player] startPlay in tab", pendingPlay.tabId, {
+        step: pendingPlay.stepNodeId,
+        group: pendingPlay.groupNodeId,
+        condition: pendingPlay.conditionNodeId
+      });
+    }
     return startPlay(pendingPlay.taskId, pendingPlay.tabId, pendingPlay.runMode, playOpts);
   }
 
@@ -1076,13 +1168,25 @@ async function resumePendingPlayAfterReload() {
       {
         groupNodeId: pendingPlayRequest.groupNodeId || null,
         stepNodeId: pendingPlayRequest.stepNodeId || null,
+        conditionNodeId: pendingPlayRequest.conditionNodeId || null,
         openNewTab: pendingPlayRequest.openNewTab === true
       }
-    ).then(() => chrome.storage.local.remove("resumePlayAfterReload"))
-      .catch((err) => {
-        chrome.storage.local.remove("resumePlayAfterReload");
-        console.warn("[DA Player] resume play failed", err);
-      });
+    ).then((res) => {
+      chrome.storage.local.remove("resumePlayAfterReload");
+      if (res && res.ok === false) {
+        const msg = res.error || "اجرا پس از به‌روزرسانی افزونه ناموفق بود.";
+        playStatus.lastError = msg;
+        playStatus.playing = false;
+        notifyPortalTabs({ type: "playStateChanged", ...getPlayStatus() });
+      }
+    }).catch((err) => {
+      chrome.storage.local.remove("resumePlayAfterReload");
+      const msg = err?.message || String(err) || "اجرا پس از به‌روزرسانی افزونه ناموفق بود.";
+      playStatus.lastError = msg;
+      playStatus.playing = false;
+      notifyPortalTabs({ type: "playStateChanged", ...getPlayStatus() });
+      console.warn("[DA Player] resume play failed", err);
+    });
   }, 700);
 }
 

@@ -1,4 +1,4 @@
-﻿importScripts("player/engine.js");
+importScripts("player/engine.js");
 
 /** Single-app mode: portal hosts UI + /api/* — no separate API process. */
 const DEFAULT_PORTAL = "https://localhost:7201";
@@ -646,6 +646,7 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
         constantValue: isNav ? "" : (a.value || ""),
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         framePathJson: JSON.stringify(a.framePath || []),
+        ignoreError: true,
         isActive: true,
         x: 40,
         y: i * 90
@@ -755,6 +756,7 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
         constantValue: isNav ? "" : (a.value || ""),
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         framePathJson: JSON.stringify(a.framePath || []),
+        ignoreError: true,
         isActive: true,
         x: 40,
         y: i * 90

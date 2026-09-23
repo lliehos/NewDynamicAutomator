@@ -4,10 +4,11 @@ async function refresh() {
   const preview = document.getElementById("preview");
   const ver = state?.version || chrome.runtime.getManifest().version;
   if (state?.hasSelector) {
-    status.textContent = `v${ver} · سلکتور در حافظه است`;
+    const hops = Number(state.frameHops) || 0;
+    status.textContent = `v${ver} · آبجکت در حافظه` + (hops ? ` · ${hops} فریم` : "");
     preview.textContent = state.selectorPreview || "—";
   } else {
-    status.textContent = `v${ver} · حافظه خالی است`;
+    status.textContent = `v${ver} · حافظه آبجکت خالی است`;
     preview.textContent = "—";
   }
 }

@@ -1,0 +1,62 @@
+.da-smart-root {
+  position: fixed !important;
+  left: 18px !important;
+  right: auto !important;
+  bottom: 18px !important;
+  z-index: 2147483647 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 10px !important;
+  pointer-events: none !important;
+  font-family: Tahoma, sans-serif !important;
+}
+.da-smart-root[hidden] {
+  display: none !important;
+}
+.da-smart-root > * { pointer-events: auto !important; }
+.da-smart-logo-btn {
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(13, 148, 136, 0.35);
+  overflow: hidden;
+  display: block;
+}
+.da-smart-logo-btn img {
+  width: 56px;
+  height: 56px;
+  display: block;
+}
+.da-smart-logo-btn.thinking {
+  animation: da-smart-pulse 1.4s ease-in-out infinite;
+}
+.da-smart-logo-btn.save-ready {
+  box-shadow: 0 8px 22px rgba(40, 199, 111, 0.45);
+  animation: none;
+}
+@keyframes da-smart-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(13, 148, 136, 0.5); }
+  50% { box-shadow: 0 0 0 12px rgba(13, 148, 136, 0); }
+}
+.da-smart-save {
+  width: 56px;
+  height: 42px;
+  border: 0;
+  border-radius: 12px;
+  background: #28c76f;
+  color: #fff;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 16px rgba(40, 199, 111, 0.35);
+}
+.da-smart-save.show {
+  display: inline-flex;
+}
+.da-smart-save svg { display: block; }

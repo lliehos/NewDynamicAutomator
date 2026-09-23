@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Morobot Selector",
-  "version": "1.0.1",
-  "description": "کپی سلکتور عنصر با راست‌کلیک — مروبات",
+  "version": "1.1.0",
+  "description": "۶ حالت کپی سلکتور (یونیک/نسبی) + سایدبار DevTools — مروبات",
   "permissions": [
     "storage",
     "scripting",
@@ -29,6 +29,7 @@
   "background": {
     "service_worker": "background.js"
   },
+  "devtools_page": "devtools.html",
   "action": {
     "default_popup": "popup.html",
     "default_title": "سلکتور — مروبات",
@@ -46,12 +47,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "http://localhost/*",
-        "https://localhost/*",
-        "http://127.0.0.1/*",
-        "https://127.0.0.1/*"
-      ],
+      "matches": ["http://*/*", "https://*/*"],
       "js": ["content/portal-bridge.js"],
       "run_at": "document_start",
       "all_frames": false

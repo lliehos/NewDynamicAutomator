@@ -1,8 +1,8 @@
-{
+﻿{
   "manifest_version": 3,
   "name": "Morobot Player",
-  "version": "1.0.29",
-  "description": "اجرای فرآیند مروبات روی صفحات — جدا از افزونهٔ ضبط",
+  "version": "1.0.50",
+  "description": "Morobot process player — runs flows on real pages",
   "permissions": ["storage", "cookies", "scripting", "webNavigation", "tabs", "activeTab", "windows"],
   "host_permissions": [
     "http://localhost/*",

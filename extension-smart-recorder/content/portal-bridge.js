@@ -1,0 +1,40 @@
+/** Portal handshake — Smart Recorder role. */
+(function () {
+  const ROLE = "smart";
+
+  function mark() {
+    try {
+      const version = chrome.runtime.getManifest().version;
+      document.documentElement.dataset.daSmartExtension = "1";
+      document.documentElement.dataset.daSmartVersion = version;
+      window.dispatchEvent(new CustomEvent("da-extension-ready", {
+        detail: { version, role: ROLE }
+      }));
+      window.dispatchEvent(new CustomEvent("da-smart-ready", {
+        detail: { version }
+      }));
+    } catch { /* ignore */ }
+  }
+
+  try {
+    chrome.storage.local.set({
+      portalBase: location.origin,
+      apiBase: location.origin,
+      extensionRole: ROLE
+    });
+    chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
+  } catch { /* ignore */ }
+
+  mark();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mark);
+  }
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message.type === "portalPing") {
+      sendResponse({ ok: true, extension: true, role: ROLE, version: chrome.runtime.getManifest().version });
+      return true;
+    }
+    return false;
+  });
+})();

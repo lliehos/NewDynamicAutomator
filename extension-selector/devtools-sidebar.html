@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        font-family: Tahoma, sans-serif;
+        margin: 0;
+        padding: 10px;
+        font-size: 12px;
+        color: #333;
+        background: #fff;
+      }
+      h4 { margin: 0 0 6px; font-size: 13px; }
+      .hint { color: #666; margin: 0 0 10px; line-height: 1.45; font-size: 11px; }
+      .row { display: grid; gap: 6px; margin-bottom: 10px; }
+      button {
+        padding: 7px 8px;
+        border: 1px solid #d0d0d8;
+        border-radius: 6px;
+        background: #f7f7fb;
+        cursor: pointer;
+        text-align: right;
+        font: inherit;
+      }
+      button:hover { background: #ebebf5; }
+      button.u { border-color: #28c76f55; }
+      button.r { border-color: #ff9f4355; }
+      label { display: block; font-weight: 700; margin: 8px 0 4px; color: #5e5873; }
+      code {
+        display: block;
+        background: #f5f5f9;
+        padding: 8px;
+        border-radius: 6px;
+        word-break: break-all;
+        max-height: 72px;
+        overflow: auto;
+        font-size: 11px;
+        white-space: pre-wrap;
+      }
+      #status { margin-top: 8px; color: #666; min-height: 1.2em; }
+      #status.ok { color: #28c76f; }
+      #status.err { color: #ea5455; }
+    </style>
+  </head>
+  <body>
+    <h4>سلکتور برای $0</h4>
+    <p class="hint">
+      کنار Copy selector / XPath مرورگر نمی‌توان آیتم گذاشت؛ این پنل همان ۶ حالت را برای المنت انتخاب‌شده در Elements می‌دهد.
+    </p>
+    <label>یونیک</label>
+    <div class="row">
+      <button type="button" class="u" data-kind="element" data-unique="1">کپی سلکتور المنت (یونیک)</button>
+      <button type="button" class="u" data-kind="frame" data-unique="1">کپی فریم المنت (یونیک)</button>
+      <button type="button" class="u" data-kind="object" data-unique="1">کپی آبجکت سلکتور (یونیک)</button>
+    </div>
+    <label>نسبی</label>
+    <div class="row">
+      <button type="button" class="r" data-kind="element" data-unique="0">کپی سلکتور المنت (نسبی)</button>
+      <button type="button" class="r" data-kind="frame" data-unique="0">کپی فریم المنت (نسبی)</button>
+      <button type="button" class="r" data-kind="object" data-unique="0">کپی آبجکت سلکتور (نسبی)</button>
+    </div>
+    <label>پیش‌نمایش</label>
+    <code id="preview">— المنتی در Elements انتخاب کنید —</code>
+    <div id="status"></div>
+    <script src="devtools-sidebar.js"></script>
+  </body>
+</html>

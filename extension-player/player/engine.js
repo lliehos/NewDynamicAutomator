@@ -105,6 +105,20 @@ function conditionNeedsCompareOperand(ct, eq) {
   return true;
 }
 
+/** Allowed: YYYY-MM-DD (calendar-valid). */
+function isValidUserSystemDateForPlay(v) {
+  const s = String(v || "").trim();
+  if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+}
+
+/** Allowed: HH:mm or HH:mm:ss */
+function isValidUserSystemTimeForPlay(v) {
+  return /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(v || "").trim());
+}
+
 function validateSelectorBlock(n, opts = {}) {
   const valueKey = opts.valueKey || "selectorValue";
   const dynFlag = opts.dynFlag || "selectorIsDynamic";
@@ -274,6 +288,20 @@ function validateConditionNodeForPlay(n) {
       } else if (!val) {
         reasons.push("مقدار مقایسه خالی است");
       }
+    } else if (src === "UserSystemDate") {
+      const val = String(n.constantEqualValue ?? n.userSystemDateValue ?? "").trim();
+      if (!val) {
+        reasons.push("تاریخ سیستم کاربر مشخص نیست");
+      } else if (!isValidUserSystemDateForPlay(val)) {
+        reasons.push("فرمت تاریخ سیستم کاربر نامعتبر است (مجاز: YYYY-MM-DD)");
+      }
+    } else if (src === "UserSystemTime") {
+      const val = String(n.constantEqualValue ?? n.userSystemTimeValue ?? "").trim();
+      if (!val) {
+        reasons.push("زمان سیستم کاربر مشخص نیست");
+      } else if (!isValidUserSystemTimeForPlay(val)) {
+        reasons.push("فرمت زمان سیستم کاربر نامعتبر است (مجاز: HH:mm یا HH:mm:ss)");
+      }
     } else if (src === "Elements") {
       const v = validateSelectorBlock(n, {
         valueKey: "equalSelectorValue",
@@ -361,6 +389,7 @@ let playStatus = {
   loopIndex: 0,
   loopTotal: 1,
   repeatType: "None",
+  currentNodeId: null,
   lastError: null,
   lastResult: null,
   runMode: RunMode.Play,
@@ -414,21 +443,52 @@ function clearPlayLogs() {
 function broadcastPlayState() {
   const message = { type: "playStateChanged", ...getPlayStatus() };
   if (playTabId) notifyTab(playTabId, message);
-  // Keep popup / other listeners in sync via a light fan-out.
+  // Popup / extension pages
   chrome.runtime.sendMessage(message).catch(() => {});
+  // Designer/portal tabs must get condition results (playTabId is the target page, not the editor).
+  notifyPortalTabs(message);
+}
+
+/** Send a message to Morobot portal/editor tabs (localhost + stored portalBase). */
+function notifyPortalTabs(message) {
+  chrome.storage.local.get("portalBase").then(({ portalBase }) => {
+    const base = String(portalBase || "").replace(/\/$/, "");
+    return chrome.tabs.query({}).then((tabs) => {
+      for (const tab of tabs) {
+        if (!tab?.id || tab.id === playTabId) continue;
+        const url = String(tab.url || "");
+        if (!/^https?:\/\//i.test(url)) continue;
+        const isPortal = (base && url.startsWith(base))
+          || /:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
+        if (isPortal) notifyTab(tab.id, message);
+      }
+    });
+  }).catch(() => {});
 }
 
 /** Inject pause/stop HUD on the play tab (needed for about:blank and after navigations). */
 async function injectPlayFab(tabId) {
   if (!tabId) return false;
   try {
+    // Never mount Player HUD over an active Recorder session on this page.
+    const [{ result: blocked } = {}] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        if (document.documentElement.dataset.daMorobotMode === "record") return true;
+        if (document.getElementById("da-recorder-fab")) return true;
+        document.documentElement.dataset.daMorobotMode = "play";
+        return false;
+      }
+    }).catch(() => [{ result: false }]);
+    if (blocked) return false;
+
     await chrome.scripting.insertCSS({
       target: { tabId },
       files: ["styles/fab.css"]
     }).catch(() => {});
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["content/fab.js"]
+      files: ["lib/ext-i18n.js", "content/fab.js"]
     });
     notifyTab(tabId, { type: "playStateChanged", ...getPlayStatus() });
     return true;
@@ -520,6 +580,7 @@ async function stopPlay() {
   playPaused = false;
   playStatus.playing = false;
   playStatus.paused = false;
+  playStatus.currentNodeId = null;
   wakePlayResumeWaiters();
   appendPlayLog("warn", "اجرا توسط کاربر متوقف شد");
   await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
@@ -617,8 +678,8 @@ async function listTasks() {
 }
 
 /** True if this tab can host play (http(s) page, not chrome internals). */
-async function isReusablePlayTab(url) {
-  if (!url) return false;
+async function isReusablePlayTab(url, { allowEmpty = false } = {}) {
+  if (!url) return !!allowEmpty;
   if (url.startsWith("chrome://") || url.startsWith("chrome-extension://")) return false;
   if (url.startsWith("edge://") || url.startsWith("devtools://")) return false;
   if (!/^https?:\/\//i.test(url) && url !== "about:blank") return false;
@@ -639,36 +700,86 @@ async function isReusablePlayTab(url) {
 
 /**
  * تب جدید فقط وقتی از اپ خودمان (پورتال) Start زده شود (openNewTab).
- * از FAB/صفحه هدف → همان تب فعلی؛ در غیر این صورت خطا (تب جدید ساخته نمی‌شود).
+ * اگر tabId صریح از ویرایشگر آمده باشد، همان تب را بدون فیلتر سخت‌گیرانه استفاده می‌کنیم.
+ * activateTab:false → فقط شناسه را برمی‌گرداند و تب را فوکوس/فعال نمی‌کند (بررسی شرط).
  */
 async function resolveExecutionTabId(preferredTabId, opts = {}) {
   if (opts.openNewTab === true) {
     const created = await chrome.tabs.create({ url: "about:blank", active: true });
+    if (created?.windowId != null) {
+      try {
+        await chrome.windows.update(created.windowId, { focused: true });
+      } catch { /* ignore */ }
+    }
     return created?.id || null;
   }
 
-  const tryTab = async (id) => {
-    if (!id) return null;
+  const explicitId = preferredTabId != null && preferredTabId !== ""
+    ? Number(preferredTabId)
+    : NaN;
+  const hasExplicit = Number.isFinite(explicitId);
+  const shouldActivate = opts.activateTab !== false;
+
+  const focusWindow = async (winId) => {
+    if (winId == null || !shouldActivate) return;
     try {
-      const tab = await chrome.tabs.get(id);
-      const url = tab?.url || tab?.pendingUrl || "";
-      if (tab?.id && (await isReusablePlayTab(url))) {
-        await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
-        return tab.id;
-      }
-    } catch {
-      /* ignore */
-    }
-    return null;
+      await chrome.windows.update(winId, { focused: true });
+    } catch { /* ignore */ }
   };
 
-  const fromPreferred = await tryTab(preferredTabId);
-  if (fromPreferred) return fromPreferred;
+  const activate = async (tab) => {
+    if (!tab?.id) return null;
+    let url = tab.url || tab.pendingUrl || "";
+    // New Tab page cannot run content scripts — switch to about:blank first.
+    if (
+      /^chrome:\/\/(newtab|new-tab-page)/i.test(url)
+      || /^edge:\/\/(newtab|new-tab-page)/i.test(url)
+      || url === ""
+    ) {
+      if (!shouldActivate) return null;
+      try {
+        await chrome.tabs.update(tab.id, { url: "about:blank", active: true });
+      } catch {
+        await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+      }
+      await focusWindow(tab.windowId);
+      return tab.id;
+    }
+    if (shouldActivate) {
+      await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+      await focusWindow(tab.windowId);
+    }
+    return tab.id;
+  };
+
+  if (hasExplicit) {
+    try {
+      const tab = await chrome.tabs.get(explicitId);
+      const id = await activate(tab);
+      if (id) return id;
+    } catch (err) {
+      console.warn("[DA Player] explicit tab get failed", explicitId, err?.message || err);
+    }
+    // Fallback: search in all tabs (some Chromium builds are flaky on tabs.get)
+    try {
+      const all = await chrome.tabs.query({});
+      const found = all.find((t) => Number(t.id) === explicitId);
+      const id = await activate(found);
+      if (id) return id;
+    } catch (err) {
+      console.warn("[DA Player] explicit tab query failed", explicitId, err?.message || err);
+    }
+    return null;
+  }
 
   try {
     const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const fromActive = await tryTab(active?.id);
-    if (fromActive) return fromActive;
+    if (active?.id && (await isReusablePlayTab(active.url || active.pendingUrl || ""))) {
+      if (shouldActivate) {
+        await chrome.tabs.update(active.id, { active: true }).catch(() => {});
+      }
+      return active.id;
+    }
   } catch {
     /* ignore */
   }
@@ -676,48 +787,123 @@ async function resolveExecutionTabId(preferredTabId, opts = {}) {
   return null;
 }
 
+/** شرط وابسته به المان صفحه (نیاز به تب هدف برای querySelector). */
+function conditionNeedsPageElement(node) {
+  if (!node || node.kind !== "condition") return false;
+  const ct = node.conditionType || "None";
+  if (["FindElement", "NotFindElement", "FindElements", "ElementValue"].includes(ct)) return true;
+  if ((node.contentSourceType || "Constant") === "Elements") return true;
+  return false;
+}
+
+/** آیا ارزیابی این شرط به مرورگر/تب وابسته است؟ */
+function conditionNeedsBrowserTab(node) {
+  if (!node) return false;
+  if (conditionNeedsPageElement(node)) return true;
+  const ct = node.conditionType || "None";
+  return ct === "Url" || ct === "DriverTabs";
+}
+
+/** اولین تب http(s) بدون فوکوس — برای شرط Url بدون انتخاب تب. */
+async function pickSilentHttpTabId() {
+  try {
+    const all = await chrome.tabs.query({});
+    const hit = all.find((t) => t?.id && /^https?:\/\//i.test(String(t.url || t.pendingUrl || "")));
+    return hit?.id || null;
+  } catch {
+    return null;
+  }
+}
+
 async function startPlay(taskId, tabId, runMode, options) {
-  if (playStatus.playing) return { ok: false, error: "پخش در حال اجراست." };
+  const opts = options || {};
+  // Condition re-check must not be blocked by a stuck previous run.
+  if (playStatus.playing) {
+    if (opts.conditionNodeId) {
+      playAbort = true;
+      playPaused = false;
+      playStatus.playing = false;
+      playStatus.paused = false;
+      wakePlayResumeWaiters();
+      await chrome.storage.local.set({ playing: false, playPaused: false }).catch(() => {});
+      await sleep(40);
+    } else {
+      return { ok: false, error: "پخش در حال اجراست." };
+    }
+  }
   await checkSession();
 
   const { recording } = await chrome.storage.local.get("recording");
   if (recording) return { ok: false, error: "ابتدا ضبط را متوقف کنید." };
 
   const tasks = await loadUserTasks();
-  const graph = tasks.find((t) => String(t.id) === String(taskId))?.graph || null;
+  let graph = tasks.find((t) => String(t.id) === String(taskId))?.graph || null;
   if (!graph) {
-    return { ok: false, error: "فرآیند در حافظهٔ محلی پیدا نشد." };
+    // Last chance: re-read storage (portal sync may have just landed).
+    await new Promise((r) => setTimeout(r, 120));
+    const again = await loadUserTasks();
+    graph = again.find((t) => String(t.id) === String(taskId))?.graph || null;
+  }
+  if (!graph) {
+    return { ok: false, error: "فرآیند در حافظهٔ محلی پیدا نشد. صفحهٔ فرآیندها را رفرش کنید و دوباره اجرا بزنید." };
   }
 
   if (graphHasInvalidNodesForPlay(graph)) {
     return { ok: false, error: "در فرایند المان نامعتبر وجود دارد" };
   }
 
-  const opts = options || {};
   const entryId = resolvePlayEntryId(graph, opts);
   if (!entryId) {
     return { ok: false, error: "نود شروع فرآیند پیدا نشد." };
   }
   // Estimate steps along the happy-path (success) for HUD totals; runtime may branch.
   const steps = collectPlaySteps(graph, opts);
-  if (steps.length === 0 && !opts.stepNodeId) {
+  const singleCond = opts.conditionNodeId
+    ? (graph.nodes || []).find((n) => n.id === opts.conditionNodeId && n.kind === "condition")
+    : null;
+  const singleStep = opts.stepNodeId
+    ? (graph.nodes || []).find((n) => n.id === opts.stepNodeId)
+    : null;
+  if (steps.length === 0 && !opts.stepNodeId && !singleCond) {
     // Still allow walk — conditions/groups may expand at runtime; but warn if no actions exist at all.
     const anyAction = (graph.nodes || []).some((n) => isActionNode(n));
     if (!anyAction) return { ok: false, error: "هیچ استپی برای اجرا نیست." };
   }
   if (opts.stepNodeId && steps.length === 0) {
-    return { ok: false, error: "استپ انتخاب‌شده برای اجرا پیدا نشد." };
+    // Allow condition-as-stepNodeId for «بررسی در مرورگر»
+    if (!(singleStep && singleStep.kind === "condition") && !singleCond) {
+      return { ok: false, error: "استپ انتخاب‌شده برای اجرا پیدا نشد." };
+    }
+  }
+  if (opts.conditionNodeId && !singleCond) {
+    return { ok: false, error: "شرط انتخاب‌شده پیدا نشد." };
   }
 
   // From FAB/popup on a real page → reuse that tab.
-  // From portal (or no usable tab) → fresh about:blank.
+  // From portal with explicit tabId (ctx menu) → that tab (no focus for condition check).
+  // From portal Start → fresh about:blank when openNewTab.
+  // بررسی شرط: تب را فعال/سوییچ نکن.
+  if (opts.conditionNodeId || (singleStep && singleStep.kind === "condition")) {
+    opts.activateTab = false;
+  }
+  const requestedTabId = tabId;
+  const condNode = singleCond || (singleStep && singleStep.kind === "condition" ? singleStep : null);
   tabId = await resolveExecutionTabId(tabId, opts);
-  if (!tabId) {
+  if (!tabId && condNode && !conditionNeedsBrowserTab(condNode)) {
+    // SourceValue / DriverTabs / … — بدون تب هم قابل ارزیابی است.
+    tabId = null;
+  } else if (!tabId && condNode && ((condNode.conditionType || "") === "Url" || (condNode.conditionType || "") === "DriverTabs")) {
+    tabId = await pickSilentHttpTabId();
+  }
+  if (!tabId && !(condNode && !conditionNeedsBrowserTab(condNode))) {
+    const wanted = Number(requestedTabId);
     return {
       ok: false,
       error: opts.openNewTab
         ? "تب جدید ساخته نشد."
-        : "روی صفحهٔ هدف اجرا کنید (از FAB)، یا از پورتال Start بزنید تا تب جدید باز شود."
+        : (opts.stepNodeId || opts.groupNodeId || opts.conditionNodeId
+          ? `تب انتخاب‌شده پیدا نشد${Number.isFinite(wanted) ? ` (#${wanted})` : ""}. تب را باز نگه دارید و دوباره انتخاب کنید.`
+          : "روی صفحهٔ هدف اجرا کنید (از FAB)، یا از پورتال Start بزنید تا تب جدید باز شود.")
     };
   }
   await ensurePlayMemory(graph);
@@ -727,6 +913,7 @@ async function startPlay(taskId, tabId, runMode, options) {
     runMode: runMode === RunMode.Learn ? RunMode.Learn : RunMode.Play,
     groupNodeId: opts.groupNodeId || null,
     stepNodeId: opts.stepNodeId || null,
+    conditionNodeId: opts.conditionNodeId || null,
     title: graph.title || null
   };
   await chrome.storage.local.set({ lastPlayRequest });
@@ -737,10 +924,18 @@ async function startPlay(taskId, tabId, runMode, options) {
   // Keep prior logs/results until the user clears them.
   const hadHistory = playLogs.length > 0 || (playStatus.results || []).length > 0;
   playTabId = tabId;
-  const iterations = (opts.groupNodeId || opts.stepNodeId)
+  const limited = !!(opts.groupNodeId || opts.stepNodeId || opts.conditionNodeId);
+  const iterations = limited
     ? { type: "None", indices: [0], total: 1, label: "اجرای محدود (بدون تکرار فرآیند)" }
     : resolveProcessIterations(graph);
   const priorResults = Array.isArray(playStatus.results) ? playStatus.results.slice() : [];
+  const scopeLabel = opts.conditionNodeId || (singleStep && singleStep.kind === "condition")
+    ? "condition"
+    : opts.stepNodeId
+      ? "step"
+      : opts.groupNodeId
+        ? "group"
+        : "task";
   playStatus = {
     playing: true,
     paused: false,
@@ -751,16 +946,19 @@ async function startPlay(taskId, tabId, runMode, options) {
     loopIndex: 0,
     loopTotal: iterations.total,
     repeatType: iterations.type,
+    currentNodeId: null,
     lastError: null,
     lastResult: null,
     runMode: runMode === RunMode.Learn ? RunMode.Learn : RunMode.Play,
-    scope: opts.stepNodeId ? "step" : opts.groupNodeId ? "group" : "task",
+    scope: scopeLabel,
     logs: playLogs.slice(-80),
     results: priorResults
   };
   await chrome.storage.local.set({ playing: true, playTabId: tabId, playPaused: false });
-  // HUD (pause/stop + results) on the execution tab — including about:blank.
-  await injectPlayFab(tabId);
+  // HUD (pause/stop + results) on the execution tab — skip for condition-only check.
+  if (scopeLabel !== "condition") {
+    await injectPlayFab(tabId);
+  }
   if (hadHistory) appendPlayLog("info", "──────── اجرای جدید ────────");
   appendPlayLog("info", `شروع اجرا: ${graph.title || taskId}`);
   appendPlayLog("info", `تکرار فرآیند: ${iterations.label}`);
@@ -819,20 +1017,80 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
       appendPlayLog("info", `──── حلقه ${li + 1} / ${iters.total} (اندیس ${rowIndex}) ────`);
       broadcastPlayState();
 
-      // Single-step scope: run only that action.
-      if (opts.stepNodeId) {
-        const step = (graph.nodes || []).find((n) => n.id === opts.stepNodeId);
-        if (!step || !isActionNode(step)) {
-          playStatus.lastError = "استپ پیدا نشد.";
+      // Single-step scope: run only that action — or evaluate one condition.
+      if (opts.conditionNodeId || opts.stepNodeId) {
+        const nodeId = opts.conditionNodeId || opts.stepNodeId;
+        const step = (graph.nodes || []).find((n) => n.id === nodeId);
+        if (!step) {
+          playStatus.lastError = "نود پیدا نشد.";
           break;
         }
         playStatus.stepIndex = 1;
         playStatus.stepTotal = 1;
-        const outcome = await runOneAction(activeTabId, graph, step, rowIndex, li + 1, iters.total, 1, 1);
-        if (outcome.tabId) activeTabId = outcome.tabId;
-        if (!outcome.ok) {
-          const decision = handleStepFailureForLoop(graph, outcome.error);
-          if (decision.continueLoop) continue;
+        playStatus.currentNodeId = step.id;
+        broadcastPlayState();
+        if (step.kind === "condition") {
+          const title = step.title || step.conditionType || step.id;
+          const checkId = Date.now();
+          appendPlayLog("info", `بررسی شرط «${title}»…`);
+          let pass = false;
+          try {
+            if (conditionNeedsPageElement(step) && activeTabId) {
+              const ready = await pingTabScriptable(activeTabId);
+              if (!ready) {
+                appendPlayLog("warn", `تب #${activeTabId} برای اسکریپت آماده نشد`);
+              }
+            }
+            const waitBudget = step.selectorWaitEnabled === true
+              ? Math.max(0, Number(step.selectorWaitMs) || 1000)
+              : 0;
+            const evalMs = Math.max(5000, waitBudget + 4000);
+            pass = await Promise.race([
+              evaluateCondition(activeTabId, step, graph, rowIndex),
+              sleep(evalMs).then(() => {
+                appendPlayLog("warn", `مهلت بررسی شرط «${title}» تمام شد (${evalMs}ms)`);
+                return false;
+              })
+            ]);
+          } catch (err) {
+            appendPlayLog("warn", `خطا در بررسی شرط: ${err?.message || err}`);
+            pass = false;
+          }
+          playStatus.lastResult = {
+            ok: true,
+            conditionPass: !!pass,
+            nodeId: step.id,
+            checkId
+          };
+          appendPlayLog(
+            pass ? "info" : "warn",
+            pass
+              ? `نتیجه شرط «${title}»: برقرار (موفق)`
+              : `نتیجه شرط «${title}»: برقرار نیست (ناموفق)`
+          );
+          // Mark finished before final finally so portal can show result immediately.
+          playStatus.playing = false;
+          broadcastPlayState();
+          // Dedicated signal so editor always gets pass/fail even if a later broadcast races.
+          notifyPortalTabs({
+            type: "conditionCheckResult",
+            pass: !!pass,
+            nodeId: step.id,
+            checkId,
+            message: pass
+              ? "نتیجه شرط: برقرار (موفق)"
+              : "نتیجه شرط: برقرار نیست (ناموفق)"
+          });
+        } else if (isActionNode(step)) {
+          const outcome = await runOneAction(activeTabId, graph, step, rowIndex, li + 1, iters.total, 1, 1);
+          if (outcome.tabId) activeTabId = outcome.tabId;
+          if (!outcome.ok) {
+            const decision = handleStepFailureForLoop(graph, outcome.error);
+            if (decision.continueLoop) continue;
+            break;
+          }
+        } else {
+          playStatus.lastError = "این نود قابل اجرا در مرورگر نیست.";
           break;
         }
       } else {
@@ -854,6 +1112,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
   } finally {
     playStatus.playing = false;
     playStatus.paused = false;
+    playStatus.currentNodeId = null;
     playPaused = false;
     wakePlayResumeWaiters();
     await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
@@ -915,6 +1174,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       stepOrdinal += 1;
       playStatus.stepIndex = stepOrdinal;
       if (stepOrdinal > playStatus.stepTotal) playStatus.stepTotal = stepOrdinal;
+      playStatus.currentNodeId = node.id;
       const outcome = await runOneAction(
         activeTabId, graph, node, rowIndex, loopIndex, loopTotal, stepOrdinal, playStatus.stepTotal
       );
@@ -934,6 +1194,8 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     }
 
     if (node.kind === "condition") {
+      playStatus.currentNodeId = node.id;
+      broadcastPlayState();
       // Conditions never fail the run: any exception → false (fail branch).
       let pass = false;
       try {
@@ -963,6 +1225,8 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     }
 
     if (node.kind === "group") {
+      playStatus.currentNodeId = node.id;
+      broadcastPlayState();
       appendPlayLog("info", `ورود به گروه «${node.title || node.id}»`);
       const innerEntry = (graph.nodes || []).find((n) => n.kind === "start" && n.groupNodeId === node.id)?.id
         || flowEdge(edges, node.id, ["contains"])?.to
@@ -1014,6 +1278,7 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
   await waitIfPaused();
   if (playAbort) return { ok: false, stepFailed: true, error: "اجرا متوقف شد", tabId };
 
+  playStatus.currentNodeId = step.id;
   const label = step.title || step.actionType || `مرحله ${stepIndex}`;
   appendPlayLog("step", `[حلقه ${loopIndex}] ${stepIndex}/${stepTotal} — ${label}`);
   broadcastPlayState();
@@ -1037,7 +1302,7 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
 
   const outcome = await runStep(tabId, graph.taskId, step, playStatus.runMode, graph, rowIndex);
   const failed = !outcome?.ok;
-  const ignored = failed && step.ignoreError === true;
+  const ignored = failed && step.ignoreError !== false;
   const errMsg = outcome?.error || "توقف به‌خاطر واگرایی";
   const reason = outcome?.reason || outcome?.unexpected?.reason || "";
   const errDetail = reason ? `${errMsg} [${reason}]` : errMsg;
@@ -1121,15 +1386,23 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
       const selector = resolveDynamicSelector(node, graph, rowIndex) || node.selectorValue || "";
       if (!selector) return ct === "NotFindElement";
       const waitMs = node.selectorWaitEnabled === true
-        ? Math.max(0, Number(node.selectorWaitMs) || 10000)
+        ? Math.max(0, Number(node.selectorWaitMs) || 1000)
         : 0;
-      const found = await elementExistsInTab(tabId, selector, parseFramePath(node.framePathJson), waitMs);
+      const found = await elementExistsInTab(
+        tabId,
+        selector,
+        parseFramePath(node.framePathJson),
+        waitMs,
+        selectorStateReqs(node)
+      );
       return ct === "FindElement" ? !!found : !found;
     }
 
     if (ct === "FindElements") {
       const selector = resolveDynamicSelector(node, graph, rowIndex) || node.selectorValue || "";
-      const count = selector ? await elementCountInTab(tabId, selector, parseFramePath(node.framePathJson)) : 0;
+      const count = selector
+        ? await elementCountInTab(tabId, selector, parseFramePath(node.framePathJson), selectorStateReqs(node))
+        : 0;
       const expected = Number(
         node.constantEqualValue ?? node.constantValue ?? node.navigation
       ) || 0;
@@ -1161,6 +1434,9 @@ async function resolveConditionCompareValue(tabId, node, graph, rowIndex, opts =
     const src = node.contentSourceType || "Constant";
     if (src === "System") {
       return resolveSystemValue(node.systemValueType || "CurrentDateTime");
+    }
+    if (src === "UserSystemDate" || src === "UserSystemTime") {
+      return String(node.constantEqualValue || node.constantValue || "").trim();
     }
     if (src === "Memory") {
       const name = String(node.memoryVariableName || node.sourceMemoryVariableName || "").trim();
@@ -1263,41 +1539,211 @@ function compareConditionValues(left, right, equalityType) {
   }
 }
 
-async function elementExistsInTab(tabId, selector, framePath, waitTimeoutMs = 0) {
+function selectorStateReqs(step, { equal = false } = {}) {
+  if (!step) return { requireVisible: false, requireEnabled: false, requireClickable: false };
+  if (equal) {
+    return {
+      requireVisible: step.equalSelectorRequireVisible === true,
+      requireEnabled: step.equalSelectorRequireEnabled === true,
+      requireClickable: step.equalSelectorRequireClickable === true
+    };
+  }
+  return {
+    requireVisible: step.selectorRequireVisible === true,
+    requireEnabled: step.selectorRequireEnabled === true,
+    requireClickable: step.selectorRequireClickable === true
+  };
+}
+
+/** Injected into pages — find first element matching CSS + optional state filters. */
+function pageFindMatchingElement(sel, req) {
+  const need = req || {};
+  let nodes;
   try {
+    nodes = Array.from(document.querySelectorAll(sel));
+  } catch {
+    return { ok: false, badSelector: true };
+  }
+  for (const el of nodes) {
+    if (!(el instanceof Element)) continue;
+    if (need.requireVisible || need.requireClickable) {
+      const st = window.getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) continue;
+      if (!(r.width > 0 && r.height > 0)) continue;
+    }
+    if (need.requireEnabled) {
+      if (el.disabled === true) continue;
+      if (el.getAttribute("aria-disabled") === "true") continue;
+      if (el.getAttribute("disabled") != null && el.getAttribute("disabled") !== "false") continue;
+    }
+    if (need.requireClickable) {
+      const st = window.getComputedStyle(el);
+      if (st.pointerEvents === "none") continue;
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) continue;
+      try {
+        const top = document.elementFromPoint(x, y);
+        if (top && top !== el && !el.contains(top) && !top.contains?.(el)) continue;
+      } catch { /* ignore hit-test failures */ }
+    }
+    return { ok: true, found: true };
+  }
+  return { ok: true, found: false };
+}
+
+async function elementExistsInTab(tabId, selector, framePath, waitTimeoutMs = 0, stateReq = null) {
+  if (!tabId || !selector) return false;
+  const req = stateReq || {};
+  try {
+    await pingTabScriptable(tabId);
     const frameId = await resolveFramePath(tabId, framePath || []);
     const maxMs = Math.max(0, Number(waitTimeoutMs) || 0);
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId, frameIds: [frameId] },
-      func: async (sel, timeoutMs) => {
-        const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
-        for (;;) {
-          try {
-            if (document.querySelector(sel)) return true;
-          } catch {
-            return false;
-          }
-          if (Date.now() >= deadline) return false;
-          await new Promise((r) => setTimeout(r, 100));
+    const deadline = Date.now() + maxMs;
+    let injectFails = 0;
+    for (;;) {
+      try {
+        const [{ result } = {}] = await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [frameId] },
+          func: pageFindMatchingElement,
+          args: [selector, req]
+        });
+        injectFails = 0;
+        if (result?.badSelector) return false;
+        if (result?.found) return true;
+      } catch (err) {
+        injectFails += 1;
+        console.warn("[DA Player] elementExistsInTab inject failed", tabId, err?.message || err);
+        if (injectFails === 1) {
+          await pingTabScriptable(tabId);
+          continue;
         }
-      },
-      args: [selector, maxMs]
-    });
-    return !!result;
-  } catch {
+        return false;
+      }
+      if (Date.now() >= deadline) return false;
+      await sleep(100);
+    }
+  } catch (err) {
+    console.warn("[DA Player] elementExistsInTab", err?.message || err);
     return false;
   }
 }
 
-async function elementCountInTab(tabId, selector, framePath) {
+/**
+ * Make sure the tab can run scripting without leaving the user on that tab.
+ * Discarded / unresponsive tabs are woken briefly then focus is restored.
+ */
+async function ensureTabScriptable(tabId, opts = {}) {
+  if (!tabId) return false;
+  let tab;
   try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return false;
+  }
+  const needsWake = !!(opts.force || tab.discarded || tab.status === "unloaded");
+  if (!needsWake) return true;
+
+  let prevTabId = null;
+  let prevWinId = null;
+  try {
+    const [prev] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (prev?.id && prev.id !== tabId) {
+      prevTabId = prev.id;
+      prevWinId = prev.windowId;
+    }
+  } catch { /* ignore */ }
+
+  try {
+    await chrome.tabs.update(tabId, { active: true });
+  } catch { /* ignore */ }
+
+  const start = Date.now();
+  while (Date.now() - start < 2000) {
+    try {
+      const t = await chrome.tabs.get(tabId);
+      if (t && !t.discarded && (t.status === "complete" || t.status === "loading")) break;
+    } catch { break; }
+    await sleep(80);
+  }
+  // Give the renderer a beat after wake.
+  await sleep(120);
+
+  if (prevTabId) {
+    try {
+      await chrome.tabs.update(prevTabId, { active: true });
+      if (prevWinId != null) {
+        await chrome.windows.update(prevWinId, { focused: true }).catch(() => {});
+      }
+    } catch { /* ignore */ }
+  }
+  return true;
+}
+
+/** Probe scripting; on failure wake the tab and retry once. */
+async function pingTabScriptable(tabId) {
+  if (!tabId) return false;
+  const probe = async () => {
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => true
+    });
+    return !!result;
+  };
+  try {
+    if (await probe()) return true;
+  } catch {
+    /* wake and retry */
+  }
+  await ensureTabScriptable(tabId, { force: true });
+  try {
+    return await probe();
+  } catch (err) {
+    console.warn("[DA Player] pingTabScriptable failed", tabId, err?.message || err);
+    return false;
+  }
+}
+
+async function elementCountInTab(tabId, selector, framePath, stateReq = null) {
+  const req = stateReq || {};
+  try {
+    await pingTabScriptable(tabId);
     const frameId = await resolveFramePath(tabId, framePath || []);
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
-      func: (sel) => {
-        try { return document.querySelectorAll(sel).length; } catch { return 0; }
+      func: (sel, need) => {
+        try {
+          const nodes = Array.from(document.querySelectorAll(sel));
+          if (!need || !(need.requireVisible || need.requireEnabled || need.requireClickable)) {
+            return nodes.length;
+          }
+          let n = 0;
+          for (const el of nodes) {
+            if (!(el instanceof Element)) continue;
+            if (need.requireVisible || need.requireClickable) {
+              const st = getComputedStyle(el);
+              const r = el.getBoundingClientRect();
+              if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) continue;
+              if (!(r.width > 0 && r.height > 0)) continue;
+            }
+            if (need.requireEnabled) {
+              if (el.disabled === true) continue;
+              if (el.getAttribute("aria-disabled") === "true") continue;
+            }
+            if (need.requireClickable) {
+              const st = getComputedStyle(el);
+              if (st.pointerEvents === "none") continue;
+            }
+            n += 1;
+          }
+          return n;
+        } catch {
+          return 0;
+        }
       },
-      args: [selector]
+      args: [selector, req]
     });
     return Number(result) || 0;
   } catch {
@@ -1308,19 +1754,47 @@ async function elementCountInTab(tabId, selector, framePath) {
 async function readElementText(tabId, node, graph, rowIndex) {
   const selector = resolveDynamicSelector(node, graph, rowIndex) || node.selectorValue || "";
   if (!selector) return "";
+  const req = selectorStateReqs(node);
   try {
+    await pingTabScriptable(tabId);
     const frameId = await resolveFramePath(tabId, parseFramePath(node.framePathJson));
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId, frameIds: [frameId] },
-      func: (sel) => {
-        const el = document.querySelector(sel);
-        if (!el) return "";
-        if (el.value != null) return String(el.value);
-        return (el.textContent || "").trim();
-      },
-      args: [selector]
-    });
-    return result == null ? "" : String(result);
+    const waitMs = node.selectorWaitEnabled === true
+      ? Math.max(0, Number(node.selectorWaitMs) || 1000)
+      : 0;
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      const [{ result } = {}] = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] },
+        func: (sel, need) => {
+          let nodes;
+          try { nodes = Array.from(document.querySelectorAll(sel)); } catch { return ""; }
+          for (const el of nodes) {
+            if (!(el instanceof Element)) continue;
+            if (need.requireVisible || need.requireClickable) {
+              const st = getComputedStyle(el);
+              const r = el.getBoundingClientRect();
+              if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) continue;
+              if (!(r.width > 0 && r.height > 0)) continue;
+            }
+            if (need.requireEnabled) {
+              if (el.disabled === true) continue;
+              if (el.getAttribute("aria-disabled") === "true") continue;
+            }
+            if (need.requireClickable) {
+              const st = getComputedStyle(el);
+              if (st.pointerEvents === "none") continue;
+            }
+            if (el.value != null) return String(el.value);
+            return (el.textContent || "").trim();
+          }
+          return null;
+        },
+        args: [selector, req]
+      });
+      if (result != null) return String(result);
+      if (Date.now() >= deadline) return "";
+      await sleep(100);
+    }
   } catch {
     return "";
   }
@@ -1431,20 +1905,27 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   }
 
   const waitTimeoutMs = step.selectorWaitEnabled === true
-    ? Math.max(0, Number(step.selectorWaitMs) || 10000)
+    ? Math.max(0, Number(step.selectorWaitMs) || 1000)
     : 0;
+  const stateReq = selectorStateReqs(step);
   const payload = {
     actionType,
     selectorValue: resolvedSelector,
     constantValue: valueForAction,
     navigateUrl: step.navigateUrl,
     highlightColor: resolveHighlightColor(graph),
-    waitTimeoutMs
+    waitTimeoutMs,
+    requireVisible: !!stateReq.requireVisible,
+    requireEnabled: !!stateReq.requireEnabled,
+    requireClickable: !!stateReq.requireClickable
   };
 
-  let result = await chrome.tabs
-    .sendMessage(tabId, { type: "playExecute", payload }, { frameId })
-    .catch(() => null);
+  let result = await (async () => {
+    await clearTabPlayHighlights(tabId);
+    return chrome.tabs
+      .sendMessage(tabId, { type: "playExecute", payload }, { frameId })
+      .catch(() => null);
+  })();
 
   if (!result) {
     result = await executeInFrame(tabId, frameId, payload);
@@ -1494,18 +1975,25 @@ async function runCaptureStep(tabId, taskId, step, runMode, graph, rowIndex, fra
       }, err.message);
     }
     const waitTimeoutMs = step.selectorWaitEnabled === true
-      ? Math.max(0, Number(step.selectorWaitMs) || 10000)
+      ? Math.max(0, Number(step.selectorWaitMs) || 1000)
       : 0;
+    const stateReq = selectorStateReqs(step);
     const payload = {
       actionType: "TakeContent",
       selectorValue: resolvedSelector,
       constantValue: "",
       highlightColor: resolveHighlightColor(graph),
-      waitTimeoutMs
+      waitTimeoutMs,
+      requireVisible: !!stateReq.requireVisible,
+      requireEnabled: !!stateReq.requireEnabled,
+      requireClickable: !!stateReq.requireClickable
     };
-    let result = await chrome.tabs
-      .sendMessage(tabId, { type: "playExecute", payload }, { frameId })
-      .catch(() => null);
+    let result = await (async () => {
+      await clearTabPlayHighlights(tabId);
+      return chrome.tabs
+        .sendMessage(tabId, { type: "playExecute", payload }, { frameId })
+        .catch(() => null);
+    })();
     if (!result) result = await executeInFrame(tabId, frameId, payload);
     if (!result || !result.ok) {
       return onUnexpected(runMode, {
@@ -1678,14 +2166,19 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
     } catch {
       frameId = 0;
     }
+    const eqReq = selectorStateReqs(step, { equal: true });
     const payload = {
       actionType: "TakeContent",
       selectorValue: valueSel,
       constantValue: "",
       waitTimeoutMs: step.equalSelectorWaitEnabled === true
-        ? Math.max(0, Number(step.equalSelectorWaitMs) || 10000)
-        : 0
+        ? Math.max(0, Number(step.equalSelectorWaitMs) || 1000)
+        : 0,
+      requireVisible: !!eqReq.requireVisible,
+      requireEnabled: !!eqReq.requireEnabled,
+      requireClickable: !!eqReq.requireClickable
     };
+    await clearTabPlayHighlights(tabId);
     let result = await chrome.tabs
       .sendMessage(tabId, { type: "playExecute", payload }, { frameId })
       .catch(() => null);
@@ -1958,9 +2451,15 @@ function collectPlaySteps(graph, opts = {}) {
     }
   }
 
+  if (opts.conditionNodeId) {
+    const n = nodes.get(opts.conditionNodeId);
+    return n && n.kind === "condition" ? [] : [];
+  }
   if (opts.stepNodeId) {
     const n = nodes.get(opts.stepNodeId);
     if (n && isActionNode(n)) return [n];
+    // Condition via stepNodeId — handled in runPlayLoop, not as action steps
+    if (n && n.kind === "condition") return [];
     return [];
   }
 
@@ -2055,8 +2554,25 @@ async function resolveFramePath(tabId, framePath) {
   return currentFrameId;
 }
 
+async function clearTabPlayHighlights(tabId) {
+  if (!tabId) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => {
+        try {
+          document.querySelectorAll("#da-play-hl, .da-play-hl").forEach((n) => n.remove());
+        } catch { /* ignore */ }
+      }
+    });
+  } catch {
+    /* ignore — tab may not allow scripting */
+  }
+}
+
 async function executeInFrame(tabId, frameId, payload) {
   try {
+    await clearTabPlayHighlights(tabId);
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
       func: playExecuteInjected,
@@ -2074,6 +2590,11 @@ async function playExecuteInjected(payload) {
   const value = payload.constantValue;
   const highlightColor = payload.highlightColor || "#ea5455";
   const waitTimeoutMs = Math.max(0, Number(payload.waitTimeoutMs) || 0);
+  const stateReq = {
+    requireVisible: !!payload.requireVisible,
+    requireEnabled: !!payload.requireEnabled,
+    requireClickable: !!payload.requireClickable
+  };
 
   function normalizeColor(v) {
     const s = String(v || "").trim();
@@ -2087,11 +2608,14 @@ async function playExecuteInjected(payload) {
   function highlightTarget(el, color) {
     if (!(el instanceof Element)) return;
     const c = normalizeColor(color);
-    document.getElementById("da-play-hl")?.remove();
+    try {
+      document.querySelectorAll("#da-play-hl, .da-play-hl").forEach((n) => n.remove());
+    } catch { /* ignore */ }
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch { /* ignore */ }
     const r = el.getBoundingClientRect();
     const box = document.createElement("div");
     box.id = "da-play-hl";
+    box.className = "da-play-hl";
     Object.assign(box.style, {
       position: "fixed",
       left: `${Math.max(0, r.left - 3)}px`,
@@ -2108,16 +2632,46 @@ async function playExecuteInjected(payload) {
     document.documentElement.appendChild(box);
   }
 
-  async function waitForElement(sel, timeoutMs) {
+  function elementMatchesState(el, need) {
+    if (!(el instanceof Element)) return false;
+    if (need.requireVisible || need.requireClickable) {
+      const st = window.getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) return false;
+      if (!(r.width > 0 && r.height > 0)) return false;
+    }
+    if (need.requireEnabled) {
+      if (el.disabled === true) return false;
+      if (el.getAttribute("aria-disabled") === "true") return false;
+      if (el.getAttribute("disabled") != null && el.getAttribute("disabled") !== "false") return false;
+    }
+    if (need.requireClickable) {
+      const st = window.getComputedStyle(el);
+      if (st.pointerEvents === "none") return false;
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false;
+      try {
+        const top = document.elementFromPoint(x, y);
+        if (top && top !== el && !el.contains(top) && !(top.contains && top.contains(el))) return false;
+      } catch { /* ignore */ }
+    }
+    return true;
+  }
+
+  async function waitForElement(sel, timeoutMs, need) {
     const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
     for (;;) {
-      let el;
+      let nodes;
       try {
-        el = document.querySelector(sel);
+        nodes = Array.from(document.querySelectorAll(sel));
       } catch {
         return { ok: false, error: `سلکتور نامعتبر: ${sel}`, reason: "bad_selector" };
       }
-      if (el) return { ok: true, el };
+      for (const el of nodes) {
+        if (elementMatchesState(el, need || {})) return { ok: true, el };
+      }
       if (Date.now() >= deadline) break;
       await new Promise((r) => setTimeout(r, 100));
     }
@@ -2134,7 +2688,7 @@ async function playExecuteInjected(payload) {
 
   if (!selector) return { ok: false, error: "سلکتور خالی است.", reason: "missing_selector" };
 
-  const found = await waitForElement(selector, waitTimeoutMs);
+  const found = await waitForElement(selector, waitTimeoutMs, stateReq);
   if (!found.ok) return found;
   const el = found.el;
 

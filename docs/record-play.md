@@ -4,7 +4,7 @@
 
 پرتال در لود صفحه مودال افزونه را باز **نمی‌کند**. فقط وقتی کاربر **اجرا** یا **ضبط** بزند و افزونه نباشد، مودال راهنما می‌آید:
 
-1. مسیر ثابت از `/extension/install-path` (معمولاً `%LocalAppData%\DynamicAutomator\extension`)
+1. مسیر ثابت از `/extension/install-path` (معمولاً `%LocalAppData%\morobot.soras.ir\extension-*`)
 2. `chrome://extensions` یا `edge://extensions` → Developer mode → Load unpacked
 3. «بررسی مجدد» — در صورت موفقیت همان عمل دوباره اجرا می‌شود
 

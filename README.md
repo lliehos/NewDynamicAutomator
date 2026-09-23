@@ -1,4 +1,4 @@
-# Dynamic Automator V3 — مروبات / Morobot
+# Morobot V3 — مروبات / Morobot
 
 بازنویسی پنل بدون Selenium: پرتال ASP.NET + بوم گردش + افزونه‌های Chrome MV3.
 
@@ -8,7 +8,7 @@
 ## اجرا (local-first)
 
 ```bash
-dotnet run --project src/DynamicAutomator.Web --launch-profile https
+dotnet run --project src/Morobot.Web --launch-profile https
 ```
 
 - لندینگ: https://localhost:7201/
@@ -20,8 +20,8 @@ dotnet run --project src/DynamicAutomator.Web --launch-profile https
 ## ساختار مهم
 
 ```
-src/DynamicAutomator.Web/Areas/Panel   پنل احرازشده
-src/DynamicAutomator.Web/Views/Home    لندینگ عمومی
+src/Morobot.Web/Areas/Panel   پنل احرازشده
+src/Morobot.Web/Views/Home    لندینگ عمومی
 wwwroot/locales                        fa.json / en.json
 wwwroot/js/da-crypto.js                AES-GCM + .mrbt
 wwwroot/js/da-secure-store.js          localStorage رمزشده

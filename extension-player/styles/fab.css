@@ -315,4 +315,14 @@
   margin-bottom: 0;
   flex: 0 0 auto;
 }
+.da-recorder-root[dir="ltr"] {
+  direction: ltr !important;
+}
+.da-recorder-root[dir="ltr"] .da-fab-log {
+  direction: ltr !important;
+  text-align: left !important;
+}
+.da-recorder-root[dir="ltr"] .da-fab-res-detail {
+  text-align: left;
+}
 

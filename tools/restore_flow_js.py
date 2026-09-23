@@ -3,10 +3,10 @@ import re
 import subprocess
 from pathlib import Path
 
-root = Path(r"d:\Projects\Web\NewDaynamicAutomator\NewDynamicAutomator")
-p = root / "src/DynamicAutomator.Web/wwwroot/editor/flow.js"
+root = Path(r"C:\Projects\MorobotV3")
+p = root / "src/Morobot.Web/wwwroot/editor/flow.js"
 data = subprocess.check_output(
-    ["git", "show", "HEAD:src/DynamicAutomator.Web/wwwroot/editor/flow.js"],
+    ["git", "show", "HEAD:src/Morobot.Web/wwwroot/editor/flow.js"],
     cwd=root,
 )
 text = data.decode("utf-8")

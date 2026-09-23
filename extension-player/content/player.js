@@ -20,11 +20,17 @@ function normalizeHighlightColor(v) {
   return "#ea5455";
 }
 
-/** Draw a colored border overlay around the targeted element. */
+/** Draw a colored border overlay around the targeted element (only one at a time). */
+function clearPlayHighlights() {
+  try {
+    document.querySelectorAll("#da-play-hl, .da-play-hl").forEach((n) => n.remove());
+  } catch { /* ignore */ }
+}
+
 function highlightTarget(el, color) {
   if (!(el instanceof Element)) return;
   const c = normalizeHighlightColor(color);
-  document.getElementById("da-play-hl")?.remove();
+  clearPlayHighlights();
   try {
     el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" in Element.prototype ? "instant" : "auto" });
   } catch {
@@ -33,8 +39,10 @@ function highlightTarget(el, color) {
   const place = () => {
     const r = el.getBoundingClientRect();
     if (!r.width && !r.height) return;
+    clearPlayHighlights();
     const box = document.createElement("div");
     box.id = "da-play-hl";
+    box.className = "da-play-hl";
     box.setAttribute("aria-hidden", "true");
     Object.assign(box.style, {
       position: "fixed",
@@ -57,21 +65,53 @@ function highlightTarget(el, color) {
 }
 
 /**
- * Poll until selector matches or timeout.
+ * Poll until selector matches (with optional visible/enabled/clickable) or timeout.
  * timeoutMs <= 0 → single attempt (immediate not-found if missing).
  */
-async function waitForElement(selector, timeoutMs) {
+function elementMatchesState(el, need) {
+  if (!(el instanceof Element)) return false;
+  const req = need || {};
+  if (req.requireVisible || req.requireClickable) {
+    const st = window.getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) return false;
+    if (!(r.width > 0 && r.height > 0)) return false;
+  }
+  if (req.requireEnabled) {
+    if (el.disabled === true) return false;
+    if (el.getAttribute("aria-disabled") === "true") return false;
+    if (el.getAttribute("disabled") != null && el.getAttribute("disabled") !== "false") return false;
+  }
+  if (req.requireClickable) {
+    const st = window.getComputedStyle(el);
+    if (st.pointerEvents === "none") return false;
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false;
+    try {
+      const top = document.elementFromPoint(x, y);
+      if (top && top !== el && !el.contains(top) && !(top.contains && top.contains(el))) return false;
+    } catch { /* ignore */ }
+  }
+  return true;
+}
+
+async function waitForElement(selector, timeoutMs, stateReq) {
   const maxMs = Math.max(0, Number(timeoutMs) || 0);
   const deadline = Date.now() + maxMs;
   const poll = 100;
+  const need = stateReq || {};
   for (;;) {
-    let el;
+    let nodes;
     try {
-      el = document.querySelector(selector);
+      nodes = Array.from(document.querySelectorAll(selector));
     } catch {
       return { ok: false, error: `سلکتور نامعتبر: ${selector}`, reason: "bad_selector" };
     }
-    if (el) return { ok: true, el };
+    for (const el of nodes) {
+      if (elementMatchesState(el, need)) return { ok: true, el };
+    }
     if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, poll));
   }
@@ -90,6 +130,11 @@ async function executeAction(payload) {
   const navigateUrl = payload.navigateUrl;
   const highlightColor = payload.highlightColor;
   const waitTimeoutMs = Math.max(0, Number(payload.waitTimeoutMs) || 0);
+  const stateReq = {
+    requireVisible: !!payload.requireVisible,
+    requireEnabled: !!payload.requireEnabled,
+    requireClickable: !!payload.requireClickable
+  };
 
   if (actionType === "GoToUrl" || actionType === "NewPage") {
     const url = navigateUrl || value;
@@ -119,7 +164,7 @@ async function executeAction(payload) {
     return { ok: false, error: "سلکتور خالی است.", reason: "missing_selector" };
   }
 
-  const found = await waitForElement(selector, waitTimeoutMs);
+  const found = await waitForElement(selector, waitTimeoutMs, stateReq);
   if (!found.ok) return found;
   const el = found.el;
 

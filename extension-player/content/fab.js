@@ -1,7 +1,47 @@
 /** Player FAB — start / pause / resume / stop / clear logs + results. */
 (async function initFab() {
   if (window !== window.top) return;
-  if (window.__daFabInit || document.getElementById("da-player-fab") || document.getElementById("da-recorder-fab")) return;
+  // Don't mount Player HUD while Recorder owns the page (or already mounted its FAB).
+  if (document.documentElement.dataset.daMorobotMode === "record") return;
+  if (document.getElementById("da-recorder-fab")) return;
+  if (window.__daFabInit || document.getElementById("da-player-fab")) return;
+
+  // Content script runs on every http(s) load; only mount while a play session is active.
+  // If play starts later, storage/message wake us (or background re-injects this file).
+  async function isPlaySessionActive() {
+    try {
+      const st = await chrome.storage.local.get(["playing"]);
+      if (st.playing) return true;
+    } catch { /* ignore */ }
+    try {
+      const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => null);
+      return !!(state?.playing || state?.play?.playing);
+    } catch {
+      return false;
+    }
+  }
+
+  let bootPlaying = await isPlaySessionActive();
+  if (!bootPlaying) {
+    if (window.__daFabWaitPlay) return;
+    window.__daFabWaitPlay = true;
+    const onStorage = (changes, area) => {
+      if (area !== "local" || !changes.playing?.newValue) return;
+      chrome.storage.onChanged.removeListener(onStorage);
+      window.__daFabWaitPlay = false;
+      // Re-run by injecting is background's job; for content-script path, reload entry:
+      initFab().catch(() => {});
+    };
+    chrome.storage.onChanged.addListener(onStorage);
+    chrome.runtime.onMessage.addListener(function wake(msg) {
+      if (msg?.type !== "playStateChanged" || !msg.playing) return;
+      chrome.runtime.onMessage.removeListener(wake);
+      window.__daFabWaitPlay = false;
+      initFab().catch(() => {});
+    });
+    return;
+  }
+
   window.__daFabInit = true;
 
   try {
@@ -15,12 +55,17 @@
     /* continue */
   }
 
+  const I18n = globalThis.DaExtI18n;
+  const t = (key, vars) => (I18n ? I18n.t(key, vars) : key);
+  if (I18n) await I18n.init();
+
   const root = document.createElement("div");
-  root.className = "da-recorder-root";
+  root.className = "da-recorder-root da-player-root";
   root.id = "da-player-fab";
+  root.setAttribute("data-da-role", "player");
   root.innerHTML = `
     <div class="da-fab-panel" id="da-fab-panel" hidden>
-      <div class="da-fab-resize" id="da-fab-resize" title="تغییر اندازه" aria-label="تغییر اندازه پنل"></div>
+      <div class="da-fab-resize" id="da-fab-resize" title="${t("play.resize")}" aria-label="${t("play.resize")}"></div>
       <div class="da-fab-status" id="da-fab-status">...</div>
       <div class="da-play-hud">
         <div class="da-play-hud-top">
@@ -29,20 +74,21 @@
         </div>
         <div class="da-fab-results" id="da-fab-results" aria-live="polite"></div>
         <div class="da-fab-play-actions da-fab-play-icons">
-          <button type="button" id="da-fab-playpause" class="da-ico-btn da-fab-play" title="اجرا" aria-label="اجرا" data-mode="play">
+          <button type="button" id="da-fab-playpause" class="da-ico-btn da-fab-play" title="${t("play.play")}" aria-label="${t("play.play")}" data-mode="play">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg>
           </button>
-          <button type="button" id="da-fab-stop" class="da-ico-btn da-fab-stop" title="توقف (از اول)" aria-label="توقف" hidden>
+          <button type="button" id="da-fab-stop" class="da-ico-btn da-fab-stop" title="${t("play.stop")}" aria-label="${t("play.stop")}" hidden>
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 7h10v10H7V7z"/></svg>
           </button>
-          <button type="button" id="da-fab-clear-logs" class="da-ico-btn da-fab-clear" title="پاکسازی لاگ‌ها" aria-label="پاکسازی لاگ‌ها">
+          <button type="button" id="da-fab-clear-logs" class="da-ico-btn da-fab-clear" title="${t("play.clear")}" aria-label="${t("play.clear")}">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 7h12v2H6V7zm2 3h8l-1 10H9L8 10zm3-5h2l1 2h4v2H6V7h4l1-2z"/></svg>
           </button>
         </div>
       </div>
     </div>
-    <button type="button" class="da-fab-btn da-fab-btn-hud" id="da-fab-toggle" title="پنل اجرا" hidden>☰</button>
+    <button type="button" class="da-fab-btn da-fab-btn-hud" id="da-fab-toggle" title="${t("play.panel")}" hidden>☰</button>
   `;
+  if (I18n) I18n.applyRoot(root);
   document.documentElement.appendChild(root);
   Object.assign(root.style, {
     position: "fixed", left: "18px", right: "auto", bottom: "18px", top: "auto",
@@ -206,11 +252,11 @@
     playPauseBtn.classList.toggle("da-fab-pause", mode === "pause");
     playPauseBtn.classList.remove("da-fab-start", "da-fab-resume");
     if (mode === "pause") {
-      playPauseBtn.title = "پاز";
-      playPauseBtn.setAttribute("aria-label", "پاز");
+      playPauseBtn.title = t("play.pause");
+      playPauseBtn.setAttribute("aria-label", t("play.pause"));
       playPauseBtn.innerHTML = ICO_PAUSE;
     } else {
-      const label = paused ? "ادامه" : "اجرا";
+      const label = paused ? t("play.resume") : t("play.play");
       playPauseBtn.title = label;
       playPauseBtn.setAttribute("aria-label", label);
       playPauseBtn.innerHTML = ICO_PLAY;
@@ -249,12 +295,12 @@
           status.textContent = res.error;
         } else {
           setPlayPauseMode("play");
-          playPauseBtn.title = "ادامه";
-          playPauseBtn.setAttribute("aria-label", "ادامه");
+          playPauseBtn.title = t("play.resume");
+          playPauseBtn.setAttribute("aria-label", t("play.resume"));
           if (playProgress) {
-            playProgress.textContent = playProgress.textContent.replace(/^▶/, "⏸ پاز —");
+            playProgress.textContent = playProgress.textContent.replace(/^▶/, "⏸");
           }
-          status.textContent = "پاز — اجرا=ادامه از همین‌جا · توقف=قطع و شروع از اول";
+          status.textContent = t("play.pausedHint");
         }
       } else {
         const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({}));
@@ -267,7 +313,7 @@
           if (res?.ok === false && res?.error) status.textContent = res.error;
           else {
             setPlayPauseMode("pause");
-            status.textContent = "در حال اجرا — پاز یا توقف";
+            status.textContent = t("play.runningHint");
           }
         } else if (playing && !paused) {
           // Safety: UI said play but engine still running → pause
@@ -276,18 +322,18 @@
           const { lastPlayRequest } = await chrome.storage.local.get("lastPlayRequest");
           const taskId = lastPlayRequest?.taskId || lastPlaySnapshot?.taskId || state.play?.taskId;
           if (!taskId) {
-            status.textContent = "فرآیندی برای اجرا نیست — از پورتال اجرا کنید.";
+            status.textContent = t("play.noProcess");
             return;
           }
           const res = await chrome.runtime.sendMessage({
             type: "startPlay",
-            taskId: Number(taskId),
+            taskId: String(taskId),
             runMode: lastPlayRequest?.runMode,
             groupNodeId: lastPlayRequest?.groupNodeId || null,
             stepNodeId: lastPlayRequest?.stepNodeId || null
           }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
           if (!res?.ok && !res?.reloading) {
-            status.textContent = res?.error || "خطا در شروع";
+            status.textContent = res?.error || t("play.startError");
           }
         }
       }
@@ -347,9 +393,9 @@
 
   function renderPlayResults(play) {
     if (!playResults) return;
-    const loopLine = `حلقه ${play.loopIndex || 0} / ${play.loopTotal || 1}`
+    const loopLine = t("play.loop", { i: play.loopIndex || 0, total: play.loopTotal || 1 })
       + (play.repeatType && play.repeatType !== "None" ? ` · ${play.repeatType}` : "");
-    const stepLine = `مرحله ${play.stepIndex || 0} / ${play.stepTotal || 0}`;
+    const stepLine = t("play.step", { i: play.stepIndex || 0, total: play.stepTotal || 0 });
     const results = Array.isArray(play.results) ? play.results.slice(-40) : [];
     const logs = Array.isArray(play.logs) ? play.logs.slice(-40) : [];
     const resultHtml = results.length
@@ -363,14 +409,14 @@
             + `<span class="da-fab-res-detail">${escapeHtml(r.detail || "")}</span>`
             + `</div>`;
         }).join("")
-      : `<div class="da-fab-res-empty">هنوز نتیجه‌ای ثبت نشده</div>`;
+      : `<div class="da-fab-res-empty">${escapeHtml(t("play.noResults"))}</div>`;
     const logHtml = logs.length
       ? `<div class="da-fab-log">${logs.map((entry) => {
           const lv = entry.level || "info";
           const safe = ["error", "warn", "ok", "step", "info"].includes(lv) ? lv : "info";
           return `<div class="da-fab-log-line da-fab-log-${safe}">${escapeHtml(entry.text || "")}</div>`;
         }).join("")}</div>`
-      : `<div class="da-fab-log"><div class="da-fab-res-empty">لاگی نیست</div></div>`;
+      : `<div class="da-fab-log"><div class="da-fab-res-empty">${escapeHtml(t("play.noLogs"))}</div></div>`;
     playResults.innerHTML = `
       <div class="da-fab-res-head">
         <div>${escapeHtml(loopLine)}</div>
@@ -386,6 +432,18 @@
   }
 
   async function refresh(playHint) {
+    if (I18n) I18n.applyRoot(root);
+    const resizeEl = root.querySelector("#da-fab-resize");
+    if (resizeEl) {
+      resizeEl.title = t("play.resize");
+      resizeEl.setAttribute("aria-label", t("play.resize"));
+    }
+    stopBtn.title = t("play.stop");
+    stopBtn.setAttribute("aria-label", t("play.stop"));
+    clearBtn.title = t("play.clear");
+    clearBtn.setAttribute("aria-label", t("play.clear"));
+    toggleBtn.title = t("play.panel");
+
     const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({
       playing: false, play: null
     }));
@@ -403,13 +461,23 @@
     const ver = session?.version || chrome.runtime.getManifest().version;
     const user = session?.userName || "test";
     const canRestart = !!(lastPlayRequest?.taskId || play.taskId);
-    const showHud = playing || hasHistory(play) || canRestart;
+
+    // Shared DOM flag — recorder sets "record"; never show player HUD over an active record session.
+    const pageMode = document.documentElement.dataset.daMorobotMode || "";
+    if (playing) document.documentElement.dataset.daMorobotMode = "play";
+    else if (pageMode === "play") delete document.documentElement.dataset.daMorobotMode;
+
+    // Only auto-open while actually playing. Stale lastPlayRequest must not steal the record HUD.
+    const showHud = playing && (document.documentElement.dataset.daMorobotMode !== "record");
 
     if (!showHud) {
       panel.hidden = true;
       toggleBtn.hidden = true;
+      root.hidden = true;
       return;
     }
+
+    root.hidden = false;
 
     if (userCollapsed && !playing) {
       panel.hidden = true;
@@ -423,15 +491,18 @@
     // Ensure saved size is applied when HUD becomes visible
     if (!panel.classList.contains("is-sized")) restoreHudSize();
 
-    const title = play.title || lastPlayRequest?.title || (play.taskId ? `فرآیند #${play.taskId}` : "اجرا");
+    const title = play.title || lastPlayRequest?.title
+      || (play.taskId ? t("play.process", { id: play.taskId }) : t("play.fallbackTitle"));
     if (playTitle) playTitle.textContent = title;
     if (playProgress) {
-      const loop = `حلقه ${play.loopIndex || 0}/${play.loopTotal || 1}`;
-      const step = `مرحله ${play.stepIndex || 0}/${play.stepTotal || 0}`;
+      const loop = t("play.loopShort", { i: play.loopIndex || 0, total: play.loopTotal || 1 });
+      const step = t("play.stepShort", { i: play.stepIndex || 0, total: play.stepTotal || 0 });
       if (playing) {
-        playProgress.textContent = paused ? `⏸ پاز — ${loop} · ${step}` : `▶ ${loop} · ${step}`;
+        playProgress.textContent = paused ? `⏸ ${loop} · ${step}` : `▶ ${loop} · ${step}`;
       } else {
-        playProgress.textContent = play.lastError ? "پایان با خطا" : (hasHistory(play) ? `پایان · ${loop} · ${step}` : "آماده شروع");
+        playProgress.textContent = play.lastError
+          ? t("play.endedError")
+          : (hasHistory(play) ? t("play.ended", { loop, step }) : t("play.readyStart"));
       }
     }
     renderPlayResults(play);
@@ -450,13 +521,19 @@
     status.textContent = play.lastError && !playing
       ? String(play.lastError)
       : (playing
-        ? (paused
-          ? "پاز — اجرا=ادامه از همین‌جا · توقف=قطع و شروع از اول"
-          : "در حال اجرا — پاز یا توقف")
+        ? (paused ? t("play.pausedHint") : t("play.runningHint"))
         : (canRestart
-          ? `آماده · v${ver} · ${user} — اجرا از اول`
-          : `اجرا v${ver} · ${user}`));
+          ? t("play.readyRestart", { ver, user })
+          : t("play.readyIdle", { ver, user })));
   }
 
+  if (I18n) I18n.onChange(() => refresh());
+  // React when recorder claims/releases the page.
+  try {
+    new MutationObserver(() => { refresh().catch(() => {}); }).observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-da-morobot-mode"]
+    });
+  } catch { /* ignore */ }
   refresh();
 })();

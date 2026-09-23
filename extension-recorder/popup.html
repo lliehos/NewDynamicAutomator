@@ -3,38 +3,71 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      body { font-family: Tahoma, sans-serif; width: 300px; padding: 12px; margin: 0; }
-      button, select, input { width: 100%; margin-top: 8px; padding: 8px; box-sizing: border-box; }
-      .muted { color: #666; font-size: 12px; }
+      body { font-family: Tahoma, sans-serif; width: 300px; padding: 12px; margin: 0; box-sizing: border-box; }
+      button { width: 100%; margin-top: 8px; padding: 8px; box-sizing: border-box; border-radius: 6px; border: 0; cursor: pointer; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      .muted { color: #666; font-size: 12px; line-height: 1.5; }
       h4 { margin: 0 0 8px; }
-      #record, #finish { background: #ea5455; color: #fff; border: 0; border-radius: 6px; }
-      #upload { background: #28c76f; color: #fff; border: 0; border-radius: 6px; }
-      label { display: block; font-size: 12px; color: #666; margin-top: 10px; }
+      #refresh { background: #f1f0ff; color: #4b465c; }
+      #stop { background: #ea5455; color: #fff; }
+      #save { background: #28c76f; color: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 0; }
+      #save svg { display: block; }
+      #resume { background: #ea5455; color: #fff; }
+      #end, #end2 { background: #6e6b7b; color: #fff; }
+      .switches { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+      .switch { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: #5e5873; }
+      .log {
+        margin-top: 10px; max-height: 180px; overflow: auto; border: 1px solid #ece9f7;
+        border-radius: 8px; background: #f7f7fb; padding: 6px 8px; font-size: 11px;
+      }
+      .log-empty { color: #a8aaae; text-align: center; padding: 8px; }
+      .log-line { padding: 4px 0; border-bottom: 1px solid rgba(0,0,0,0.04); }
+      .log-line:last-child { border-bottom: 0; }
+      .log-title { font-weight: 600; color: #2f2b3d; }
+      .log-detail { color: #6e6b7b; direction: ltr; text-align: left; word-break: break-all; }
+      .check-line { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; cursor: pointer; }
+      .check-line input { margin-top: 2px; accent-color: #28c76f; }
     </style>
   </head>
   <body>
-    <h4 style="display:flex;align-items:center;gap:8px">
+    <h4 id="app-title" style="display:flex;align-items:center;gap:8px">
       <img src="icons/icon32.png" width="22" height="22" alt="" style="border-radius:5px" />
-      ضبط — مروبات
+      <span data-i18n="rec.title">ضبط — مروبات</span>
     </h4>
-    <div id="status" class="muted">در حال بررسی...</div>
-    <button id="refresh">تازه‌سازی</button>
+    <div id="status" class="muted">...</div>
+    <button id="refresh" data-i18n="rec.refresh">تازه‌سازی</button>
+
     <div id="idle-box">
-      <label for="record-tab">محل ضبط</label>
-      <select id="record-tab"><option value="">تب جدید (خالی)</option></select>
-      <button id="record">شروع ضبط</button>
+      <p class="muted" data-i18n="rec.idleHint">ضبط را از لیست فرآیندها در پورتال شروع کنید.</p>
     </div>
+
     <div id="rec-box" hidden>
-      <p class="muted">روی تب انتخاب‌شده کار کنید؛ تغییر آدرس به‌عنوان GoToUrl ثبت می‌شود.</p>
-      <button id="finish">اتمام ضبط</button>
+      <div class="switches">
+        <label class="switch">
+          <span data-i18n="rec.trackInputClicks">ترک کلیک در فیلد ورودی</span>
+          <input type="checkbox" id="opt-input-clicks" />
+        </label>
+        <label class="switch">
+          <span data-i18n="rec.trackMouse">ترک عملیات موس</span>
+          <input type="checkbox" id="opt-mouse" checked />
+        </label>
+      </div>
+      <div class="log" id="log"></div>
+      <button id="stop" data-i18n="rec.stop">توقف</button>
+      <button id="end" data-i18n="rec.end">پایان جلسه</button>
     </div>
+
     <div id="review-box" hidden>
-      <input id="title" type="text" value="فرآیند ضبط‌شده" placeholder="عنوان فرآیند" />
-      <button id="upload">ذخیره محلی</button>
-      <button id="rerecord">ضبط مجدد</button>
-      <button id="discard">انصراف</button>
+      <p class="muted" data-i18n="rec.reviewHint">موارد را انتخاب کنید، سپس ذخیره کنید.</p>
+      <div class="log" id="review-log"></div>
+      <button id="save" title="Save" aria-label="Save">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>
+      </button>
+      <button id="resume" data-i18n="rec.popupResume">ادامه ضبط (بدون ذخیره)</button>
+      <button id="end2" data-i18n="rec.end">پایان جلسه</button>
     </div>
-    <p class="muted">برای اجرا، افزونهٔ Player را جداگانه نصب کنید.</p>
+
+    <script src="lib/ext-i18n.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
