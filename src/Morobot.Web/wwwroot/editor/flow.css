@@ -676,6 +676,8 @@ rect.flow-marquee{pointer-events:none}
 .ds-icon-btn.is-danger:hover{background:#fce4e4;color:#ea5455}
 .ds-icon-btn.is-busy{opacity:.45;pointer-events:none}
 .ds-icon-btn.js-ds-rename{width:26px;height:26px;color:#0d9488}
+.ds-icon-btn.is-server{color:#0d9488;opacity:1;cursor:default}
+.ds-icon-btn.is-local{color:#a8aaae;opacity:.85;cursor:default}
 .ds-meta,.ds-list .ds-meta{
   color:#a8aaae;
   font-size:10px;
@@ -690,7 +692,7 @@ rect.flow-marquee{pointer-events:none}
   margin:0 0 10px;
 }
 .insp-status b{font-weight:600;color:#8a8699}
-.ds-list .ds-keys{color:#0d9488;font-size:11px;word-break:break-all}
+.ds-list .ds-keys{display:none}
 .ds-list .ds-actions{display:flex;gap:2px;flex-wrap:wrap;flex-shrink:0;align-items:center;position:relative;z-index:1}
 .ds-viewer[hidden]{display:none!important}
 .ds-viewer{

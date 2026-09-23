@@ -699,32 +699,34 @@
       return;
     }
     listEl.innerHTML = list.map((d) => {
-      const keys = (d.columnKeys || (d.columns || []).map((c) => c.key || c.Key) || []).join("، ") || "—";
       const isMaster = Number(d.id) === Number(masterId);
       const label = d.title || dataSourceFileTitle(d.fileName) || t("editor.ds.removed");
       const sid = Number(d.id);
+      const onServer = !isLocalMode && Number.isFinite(sid) && sid > 0;
       const masterBtn = isMaster
         ? dsIconBtn("is-master", t("editor.ds.masterBadge"), DS_ICO_STAR, "disabled")
         : (canModify
           ? dsIconBtn("js-ds-master", t("editor.ds.setMaster"), DS_ICO_STAR_OUT, `data-id="${sid}"`)
           : "");
+      const cloudTitle = onServer ? t("editor.ds.onServer") : t("editor.ds.onLocal");
+      const cloudIco = onServer ? DS_ICO_CLOUD : DS_ICO_LOCAL;
+      const cloudCls = onServer ? "js-ds-cloud is-server" : "js-ds-cloud is-local";
       const actions = `
         ${dsIconBtn("js-ds-view", t("editor.ds.viewTable"), DS_ICO_VIEW, `data-id="${sid}"`)}
         ${dsIconBtn("js-ds-dl", t("editor.ds.downloadExcel"), DS_ICO_DL, `data-id="${sid}"`)}
-        ${dsIconBtn("js-ds-cloud", t("editor.ds.saveServerSoon"), DS_ICO_CLOUD, `data-id="${sid}"`)}
+        ${dsIconBtn(cloudCls, cloudTitle, cloudIco, `data-id="${sid}" data-on-server="${onServer ? "1" : "0"}" disabled`)}
         ${masterBtn}
         ${canModify ? dsIconBtn("js-ds-del is-danger", t("editor.ds.detach"), DS_ICO_DEL, `data-id="${sid}"`) : ""}
       `;
       return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}">
         <div class="ds-row-top">
           <div class="ds-title-row">
-            <span class="ds-title">${esc(label)}${isMaster ? `<span class="ds-badge-master">${t("editor.ds.masterBadge")}</span>` : ""}</span>
+            <span class="ds-title">${esc(label)}</span>
             ${canModify ? dsIconBtn("js-ds-rename", t("editor.ds.rename"), DS_ICO_RENAME, `data-id="${sid}"`) : ""}
           </div>
           <div class="ds-actions">${actions}</div>
         </div>
         <div class="ds-meta">${d.columnCount || 0} ${t("editor.ds.columns")} · ${d.rowCount || 0} ${t("editor.ds.rows")}${d.fileName ? ` · ${esc(d.fileName)}` : ""}</div>
-        <div class="ds-keys">${esc(keys)}</div>
       </li>`;
     }).join("");
 
@@ -735,7 +737,10 @@
       btn.addEventListener("click", () => downloadDataSource(Number(btn.dataset.id), btn));
     });
     listEl.querySelectorAll(".js-ds-cloud").forEach((btn) => {
-      btn.addEventListener("click", () => setStatus(t("editor.ds.inLibrary"), "info"));
+      btn.addEventListener("click", () => {
+        const onServer = btn.dataset.onServer === "1";
+        setStatus(onServer ? t("editor.ds.onServerHint") : t("editor.ds.onLocalHint"), "info");
+      });
     });
     listEl.querySelectorAll(".js-ds-rename").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
@@ -777,7 +782,8 @@
 
   const DS_ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
   const DS_ICO_DL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.4-3.4 1.4 1.4L12 17l-4.8-5.8 1.4-1.4L11 13.2V3h1zM5 19h14v2H5v-2z"/></svg>`;
-  const DS_ICO_CLOUD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17.5 19H8a5 5 0 0 1-.7-9.95A6.5 6.5 0 0 1 20 12.5a3.5 3.5 0 0 1-2.5 6.5zM12 8v6.2l2.4-2.4 1.2 1.2L12 17l-3.6-3.999 1.2-1.2L11 14.2V8h1z"/></svg>`;
+  const DS_ICO_CLOUD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17.5 19H8a5 5 0 0 1-.7-9.95A6.5 6.5 0 0 1 20 12.5a3.5 3.5 0 0 1-2.5 6.5z"/></svg>`;
+  const DS_ICO_LOCAL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 6h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zm0 2v5h16V8H4z"/></svg>`;
   const DS_ICO_STAR = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
   const DS_ICO_STAR_OUT = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
   const DS_ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
