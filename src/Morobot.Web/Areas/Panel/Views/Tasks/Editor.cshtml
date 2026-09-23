@@ -28,7 +28,7 @@
   </style>
 </head>
 <body>
-  <div class="flow-shell" id="flow-app" data-task-id="@ViewBag.TaskId" data-can-modify="@(ViewBag.CanModify == true ? "true" : "false")" data-local-mode="@(ViewBag.LocalMode == true ? "true" : "false")">
+  <div class="flow-shell" id="flow-app" data-task-id="@ViewBag.TaskId" data-user-id="@(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "")" data-can-modify="@(ViewBag.CanModify == true ? "true" : "false")" data-local-mode="@(ViewBag.LocalMode == true ? "true" : "false")">
     <div class="flow-mobile-scrim" id="flow-mobile-scrim" hidden></div>
     <div class="flow-ribbon">
       <a class="btn-flow btn-ghost btn-with-ico" href="@Url.Action("Index","Home", new { area = "Panel" })" data-i18n-title="editor.ribbon.home" title="@L["editor.ribbon.home"]">
@@ -208,6 +208,6 @@
   <script src="~/js/da-crypto.js?v=3"></script>
   <script src="~/js/da-secure-store.js?v=4"></script>
   <script src="~/js/extension-gate.js?v=plan-1"></script>
-  <script src="~/editor/flow.js?v=ds-conflict-1"></script>
+  <script src="~/editor/flow.js?v=ds-conflict-2"></script>
 </body>
 </html>

@@ -48,6 +48,7 @@
     return s;
   }
   if (taskId) app.dataset.taskId = taskId;
+  const currentUserId = String(app?.dataset?.userId || "").trim();
   const world = document.getElementById("world");
   const svg = document.getElementById("flow-svg");
   const wrap = document.getElementById("canvas-wrap");
@@ -394,7 +395,7 @@
 
       conn.on("canvasChanged", async (payload) => {
         if (!payload) return;
-        // Ignore our own save echo (SignalR may use either casing).
+        // Same editor tab: ignore echo (source upload / canvas save from this session).
         const remoteSid = payload.editorSessionId || payload.EditorSessionId || "";
         if (remoteSid && remoteSid === editorSessionId) {
           const ownAt = payload.updatedAtUtc || payload.UpdatedAtUtc;
@@ -406,10 +407,21 @@
         if (canvasConflictPromptOpen) return;
         canvasConflictPromptOpen = true;
         try {
-          const whoName = payload.userName || payload.UserName || "";
-          const who = whoName ? ` (${whoName})` : "";
+          // Prompt only for another user, or the same user in another browser/tab.
+          const remoteUid = String(payload.userId ?? payload.UserId ?? "").trim();
+          const whoName = String(payload.userName || payload.UserName || "").trim();
+          const isSelfOtherBrowser = !!(currentUserId && remoteUid && remoteUid === currentUserId);
+          let msg;
+          if (isSelfOtherBrowser) {
+            msg = t("editor.status.conflictLiveOtherBrowser");
+          } else if (whoName) {
+            msg = t("editor.status.conflictLiveOtherUser", { who: whoName });
+          } else {
+            const who = whoName ? ` (${whoName})` : "";
+            msg = t("editor.status.conflictLive", { who });
+          }
           const refresh = await (window.DaNotify
-            ? DaNotify.confirm(t("editor.status.conflictLive", { who }), {
+            ? DaNotify.confirm(msg, {
                 title: t("editor.status.conflictTitle"),
                 okText: t("editor.status.conflictReloadBtn"),
                 cancelText: t("editor.status.conflictKeepBtn")
