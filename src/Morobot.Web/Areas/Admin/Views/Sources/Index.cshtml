@@ -1,34 +1,92 @@
 @model IEnumerable<Morobot.Infrastructure.Services.AdminCanvasSourceRow>
 @{
-  ViewData["Title"] = L["admin.nav.sources"];
+  ViewData["Title"] = L["admin.sources.title"];
 }
-<p class="text-muted small mb-3">کتابخانه منابع کاربران (موجودیت مستقل — حذف فرآیند منبع را پاک نمی‌کند)</p>
-<table class="admin-table">
+<p class="text-muted small mb-3">@L["admin.sources.intro"]</p>
+<div class="admin-live-bar" id="admin-live-bar">
+  <span class="admin-live-dot" id="admin-live-dot" title="@L["admin.live.offline"]"></span>
+  <span id="admin-live-status">@L["admin.live.connecting"]</span>
+  <span class="admin-live-feed" id="admin-live-feed" aria-live="polite"></span>
+</div>
+
+<table class="admin-table" id="admin-source-table">
   <thead>
     <tr>
-      <th>Id</th>
-      <th>Title</th>
-      <th>Linked processes</th>
-      <th>Owner</th>
-      <th>Columns</th>
-      <th>Rows</th>
+      <th>@L["admin.sources.colId"]</th>
+      <th>@L["admin.sources.colTitle"]</th>
+      <th>@L["admin.sources.colLinked"]</th>
+      <th>@L["admin.sources.colOwner"]</th>
+      <th>@L["admin.sources.colColumns"]</th>
+      <th>@L["admin.sources.colRows"]</th>
+      <th>@L["admin.sources.colChange"]</th>
+      <th>@L["admin.sources.colOps"]</th>
     </tr>
   </thead>
-  <tbody>
+  <tbody id="admin-source-rows">
   @foreach (var s in Model)
   {
-    <tr>
+    <tr data-source-id="@s.SourceId" data-flash="row">
       <td>@s.SourceId</td>
-      <td>@s.Title</td>
-      <td>@s.TaskTitle</td>
+      <td data-flash="title">@s.Title</td>
+      <td data-flash="linked">@s.TaskTitle</td>
       <td>@s.Owner</td>
-      <td>@s.ColumnCount</td>
-      <td>@s.RowCount</td>
+      <td data-flash="cols">@s.ColumnCount</td>
+      <td data-flash="rows">@s.RowCount</td>
+      <td class="admin-change-cell" data-flash="change"><span class="admin-change-badge is-idle">—</span></td>
+      <td class="text-nowrap">
+        <button type="button" class="btn-admin secondary js-admin-ds-view" data-id="@s.SourceId" title="@L["admin.sources.viewData"]">@L["admin.sources.viewData"]</button>
+        <button type="button" class="btn-admin js-admin-ds-dl" data-id="@s.SourceId" title="@L["admin.sources.downloadExcel"]">@L["admin.sources.downloadExcel"]</button>
+      </td>
     </tr>
   }
   @if (!Model.Any())
   {
-    <tr><td colspan="6" class="text-muted">منبعی در کتابخانه نیست.</td></tr>
+    <tr class="admin-empty-row"><td colspan="8" class="text-muted">@L["admin.sources.empty"]</td></tr>
   }
   </tbody>
 </table>
+
+<div class="ds-viewer" id="da-portal-ds-viewer" hidden>
+  <div class="ds-viewer-backdrop" data-portal-ds-close="1"></div>
+  <div class="ds-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="da-portal-ds-title">
+    <div class="ds-viewer-head">
+      <div>
+        <h2 id="da-portal-ds-title">@L["admin.sources.viewerTitle"]</h2>
+        <p class="ds-viewer-sub" id="da-portal-ds-sub"></p>
+      </div>
+      <div class="ds-viewer-head-actions">
+        <button type="button" class="btn-admin secondary" data-portal-ds-close="1">@L["common.cancel"]</button>
+      </div>
+    </div>
+    <div class="ds-viewer-scroll">
+      <table class="ds-viewer-table" id="da-portal-ds-table">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+@section Scripts {
+<link rel="stylesheet" href="~/editor/flow.css?v=ds-box-1" />
+<script>
+  window.__ADMIN_I18N__ = {
+    offline: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.offline"])),
+    live: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.live"])),
+    connecting: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.connecting"])),
+    byUser: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.byUser"])),
+    actions: {
+      created: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.created"])),
+      updated: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.updated"])),
+      deleted: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.deleted"])),
+      renamed: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.renamed"])),
+      attached: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.attached"])),
+      detached: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.detached"]))
+    },
+    viewFail: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.viewFail"])),
+    downloadFail: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.downloadFail"])),
+    noRows: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.noRows"]))
+  };
+</script>
+<script src="~/js/admin-sources.js?v=1"></script>
+}
