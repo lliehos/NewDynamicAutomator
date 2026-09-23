@@ -11,7 +11,8 @@
 - **منابع مستقل:** جدول `DataSources` + لینک `ProcessDataSources`؛ detach ≠ حذف؛ حذف فرآیند کتابخانه را پاک نمی‌کند
 - **انتقال قدیمی (Admin → Migrate):** فقط فرآیندهای مالک کاربر + گراف (گروه/مرحله/شرط)؛ بدون منبع
 - **پروفایل اجباری:** نام/فامیل/ایمیل/موبایل قبل از استفاده پنل؛ ناو نمایش display name
-- **کاتالوگ زنده:** نوتیف فقط به مالک/share
+- **کاتالوگ زنده:** نوتیف به مالک/share؛ ادمین با `JoinAdminCatalog` همهٔ `taskChanged` / `sourceChanged` / `playState` را می‌بیند (نوع تغییر + چشمک اجرا)
+- **ادمین منابع:** مشاهده دیتا + دانلود اکسل از `/Admin/Sources`
 - **افزونه‌ها:** فقط `extension-{recorder|player|selector|smart-recorder}` (mono `extension/` حذف شد)
 - Seed: `guest`/`free`/`pro`/`admin` — رمزها در [plans-and-tiers.md](plans-and-tiers.md)
 

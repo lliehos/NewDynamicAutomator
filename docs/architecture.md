@@ -17,9 +17,12 @@
   POST /api/datasources  (کتابخانه)
 پخش (Free+) → Player از Graph JSON هیدراته‌شده
 ادمین → /Admin (Role=Admin) incl. Migrate / Plans caps / Sources library
+  SignalR `/hubs/catalog` → JoinAdminCatalog → taskChanged / sourceChanged / playState
 ```
 
 بدون Selenium. منابع اکسل موجودیت مستقل‌اند؛ حذف فرآیند لینک را می‌بُرد نه کتابخانه را.
+
+Live catalog: مالک و share گیرنده‌اند؛ گروه `catalog-admins` همهٔ رویدادهای فرآیند/منبع و وضعیت اجرا را برای پنل ادمین می‌گیرد.
 
 `RunMode`: `Play` فعال؛ `Learn` / Smart فاز بعد (پلن Gold).
 

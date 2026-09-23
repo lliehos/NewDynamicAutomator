@@ -35,9 +35,11 @@ Each tier includes capabilities of lower tiers. Limits are **admin-editable** pe
 ## Portal / Admin
 
 - Admin → Plans: edit all three caps
-- Admin → Sources: library inventory
+- Admin → Processes: live SignalR catalog (`taskChanged` + change type) and blinking play icon for running sessions
+- Admin → Sources: library inventory with live `sourceChanged`, view table, Excel download
 - Admin → Migrate: owner-owned processes only; no data sources imported
 - Panel → منابع: library list; hard-delete only here / API delete
+- Favicon + bilingual labels on Admin shell (`admin.*` locale keys)
 
 ## Seed accounts
 
