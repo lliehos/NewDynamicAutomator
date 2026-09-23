@@ -123,6 +123,114 @@
 }
 .da-cond-alert-box.is-fail .da-cond-alert-ok { background: #ea5455; }
 
+/* Modern confirm */
+.da-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 13000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  opacity: 0;
+  transition: opacity .18s ease;
+  padding: 16px;
+  direction: rtl;
+  font-family: Vazirmatn, Tahoma, sans-serif;
+}
+.da-confirm-backdrop.da-confirm-in { opacity: 1; }
+.da-confirm-box {
+  width: min(420px, 100%);
+  background: #fff;
+  border-radius: 16px;
+  padding: 1.25rem 1.35rem;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, .28);
+  transform: translateY(10px) scale(.98);
+  transition: transform .18s ease;
+}
+.da-confirm-backdrop.da-confirm-in .da-confirm-box {
+  transform: translateY(0) scale(1);
+}
+.da-confirm-box.is-danger { border-top: 4px solid #ea5455; }
+.da-confirm-title {
+  font-weight: 800;
+  font-size: 1.05rem;
+  margin-bottom: .5rem;
+  color: #0f766e;
+}
+.da-confirm-box.is-danger .da-confirm-title { color: #dc2626; }
+.da-confirm-msg {
+  font-size: .92rem;
+  line-height: 1.55;
+  color: #334155;
+  margin-bottom: 1.1rem;
+  white-space: pre-wrap;
+}
+.da-confirm-actions {
+  display: flex;
+  gap: .6rem;
+  justify-content: flex-end;
+}
+.da-confirm-cancel,
+.da-confirm-ok {
+  border: 0;
+  border-radius: 10px;
+  padding: .55rem 1.1rem;
+  font-family: inherit;
+  font-size: .88rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.da-confirm-cancel { background: #e2e8f0; color: #334155; }
+.da-confirm-ok { background: #0d9488; color: #fff; }
+.da-confirm-box.is-danger .da-confirm-ok { background: #dc2626; }
+
+/* Share modal */
+.da-share-backdrop {
+  position: fixed; inset: 0; z-index: 12500;
+  background: rgba(15,23,42,.48);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; direction: rtl;
+  font-family: Vazirmatn, Tahoma, sans-serif;
+}
+.da-share-box {
+  width: min(560px, 100%); max-height: min(90vh, 720px);
+  overflow: auto; background: #fff; border-radius: 16px;
+  box-shadow: 0 22px 55px rgba(15,23,42,.3); padding: 1.2rem 1.35rem;
+}
+.da-share-title { font-weight: 800; font-size: 1.1rem; margin: 0 0 .35rem; color: #0f766e; }
+.da-share-sub { font-size: .85rem; color: #64748b; margin-bottom: .9rem; }
+.da-share-search { width: 100%; padding: .55rem .75rem; border: 1px solid #cbd5e1; border-radius: .65rem; margin-bottom: .5rem; font-family: inherit; }
+.da-share-hits { list-style: none; margin: 0 0 1rem; padding: 0; max-height: 160px; overflow: auto; border: 1px solid #e2e8f0; border-radius: .65rem; }
+.da-share-hits li { padding: .55rem .75rem; cursor: pointer; border-bottom: 1px solid #f1f5f9; font-size: .88rem; }
+.da-share-hits li:hover, .da-share-hits li.is-on { background: #f0fdfa; }
+.da-share-perms { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem .75rem; margin: .75rem 0 1rem; font-size: .88rem; }
+.da-share-list { margin: 0; padding: 0; list-style: none; }
+.da-share-list li { display: flex; justify-content: space-between; gap: .5rem; align-items: center; padding: .55rem 0; border-bottom: 1px solid #f1f5f9; font-size: .86rem; }
+.da-share-actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .75rem; }
+.da-share-btn { border: 0; border-radius: 10px; padding: .5rem 1rem; font-weight: 700; font-family: inherit; cursor: pointer; }
+.da-share-btn.primary { background: #0d9488; color: #fff; }
+.da-share-btn.ghost { background: #e2e8f0; color: #334155; }
+.da-share-btn.danger { background: #fee2e2; color: #b91c1c; }
+.da-share-flags { color: #64748b; font-size: .78rem; }
+
+/* Live catalog flash / fade */
+.da-row-flash { animation: da-row-pulse .9s ease; }
+.da-cell-blink { animation: da-cell-blink 1.2s ease; background: rgba(13,148,136,.18) !important; border-radius: .35rem; }
+.da-row-fade-out { animation: da-row-fade .45s ease forwards; pointer-events: none; }
+@keyframes da-row-pulse {
+  0% { background: transparent; }
+  35% { background: rgba(13, 148, 136, .12); }
+  100% { background: transparent; }
+}
+@keyframes da-cell-blink {
+  0%, 100% { box-shadow: inset 0 0 0 0 transparent; }
+  40% { box-shadow: inset 0 0 0 2px rgba(13,148,136,.55); }
+}
+@keyframes da-row-fade {
+  to { opacity: 0; transform: translateX(12px); }
+}
+
 @media (max-width: 767.98px) {
   .da-toast-host {
     inset-inline: 12px;

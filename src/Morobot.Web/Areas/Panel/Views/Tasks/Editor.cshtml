@@ -19,8 +19,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="~/img/brand/morobot-icon.png" />
   <link rel="apple-touch-icon" href="~/img/brand/apple-touch-icon.png" />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="~/css/da-notify.css?v=cond-alert-1" />
-  <link rel="stylesheet" href="~/editor/flow.css?v=play-ctrl-2" />
+  <link rel="stylesheet" href="~/css/da-notify.css?v=share-1" />
+  <link rel="stylesheet" href="~/editor/flow.css?v=nest-drop-1" />
   <style>
     html, body { margin: 0; direction: @dir; }
     html.flow-rtl, html.flow-rtl body { font-family: Vazirmatn, Tahoma, sans-serif; }
@@ -28,7 +28,7 @@
   </style>
 </head>
 <body>
-  <div class="flow-shell" id="flow-app" data-task-id="@ViewBag.TaskId" data-can-modify="@(ViewBag.CanModify == true ? "true" : "false")">
+  <div class="flow-shell" id="flow-app" data-task-id="@ViewBag.TaskId" data-can-modify="@(ViewBag.CanModify == true ? "true" : "false")" data-local-mode="@(ViewBag.LocalMode == true ? "true" : "false")">
     <div class="flow-mobile-scrim" id="flow-mobile-scrim" hidden></div>
     <div class="flow-ribbon">
       <a class="btn-flow btn-ghost btn-with-ico" href="@Url.Action("Index","Home", new { area = "Panel" })" data-i18n-title="editor.ribbon.home" title="@L["editor.ribbon.home"]">
@@ -197,10 +197,17 @@
     </div>
   </div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+    window.__DA_ENTITLEMENTS__ = @Html.Raw(ViewBag.EntitlementsJson ?? "{}");
+  </script>
   <script src="~/js/i18n.js?v=4"></script>
-  <script src="~/js/da-notify.js?v=cond-alert-1"></script>
+  <script src="~/js/da-notify.js?v=share-1"></script>
+  <script src="~/js/entitlements.js?v=share-1"></script>
+  <script src="~/js/da-device.js?v=1"></script>
+  <script src="~/js/da-telemetry.js?v=1"></script>
   <script src="~/js/da-crypto.js?v=3"></script>
   <script src="~/js/da-secure-store.js?v=4"></script>
-  <script src="~/editor/flow.js?v=ds-icons-1"></script>
+  <script src="~/js/extension-gate.js?v=plan-1"></script>
+  <script src="~/editor/flow.js?v=live-play-1"></script>
 </body>
 </html>

@@ -1,0 +1,30 @@
+@model Morobot.Domain.Entities.PlanPrice
+@{
+  ViewData["Title"] = "New price";
+  var plans = ViewBag.Plans as IEnumerable<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem>;
+}
+<form method="post" class="card-admin" style="max-width:480px">
+  @Html.AntiForgeryToken()
+  <div class="mb-2">
+    <label>Plan</label>
+    <select name="PlanId" class="form-select">
+      @if (plans != null)
+      {
+        foreach (var p in plans)
+        {
+          <option value="@p.Value">@p.Text</option>
+        }
+      }
+    </select>
+  </div>
+  <div class="mb-2"><label>Amount</label><input class="form-control" name="Amount" value="@Model.Amount" /></div>
+  <div class="mb-2"><label>Currency</label><input class="form-control" name="Currency" value="@Model.Currency" /></div>
+  <div class="mb-2"><label>Interval</label><input class="form-control" name="Interval" value="@Model.Interval" /></div>
+  <div class="mb-2"><label>Notes</label><input class="form-control" name="Notes" value="@Model.Notes" /></div>
+  <label><input type="checkbox" name="IsActive" value="true" checked /> Active</label>
+  <input type="hidden" name="IsActive" value="false" />
+  <p style="margin-top:1rem">
+    <button type="submit" class="btn-admin">Create</button>
+    <a class="btn-admin secondary" asp-action="Index">Back</a>
+  </p>
+</form>

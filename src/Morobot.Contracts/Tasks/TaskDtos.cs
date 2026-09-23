@@ -7,9 +7,19 @@ public class TaskListItemDto
     public DateTime CreatedAtUtc { get; set; }
     public int GroupCount { get; set; }
     public int StepCount { get; set; }
+    public int DataSourceCount { get; set; }
     public bool CanModify { get; set; }
+    public bool CanView { get; set; } = true;
+    public bool CanEdit { get; set; }
+    public bool CanDelete { get; set; }
+    public bool CanExecute { get; set; }
+    public bool CanChangeDataSource { get; set; }
+    public bool CanShare { get; set; }
+    public bool IsOwner { get; set; }
     /// <summary>Manual or Recorded</summary>
     public string DesignOrigin { get; set; } = "Manual";
+    public string? OwnerUserName { get; set; }
+    public int SharedWithCount { get; set; }
 }
 
 public class CreateTaskRequest
@@ -20,4 +30,41 @@ public class CreateTaskRequest
     public bool UseGlobalDataSources { get; set; }
     /// <summary>Manual (default) or Recorded</summary>
     public string? DesignOrigin { get; set; }
+}
+
+public class TaskShareDto
+{
+    public int UserId { get; set; }
+    public string UserName { get; set; } = string.Empty;
+    public string? DisplayName { get; set; }
+    public string? Email { get; set; }
+    public string? NationalId { get; set; }
+    public bool CanView { get; set; } = true;
+    public bool CanEdit { get; set; }
+    public bool CanDelete { get; set; }
+    public bool CanExecute { get; set; }
+    public bool CanChangeDataSource { get; set; }
+    public bool IsOwner { get; set; }
+    public DateTime GrantedAtUtc { get; set; }
+}
+
+public class UpsertTaskShareRequest
+{
+    public int UserId { get; set; }
+    public bool CanView { get; set; } = true;
+    public bool CanEdit { get; set; }
+    public bool CanDelete { get; set; }
+    public bool CanExecute { get; set; }
+    public bool CanChangeDataSource { get; set; }
+}
+
+public class UserSearchHitDto
+{
+    public int UserId { get; set; }
+    public string UserName { get; set; } = string.Empty;
+    public string? FirstName { get; set; }
+    public string? LastName { get; set; }
+    public string? DisplayName { get; set; }
+    public string? Email { get; set; }
+    public string? NationalId { get; set; }
 }

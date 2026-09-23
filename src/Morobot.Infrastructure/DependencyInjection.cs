@@ -16,7 +16,11 @@ public static class DependencyInjection
 
         services.AddDbContext<AppDbContext>(o => o.UseSqlServer(cs));
         services.AddScoped<AuthService>();
+        services.AddScoped<EntitlementService>();
+        services.AddScoped<EventLogService>();
+        services.AddScoped<SystemSettingsService>();
         services.AddScoped<TaskService>();
+        services.AddScoped<TaskShareService>();
         services.AddScoped<RecordingService>();
         services.AddScoped<GraphService>();
         services.AddScoped<DataSourceService>();

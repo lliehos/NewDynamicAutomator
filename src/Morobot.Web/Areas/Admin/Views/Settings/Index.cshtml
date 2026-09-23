@@ -1,0 +1,34 @@
+@model IEnumerable<Morobot.Domain.Entities.SystemSetting>
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = L["admin.settings.title"];
+  var isFa = L.IsRtl;
+}
+<div class="card-admin">
+  <p class="mb-3">@L["admin.settings.intro"]</p>
+  <p class="mb-3">
+    <a class="btn-admin secondary" asp-controller="Plans" asp-action="Index">@L["admin.settings.gotoPlans"]</a>
+  </p>
+  <form method="post">
+    @Html.AntiForgeryToken()
+    @foreach (var group in Model.GroupBy(s => s.Group))
+    {
+      <h3 style="font-size:1.05rem;margin:1.25rem 0 .5rem">@group.Key</h3>
+      foreach (var s in group)
+      {
+        <div class="mb-3">
+          <label for="setting_@s.Key">@(isFa ? s.LabelFa : s.LabelEn)</label>
+          <input class="form-control" id="setting_@s.Key" name="setting_@s.Key" value="@s.Value" />
+          @{
+            var hint = isFa ? s.HintFa : s.HintEn;
+          }
+          @if (!string.IsNullOrWhiteSpace(hint))
+          {
+            <div style="font-size:.82rem;color:#64748b;margin-top:.25rem">@hint</div>
+          }
+        </div>
+      }
+    }
+    <button type="submit" class="btn-admin">@L["admin.settings.save"]</button>
+  </form>
+</div>

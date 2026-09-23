@@ -1,0 +1,73 @@
+@model Morobot.Domain.Entities.AppUser
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = "Edit user";
+  var plans = ViewBag.Plans as IEnumerable<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem>;
+}
+<form method="post" class="card-admin" style="max-width:480px">
+  @Html.AntiForgeryToken()
+  <p><strong>@Model.UserName</strong> (#@Model.Id)</p>
+  <div class="mb-3">
+    <label class="form-label">First name</label>
+    <input class="form-control" name="firstName" value="@Model.FirstName" />
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Last name</label>
+    <input class="form-control" name="lastName" value="@Model.LastName" />
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Email</label>
+    <input class="form-control" name="email" type="email" value="@Model.Email" />
+  </div>
+  <div class="mb-3">
+    <label class="form-label">National ID</label>
+    <input class="form-control" name="nationalId" value="@Model.NationalId" maxlength="20" />
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Plan</label>
+    <select name="planId" class="form-select">
+      <option value="">—</option>
+      @if (plans != null)
+      {
+        foreach (var p in plans)
+        {
+          if (Model.PlanId?.ToString() == p.Value)
+          {
+            <option value="@p.Value" selected>@p.Text</option>
+          }
+          else
+          {
+            <option value="@p.Value">@p.Text</option>
+          }
+        }
+      }
+    </select>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Role</label>
+    <select name="role" class="form-select">
+      @if (Model.Role == Morobot.Domain.Enums.UserRole.User)
+      {
+        <option value="User" selected>User</option>
+        <option value="Admin">Admin</option>
+      }
+      else
+      {
+        <option value="User">User</option>
+        <option value="Admin" selected>Admin</option>
+      }
+    </select>
+  </div>
+  <div class="mb-3 form-check">
+    <input class="form-check-input" type="checkbox" name="isActive" value="true" id="isActive" @(Model.IsActive ? "checked" : null) />
+    <label class="form-check-label" for="isActive">Active</label>
+  </div>
+  <div class="mb-3">
+    <label class="form-label" for="newPassword">New password (required when moving Free → Pro/Gold)</label>
+    <input class="form-control" type="password" id="newPassword" name="newPassword" autocomplete="new-password" />
+    <div class="form-text">Pro/Gold: min 8 chars, letter + digit.</div>
+  </div>
+  <div asp-validation-summary="All" class="text-danger small mb-3"></div>
+  <button type="submit" class="btn-admin">Save</button>
+  <a class="btn-admin secondary" asp-action="Index">Back</a>
+</form>

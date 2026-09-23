@@ -1,0 +1,42 @@
+@model Morobot.Domain.Entities.AppUser
+@{
+  ViewData["Title"] = "Create user";
+  var plans = ViewBag.Plans as IEnumerable<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem>;
+}
+<form method="post" class="card-admin" style="max-width:480px">
+  @Html.AntiForgeryToken()
+  <div asp-validation-summary="All" class="text-danger mb-2"></div>
+  <p class="small text-muted">Reserved names (admin, free, pro, guest, test, …) cannot be used.</p>
+  <div class="mb-2"><label>Username</label><input class="form-control" name="userName" value="@Model.UserName" required /></div>
+  <div class="mb-2"><label>Password</label><input class="form-control" type="password" name="password" required /></div>
+  <div class="mb-2"><label>First name</label><input class="form-control" name="firstName" value="@Model.FirstName" /></div>
+  <div class="mb-2"><label>Last name</label><input class="form-control" name="lastName" value="@Model.LastName" /></div>
+  <div class="mb-2"><label>Email</label><input class="form-control" name="email" type="email" value="@Model.Email" /></div>
+  <div class="mb-2"><label>National ID</label><input class="form-control" name="nationalId" value="@Model.NationalId" maxlength="20" /></div>
+  <div class="mb-2">
+    <label>Plan</label>
+    <select name="planId" class="form-select">
+      <option value="">—</option>
+      @if (plans != null)
+      {
+        foreach (var p in plans)
+        {
+          if (Model.PlanId?.ToString() == p.Value) { <option value="@p.Value" selected>@p.Text</option> }
+          else { <option value="@p.Value">@p.Text</option> }
+        }
+      }
+    </select>
+  </div>
+  <div class="mb-2">
+    <label>Role</label>
+    <select name="role" class="form-select">
+      <option value="User" selected>User</option>
+      <option value="Admin">Admin</option>
+    </select>
+  </div>
+  <label><input type="checkbox" name="isActive" value="true" checked /> Active</label>
+  <p style="margin-top:1rem">
+    <button type="submit" class="btn-admin">Create</button>
+    <a class="btn-admin secondary" asp-action="Index">Back</a>
+  </p>
+</form>

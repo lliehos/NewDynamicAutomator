@@ -36,6 +36,7 @@
   const pathSeg = location.pathname.split("/").filter(Boolean).pop() || "";
   const taskId = /^\d+$/.test(pathSeg) ? pathSeg : (app.dataset.taskId || "");
   const canModify = app.dataset.canModify === "true";
+  const isLocalMode = false; // server is source of truth for all plans
   /** Keep UUID/string process ids — Number(uuid) becomes NaN and corrupts saves. */
   function stableTaskId(id) {
     if (id == null || id === "") return id;
@@ -69,8 +70,9 @@
   function setStatus(msg, type) {
     if (status && msg != null) status.textContent = String(msg);
     if (!msg || typeof window.daNotify !== "function") return;
-    if (type === "error" || type === "success" || type === "warn" || type === "info") {
-      window.daNotify(String(msg), type);
+    const kind = type === "warning" ? "warn" : type;
+    if (kind === "error" || kind === "success" || kind === "warn" || kind === "info") {
+      window.daNotify(String(msg), kind);
     }
   }
 
@@ -238,6 +240,7 @@
     }
     graph.canModify = true;
     graph.designOrigin = local.designOrigin || graph.designOrigin || "Manual";
+    loadedUpdatedAtUtc = local.updatedAtUtc || local.graph?.updatedAtUtc || loadedUpdatedAtUtc || null;
     migrateActionKinds(graph);
     enforceSingleStartOut();
     normalizeProcessRepeat();
@@ -289,6 +292,42 @@
   }
 
   async function load() {
+    if (!isLocalMode && /^\d+$/.test(String(taskId))) {
+      try {
+        const res = await fetch(`/api/tasks/${taskId}/canvas`, { credentials: "same-origin" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && (data.nodes || data.Nodes)) {
+            applyLocalGraph({
+              id: taskId,
+              title: data.title || data.Title || t("editor.ribbon.workflow"),
+              designOrigin: data.designOrigin || data.DesignOrigin || "Manual",
+              updatedAtUtc: data.updatedAtUtc || data.UpdatedAtUtc || null,
+              graph: {
+                taskId: Number(taskId),
+                title: data.title || data.Title,
+                nodes: data.nodes || data.Nodes || [],
+                edges: data.edges || data.Edges || [],
+                viewport: data.viewport || data.Viewport,
+                dataSources: data.dataSources || data.DataSources || [],
+                designOrigin: data.designOrigin || data.DesignOrigin,
+                stepDelayMs: data.stepDelayMs,
+                highlightColor: data.highlightColor,
+                ignorePlayError: data.ignorePlayError,
+                repeatSourceType: data.repeatSourceType
+              }
+            });
+            ensureCanvasHub();
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("server canvas load failed", e);
+      }
+      emptyShell();
+      ensureCanvasHub();
+      return;
+    }
     const local = findLocalTask(taskId);
     if (local?.graph && graphStepCount(local.graph) > 0) {
       applyLocalGraph(local);
@@ -327,6 +366,87 @@
   function saveBtnSpinnerHtml() { return `<span class="btn-save-spinner" aria-hidden="true"></span><span>${t("editor.ribbon.saving")}</span>`; }
   function saveBtnLabelHtml() { return `${SAVE_ICON_SVG}<span>${t("editor.ribbon.save")}</span>`; }
   let saving = false;
+  /** Server canvas timestamp from last successful load/save (optimistic concurrency). */
+  let loadedUpdatedAtUtc = null;
+  /** Group id under drag that would become parent on drop. */
+  let nestHoverGroupId = null;
+  /** Distinguishes this editor tab so SignalR ignores our own saves. */
+  const editorSessionId = (typeof crypto !== "undefined" && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `ed-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  let canvasHubConn = null;
+  let canvasConflictPromptOpen = false;
+
+  async function ensureCanvasHub() {
+    if (isLocalMode || !/^\d+$/.test(String(taskId))) return;
+    if (typeof signalR === "undefined") return;
+    const joinId = String(taskId).trim();
+    try {
+      if (canvasHubConn) {
+        await canvasHubConn.invoke("JoinTask", joinId).catch(() => {});
+        return;
+      }
+      const conn = new signalR.HubConnectionBuilder()
+        .withUrl("/hubs/canvas")
+        .withAutomaticReconnect([0, 1000, 3000, 8000])
+        .configureLogging(signalR.LogLevel.None)
+        .build();
+
+      conn.on("canvasChanged", async (payload) => {
+        if (!payload) return;
+        // Ignore our own save echo (SignalR may use either casing).
+        const remoteSid = payload.editorSessionId || payload.EditorSessionId || "";
+        if (remoteSid && remoteSid === editorSessionId) {
+          const ownAt = payload.updatedAtUtc || payload.UpdatedAtUtc;
+          if (ownAt) loadedUpdatedAtUtc = ownAt;
+          return;
+        }
+        const remoteAt = payload.updatedAtUtc || payload.UpdatedAtUtc || null;
+        if (remoteAt && loadedUpdatedAtUtc && String(remoteAt) === String(loadedUpdatedAtUtc)) return;
+        if (canvasConflictPromptOpen) return;
+        canvasConflictPromptOpen = true;
+        try {
+          const whoName = payload.userName || payload.UserName || "";
+          const who = whoName ? ` (${whoName})` : "";
+          const refresh = await (window.DaNotify
+            ? DaNotify.confirm(t("editor.status.conflictLive", { who }), {
+                title: t("editor.status.conflictTitle"),
+                okText: t("editor.status.conflictReloadBtn"),
+                cancelText: t("editor.status.conflictKeepBtn")
+              })
+            : Promise.resolve(false));
+          if (refresh) {
+            loadedUpdatedAtUtc = remoteAt || loadedUpdatedAtUtc;
+            await load();
+            setStatus(t("editor.status.conflictReloaded"), "warn");
+          } else {
+            setStatus(t("editor.status.conflictKept"), "warn");
+          }
+        } finally {
+          canvasConflictPromptOpen = false;
+        }
+      });
+
+      conn.on("playStopDueToChange", async (payload) => {
+        const who = payload?.actorUserName ? ` (${payload.actorUserName})` : "";
+        const msg = (t("editor.status.playStoppedByEdit") || "اجرا به‌خاطر تغییر فرآیند متوقف شد") + who;
+        setStatus(msg, "warn");
+        if (window.DaNotify) DaNotify.warn(msg);
+        window.dispatchEvent(new CustomEvent("da-stop-play", { detail: { reason: "canvas_changed", ...payload } }));
+        if (window.DaTelemetry) DaTelemetry.audit("PlayStoppedByEdit", msg);
+      });
+
+      conn.onreconnected(async () => {
+        await conn.invoke("JoinTask", joinId).catch(() => {});
+      });
+
+      await conn.start();
+      await conn.invoke("JoinTask", joinId);
+      canvasHubConn = conn;
+    } catch (e) {
+      console.warn("canvas hub failed", e);
+    }
+  }
 
   function saveButtons() {
     return [
@@ -368,10 +488,88 @@
     setSaveButtonsBusy(true);
     try {
       const orphan = graph.nodes.filter((n) => isActionNode(n) && !n.groupNodeId);
-      // Free diagram steps are intentional — only warn if nothing can run them.
       void orphan;
 
       graph.taskId = stableTaskId(taskId);
+
+      if (!isLocalMode && /^\d+$/.test(String(taskId))) {
+        // Do not persist session/concurrency meta into canvas JSON.
+        const { baseUpdatedAtUtc: _b, editorSessionId: _e, updatedAtUtc: _u, ...canvasBody } = graph;
+        const payload = {
+          ...canvasBody,
+          baseUpdatedAtUtc: loadedUpdatedAtUtc,
+          editorSessionId
+        };
+        const res = await fetch(`/api/tasks/${taskId}/canvas`, {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (res.status === 409) {
+          const errBody = await res.json().catch(() => ({}));
+          if (errBody.code === "playing") {
+            const who = errBody.playerUserName ? ` (${errBody.playerUserName})` : "";
+            const force = await (window.DaNotify
+              ? DaNotify.confirm(
+                  (t("editor.status.playingWarn") || "این فرآیند در حال اجراست{who}. با تأیید، اجرا متوقف و تغییرات ذخیره می‌شود.").replace("{who}", who),
+                  {
+                    title: t("editor.status.playingTitle") || "اجرا در جریان",
+                    okText: t("editor.status.playingForce") || "توقف اجرا و ذخیره",
+                    cancelText: t("common.cancel") || "انصراف",
+                    danger: true
+                  }
+                )
+              : Promise.resolve(false));
+            if (!force) {
+              setStatus(t("editor.status.playingKept") || "ذخیره لغو شد — اجرا ادامه دارد.", "warn");
+              return { ok: false, error: "playing" };
+            }
+            const retry = await fetch(`/api/tasks/${taskId}/canvas`, {
+              method: "PUT",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...payload, forceSave: true })
+            });
+            if (!retry.ok) {
+              const rb = await retry.json().catch(() => ({}));
+              throw new Error(rb.message || t("editor.status.saveError"));
+            }
+            const okBody = await retry.json().catch(() => ({}));
+            if (okBody.updatedAtUtc) loadedUpdatedAtUtc = okBody.updatedAtUtc;
+            window.dispatchEvent(new CustomEvent("da-stop-play", { detail: { reason: "canvas_changed" } }));
+            setStatus(t("editor.status.playingForced") || "اجرا متوقف و ذخیره شد.", "warn");
+            render();
+            return { ok: true, forced: true };
+          }
+          const refresh = await (window.DaNotify
+            ? DaNotify.confirm(t("editor.status.conflictRefresh"), {
+                title: t("editor.status.conflictTitle"),
+                okText: t("editor.status.conflictReloadBtn"),
+                cancelText: t("editor.status.conflictKeepBtn")
+              })
+            : Promise.resolve(false));
+          if (refresh) {
+            loadedUpdatedAtUtc = errBody.updatedAtUtc || loadedUpdatedAtUtc;
+            await load();
+            setStatus(t("editor.status.conflictReloaded"), "warn");
+            return { ok: false, error: "conflict", reloaded: true };
+          }
+          setStatus(t("editor.status.conflictKept"), "warn");
+          return { ok: false, error: "conflict" };
+        }
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.message || t("editor.status.saveError"));
+        }
+        const okBody = await res.json().catch(() => ({}));
+        if (okBody.updatedAtUtc) loadedUpdatedAtUtc = okBody.updatedAtUtc;
+        await new Promise((r) => setTimeout(r, 200));
+        render();
+        setStatus(t("editor.status.saved"), "success");
+        return { ok: true };
+      }
+
       const tasks = readLocalTasks();
       const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
       const stepCount = graph.nodes.filter((n) => isActionNode(n)).length;
@@ -913,6 +1111,13 @@
 
   async function ingestDataSourceFile(file) {
     if (!canModify || !file) return;
+    const entitlements = window.DaEntitlements ? DaEntitlements.get() : null;
+    const currentCount = (graph.dataSources || []).length;
+    if (entitlements && entitlements.maxDataSources != null && currentCount >= entitlements.maxDataSources) {
+      const msg = t("plan.limitSources", { max: entitlements.maxDataSources });
+      notifyDsError(msg);
+      return;
+    }
     const statusEl = document.getElementById("ds-status");
     const name = file.name || "";
     if (!/\.(xlsx|xlsm)$/i.test(name)) {
@@ -3926,17 +4131,25 @@
     return node;
   }
 
-  /** Group under a world point in the current diagram scope only. */
+  /** Group under a world point in the current diagram scope only (prefer smallest / topmost). */
   function groupAtWorldInScope(wx, wy, excludeIds = null) {
     const skip = excludeIds == null
       ? null
       : (excludeIds instanceof Set ? excludeIds : new Set([].concat(excludeIds)));
+    let best = null;
+    let bestArea = Infinity;
     for (const g of scopedNodes().filter((n) => n.kind === "group")) {
       if (skip && skip.has(g.id)) continue;
       const s = sizeOf(g);
-      if (wx >= g.x && wx <= g.x + s.w && wy >= g.y && wy <= g.y + s.h) return g;
+      if (wx >= g.x && wx <= g.x + s.w && wy >= g.y && wy <= g.y + s.h) {
+        const area = s.w * s.h;
+        if (area <= bestArea) {
+          best = g;
+          bestArea = area;
+        }
+      }
     }
-    return null;
+    return best;
   }
 
   /** Drop all edges touching a node (flow + contains). */
@@ -6574,6 +6787,62 @@
     });
   }
 
+  function clearNestHoverPreview() {
+    if (!nestHoverGroupId) {
+      world.querySelectorAll("g.node.node-drop-target").forEach((g) => {
+        g.classList.remove("node-drop-target");
+        const rect = g.querySelector(":scope > rect");
+        if (rect) {
+          rect.removeAttribute("data-nest-ow");
+          rect.removeAttribute("data-nest-oh");
+        }
+      });
+      return;
+    }
+    world.querySelectorAll("g.node.node-drop-target").forEach((g) => {
+      g.classList.remove("node-drop-target");
+      const rect = g.querySelector(":scope > rect");
+      if (rect && rect.hasAttribute("data-nest-ow")) {
+        rect.setAttribute("width", rect.getAttribute("data-nest-ow"));
+        rect.setAttribute("height", rect.getAttribute("data-nest-oh"));
+        rect.removeAttribute("data-nest-ow");
+        rect.removeAttribute("data-nest-oh");
+      }
+    });
+    nestHoverGroupId = null;
+  }
+
+  function updateNestHoverPreview(primary, exclude) {
+    if (!primary || !dragMoved) {
+      clearNestHoverPreview();
+      return;
+    }
+    const sz = sizeOf(primary);
+    const hit = groupAtWorldInScope(primary.x + sz.w / 2, primary.y + sz.h / 2, exclude);
+    const canNest = hit && canMoveIntoGroup(primary, hit.id);
+    const nextId = canNest ? hit.id : null;
+    if (nextId === nestHoverGroupId) return;
+
+    clearNestHoverPreview();
+    if (!nextId) return;
+
+    nestHoverGroupId = nextId;
+    const gEl = world.querySelector(`g.node[data-id="${CSS.escape(nextId)}"]`);
+    if (!gEl) return;
+    gEl.classList.add("node-drop-target");
+    const rect = gEl.querySelector(":scope > rect");
+    if (rect) {
+      const ow = parseFloat(rect.getAttribute("width") || "0");
+      const oh = parseFloat(rect.getAttribute("height") || "0");
+      rect.setAttribute("data-nest-ow", String(ow));
+      rect.setAttribute("data-nest-oh", String(oh));
+      // Expand ~18% so the drop-into-parent intent is obvious.
+      rect.setAttribute("width", String(Math.round(ow * 1.18)));
+      rect.setAttribute("height", String(Math.round(oh * 1.28)));
+    }
+    setStatus(t("editor.status.nestHover", { title: hit.title || "گروه" }), "info");
+  }
+
   function moveDraggedNode(ev) {
     if (!dragging) return;
     const z = graph.viewport.zoom || 1;
@@ -6585,17 +6854,24 @@
       ? dragging.items
       : [{ id: dragging.id, ox: dragging.ox, oy: dragging.oy }];
     let primary = null;
+    const exclude = new Set(items.map((it) => it.id));
     items.forEach((it) => {
       const n = nodeById(it.id);
       if (!n) return;
       n.x = it.ox + dx;
       n.y = it.oy + dy;
       const g = world.querySelector(`g.node[data-id="${CSS.escape(it.id)}"]`);
-      if (g) g.setAttribute("transform", `translate(${n.x},${n.y})`);
+      if (g) {
+        g.setAttribute("transform", `translate(${n.x},${n.y})`);
+        g.classList.toggle("node-nest-dragging", true);
+      }
       if (it.id === dragging.id) primary = n;
     });
     redrawEdgesOnly();
-    if (primary) ensureNodeInScrollView(primary);
+    if (primary) {
+      ensureNodeInScrollView(primary);
+      updateNestHoverPreview(primary, exclude);
+    }
   }
 
   function finishNodeDragDrop() {
@@ -6608,6 +6884,11 @@
     const exclude = new Set(items.map((it) => it.id));
     const sz = sizeOf(primary);
     const hit = groupAtWorldInScope(primary.x + sz.w / 2, primary.y + sz.h / 2, exclude);
+    clearNestHoverPreview();
+    items.forEach((it) => {
+      const g = world.querySelector(`g.node[data-id="${CSS.escape(it.id)}"]`);
+      if (g) g.classList.remove("node-nest-dragging");
+    });
     if (hit) {
       const movers = items
         .map((it) => nodeById(it.id))
@@ -6893,6 +7174,10 @@
     if (dragging && dragMoved) {
       if (finishNodeDragDrop()) return;
     }
+    clearNestHoverPreview();
+    if (dragging) {
+      world.querySelectorAll("g.node.node-nest-dragging").forEach((g) => g.classList.remove("node-nest-dragging"));
+    }
     dragging = panning = null;
     dragMoved = false;
   });
@@ -6925,6 +7210,10 @@
     }
     if (dragging && dragMoved) {
       if (finishNodeDragDrop()) return;
+    }
+    clearNestHoverPreview();
+    if (dragging) {
+      world.querySelectorAll("g.node.node-nest-dragging").forEach((g) => g.classList.remove("node-nest-dragging"));
     }
     dragging = panning = null;
     dragMoved = false;

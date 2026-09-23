@@ -1,0 +1,74 @@
+@using Morobot.Domain.Entities
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = L["plan.upgradeTitle"];
+    var plans = ViewBag.Plans as IList<Plan> ?? new List<Plan>();
+    var target = (ViewBag.Target as string) ?? plans.FirstOrDefault()?.Code ?? "Pro";
+    var selected = plans.FirstOrDefault(p => string.Equals(p.Code, target, StringComparison.OrdinalIgnoreCase))
+                   ?? plans.FirstOrDefault();
+    var errKey = ViewBag.Error as string;
+    var okKey = ViewBag.Ok as string;
+    var minLen = selected?.MinPasswordLength ?? 8;
+}
+<div class="da-home">
+  <header class="da-home-head mb-4">
+    <div>
+      <h4 class="da-home-title mb-1" data-i18n="plan.upgradeTitle">@L["plan.upgradeTitle"]</h4>
+      <p class="da-home-sub mb-0" data-i18n="plan.upgrade.hint">@L["plan.upgrade.hint"]</p>
+    </div>
+  </header>
+
+  @if (!string.IsNullOrEmpty(okKey))
+  {
+    <div class="alert alert-success" data-i18n="@okKey">@L[okKey]</div>
+  }
+  @if (!string.IsNullOrEmpty(errKey))
+  {
+    <div class="alert alert-danger" data-i18n="@errKey">@L[errKey]</div>
+  }
+
+  @if (plans.Count == 0)
+  {
+    <div class="alert alert-warning" data-i18n="plan.upgrade.noneAvailable">@L["plan.upgrade.noneAvailable"]</div>
+  }
+  else
+  {
+    <div class="card" style="max-width: 32rem;">
+      <div class="card-body">
+        <form method="post" asp-area="Panel" asp-controller="Account" asp-action="Upgrade">
+          @Html.AntiForgeryToken()
+          <div class="mb-4">
+            <label class="form-label" for="targetPlan" data-i18n="plan.upgrade.target">@L["plan.upgrade.target"]</label>
+            <select class="form-select" id="targetPlan" name="targetPlan">
+              @foreach (var p in plans)
+              {
+                if (string.Equals(p.Code, selected?.Code, StringComparison.OrdinalIgnoreCase))
+                {
+                  <option value="@p.Code" selected>@p.NameFa / @p.NameEn (≥@p.MinPasswordLength@(p.RequireLetterAndDigit ? "+Aa1" : ""))</option>
+                }
+                else
+                {
+                  <option value="@p.Code">@p.NameFa / @p.NameEn (≥@p.MinPasswordLength@(p.RequireLetterAndDigit ? "+Aa1" : ""))</option>
+                }
+              }
+            </select>
+          </div>
+          <div class="mb-4">
+            <label class="form-label" for="currentPassword" data-i18n="plan.upgrade.currentPassword">@L["plan.upgrade.currentPassword"]</label>
+            <input class="form-control" type="password" id="currentPassword" name="currentPassword" autocomplete="current-password" required />
+          </div>
+          <div class="mb-4">
+            <label class="form-label" for="newPassword" data-i18n="plan.upgrade.newPassword">@L["plan.upgrade.newPassword"]</label>
+            <input class="form-control" type="password" id="newPassword" name="newPassword" autocomplete="new-password" required minlength="@minLen" />
+            <div class="form-text" data-i18n="password.strongHint">@L["password.strongHint"]</div>
+          </div>
+          <div class="mb-6">
+            <label class="form-label" for="confirmPassword" data-i18n="register.confirmPassword">@L["register.confirmPassword"]</label>
+            <input class="form-control" type="password" id="confirmPassword" name="confirmPassword" autocomplete="new-password" required minlength="@minLen" />
+          </div>
+          <button type="submit" class="btn btn-primary" data-i18n="plan.upgrade.submit">@L["plan.upgrade.submit"]</button>
+        </form>
+      </div>
+    </div>
+  }
+</div>

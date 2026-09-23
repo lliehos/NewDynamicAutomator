@@ -1,0 +1,14 @@
+@model Morobot.Domain.Entities.Plan
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = L["admin.plans.edit"];
+}
+<form method="post" class="card-admin" style="max-width:560px">
+  @Html.AntiForgeryToken()
+  <p><strong>@Model.Code</strong></p>
+  <partial name="_PlanFields" model="Model" />
+  <p style="margin-top:1rem">
+    <button type="submit" class="btn-admin">@L["admin.common.save"]</button>
+    <a class="btn-admin secondary" asp-action="Index">@L["admin.common.back"]</a>
+  </p>
+</form>

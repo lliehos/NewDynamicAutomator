@@ -1,0 +1,41 @@
+@model IEnumerable<Morobot.Domain.Entities.Plan>
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = L["admin.plans.title"];
+}
+<p>
+  <a class="btn-admin" asp-action="Create">@L["admin.plans.create"]</a>
+</p>
+<table class="admin-table">
+  <thead>
+    <tr>
+      <th>@L["admin.plans.code"]</th>
+      <th>@L["admin.plans.name"]</th>
+      <th>@L["admin.plans.maxTasks"]</th>
+      <th>@L["admin.plans.maxSources"]</th>
+      <th>@L["admin.plans.caps"]</th>
+      <th>@L["admin.plans.password"]</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  @foreach (var p in Model)
+  {
+    <tr>
+      <td>@p.Code @(p.IsActive ? "" : $"({L["admin.plans.inactive"]})")</td>
+      <td>@p.NameEn / @p.NameFa</td>
+      <td>@(p.MaxTasks?.ToString() ?? "∞")</td>
+      <td>@(p.MaxDataSources?.ToString() ?? "∞")</td>
+      <td>
+        @(p.CanPlay ? "Play " : "")@(p.CanSelector ? "Sel " : "")@(p.CanRecord ? "Rec " : "")@(p.CanSmart ? "Smart" : "")
+      </td>
+      <td>
+        ≥@p.MinPasswordLength
+        @(p.RequireLetterAndDigit ? "+Aa1" : "")
+        @(p.AllowSelfUpgrade ? $" · {L["admin.plans.selfUpgrade"]}" : "")
+      </td>
+      <td><a class="btn-admin secondary" asp-action="Edit" asp-route-id="@p.Id">@L["admin.common.edit"]</a></td>
+    </tr>
+  }
+  </tbody>
+</table>

@@ -37,7 +37,8 @@
     const status = document.getElementById("da-portal-status");
     if (status && message != null) status.textContent = String(message);
     if (message && typeof window.daNotify === "function") {
-      window.daNotify(String(message), type || "info");
+      const kind = type === "warning" ? "warn" : (type || "info");
+      window.daNotify(String(message), kind);
     }
   }
 
@@ -74,9 +75,12 @@
     });
   }
 
-  function sharedUsersLabel(users) {
+  function sharedUsersLabel(users, count) {
     const list = Array.isArray(users) ? users.map((u) => String(u || "").trim()).filter(Boolean) : [];
-    return list.length ? list.join(dateLocale().startsWith("fa") ? "، " : ", ") : "—";
+    if (list.length) return list.join(dateLocale().startsWith("fa") ? "، " : ", ");
+    const n = Number(count) || 0;
+    if (n > 0) return String(n);
+    return "—";
   }
 
   function normalizeTask(t) {
@@ -295,31 +299,53 @@
         ${ICO_UP}
         <input type="file" accept=".mrbt,application/octet-stream,application/json,.json" data-da-import="${tid}" hidden />
       </label>
-      ${iconBtn("", t("tasks.share"), ICO_SHARE, `data-da-share="${tid}"`)}
-      ${iconBtn("is-danger", t("tasks.delete"), ICO_DEL, `data-da-del="${tid}"`)}`;
+      ${task.canShare
+        ? iconBtn("", t("tasks.share"), ICO_SHARE, `data-da-share="${tid}"`)
+        : ""}
+      ${task.canDelete !== false
+        ? iconBtn("is-danger", t("tasks.delete"), ICO_DEL, `data-da-del="${tid}"`)
+        : ""}`;
   }
 
   function bindTaskActions(root) {
     root?.querySelectorAll("[data-da-del]").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const id = btn.getAttribute("data-da-del");
-        if (!confirm("این فرآیند حذف شود؟")) return;
-        const next = readTasks().filter((x) => !taskIdEq(x.id, id));
-        writeTasks(next);
-        render(next);
-        notifyHome("فرآیند حذف شد.", "info");
+        const ok = window.DaNotify
+          ? await DaNotify.confirm(t("tasks.deleteConfirm") || "این فرآیند حذف شود؟", {
+              title: t("tasks.delete"),
+              danger: true,
+              okText: t("tasks.delete")
+            })
+          : false;
+        if (!ok) return;
+        try {
+          if (/^\d+$/.test(String(id))) {
+            const res = await fetch(`/api/tasks/${id}`, { method: "DELETE", credentials: "same-origin" });
+            if (!res.ok && res.status !== 204) {
+              const body = await res.json().catch(() => ({}));
+              notifyHome(body.message || t("share.error") || "حذف ناموفق بود.", "error");
+              return;
+            }
+          }
+          const next = readTasks().filter((x) => !taskIdEq(x.id, id));
+          writeTasks(next);
+          render(next);
+          notifyHome(t("tasks.deleted") || "فرآیند حذف شد.", "success");
+        } catch (e) {
+          notifyHome(String(e.message || e), "error");
+        }
       });
     });
     root?.querySelectorAll("[data-da-share]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-da-share");
         const task = findTask(readTasks(), id);
-        notifyHome(
-          task
-            ? `اشتراک‌گذاری «${task.title}» به‌زودی فعال می‌شود.`
-            : "اشتراک‌گذاری به‌زودی فعال می‌شود.",
-          "info"
-        );
+        if (window.DaTaskShare) {
+          DaTaskShare.open(id, task?.title || "");
+          return;
+        }
+        notifyHome(t("share.unavailable") || "اشتراک‌گذاری در دسترس نیست.", "warn");
       });
     });
     root?.querySelectorAll("[data-da-download]").forEach((btn) => {
@@ -371,7 +397,7 @@
         <ul class="da-task-card-meta">
           <li><i class="ti ti-calendar"></i><span>${escapeHtml(formatCreatedAt(row.createdAt))}</span></li>
           <li><i class="ti ti-user"></i><span>${escapeHtml(row.createdBy)}</span></li>
-          <li><i class="ti ti-users"></i><span>${escapeHtml(sharedUsersLabel(row.sharedUsers))}</span></li>
+          <li><i class="ti ti-users"></i><span>${escapeHtml(sharedUsersLabel(row.sharedUsers, row.sharedWithCount))}</span></li>
         </ul>
         <div class="da-task-stats">
           <div class="da-task-stat"><b>${groups}</b><span>${t("dashboard.groups")}</span></div>
@@ -422,17 +448,18 @@
           } else {
             body.innerHTML = normalized.map((row) => {
               const { steps, groups, sources } = taskCounts(row);
-              return `<tr>
+              const tid = escapeHtml(String(row.id));
+              return `<tr data-task-id="${tid}">
         <td>
-          <div class="fw-semibold">${escapeHtml(row.title)}</div>
-          <span class="da-task-id" title="${escapeHtml(t("tasks.serverKey"))}">${escapeHtml(String(row.id))}</span>
+          <div class="fw-semibold" data-flash="title">${escapeHtml(row.title)}</div>
+          <span class="da-task-id" title="${escapeHtml(t("tasks.serverKey"))}">${tid}</span>
         </td>
         <td class="text-nowrap">${escapeHtml(formatCreatedAt(row.createdAt))}</td>
         <td>${escapeHtml(row.createdBy)}</td>
-        <td>${escapeHtml(sharedUsersLabel(row.sharedUsers))}</td>
-        <td>${groups}</td>
-        <td>${steps}</td>
-        <td>${sources}</td>
+        <td data-flash="shared">${escapeHtml(sharedUsersLabel(row.sharedUsers, row.sharedWithCount))}</td>
+        <td data-flash="groups">${groups}</td>
+        <td data-flash="steps">${steps}</td>
+        <td data-flash="sources">${sources}</td>
         <td class="text-nowrap">
           <div class="da-task-actions-desk da-task-actions">${actionButtonsHtml(row)}</div>
         </td>
@@ -489,9 +516,55 @@
     };
   }
 
-  function createLocalTask(titleRaw) {
+  function isServerMode() {
+    // All tiers persist on the server; localStorage is cache only.
+    return true;
+  }
+
+  async function createLocalTask(titleRaw) {
     const title = (titleRaw || "").trim() || t("tasks.newProcess");
+
+    if (isServerMode()) {
+      try {
+        const res = await fetch("/api/tasks", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, designOrigin: "Manual" })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          notifyHome(data.message || t("plan.limitTasks", { max: "?" }), "warning");
+          return;
+        }
+        const empty = emptyGraph(title);
+        empty.taskId = data.id;
+        await fetch(`/api/tasks/${data.id}/canvas`, {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(empty)
+        });
+        notifyHome(t("tasks.added", { title }), "success");
+        if (window.DaTelemetry) DaTelemetry.audit("TaskCreate", `Created task ${data.id}: ${title}`);
+        location.href = `/Panel/Tasks/Editor/${data.id}`;
+        return;
+      } catch (e) {
+        notifyHome(String(e.message || e), "error");
+        if (window.DaTelemetry) DaTelemetry.error(String(e.message || e), { where: "createTask" });
+        return;
+      }
+    }
+
     const tasks = readTasks();
+    const entitlements = window.DaEntitlements ? DaEntitlements.get() : { maxTasks: 1 };
+    if (entitlements.maxTasks != null && tasks.length >= entitlements.maxTasks) {
+      const msg = window.DaI18n
+        ? DaI18n.t("plan.limitTasks", { max: entitlements.maxTasks })
+        : "Limit reached";
+      notifyHome(msg, "warning");
+      return;
+    }
     const id = newProcessId();
     const owner = currentUser();
     const graph = emptyGraph(title);
@@ -514,6 +587,32 @@
     notifyHome(t("tasks.added", { title }), "success");
   }
 
+  async function loadServerTasks() {
+    const res = await fetch("/api/tasks", { credentials: "same-origin" });
+    if (!res.ok) throw new Error("tasks " + res.status);
+    const list = await res.json();
+    return (list || []).map((row) => ({
+      id: row.id,
+      title: row.title,
+      designOrigin: row.designOrigin || "Manual",
+      groupCount: row.groupCount || 0,
+      stepCount: row.stepCount || 0,
+      dataSourceCount: row.dataSourceCount || 0,
+      createdAt: row.createdAtUtc || row.createdAt,
+      createdBy: row.ownerUserName || "",
+      sharedUsers: [],
+      sharedWithCount: row.sharedWithCount || 0,
+      isOwner: !!row.isOwner,
+      canModify: row.canModify !== false,
+      canEdit: row.canEdit !== false,
+      canDelete: row.canDelete !== false,
+      canExecute: row.canExecute !== false,
+      canShare: !!row.canShare,
+      canChangeDataSource: !!row.canChangeDataSource,
+      graph: null
+    }));
+  }
+
   const createModalEl = document.getElementById("da-create-task-modal");
   const titleInp = document.getElementById("da-new-title");
 
@@ -528,13 +627,13 @@
     document.getElementById("da-create-local")?.click();
   });
 
-  document.getElementById("da-create-local")?.addEventListener("click", () => {
+  document.getElementById("da-create-local")?.addEventListener("click", async () => {
     const title = (titleInp?.value || "").trim();
     if (!title) {
       titleInp?.focus();
       return;
     }
-    createLocalTask(title);
+    await createLocalTask(title);
     if (titleInp) titleInp.value = "";
     window.bootstrap?.Modal?.getInstance(createModalEl)?.hide();
   });
@@ -751,7 +850,17 @@
   });
 
   function scheduleRender() {
-    const run = () => {
+    const run = async () => {
+      if (isServerMode()) {
+        try {
+          const rows = await loadServerTasks();
+          render(rows);
+          return;
+        } catch (e) {
+          console.warn(e);
+          notifyHome(String(e.message || e), "error");
+        }
+      }
       if (window.DaSecureStore && typeof DaSecureStore.whenReady === "function") {
         DaSecureStore.whenReady(() => render(readTasks()));
       } else {
@@ -763,6 +872,72 @@
     } else {
       run();
     }
+  }
+
+  function flashTaskFields(taskId, fields) {
+    const row = document.querySelector(`#da-task-rows tr[data-task-id="${CSS.escape(String(taskId))}"]`);
+    if (!row) return;
+    row.classList.add("da-row-flash");
+    setTimeout(() => row.classList.remove("da-row-flash"), 1600);
+    (fields || []).forEach((f) => {
+      const el = row.querySelector(`[data-flash="${f}"]`);
+      if (!el) return;
+      el.classList.add("da-cell-blink");
+      setTimeout(() => el.classList.remove("da-cell-blink"), 1800);
+    });
+  }
+
+  function fadeOutTask(taskId) {
+    const row = document.querySelector(`#da-task-rows tr[data-task-id="${CSS.escape(String(taskId))}"]`);
+    if (!row) {
+      scheduleRender();
+      return;
+    }
+    row.classList.add("da-row-fade-out");
+    setTimeout(() => scheduleRender(), 450);
+  }
+
+  if (window.DaCatalog) {
+    DaCatalog.ensure();
+    DaCatalog.on("taskChanged", (payload) => {
+      if (!payload) return;
+      const action = payload.action || "";
+      const task = payload.task || {};
+      const id = task.id ?? task.Id;
+      const who = payload.actorUserName ? ` (${payload.actorUserName})` : "";
+      if (action === "deleted") {
+        if (window.daNotify) daNotify((t("live.taskDeleted") || "فرآیند حذف شد") + who, "info");
+        fadeOutTask(id);
+        return;
+      }
+      if (action === "created") {
+        if (window.daNotify) daNotify((t("live.taskCreated") || "فرآیند جدید") + who, "success");
+        scheduleRender();
+        setTimeout(() => flashTaskFields(id, ["title", "steps"]), 300);
+        return;
+      }
+      // updated / shared
+      const prev = findTask(readTasks(), id);
+      scheduleRender();
+      setTimeout(() => {
+        const fields = [];
+        if (!prev || prev.title !== (task.title || task.Title)) fields.push("title");
+        if (!prev || Number(prev.stepCount) !== Number(task.stepCount ?? task.StepCount)) fields.push("steps");
+        if (!prev || Number(prev.groupCount) !== Number(task.groupCount ?? task.GroupCount)) fields.push("groups");
+        if (!prev || Number(prev.dataSourceCount ?? prev.sources) !== Number(task.dataSourceCount ?? task.DataSourceCount)) {
+          fields.push("sources");
+        }
+        if (action === "shared" || Number(prev?.sharedWithCount) !== Number(task.sharedWithCount ?? task.SharedWithCount)) {
+          fields.push("shared");
+        }
+        if (!fields.length) fields.push("steps");
+        flashTaskFields(id, fields);
+        if (window.daNotify && payload.actorUserName) {
+          const key = action === "shared" ? "live.taskShared" : "live.taskUpdated";
+          daNotify((t(key) || (action === "shared" ? "اشتراک فرآیند تغییر کرد" : "فرآیند به‌روز شد")) + who, "info");
+        }
+      }, 280);
+    });
   }
 
   scheduleRender();

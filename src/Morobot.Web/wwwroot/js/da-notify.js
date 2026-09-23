@@ -28,7 +28,7 @@
   function notify(message, type, opts) {
     const text = String(message || "").trim();
     if (!text) return null;
-    const kind = type || "info";
+    const kind = type === "warning" ? "warn" : (type || "info");
     const title = opts?.title || "";
     const ms = opts?.ms != null ? opts.ms : (kind === "error" ? 6500 : 3800);
     const host = ensureHost();
@@ -60,6 +60,53 @@
   window.daNotifyError = (m, o) => notify(m, "error", o);
   window.daNotifyWarn = (m, o) => notify(m, "warn", o);
   window.daNotifyInfo = (m, o) => notify(m, "info", o);
+  window.DaNotify = {
+    toast: notify,
+    success: (m, o) => notify(m, "success", o),
+    error: (m, o) => notify(m, "error", o),
+    warn: (m, o) => notify(m, "warn", o),
+    info: (m, o) => notify(m, "info", o),
+    /**
+     * Modern confirm dialog. Returns Promise&lt;boolean&gt;.
+     * @param {string} message
+     * @param {{ title?: string, okText?: string, cancelText?: string, danger?: boolean }} [opts]
+     */
+    confirm(message, opts) {
+      return new Promise((resolve) => {
+        const existing = document.getElementById("da-confirm");
+        if (existing) existing.remove();
+        const title = opts?.title || "";
+        const okText = opts?.okText || "تأیید";
+        const cancelText = opts?.cancelText || "انصراف";
+        const danger = !!opts?.danger;
+        const backdrop = document.createElement("div");
+        backdrop.id = "da-confirm";
+        backdrop.className = "da-confirm-backdrop";
+        backdrop.innerHTML =
+          `<div class="da-confirm-box ${danger ? "is-danger" : ""}" role="alertdialog" aria-modal="true">`
+          + (title ? `<div class="da-confirm-title">${escapeHtml(title)}</div>` : "")
+          + `<div class="da-confirm-msg">${escapeHtml(message || "")}</div>`
+          + `<div class="da-confirm-actions">`
+          + `<button type="button" class="da-confirm-cancel">${escapeHtml(cancelText)}</button>`
+          + `<button type="button" class="da-confirm-ok">${escapeHtml(okText)}</button>`
+          + `</div></div>`;
+        const finish = (val) => {
+          backdrop.classList.remove("da-confirm-in");
+          setTimeout(() => backdrop.remove(), 160);
+          resolve(!!val);
+        };
+        backdrop.addEventListener("click", (ev) => {
+          if (ev.target === backdrop) finish(false);
+        });
+        backdrop.querySelector(".da-confirm-cancel")?.addEventListener("click", () => finish(false));
+        backdrop.querySelector(".da-confirm-ok")?.addEventListener("click", () => finish(true));
+        document.documentElement.appendChild(backdrop);
+        requestAnimationFrame(() => backdrop.classList.add("da-confirm-in"));
+        try { backdrop.querySelector(".da-confirm-ok")?.focus(); } catch { /* ignore */ }
+      });
+    }
+  };
+  window.daConfirm = (m, o) => window.DaNotify.confirm(m, o);
 
   /**
    * Colored modal for condition check result.

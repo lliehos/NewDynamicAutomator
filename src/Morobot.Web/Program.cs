@@ -13,13 +13,18 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ILocaleService, LocaleService>();
-builder.Services.AddControllersWithViews()
+builder.Services.AddControllersWithViews(o =>
+    {
+        o.Filters.Add<Morobot.Web.Filters.BlockAdminFromPanelFilter>();
+    })
     .AddJsonOptions(o =>
     {
         o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
         o.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
     });
 builder.Services.AddSignalR();
+builder.Services.AddSingleton<Morobot.Web.Services.PlaySessionTracker>();
+builder.Services.AddScoped<Morobot.Web.Services.CatalogLiveService>();
 builder.Services.AddInfrastructure(builder.Configuration);
 
 var jwtKey = builder.Configuration["Jwt:Key"] ?? "CHANGE-ME-TO-A-LONG-SECRET-KEY-32+";
@@ -37,7 +42,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidIssuer = issuer,
             ValidAudience = audience,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
-            ClockSkew = TimeSpan.FromMinutes(1)
+            ClockSkew = TimeSpan.FromMinutes(1),
+            RoleClaimType = System.Security.Claims.ClaimTypes.Role,
+            NameClaimType = System.Security.Claims.ClaimTypes.Name
         };
         options.Events = new JwtBearerEvents
         {
@@ -58,7 +65,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             },
             OnChallenge = ctx =>
             {
-                if (ctx.Request.Path.StartsWithSegments("/api"))
+                if (ctx.Request.Path.StartsWithSegments("/api")
+                    || ctx.Request.Path.StartsWithSegments("/hubs"))
                 {
                     ctx.HandleResponse();
                     ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -94,6 +102,8 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHub<PlayDataHub>("/hubs/play-data");
+app.MapHub<CanvasHub>("/hubs/canvas");
+app.MapHub<CatalogHub>("/hubs/catalog");
 app.MapControllerRoute(
     name: "areas",
     pattern: "{area:exists}/{controller=Home}/{action=Index}/{id?}");

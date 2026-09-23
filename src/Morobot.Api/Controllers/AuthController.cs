@@ -18,9 +18,9 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<ActionResult<LoginResponse>> Login([FromBody] LoginRequest request, CancellationToken ct)
     {
-        var result = await _auth.LoginAsync(request, ct);
+        var (result, errorKey) = await _auth.LoginAsync(request, HttpContext.Connection.RemoteIpAddress?.ToString(), ct);
         if (result is null)
-            return Unauthorized(new { message = "نام کاربری یا رمز عبور نادرست است." });
+            return Unauthorized(new { message = errorKey ?? "login.errorInvalid", code = errorKey });
 
         Response.Cookies.Append(AuthService.CookieName, result.Token, new CookieOptions
         {

@@ -1,0 +1,37 @@
+@model IEnumerable<Morobot.Domain.Entities.PlanPrice>
+@{
+  ViewData["Title"] = "Prices";
+}
+<p><a class="btn-admin" asp-action="Create">Add price</a></p>
+<table class="admin-table">
+  <thead>
+    <tr>
+      <th>Id</th>
+      <th>Plan</th>
+      <th>Amount</th>
+      <th>Currency</th>
+      <th>Interval</th>
+      <th>Active</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  @foreach (var p in Model)
+  {
+    <tr>
+      <td>@p.Id</td>
+      <td>@p.Plan?.NameEn</td>
+      <td>@p.Amount.ToString("N0")</td>
+      <td>@p.Currency</td>
+      <td>@p.Interval</td>
+      <td>@(p.IsActive ? "yes" : "no")</td>
+      <td>
+        <form method="post" asp-action="Toggle" asp-route-id="@p.Id" style="display:inline">
+          @Html.AntiForgeryToken()
+          <button type="submit" class="btn-admin secondary">Toggle</button>
+        </form>
+      </td>
+    </tr>
+  }
+  </tbody>
+</table>

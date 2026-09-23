@@ -1,0 +1,31 @@
+@model IEnumerable<Morobot.Domain.Entities.AppUser>
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = "Users";
+}
+<p><a class="btn-admin" asp-action="Create">Add user</a></p>
+<table class="admin-table">
+  <thead>
+    <tr>
+      <th>Id</th>
+      <th>User</th>
+      <th>Role</th>
+      <th>Plan</th>
+      <th>Active</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  @foreach (var u in Model)
+  {
+    <tr>
+      <td>@u.Id</td>
+      <td>@u.UserName</td>
+      <td>@u.Role</td>
+      <td>@(u.Plan?.NameEn ?? "—")</td>
+      <td>@(u.IsActive ? "yes" : "no")</td>
+      <td><a class="btn-admin secondary" asp-action="Edit" asp-route-id="@u.Id">Edit</a></td>
+    </tr>
+  }
+  </tbody>
+</table>

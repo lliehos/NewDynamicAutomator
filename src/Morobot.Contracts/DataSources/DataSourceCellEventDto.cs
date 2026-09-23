@@ -11,4 +11,5 @@ public class DataSourceCellEventDto
     public int RowIndex { get; set; }
     public string? CellValue { get; set; }
     public string? StepTitle { get; set; }
+    public string? UserName { get; set; }
 }

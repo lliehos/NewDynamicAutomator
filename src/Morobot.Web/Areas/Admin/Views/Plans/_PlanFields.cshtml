@@ -1,0 +1,27 @@
+@model Morobot.Domain.Entities.Plan
+<div class="mb-2"><label>@L["admin.plans.nameFa"]</label><input class="form-control" name="NameFa" value="@Model.NameFa" required /></div>
+<div class="mb-2"><label>@L["admin.plans.nameEn"]</label><input class="form-control" name="NameEn" value="@Model.NameEn" required /></div>
+<div class="mb-2"><label>@L["admin.plans.maxTasks"]</label><input class="form-control" name="MaxTasks" value="@Model.MaxTasks" placeholder="∞" /></div>
+<div class="mb-2"><label>@L["admin.plans.maxSources"]</label><input class="form-control" name="MaxDataSources" value="@Model.MaxDataSources" placeholder="∞" /></div>
+<div class="mb-2"><label>@L["admin.plans.sort"]</label><input class="form-control" name="SortOrder" type="number" value="@Model.SortOrder" /></div>
+<hr />
+<div class="mb-2"><label>@L["admin.plans.minPassword"]</label><input class="form-control" name="MinPasswordLength" type="number" min="1" max="128" value="@Model.MinPasswordLength" /></div>
+<label><input type="checkbox" name="RequireLetterAndDigit" value="true" @(Model.RequireLetterAndDigit ? "checked" : null) /> @L["admin.plans.requireLetterDigit"]</label><br />
+<label><input type="checkbox" name="AllowSelfUpgrade" value="true" @(Model.AllowSelfUpgrade ? "checked" : null) /> @L["admin.plans.selfUpgrade"]</label><br />
+<hr />
+<label><input type="checkbox" name="CanPlay" value="true" @(Model.CanPlay ? "checked" : null) /> @L["admin.plans.canPlay"]</label><br />
+<label><input type="checkbox" name="CanSelector" value="true" @(Model.CanSelector ? "checked" : null) /> @L["admin.plans.canSelector"]</label><br />
+<label><input type="checkbox" name="CanRecord" value="true" @(Model.CanRecord ? "checked" : null) /> @L["admin.plans.canRecord"]</label><br />
+<label><input type="checkbox" name="CanSmart" value="true" @(Model.CanSmart ? "checked" : null) /> @L["admin.plans.canSmart"]</label><br />
+<label><input type="checkbox" name="IsActive" value="true" @(Model.IsActive ? "checked" : null) /> @L["admin.plans.active"]</label>
+<hr />
+<h4 style="font-size:1rem;margin:.75rem 0">@L["admin.plans.shareSection"]</h4>
+<label><input type="checkbox" name="CanShare" value="true" @(Model.CanShare ? "checked" : null) /> @L["admin.plans.canShare"]</label><br />
+<label><input type="checkbox" name="CanReceiveShare" value="true" @(Model.CanReceiveShare ? "checked" : null) /> @L["admin.plans.canReceiveShare"]</label><br />
+<div class="mb-2"><label>@L["admin.plans.maxShares"]</label><input class="form-control" name="MaxSharesPerTask" value="@Model.MaxSharesPerTask" placeholder="∞" /></div>
+<p style="font-size:.85rem;color:#64748b">@L["admin.plans.shareGrantsHint"]</p>
+<label><input type="checkbox" name="ShareAllowView" value="true" @(Model.ShareAllowView ? "checked" : null) /> @L["admin.plans.shareView"]</label><br />
+<label><input type="checkbox" name="ShareAllowEdit" value="true" @(Model.ShareAllowEdit ? "checked" : null) /> @L["admin.plans.shareEdit"]</label><br />
+<label><input type="checkbox" name="ShareAllowDelete" value="true" @(Model.ShareAllowDelete ? "checked" : null) /> @L["admin.plans.shareDelete"]</label><br />
+<label><input type="checkbox" name="ShareAllowExecute" value="true" @(Model.ShareAllowExecute ? "checked" : null) /> @L["admin.plans.shareExecute"]</label><br />
+<label><input type="checkbox" name="ShareAllowChangeDataSource" value="true" @(Model.ShareAllowChangeDataSource ? "checked" : null) /> @L["admin.plans.shareDs"]</label>

@@ -1,21 +1,25 @@
 # معماری
 
-دو بخش فعال (فعلاً بدون API جدا):
+دو بخش فعال:
 
-1. **Web / پرتال** `https://localhost:7201` — لاگین، ویرایشگر، و همهٔ `/api/*` برای افزونه
-2. **Chrome MV3** — ضبط + پخش؛ صحبت فقط با همان origin پرتال
+1. **Web / پرتال** `https://localhost:7201` — لاگین دو حالته (محلی / سرور)، ویرایشگر، `/api/*`، Area ادمین
+2. **Chrome MV3** — ضبط + پخش + سلکتور؛ صحبت با origin پرتال
 
-پروژهٔ `Morobot.Api` موقتاً کنار گذاشته شده تا فقط یک اپ لانچ شود.
+پروژهٔ `Morobot.Api` موقتاً کنار گذاشته شده؛ همهٔ API روی Web است.
 
 ```
-پرتال لاگین → کوکی JWT `da_access`
-افزونه REC → chrome.storage (پیش‌نویس محلی)
-اتمام ضبط → انتخاب ارسال / انصراف / مجدد
-ارسال → POST /api/recordings (روی پرتال)
-ویرایش → /Tasks/Editor/{id}
-پخش → GET /api/tasks/{id}/graph → اجرا در تب
+ورود محلی → JWT با plan=Local → داده فقط در مرورگر
+ورود سرور → JWT با plan=Free|Pro|Gold + role → EF/SQL
+افزونه REC (فقط Pro) → POST /api/recordings
+ویرایش → /Panel/Tasks/Editor/{id}
+  Local: localStorage
+  Server: GET/PUT /api/tasks/{id}/canvas
+پخش (Free+) → Player روی تب هدف
+ادمین → /Admin (Role=Admin)
 ```
 
 بدون Selenium. سلکتور با `framePath`.
 
-`RunMode`: `Play` MVP؛ `Learn` فاز بعد.
+`RunMode`: `Play` فعال؛ `Learn` / Smart فاز بعد (پلن Gold).
+
+جزئیات پلن‌ها: [plans-and-tiers.md](plans-and-tiers.md).

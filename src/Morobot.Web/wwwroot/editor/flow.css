@@ -163,6 +163,23 @@ rect.flow-marquee{pointer-events:none}
 }
 .canvas-scroll::-webkit-scrollbar-track{background:transparent}
 #flow-svg g.node{cursor:grab}
+#flow-svg g.node.node-drop-target > rect{
+  stroke:#0d9488 !important;
+  stroke-width:3 !important;
+  stroke-dasharray:none !important;
+  fill:#ecfdf5 !important;
+  filter:drop-shadow(0 0 6px rgba(13,148,136,.45));
+  transition:width .12s ease,height .12s ease,fill .12s ease;
+}
+#flow-svg g.node.node-nest-dragging{
+  opacity:.72;
+  filter:drop-shadow(0 4px 8px rgba(15,23,42,.25));
+}
+#flow-svg g.node.node-nest-dragging > rect,
+#flow-svg g.node.node-nest-dragging > polygon{
+  stroke:#f59e0b !important;
+  stroke-width:2.2 !important;
+}
 #flow-svg g.node.node-play-dim{
   opacity:.2;
   pointer-events:none;

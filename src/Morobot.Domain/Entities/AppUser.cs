@@ -1,3 +1,5 @@
+using Morobot.Domain.Enums;
+
 namespace Morobot.Domain.Entities;
 
 public class AppUser
@@ -9,12 +11,19 @@ public class AppUser
     public string? LastName { get; set; }
     public string? Email { get; set; }
     public string? Mobile { get; set; }
+    /// <summary>National ID / کد ملی (optional; used for share search).</summary>
+    public string? NationalId { get; set; }
     /// <summary>UI culture: fa | en. Default Persian.</summary>
     public string PreferredLanguage { get; set; } = "fa";
     public string? AppVersion { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
+    public UserRole Role { get; set; } = UserRole.User;
+    public int? PlanId { get; set; }
+    public DateTime? PlanExpiresAtUtc { get; set; }
+
+    public Plan? Plan { get; set; }
     public ICollection<AutomationTask> CreatedTasks { get; set; } = new List<AutomationTask>();
     public ICollection<UserTaskAccess> TaskAccess { get; set; } = new List<UserTaskAccess>();
 }

@@ -389,6 +389,7 @@ let playPaused = false;
 let playResumeWaiters = [];
 let playLogs = [];
 let playTabId = null;
+let playAbortPoll = null;
 let playStatus = {
   playing: false,
   paused: false,
@@ -595,14 +596,21 @@ function handleStepFailureForLoop(graph, errorMsg) {
   return { continueLoop: false };
 }
 
-async function stopPlay() {
+async function stopPlay(reason) {
   playAbort = true;
   playPaused = false;
   playStatus.playing = false;
   playStatus.paused = false;
-  playStatus.currentNodeId = null;
   wakePlayResumeWaiters();
-  appendPlayLog("warn", "اجرا توسط کاربر متوقف شد");
+  if (playAbortPoll) {
+    clearInterval(playAbortPoll);
+    playAbortPoll = null;
+  }
+  const tid = String(playStatus.taskId || "").trim();
+  if (tid) await unregisterPlayOnServer(tid);
+  appendPlayLog("warn", reason === "canvas_changed"
+    ? "اجرا به‌خاطر تغییر فرآیند متوقف شد"
+    : "اجرا توسط کاربر متوقف شد");
   await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
   broadcastPlayState();
   return getPlayStatus();
@@ -989,6 +997,7 @@ async function startPlay(taskId, tabId, runMode, options) {
     results: priorResults
   };
   await chrome.storage.local.set({ playing: true, playTabId: tabId, playPaused: false });
+  startPlayAbortWatch(String(graph.taskId || taskId));
   // HUD (pause/stop + results) on the execution tab — skip for condition-only check.
   if (scopeLabel !== "condition") {
     await injectPlayFab(tabId);
@@ -1273,15 +1282,31 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         || flowEdge(edges, node.id, ["contains"])?.to
         || findGroupEntryFallback(graph, node.id);
       if (innerEntry) {
-        const inner = await executeFlow(activeTabId, graph, innerEntry, rowIndex, loopIndex, loopTotal, {
-          ...opts,
-          _insideGroupId: node.id
-        });
-        activeTabId = inner.tabId || activeTabId;
-        if (inner.stepFailed) {
-          return { tabId: activeTabId, stepFailed: true, error: inner.error || "خطای مرحله" };
+        const gStart = (graph.nodes || []).find((n) => n.kind === "start" && sameNodeId(n.groupNodeId, node.id))
+          || findGraphNode(graph, innerEntry);
+        const groupIters = await expandGroupByRepeatSource(activeTabId, gStart || node, graph);
+        const moveLoop = gStart?.moveLoop !== false && node.moveLoop !== false;
+        const parentRow = rowIndex;
+        for (let gi = 0; gi < groupIters.indices.length; gi++) {
+          if (playAbort) break;
+          await waitIfPaused();
+          const gRow = groupIters.indices[gi];
+          const effectiveRow = moveLoop ? gRow : parentRow;
+          if (groupIters.total > 1) {
+            appendPlayLog("info", `تکرار گروه «${node.title || node.id}» ${gi + 1}/${groupIters.total} (${groupIters.label || groupIters.type})`);
+          }
+          const inner = await executeFlow(activeTabId, graph, innerEntry, effectiveRow, loopIndex, loopTotal, {
+            ...opts,
+            _insideGroupId: node.id,
+            _groupLoopIndex: gi + 1,
+            _groupLoopTotal: groupIters.total
+          });
+          activeTabId = inner.tabId || activeTabId;
+          if (inner.stepFailed) {
+            return { tabId: activeTabId, stepFailed: true, error: inner.error || "خطای مرحله" };
+          }
+          if (playStatus.lastError) break;
         }
-        if (playStatus.lastError) break;
       } else {
         appendPlayLog("warn", `گروه «${node.title || node.id}» ورودی ندارد`);
       }
@@ -2335,11 +2360,67 @@ function cellValue(ds, columnKey, rowIndex, opts = {}) {
   return val;
 }
 
+async function portalFetch(path, opts) {
+  try {
+    const portal = typeof portalBase === "function" ? await portalBase().catch(() => null) : null;
+    const base = String(portal || "").replace(/\/$/, "");
+    if (!base) return null;
+    return fetch(`${base}${path}`, {
+      credentials: "omit",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      ...(opts || {})
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function registerPlayOnServer(taskId) {
+  const userName = (await chrome.storage.local.get("da_local_user").catch(() => ({}))).da_local_user
+    || null;
+  await portalFetch("/Panel/Tasks/RegisterPlay", {
+    method: "POST",
+    body: JSON.stringify({ taskId: String(taskId), userName })
+  });
+}
+
+async function unregisterPlayOnServer(taskId) {
+  await portalFetch("/Panel/Tasks/UnregisterPlay", {
+    method: "POST",
+    body: JSON.stringify({ taskId: String(taskId) })
+  });
+}
+
+function startPlayAbortWatch(taskId) {
+  if (playAbortPoll) clearInterval(playAbortPoll);
+  registerPlayOnServer(taskId).catch(() => {});
+  playAbortPoll = setInterval(async () => {
+    if (!playStatus.playing) return;
+    try {
+      const res = await portalFetch(`/Panel/Tasks/PlayAbort?taskId=${encodeURIComponent(taskId)}`, { method: "GET" });
+      if (!res || !res.ok) return;
+      const body = await res.json().catch(() => ({}));
+      if (body.abort) {
+        appendPlayLog("error", "اجرا به‌خاطر تغییر فرآیند متوقف شد");
+        await stopPlay("canvas_changed");
+      }
+    } catch { /* ignore */ }
+  }, 1500);
+}
+
 async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellValue, stepTitle) {
   try {
     const taskId = String(graph?.taskId || playStatus.taskId || "").trim();
     const dsId = Number(ds?.id || 0);
     if (!taskId || !dsId || !columnKey) return;
+    let userName = null;
+    try {
+      const stored = await chrome.storage.local.get(["da_local_user", "da_session_user"]).catch(() => ({}));
+      userName = stored.da_local_user || stored.da_session_user || null;
+    } catch { /* ignore */ }
+    if (!userName && typeof localStorage !== "undefined") {
+      userName = localStorage.getItem("da_local_user") || localStorage.getItem("da_user") || null;
+    }
     const payload = {
       taskId,
       dataSourceId: dsId,
@@ -2347,7 +2428,8 @@ async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellV
       columnKey: String(columnKey),
       rowIndex: Number(rowIndex) || 0,
       cellValue: cellValue == null ? null : String(cellValue),
-      stepTitle: stepTitle || null
+      stepTitle: stepTitle || null,
+      userName
     };
     // Fan-out to open portal/editor tabs (fast local path).
     try {
@@ -2521,17 +2603,83 @@ function collectPlaySteps(graph, opts = {}) {
   return steps;
 }
 
-/** Phase 4 hook — do not call from Play MVP yet. */
-async function expandGroupByRepeatSource(_tabId, group) {
-  const type = (group.repeatSourceType || "None").toLowerCase();
-  if (type === "none" || !type) return [0];
-  if (type === "loops") {
-    const n = Math.max(1, Number(group.loopCount ?? group.constantValue) || 1);
-    return Array.from({ length: n }, (_, i) => i);
+/** Expand group iterations from group-start repeat settings (Loops / DataSource / Elements). */
+async function expandGroupByRepeatSource(tabId, groupOrStart, graph) {
+  const node = groupOrStart || {};
+  const type = String(node.repeatSourceType || "None");
+  if (type === "None" || !type) {
+    return { type: "None", indices: [0], total: 1, label: "یک‌بار" };
   }
-  // DataSource / Elements: reserved until play expands by rowCount / querySelectorAll.
-  // MoveLoop=false → independent index stack (restore parent index on exit).
-  return [0];
+  if (type === "Loops") {
+    const n = Math.max(1, Number(node.loopCount ?? node.constantValue) || 1);
+    return {
+      type: "Loops",
+      indices: Array.from({ length: n }, (_, i) => i),
+      total: n,
+      label: `تعداد ثابت × ${n}`
+    };
+  }
+  if (type === "DataSource") {
+    const dsId = node.dataSourceId;
+    const ds = (graph.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+    let count = Number(ds?.rowCount) || 0;
+    if (!count && Array.isArray(ds?.cells) && ds.cells.length) {
+      const idxs = new Set(
+        ds.cells
+          .map((c) => Number(c.index ?? c.Index ?? c.rowIndex))
+          .filter((x) => Number.isFinite(x))
+      );
+      count = idxs.size || 0;
+    }
+    if (!count) {
+      appendPlayLog("warn", "منبع گروه ردیفی ندارد؛ یک‌بار اجرا می‌شود.");
+      return { type: "DataSource", indices: [0], total: 1, label: "منبع (بدون ردیف)" };
+    }
+    return {
+      type: "DataSource",
+      indices: Array.from({ length: count }, (_, i) => i),
+      total: count,
+      label: `منبع «${ds?.title || dsId}» × ${count}`
+    };
+  }
+  if (type === "Elements") {
+    const css = String(node.elementValue || node.selectorValue || node.css || "").trim();
+    if (!css) {
+      appendPlayLog("warn", "سلکتور تکرار المان خالی است؛ یک‌بار اجرا می‌شود.");
+      return { type: "Elements", indices: [0], total: 1, label: "المان (بدون سلکتور)" };
+    }
+    let count = 0;
+    try {
+      const framePath = parseFramePath(node.framePathJson || node.framePath);
+      const frameId = await resolveFramePath(tabId, framePath);
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] },
+        func: (sel) => {
+          try {
+            return document.querySelectorAll(sel).length;
+          } catch {
+            return 0;
+          }
+        },
+        args: [css]
+      });
+      count = Number(result) || 0;
+    } catch (err) {
+      appendPlayLog("warn", `شمارش المان‌ها ناموفق: ${err?.message || err}`);
+      count = 0;
+    }
+    if (!count) {
+      appendPlayLog("warn", "هیچ المانی برای تکرار گروه پیدا نشد؛ یک‌بار اجرا می‌شود.");
+      return { type: "Elements", indices: [0], total: 1, label: "المان (۰)" };
+    }
+    return {
+      type: "Elements",
+      indices: Array.from({ length: count }, (_, i) => i),
+      total: count,
+      label: `المان‌ها × ${count}`
+    };
+  }
+  return { type: "None", indices: [0], total: 1, label: "یک‌بار" };
 }
 
 function parseFramePath(raw) {

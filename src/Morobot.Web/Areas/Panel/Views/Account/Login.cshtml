@@ -3,6 +3,7 @@
     ViewData["Title"] = L["login.title"];
     var nextLang = L.IsRtl ? "en" : "fa";
     var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
+    var errKey = ViewBag.Error as string;
 }
 
 <div class="card">
@@ -17,24 +18,47 @@
       </div>
     </div>
     <h4 class="mb-1" data-i18n="login.heading">@L["login.heading"]</h4>
-    <p class="mb-4" data-i18n="login.hint">@L["login.hint"]</p>
-    <div class="alert alert-info small" data-i18n="login.suggest">@L["login.suggest"]</div>
-    <form method="post" asp-area="Panel" asp-controller="Account" asp-action="Login">
+    <p class="mb-3" data-i18n="login.hint">@L["login.hint"]</p>
+    @if (!string.IsNullOrEmpty(errKey))
+    {
+      <div class="alert alert-danger small" data-i18n="@errKey">@L[errKey]</div>
+    }
+    <div class="alert alert-info small mb-4" role="note">
+      <div class="fw-semibold mb-1" data-i18n="login.guideTitle">@L["login.guideTitle"]</div>
+      <div data-i18n="login.guideGuest">@L["login.guideGuest"]</div>
+    </div>
+    <form method="post" asp-area="Panel" asp-controller="Account" asp-action="Login" id="login-form">
       @Html.AntiForgeryToken()
       <input type="hidden" name="returnUrl" value="@ViewBag.ReturnUrl" />
+      <input type="hidden" name="deviceJson" id="deviceJson" value="" />
       <div class="mb-6">
         <label class="form-label" for="userName" data-i18n="login.userName">@L["login.userName"]</label>
-        <input class="form-control" id="userName" name="userName" value="test" autofocus />
+        <input class="form-control" id="userName" name="userName" value="" autocomplete="username" autofocus />
       </div>
       <div class="mb-6">
         <label class="form-label" for="password" data-i18n="login.password">@L["login.password"]</label>
-        <input class="form-control" type="password" id="password" name="password" value="test" />
+        <input class="form-control" type="password" id="password" name="password" value="" autocomplete="current-password" />
       </div>
       <button class="btn btn-primary d-grid w-100" type="submit" data-i18n="login.submit">@L["login.submit"]</button>
     </form>
     <p class="text-center mt-4 mb-0">
+      <a asp-area="Panel" asp-controller="Account" asp-action="Register" asp-route-returnUrl="@ViewBag.ReturnUrl" data-i18n="login.toRegister">@L["login.toRegister"]</a>
+    </p>
+    <p class="text-center mt-2 mb-0">
       <a href="/" data-i18n="login.backSite">@L["login.backSite"]</a>
     </p>
     <p class="text-center text-muted small mt-3 mb-0" data-i18n="brand.copyright">@L["brand.copyright"]</p>
   </div>
 </div>
+  <script src="~/js/da-device.js?v=2"></script>
+<script>
+(function () {
+  var form = document.getElementById("login-form");
+  form.addEventListener("submit", function () {
+    try {
+      var d = window.DaDevice ? DaDevice.collect() : {};
+      document.getElementById("deviceJson").value = JSON.stringify(d);
+    } catch (e) { /* ignore */ }
+  });
+})();
+</script>

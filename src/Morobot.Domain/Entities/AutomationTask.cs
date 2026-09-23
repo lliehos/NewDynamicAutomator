@@ -7,6 +7,7 @@ public class AutomationTask
     public int Id { get; set; }
     public string Title { get; set; } = string.Empty;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
     public int DelayBeforeMs { get; set; }
     public int DelayAfterMs { get; set; }
     public int? CreatorUserId { get; set; }

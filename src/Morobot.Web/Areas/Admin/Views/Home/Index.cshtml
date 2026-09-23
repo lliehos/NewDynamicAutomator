@@ -1,0 +1,13 @@
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = L["admin.dashboard.title"];
+}
+<div class="card-admin">
+  <p>@L["admin.dashboard.intro"]</p>
+  <p>
+    <a class="btn-admin" asp-controller="Settings" asp-action="Index">@L["admin.nav.settings"]</a>
+    <a class="btn-admin secondary" asp-controller="Plans" asp-action="Index">@L["admin.nav.plans"]</a>
+    <a class="btn-admin secondary" asp-controller="Prices" asp-action="Index">@L["admin.nav.prices"]</a>
+    <a class="btn-admin secondary" asp-controller="Users" asp-action="Index">@L["admin.nav.users"]</a>
+  </p>
+</div>

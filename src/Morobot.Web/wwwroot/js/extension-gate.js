@@ -277,10 +277,37 @@
     return false;
   }
 
-  /** First panel load: if Selector is missing, show install modal. */
+  function capabilityForRole(role) {
+    const r = normalizeRole(role);
+    if (r === "player") return "play";
+    if (r === "selector") return "selector";
+    if (r === "smart") return "smart";
+    return "record";
+  }
+
+  function planAllowsRole(role) {
+    const e = window.DaEntitlements ? DaEntitlements.get() : null;
+    if (!e) return true;
+    const r = normalizeRole(role);
+    if (r === "player") return !!e.canPlay;
+    if (r === "selector") return !!e.canSelector;
+    if (r === "smart") return !!e.canSmart;
+    return !!e.canRecord;
+  }
+
+  function blockForPlan(role) {
+    if (window.DaEntitlements) DaEntitlements.showUpgrade(capabilityForRole(role));
+    return false;
+  }
+
+  /** First panel load: if Selector is missing (and plan allows), show install modal. */
   function promptSelectorIfMissing() {
     if (selectorPromptDone) return;
     if (!location.pathname.toLowerCase().includes("/panel")) return;
+    if (!planAllowsRole("selector")) {
+      selectorPromptDone = true;
+      return;
+    }
     if (hasSelector()) {
       selectorPromptDone = true;
       return;
@@ -334,6 +361,12 @@
     else if (action && SMART_ACTIONS.has(action)) role = "smart";
     else if (isPlayButton(el)) role = "player";
     if (!role) return;
+    if (!planAllowsRole(role)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      blockForPlan(role);
+      return;
+    }
     if (hasRole(role)) return;
 
     ev.preventDefault();

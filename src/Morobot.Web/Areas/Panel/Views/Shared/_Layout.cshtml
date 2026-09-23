@@ -40,7 +40,7 @@
   <link rel="stylesheet" href="~/assets/vendor/libs/node-waves/node-waves.css" />
   <link rel="stylesheet" href="~/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.css" />
   <link rel="stylesheet" href="~/css/portal-app.css?v=play-tab-menu-1" />
-  <link rel="stylesheet" href="~/css/da-notify.css?v=3" />
+  <link rel="stylesheet" href="~/css/da-notify.css?v=live-1" />
   <link rel="stylesheet" href="~/css/extension-gate.css?v=smart-path-1" />
   <style>
     body, .menu, .layout-navbar, .card, input, button { font-family: Vazirmatn, "Public Sans", sans-serif !important; }
@@ -107,6 +107,15 @@
               <div data-i18n="panel.navSettings">@L["panel.navSettings"]</div>
             </a>
           </li>
+          @if (User.IsInRole("Admin"))
+          {
+            <li class="menu-item">
+              <a asp-area="Admin" asp-controller="Home" asp-action="Index" class="menu-link">
+                <i class="menu-icon tf-icons ti ti-shield"></i>
+                <div data-i18n="admin.menuLabel">@L["admin.menuLabel"]</div>
+              </a>
+            </li>
+          }
         </ul>
         <div class="da-menu-foot px-4 pb-3 mt-auto">
           <small class="text-muted d-block" data-i18n="brand.copyright">@L["brand.copyright"]</small>
@@ -169,7 +178,12 @@
   <script src="~/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.js"></script>
   <script src="~/assets/vendor/js/menu.js"></script>
   <script src="~/assets/js/main.js"></script>
-  <script src="~/js/da-notify.js?v=2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="~/js/da-notify.js?v=share-1"></script>
+  <script src="~/js/da-catalog.js?v=1"></script>
+  <script src="~/js/da-device.js?v=1"></script>
+  <script src="~/js/da-telemetry.js?v=1"></script>
+  <script src="~/js/entitlements.js?v=share-1"></script>
   <script src="~/js/extension-gate.js?v=play-tab-menu-1"></script>
   @await RenderSectionAsync("Scripts", required: false)
 </body>

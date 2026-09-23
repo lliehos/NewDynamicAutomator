@@ -1,0 +1,72 @@
+@{
+  Layout = null;
+  var culture = L.Culture;
+  var dir = L.Dir;
+  var nextLang = L.IsRtl ? "en" : "fa";
+  var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
+  var ctrl = ViewContext.RouteData.Values["controller"]?.ToString() ?? "";
+  string NavClass(string c) => ctrl.Equals(c, StringComparison.OrdinalIgnoreCase) ? "active" : null!;
+}
+<!doctype html>
+<html lang="@culture" dir="@dir">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>@ViewData["Title"] — @L["admin.brand"]</title>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="~/assets/vendor/css/@(L.IsRtl ? "rtl/" : "")core.css" />
+  <link rel="stylesheet" href="~/css/portal-app.css" />
+  <style>
+    body { font-family: Vazirmatn, Syne, sans-serif; background: #f4f7f7; }
+    .admin-shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+    .admin-nav { background: #0f766e; color: #fff; padding: 1.25rem 1rem; }
+    .admin-nav a { color: #ecfeff; display: block; padding: .5rem .75rem; border-radius: .5rem; text-decoration: none; margin-bottom: .25rem; }
+    .admin-nav a:hover, .admin-nav a.active { background: rgba(255,255,255,.12); }
+    .admin-main { padding: 1.5rem; }
+    .admin-top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+    table.admin-table { width: 100%; background: #fff; border-collapse: collapse; border-radius: .75rem; overflow: hidden; }
+    table.admin-table th, table.admin-table td { padding: .65rem .85rem; border-bottom: 1px solid #e5e7eb; text-align: start; font-size: .92rem; }
+    table.admin-table th { background: #f0fdfa; }
+    .btn-admin { display: inline-block; padding: .4rem .8rem; border-radius: .5rem; background: #0d9488; color: #fff; text-decoration: none; border: 0; cursor: pointer; }
+    .btn-admin.secondary { background: #64748b; }
+    .btn-admin.danger { background: #dc2626; }
+    .card-admin { background: #fff; border-radius: .75rem; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+    .form-control, .form-select { display: block; width: 100%; padding: .45rem .65rem; border: 1px solid #cbd5e1; border-radius: .5rem; margin-top: .25rem; }
+    label { font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <div class="admin-shell">
+    <aside class="admin-nav">
+      <div class="fw-bold mb-3">@L["admin.brand"]</div>
+      <a class="@NavClass("Home")" asp-area="Admin" asp-controller="Home" asp-action="Index">@L["admin.nav.dashboard"]</a>
+      <a class="@NavClass("Settings")" asp-area="Admin" asp-controller="Settings" asp-action="Index">@L["admin.nav.settings"]</a>
+      <a class="@NavClass("Plans")" asp-area="Admin" asp-controller="Plans" asp-action="Index">@L["admin.nav.plans"]</a>
+      <a class="@NavClass("Prices")" asp-area="Admin" asp-controller="Prices" asp-action="Index">@L["admin.nav.prices"]</a>
+      <a class="@NavClass("Processes")" asp-area="Admin" asp-controller="Processes" asp-action="Index">@L["admin.nav.processes"]</a>
+      <a class="@NavClass("Sources")" asp-area="Admin" asp-controller="Sources" asp-action="Index">@L["admin.nav.sources"]</a>
+      <a class="@NavClass("Users")" asp-area="Admin" asp-controller="Users" asp-action="Index">@L["admin.nav.users"]</a>
+      <a class="@NavClass("Logs")" asp-area="Admin" asp-controller="Logs" asp-action="Index">@L["admin.nav.events"]</a>
+      <a asp-area="Admin" asp-controller="Logs" asp-action="Devices">@L["admin.nav.devices"]</a>
+      <hr style="border-color:rgba(255,255,255,.2)" />
+      <a asp-area="Panel" asp-controller="Account" asp-action="Logout">@L["common.logout"]</a>
+    </aside>
+    <main class="admin-main">
+      <div class="admin-top">
+        <h1 style="margin:0;font-size:1.35rem">@ViewData["Title"]</h1>
+        <form method="post" asp-area="Admin" asp-controller="Settings" asp-action="SetLanguage" style="margin:0">
+          @Html.AntiForgeryToken()
+          <input type="hidden" name="lang" value="@nextLang" />
+          <input type="hidden" name="returnUrl" value="@(Context.Request.Path + Context.Request.QueryString)" />
+          <button type="submit" class="btn-admin secondary">@langLabel</button>
+        </form>
+      </div>
+      @if (TempData["Ok"] != null)
+      {
+        <div class="card-admin" style="border-inline-start:4px solid #0d9488">@TempData["Ok"]</div>
+      }
+      @RenderBody()
+    </main>
+  </div>
+</body>
+</html>

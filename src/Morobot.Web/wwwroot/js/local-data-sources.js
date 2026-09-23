@@ -1,4 +1,9 @@
 (function () {
+  function t(key, vars) {
+    if (window.DaI18n && typeof DaI18n.t === "function") return DaI18n.t(key, vars);
+    return key;
+  }
+
   function currentUser() {
     if (window.DaSecureStore) return DaSecureStore.currentUser();
     const m = document.cookie.match(/(?:^|; )da_local_user=([^;]*)/);
@@ -325,9 +330,25 @@
         td.textContent = String(ev.cellValue ?? ev.CellValue ?? "");
       }
       flashCell(td, "write");
+      showActor(ev);
     } else {
       const td = table?.querySelector(`td[data-row="${idx}"][data-col="${CSS.escape(col)}"]`);
       flashCell(td, "read");
+      showActor(ev);
+    }
+  }
+
+  function showActor(ev) {
+    const who = ev.userName || ev.UserName;
+    if (!who) return;
+    const el = document.getElementById("da-portal-ds-actor");
+    if (el) {
+      el.hidden = false;
+      el.textContent = (window.DaI18n ? DaI18n.t("live.byUser", { user: who }) : `توسط ${who}`) || `توسط ${who}`;
+    }
+    if (window.daNotify) {
+      const op = String(ev.op || ev.Op || "read").toLowerCase();
+      daNotify(`${who}: ${op === "write" || op.includes("write") ? "نوشتن" : "خواندن"}`, op.includes("write") ? "warn" : "info", { ms: 2200 });
     }
   }
 
@@ -418,15 +439,15 @@
     const tid = escapeHtml(String(row.taskId));
     const sid = Number(row.ds.id);
     const master = row.isMaster
-      ? iconBtn("is-master", "منبع پیش‌فرض", ICO_STAR, "disabled")
-      : iconBtn("js-master", "تنظیم به‌عنوان پیش‌فرض", ICO_STAR_OUT, `data-task="${tid}" data-id="${sid}"`);
+      ? iconBtn("is-master", t("sources.master"), ICO_STAR, "disabled")
+      : iconBtn("js-master", t("sources.setMaster"), ICO_STAR_OUT, `data-task="${tid}" data-id="${sid}"`);
     return `
-      ${iconBtn("js-view", "مشاهده جدول", ICO_VIEW, `data-task="${tid}" data-id="${sid}"`)}
-      ${iconBtn("js-dl", "دانلود اکسل", ICO_DL, `data-task="${tid}" data-id="${sid}"`)}
-      ${iconBtn("js-cloud", "ذخیره در سرور (به‌زودی)", ICO_CLOUD, `data-task="${tid}" data-id="${sid}"`)}
+      ${iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `data-task="${tid}" data-id="${sid}"`)}
+      ${iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`)}
+      ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-task="${tid}" data-id="${sid}"`)}
       ${master}
-      ${iconBtn("js-del is-danger", "حذف منبع", ICO_DEL, `data-task="${tid}" data-id="${sid}"`)}
-      ${iconBtn("js-open", "باز کردن فرآیند", ICO_OPEN, `data-task="${tid}"`)}
+      ${iconBtn("js-del is-danger", t("sources.delete"), ICO_DEL, `data-task="${tid}" data-id="${sid}"`)}
+      ${iconBtn("js-open", t("sources.openProcess"), ICO_OPEN, `data-task="${tid}"`)}
     `;
   }
 
@@ -439,7 +460,7 @@
       btn.addEventListener("click", () => downloadSource(btn.dataset.task, btn.dataset.id, btn));
     });
     root.querySelectorAll(".js-cloud").forEach((btn) => {
-      btn.addEventListener("click", () => notify("ذخیره در سرور به‌زودی فعال می‌شود.", "info"));
+      btn.addEventListener("click", () => notify(t("sources.saveServerSoonToast"), "info"));
     });
     root.querySelectorAll(".js-master").forEach((btn) => {
       btn.addEventListener("click", () => setMaster(btn.dataset.task, btn.dataset.id));
@@ -554,6 +575,38 @@
   }
 
   document.addEventListener("da:locale", () => scheduleRender());
+  if (window.DaCatalog) {
+    DaCatalog.ensure();
+    DaCatalog.on("sourceChanged", (payload) => {
+      if (!payload) return;
+      const who = payload.actorUserName ? ` (${payload.actorUserName})` : "";
+      const action = payload.action || "updated";
+      if (window.daNotify) {
+        const msg = action === "deleted"
+          ? ((window.DaI18n ? DaI18n.t("live.sourceDeleted") : null) || "منبع حذف شد")
+          : ((window.DaI18n ? DaI18n.t("live.sourceUpdated") : null) || "منبع به‌روز شد");
+        daNotify(msg + who, action === "deleted" ? "info" : "success");
+      }
+      scheduleRender();
+      setTimeout(() => {
+        const tid = payload.taskId ?? payload.TaskId;
+        document.querySelectorAll(`#da-source-rows tr, #da-source-cards .da-source-card`).forEach((el) => {
+          const link = el.querySelector(`a[href*="/Editor/${tid}"]`) || el.querySelector(`[data-task="${tid}"]`);
+          if (!link && !String(el.innerHTML || "").includes(`/Editor/${tid}`)) return;
+          el.classList.add("da-row-flash");
+          setTimeout(() => el.classList.remove("da-row-flash"), 1600);
+        });
+      }, 250);
+    });
+    DaCatalog.on("taskChanged", (payload) => {
+      if (!payload) return;
+      if (payload.action === "deleted") {
+        scheduleRender();
+        return;
+      }
+      scheduleRender();
+    });
+  }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", scheduleRender);
   } else {

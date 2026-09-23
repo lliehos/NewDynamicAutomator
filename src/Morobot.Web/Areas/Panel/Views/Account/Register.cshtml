@@ -1,0 +1,76 @@
+@{
+    Layout = "_AuthLayout";
+    ViewData["Title"] = L["register.title"];
+    var nextLang = L.IsRtl ? "en" : "fa";
+    var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
+    var errKey = ViewBag.Error as string;
+}
+
+<div class="card">
+  <div class="card-body">
+    <div class="d-flex justify-content-end mb-2">
+      <button type="button" class="btn btn-sm btn-label-primary rounded-pill px-3" data-lang-switch data-lang-next="@nextLang">@langLabel</button>
+    </div>
+    <div class="app-brand justify-content-center mb-6 morobot-login-brand">
+      <img class="morobot-login-logo" src="~/img/brand/morobot-mark.svg" width="120" height="120" alt="@L["brand.name"]" />
+      <div class="morobot-login-titles">
+        <span class="app-brand-text demo text-heading fw-bold" data-i18n="brand.name">@L["brand.name"]</span>
+      </div>
+    </div>
+    <h4 class="mb-1" data-i18n="register.heading">@L["register.heading"]</h4>
+    @if (!string.IsNullOrEmpty(errKey))
+    {
+      <div class="alert alert-danger small" data-i18n="@errKey">@L[errKey]</div>
+    }
+    <form method="post" asp-area="Panel" asp-controller="Account" asp-action="Register" id="register-form">
+      @Html.AntiForgeryToken()
+      <input type="hidden" name="returnUrl" value="@ViewBag.ReturnUrl" />
+      <input type="hidden" name="deviceJson" id="deviceJson" value="" />
+      <div class="mb-4">
+        <label class="form-label" for="userName" data-i18n="register.userName">@L["register.userName"]</label>
+        <input class="form-control" id="userName" name="userName" autocomplete="username" autofocus required maxlength="50" />
+        <div class="form-text" data-i18n="register.userNameHint">@L["register.userNameHint"]</div>
+      </div>
+      <div class="row">
+        <div class="col-md-6 mb-4">
+          <label class="form-label" for="firstName" data-i18n="register.firstName">@L["register.firstName"]</label>
+          <input class="form-control" id="firstName" name="firstName" maxlength="50" />
+        </div>
+        <div class="col-md-6 mb-4">
+          <label class="form-label" for="lastName" data-i18n="register.lastName">@L["register.lastName"]</label>
+          <input class="form-control" id="lastName" name="lastName" maxlength="50" />
+        </div>
+      </div>
+      <div class="mb-4">
+        <label class="form-label" for="email" data-i18n="register.email">@L["register.email"]</label>
+        <input class="form-control" type="email" id="email" name="email" autocomplete="email" maxlength="120" />
+      </div>
+      <div class="mb-4">
+        <label class="form-label" for="password" data-i18n="register.password">@L["register.password"]</label>
+        <input class="form-control" type="password" id="password" name="password" autocomplete="new-password" required minlength="3" />
+        <div class="form-text" data-i18n="register.passwordHint">@L["register.passwordHint"]</div>
+      </div>
+      <div class="mb-6">
+        <label class="form-label" for="confirmPassword" data-i18n="register.confirmPassword">@L["register.confirmPassword"]</label>
+        <input class="form-control" type="password" id="confirmPassword" name="confirmPassword" autocomplete="new-password" required minlength="3" />
+      </div>
+      <button class="btn btn-primary d-grid w-100" type="submit" data-i18n="register.submit">@L["register.submit"]</button>
+    </form>
+    <p class="text-center mt-4 mb-0">
+      <a asp-area="Panel" asp-controller="Account" asp-action="Login" asp-route-returnUrl="@ViewBag.ReturnUrl" data-i18n="register.haveAccount">@L["register.haveAccount"]</a>
+    </p>
+    <p class="text-center text-muted small mt-3 mb-0" data-i18n="brand.copyright">@L["brand.copyright"]</p>
+  </div>
+</div>
+<script src="~/js/da-device.js?v=2"></script>
+<script>
+(function () {
+  var form = document.getElementById("register-form");
+  form.addEventListener("submit", function () {
+    try {
+      var d = window.DaDevice ? DaDevice.collect() : {};
+      document.getElementById("deviceJson").value = JSON.stringify(d);
+    } catch (e) { /* ignore */ }
+  });
+})();
+</script>
