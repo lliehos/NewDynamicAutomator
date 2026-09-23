@@ -400,6 +400,25 @@
         if (remoteSid && remoteSid === editorSessionId) {
           const ownAt = payload.updatedAtUtc || payload.UpdatedAtUtc;
           if (ownAt) loadedUpdatedAtUtc = ownAt;
+          const ownTitle = payload.title || payload.Title;
+          if (ownTitle) {
+            graph.title = ownTitle;
+            if (titleEl) titleEl.textContent = ownTitle;
+          }
+          return;
+        }
+        // Soft-apply data-source rename from library without full conflict dialog.
+        const reason = String(payload.reason || payload.Reason || "");
+        if (reason === "datasource_renamed") {
+          const dsId = payload.dataSourceId ?? payload.DataSourceId;
+          const newTitle = payload.title || payload.Title;
+          const ds = findDataSourceById(dsId);
+          if (ds && newTitle) {
+            ds.title = newTitle;
+            renderDataSources();
+          }
+          const remoteAt = payload.updatedAtUtc || payload.UpdatedAtUtc;
+          if (remoteAt) loadedUpdatedAtUtc = remoteAt;
           return;
         }
         const remoteAt = payload.updatedAtUtc || payload.UpdatedAtUtc || null;
@@ -698,7 +717,10 @@
       `;
       return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}">
         <div class="ds-row-top">
-          <span class="ds-title">${esc(label)}${isMaster ? `<span class="ds-badge-master">${t("editor.ds.masterBadge")}</span>` : ""}</span>
+          <div class="ds-title-row">
+            <span class="ds-title">${esc(label)}${isMaster ? `<span class="ds-badge-master">${t("editor.ds.masterBadge")}</span>` : ""}</span>
+            ${canModify ? dsIconBtn("js-ds-rename", t("editor.ds.rename"), DS_ICO_RENAME, `data-id="${sid}"`) : ""}
+          </div>
           <div class="ds-actions">${actions}</div>
         </div>
         <div class="ds-meta">${d.columnCount || 0} ${t("editor.ds.columns")} · ${d.rowCount || 0} ${t("editor.ds.rows")}${d.fileName ? ` · ${esc(d.fileName)}` : ""}</div>
@@ -714,6 +736,12 @@
     });
     listEl.querySelectorAll(".js-ds-cloud").forEach((btn) => {
       btn.addEventListener("click", () => setStatus(t("editor.ds.inLibrary"), "info"));
+    });
+    listEl.querySelectorAll(".js-ds-rename").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        renameDataSource(Number(btn.dataset.id));
+      });
     });
     listEl.querySelectorAll(".js-ds-del").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -753,9 +781,119 @@
   const DS_ICO_STAR = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
   const DS_ICO_STAR_OUT = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
   const DS_ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
+  const DS_ICO_RENAME = `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M4 17.5V20h2.5L18 8.5 15.5 6 4 17.5zm16.7-11.2a1 1 0 0 0 0-1.4l-2.1-2.1a1 1 0 0 0-1.4 0l-1.6 1.6 3.5 3.5 1.6-1.6z"/></svg>`;
 
   function dsIconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${esc(title)}" aria-label="${esc(title)}" ${extra}>${iconHtml}</button>`;
+  }
+
+  async function promptRename(current, titleKey, msgKey) {
+    if (window.DaNotify?.prompt) {
+      return DaNotify.prompt(t(msgKey), {
+        title: t(titleKey),
+        value: current || "",
+        okText: t("common.save"),
+        cancelText: t("common.cancel"),
+        maxLength: 200
+      });
+    }
+    const next = window.prompt(t(msgKey), current || "");
+    return next == null ? null : String(next).trim() || null;
+  }
+
+  async function renameDataSource(sourceId) {
+    if (!canModify) return;
+    const ds = findDataSourceById(sourceId);
+    if (!ds) {
+      setStatus(t("editor.ds.notFound"), "error");
+      return;
+    }
+    const current = ds.title || dataSourceFileTitle(ds.fileName) || "";
+    const next = await promptRename(current, "editor.ds.rename", "editor.ds.renamePrompt");
+    if (next == null || next === current) return;
+    ds.title = next;
+    renderDataSources();
+    try {
+      if (!isLocalMode && Number(sourceId) > 0) {
+        const res = await fetch(`/api/datasources/${sourceId}`, {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: next })
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.message || t("editor.ds.renameFail"));
+        }
+        // Server already patched GraphJson + bumped UpdatedAt — refresh stamp only.
+        if (/^\d+$/.test(String(taskId))) {
+          const canvasRes = await fetch(`/api/tasks/${taskId}/canvas`, { credentials: "same-origin" });
+          if (canvasRes.ok) {
+            const c = await canvasRes.json();
+            if (c.updatedAtUtc) loadedUpdatedAtUtc = c.updatedAtUtc;
+          }
+        }
+      } else {
+        await save();
+      }
+      setStatus(t("editor.ds.renamed"), "success");
+    } catch (e) {
+      ds.title = current;
+      renderDataSources();
+      setStatus(e.message || t("editor.ds.renameFail"), "error");
+    }
+  }
+
+  async function renameProcessTitle() {
+    if (!canModify) return;
+    const current = graph.title || titleEl?.textContent || "";
+    const next = await promptRename(current, "editor.ribbon.rename", "editor.ribbon.renamePrompt");
+    if (next == null || next === current) return;
+    graph.title = next;
+    if (titleEl) titleEl.textContent = next;
+    try {
+      if (!isLocalMode && /^\d+$/.test(String(taskId))) {
+        const res = await fetch(`/api/tasks/${taskId}/title`, {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: next, editorSessionId })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || t("editor.ribbon.renameFail"));
+        if (body.updatedAtUtc) loadedUpdatedAtUtc = body.updatedAtUtc;
+        // Mirror into local cache if present
+        try {
+          if (window.DaSecureStore) {
+            const tasks = DaSecureStore.readTasks() || [];
+            const hit = tasks.find((x) => String(x.id) === String(taskId));
+            if (hit) {
+              hit.title = next;
+              if (hit.graph) hit.graph.title = next;
+              DaSecureStore.writeTasks(tasks);
+            }
+          }
+        } catch { /* cache optional */ }
+      } else {
+        await save();
+      }
+      setStatus(t("editor.ribbon.renamed"), "success");
+    } catch (e) {
+      graph.title = current;
+      if (titleEl) titleEl.textContent = current;
+      setStatus(e.message || t("editor.ribbon.renameFail"), "error");
+    }
+  }
+
+  async function renameDiagramNode(n) {
+    if (!canModify || !n || n.kind === "start") return;
+    const current = n.title || "";
+    const next = await promptRename(current, "editor.insp.title", "editor.ribbon.renamePrompt");
+    if (next == null || next === current) return;
+    n.title = next;
+    render();
+    renderInspector();
+    await save();
   }
 
   function findDataSourceById(sourceId) {
@@ -3332,6 +3470,13 @@
       tip.textContent = "نامعتبر: " + validity.reasons.join(" · ");
       g.insertBefore(tip, g.firstChild);
     }
+    // Buttons first (lower paint layer); titles appended after so they sit above.
+    if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify) {
+      g.appendChild(makeCloneButton(w, h, n.kind === "condition" ? "condition" : n.kind === "group" ? "group" : "action"));
+    }
+    if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify) {
+      g.appendChild(makeRenameButton(w, h, n.kind === "condition" ? "condition" : n.kind === "group" ? "group" : "action"));
+    }
     let label = n.title;
     let fontSize = 12;
     let labelLines = null;
@@ -3409,10 +3554,14 @@
     } else if (isActionNode(n)) {
       appendRectOutPorts(g, n, stepStroke(n), 6);
     }
-    if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify) {
-      g.appendChild(makeCloneButton(w, h, n.kind === "condition" ? "condition" : n.kind === "group" ? "group" : "action"));
-    }
     g.addEventListener("mousedown", (ev) => {
+      const renameEl = ev.target.closest && ev.target.closest(".node-rename-btn");
+      if (renameEl || (ev.target.classList && ev.target.classList.contains("node-rename-btn"))) {
+        ev.stopPropagation();
+        ev.preventDefault();
+        renameDiagramNode(n);
+        return;
+      }
       const cloneEl = ev.target.closest && ev.target.closest(".node-clone-btn");
       if (cloneEl || (ev.target.classList && ev.target.classList.contains("node-clone-btn"))) {
         ev.stopPropagation();
@@ -3490,11 +3639,11 @@
       : "نمودار فرآیند";
   }
 
-  /** Clone icon on the left — no border/background, tone-colored glyph only. */
+  /** Clone icon at bottom-left — under the title paint layer. */
   function makeCloneButton(w, h, kind) {
     const size = 18;
     const x = kind === "condition" ? 4 : 5;
-    const y = 5;
+    const y = Math.max(5, h - size - 5);
     const tone = kind === "group" ? "group" : kind === "condition" ? "condition" : "action";
     const color = tone === "group" ? "#9b92f8"
       : tone === "condition" ? COND_STROKE
@@ -3522,6 +3671,36 @@
       class: "clone-ico",
       x: 7, y: 3, width: 9, height: 9, rx: 1.5,
       fill: "none", stroke: color, "stroke-width": 1.45
+    }));
+    return btn;
+  }
+
+  /** Pencil next to title (top-right) for rename modal. */
+  function makeRenameButton(w, h, kind) {
+    const size = 18;
+    const x = Math.max(4, w - size - 5);
+    const y = kind === "condition" ? Math.max(4, h * 0.18) : 5;
+    const color = kind === "group" ? "#0d9488"
+      : kind === "condition" ? "#6f6b7d"
+      : "#0d9488";
+    const btn = el("g", {
+      class: "node-rename-btn",
+      transform: `translate(${x},${y})`,
+      style: "cursor:pointer"
+    });
+    const tip = document.createElementNS(ns, "title");
+    tip.textContent = t("editor.ds.rename") || "تغییر عنوان";
+    btn.appendChild(tip);
+    btn.appendChild(el("rect", {
+      class: "rename-hit",
+      width: size, height: size, rx: 4,
+      fill: "transparent", stroke: "none"
+    }));
+    // Simple pencil glyph
+    btn.appendChild(el("path", {
+      class: "rename-ico",
+      d: "M4 13.5V16h2.5L14.2 8.3 11.7 5.8 4 13.5zm12.2-9.1a.75.75 0 0 0 0-1.06L14.7 1.8a.75.75 0 0 0-1.06 0L12.4 3.04l2.5 2.5 1.3-1.14z",
+      fill: color
     }));
     return btn;
   }
@@ -7432,6 +7611,11 @@
   document.getElementById("btn-back-group").addEventListener("click", closeGroup);
   document.getElementById("btn-group-edit-close").addEventListener("click", closeGroup);
   document.getElementById("btn-save").addEventListener("click", save);
+  const btnRenameProcess = document.getElementById("btn-rename-process");
+  if (btnRenameProcess) {
+    btnRenameProcess.hidden = !canModify;
+    btnRenameProcess.addEventListener("click", () => renameProcessTitle());
+  }
   const canvasSaveHtml = `${SAVE_ICON_SVG}<span>ذخیره</span>`;
   // Ensure canvas save exists even if Razor view is stale (server not restarted).
   let btnCanvasSave = document.getElementById("btn-canvas-save");

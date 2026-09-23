@@ -55,6 +55,11 @@ public class CreateDataSourceRequest
     public int? RowCount { get; set; }
 }
 
+public class UpdateDataSourceRequest
+{
+    public string? Title { get; set; }
+}
+
 public class UploadDataSourceResponse
 {
     public int Id { get; set; }

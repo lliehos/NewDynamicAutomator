@@ -104,9 +104,71 @@
         requestAnimationFrame(() => backdrop.classList.add("da-confirm-in"));
         try { backdrop.querySelector(".da-confirm-ok")?.focus(); } catch { /* ignore */ }
       });
+    },
+    /**
+     * Prompt for a single text value. Returns Promise&lt;string|null&gt; (null = cancel).
+     * @param {string} message
+     * @param {{ title?: string, okText?: string, cancelText?: string, value?: string, placeholder?: string, maxLength?: number }} [opts]
+     */
+    prompt(message, opts) {
+      return new Promise((resolve) => {
+        const existing = document.getElementById("da-confirm");
+        if (existing) existing.remove();
+        const title = opts?.title || "";
+        const okText = opts?.okText || "ذخیره";
+        const cancelText = opts?.cancelText || "انصراف";
+        const value = opts?.value != null ? String(opts.value) : "";
+        const placeholder = opts?.placeholder || "";
+        const maxLength = opts?.maxLength > 0 ? Number(opts.maxLength) : 200;
+        const backdrop = document.createElement("div");
+        backdrop.id = "da-confirm";
+        backdrop.className = "da-confirm-backdrop";
+        backdrop.innerHTML =
+          `<div class="da-confirm-box" role="dialog" aria-modal="true">`
+          + (title ? `<div class="da-confirm-title">${escapeHtml(title)}</div>` : "")
+          + (message ? `<div class="da-confirm-msg">${escapeHtml(message)}</div>` : "")
+          + `<input type="text" class="da-confirm-input" maxlength="${maxLength}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}" autocomplete="off" />`
+          + `<div class="da-confirm-actions">`
+          + `<button type="button" class="da-confirm-cancel">${escapeHtml(cancelText)}</button>`
+          + `<button type="button" class="da-confirm-ok">${escapeHtml(okText)}</button>`
+          + `</div></div>`;
+        const input = backdrop.querySelector(".da-confirm-input");
+        const finish = (val) => {
+          backdrop.classList.remove("da-confirm-in");
+          setTimeout(() => backdrop.remove(), 160);
+          resolve(val);
+        };
+        const submit = () => {
+          const next = String(input?.value || "").trim();
+          if (!next) {
+            input?.focus();
+            input?.classList.add("is-invalid");
+            return;
+          }
+          finish(next);
+        };
+        backdrop.addEventListener("click", (ev) => {
+          if (ev.target === backdrop) finish(null);
+        });
+        backdrop.querySelector(".da-confirm-cancel")?.addEventListener("click", () => finish(null));
+        backdrop.querySelector(".da-confirm-ok")?.addEventListener("click", submit);
+        input?.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") { ev.preventDefault(); submit(); }
+          if (ev.key === "Escape") { ev.preventDefault(); finish(null); }
+        });
+        document.documentElement.appendChild(backdrop);
+        requestAnimationFrame(() => {
+          backdrop.classList.add("da-confirm-in");
+          try {
+            input?.focus();
+            input?.select();
+          } catch { /* ignore */ }
+        });
+      });
     }
   };
   window.daConfirm = (m, o) => window.DaNotify.confirm(m, o);
+  window.daPrompt = (m, o) => window.DaNotify.prompt(m, o);
 
   /**
    * Colored modal for condition check result.

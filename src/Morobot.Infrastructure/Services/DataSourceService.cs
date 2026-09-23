@@ -201,6 +201,33 @@ public class DataSourceService
         return ToUploadResponse(entity, columns, cells);
     }
 
+    /// <summary>Rename library source and mirror title into linked process GraphJson snapshots.</summary>
+    public async Task<(bool ok, string? error, List<int> linkedProcessIds)> UpdateTitleAsync(
+        int userId, int id, string? title, CancellationToken ct = default)
+    {
+        var trimmed = (title ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return (false, "عنوان منبع لازم است.", new List<int>());
+        if (trimmed.Length > 200) trimmed = trimmed[..200];
+
+        var entity = await _db.DataSources
+            .Include(d => d.ProcessLinks)
+            .FirstOrDefaultAsync(d => d.Id == id && d.OwnerUserId == userId, ct);
+        if (entity is null) return (false, "notfound", new List<int>());
+
+        entity.Title = trimmed;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        var processIds = entity.ProcessLinks.Select(l => l.ProcessId).Distinct().ToList();
+        await _db.SaveChangesAsync(ct);
+
+        foreach (var pid in processIds)
+        {
+            try { await PatchSourceTitleInProcessGraphAsync(pid, id, trimmed, ct); }
+            catch (Exception ex) { _log.LogWarning(ex, "Patch source title {Ds} on process {P}", id, pid); }
+        }
+        return (true, null, processIds);
+    }
+
     public async Task<bool> DeleteLibraryAsync(int userId, int id, CancellationToken ct = default)
     {
         var entity = await _db.DataSources
@@ -495,6 +522,33 @@ public class DataSourceService
         }
         if (!exists) arr.Add(ToGraphNode(ds));
         if (makeDefault) ApplyMaster(obj, ds.Id);
+        process.GraphJson = obj.ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    private async Task PatchSourceTitleInProcessGraphAsync(int processId, int dataSourceId, string title, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return;
+        JsonObject? obj;
+        try { obj = JsonNode.Parse(process.GraphJson) as JsonObject; }
+        catch { return; }
+        if (obj is null) return;
+
+        var changed = false;
+        if (obj["dataSources"] is JsonArray arr)
+        {
+            foreach (var item in arr)
+            {
+                if (item is not JsonObject o) continue;
+                var sid = o["id"]?.GetValue<int?>() ?? o["Id"]?.GetValue<int?>();
+                if (sid != dataSourceId) continue;
+                o["title"] = title;
+                changed = true;
+            }
+        }
+        if (!changed) return;
         process.GraphJson = obj.ToJsonString(JsonOpts);
         process.UpdatedAtUtc = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);

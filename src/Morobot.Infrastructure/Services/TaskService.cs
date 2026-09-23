@@ -249,6 +249,41 @@ public class TaskService
         return hit?.json;
     }
 
+    public async Task<(bool ok, string? error, DateTime? updatedAtUtc)> UpdateTitleAsync(
+        int userId, int taskId, string? title, CancellationToken ct = default)
+    {
+        if (!await CanModifyAsync(userId, taskId, ct))
+            return (false, "forbidden", null);
+        var trimmed = (title ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return (false, "عنوان فرآیند لازم است.", null);
+        if (trimmed.Length > 200) trimmed = trimmed[..200];
+
+        var process = await _db.Processes.FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (process is null) return (false, "notfound", null);
+
+        process.Title = trimmed;
+        if (!string.IsNullOrWhiteSpace(process.GraphJson))
+        {
+            try
+            {
+                var node = System.Text.Json.Nodes.JsonNode.Parse(process.GraphJson) as System.Text.Json.Nodes.JsonObject;
+                if (node is not null)
+                {
+                    node["title"] = trimmed;
+                    process.GraphJson = node.ToJsonString(new System.Text.Json.JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+                    });
+                }
+            }
+            catch { /* keep title on entity even if graph patch fails */ }
+        }
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return (true, null, DateTime.SpecifyKind(process.UpdatedAtUtc, DateTimeKind.Utc));
+    }
+
     public async Task<(bool ok, string? error, DateTime? updatedAtUtc)> SaveCanvasJsonAsync(
         int userId, int taskId, string canvasJson, string? title,
         DateTime? baseUpdatedAtUtc = null, EntitlementsDto? entitlements = null, CancellationToken ct = default)

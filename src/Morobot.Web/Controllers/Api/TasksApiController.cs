@@ -101,6 +101,32 @@ public class TasksApiController : ControllerBase
         }
     }
 
+    [HttpPut("{id:int}/title")]
+    public async Task<IActionResult> UpdateTitle(int id, [FromBody] UpdateTaskTitleRequest request, CancellationToken ct)
+    {
+        var (ok, error, newUpdated) = await _tasks.UpdateTitleAsync(UserId, id, request.Title, ct);
+        if (!ok && error == "forbidden") return Forbid();
+        if (!ok && error == "notfound") return NotFound();
+        if (!ok) return BadRequest(new { message = error });
+
+        await _canvasHub.Clients.Group(CanvasHub.TaskGroup(id)).SendAsync("canvasChanged", new
+        {
+            taskId = id,
+            updatedAtUtc = newUpdated,
+            editorSessionId = request.EditorSessionId,
+            userId = UserId,
+            userName = User.Identity?.Name,
+            title = request.Title?.Trim()
+        }, ct);
+
+        var list = await _tasks.ListForUserAsync(UserId, ct);
+        var item = list.FirstOrDefault(x => x.Id == id);
+        if (item != null)
+            await _catalog.TaskUpsertedAsync(item, "updated", User.Identity?.Name, ct);
+
+        return Ok(new { ok = true, updatedAtUtc = newUpdated, title = item?.Title ?? request.Title?.Trim() });
+    }
+
     /// <summary>Legacy alias — returns the same GraphJson payload as /canvas.</summary>
     [HttpGet("{id:int}/graph")]
     public Task<IActionResult> Graph(int id, CancellationToken ct) => GetCanvas(id, ct);
@@ -376,11 +402,19 @@ public class DataSourcesApiController : ControllerBase
 {
     private readonly DataSourceService _sources;
     private readonly EntitlementService _entitlements;
+    private readonly CatalogLiveService _catalog;
+    private readonly IHubContext<CanvasHub> _canvasHub;
 
-    public DataSourcesApiController(DataSourceService sources, EntitlementService entitlements)
+    public DataSourcesApiController(
+        DataSourceService sources,
+        EntitlementService entitlements,
+        CatalogLiveService catalog,
+        IHubContext<CanvasHub> canvasHub)
     {
         _sources = sources;
         _entitlements = entitlements;
+        _catalog = catalog;
+        _canvasHub = canvasHub;
     }
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -408,6 +442,31 @@ public class DataSourcesApiController : ControllerBase
         {
             return BadRequest(new { message = ex.Message, code = "limit" });
         }
+    }
+
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Update(int id, [FromBody] Morobot.Contracts.DataSources.UpdateDataSourceRequest req, CancellationToken ct)
+    {
+        var (ok, error, linked) = await _sources.UpdateTitleAsync(UserId, id, req.Title, ct);
+        if (!ok && error == "notfound") return NotFound();
+        if (!ok) return BadRequest(new { message = error });
+
+        var title = req.Title?.Trim();
+        foreach (var processId in linked)
+        {
+            await _catalog.SourceChangedAsync(processId, new { id, title }, "renamed", User.Identity?.Name, ct);
+            await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
+            {
+                taskId = processId,
+                dataSourceId = id,
+                title,
+                userId = UserId,
+                userName = User.Identity?.Name,
+                reason = "datasource_renamed"
+            }, ct);
+        }
+
+        return Ok(new { ok = true, id, title, linkedProcessIds = linked });
     }
 
     [HttpDelete("{id:int}")]

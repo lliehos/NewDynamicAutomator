@@ -184,6 +184,20 @@
 .da-confirm-cancel { background: #e2e8f0; color: #334155; }
 .da-confirm-ok { background: #0d9488; color: #fff; }
 .da-confirm-box.is-danger .da-confirm-ok { background: #dc2626; }
+.da-confirm-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 1rem;
+  padding: .65rem .8rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: .95rem;
+  color: #334155;
+  outline: none;
+}
+.da-confirm-input:focus { border-color: #0d9488; box-shadow: 0 0 0 3px rgba(13,148,136,.15); }
+.da-confirm-input.is-invalid { border-color: #ea5455; }
 
 /* Share modal */
 .da-share-backdrop {

@@ -132,6 +132,8 @@
   const ICO_UP = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 21V10.8l3.4 3.4 1.4-1.4L12 7l-4.8 5.8 1.4 1.4L11 10.8V21h1zM5 3h14v2H5V3z"/></svg>`;
   const ICO_CLONE = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 7h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm-3 3H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1H8a3 3 0 0 0-3 3v7z"/></svg>`;
   const ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
+  const ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
+  const ICO_XLSX = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm1 7V3.5L19.5 9H15zM8.2 18l2.3-3.2L8.3 12h1.7l1.4 2.1L12.8 12H14.4l-2.2 2.8L14.5 18h-1.7l-1.5-2.2L9.9 18H8.2z"/></svg>`;
 
   function iconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
@@ -285,14 +287,20 @@
     const ttitle = escapeHtml(String(task.title || "").trim());
     const counts = taskCounts(task);
     const isEmpty = !counts.steps;
+    const hasData = counts.sources > 0;
     const smartBtn = isEmpty
       ? iconBtn("is-smart", t("tasks.smart"), ICO_SMART, `data-da-action="start-smart-record" data-task-id="${tid}" data-task-title="${ttitle}"`)
+      : "";
+    const dataBtns = hasData
+      ? `${iconBtn("is-view", t("tasks.viewData"), ICO_VIEW, `data-da-view-data="${tid}"`)}
+         ${iconBtn("is-xlsx", t("tasks.downloadExcel"), ICO_XLSX, `data-da-dl-excel="${tid}"`)}`
       : "";
     return `
       ${iconLink("is-edit", t("tasks.edit"), `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_EDIT)}
       ${iconBtn("is-play", t("tasks.play"), ICO_PLAY, `data-da-action="play-task-menu" data-task-id="${tid}" aria-haspopup="menu"`)}
       ${iconBtn("is-rec", t("tasks.record"), ICO_REC, `data-da-action="start-record" data-task-id="${tid}" data-task-title="${ttitle}"`)}
       ${smartBtn}
+      ${dataBtns}
       ${iconBtn("", t("tasks.clone"), ICO_CLONE, `data-da-clone="${tid}"`)}
       ${iconBtn("", t("tasks.downloadMrbt"), ICO_DL, `data-da-download="${tid}"`)}
       <label class="ds-icon-btn da-import-btn" title="${t("tasks.importMrbt")}" aria-label="${t("tasks.importMrbt")}">
@@ -378,6 +386,183 @@
         }
       });
     });
+    root?.querySelectorAll("[data-da-view-data]").forEach((btn) => {
+      btn.addEventListener("click", () => viewProcessData(btn.getAttribute("data-da-view-data"), btn));
+    });
+    root?.querySelectorAll("[data-da-dl-excel]").forEach((btn) => {
+      btn.addEventListener("click", () => downloadProcessExcel(btn.getAttribute("data-da-dl-excel"), btn));
+    });
+  }
+
+  function dataSourceSafeFileName(ds) {
+    const raw = (ds?.fileName && String(ds.fileName).replace(/\.(xlsx|xlsm|csv)$/i, ""))
+      || ds?.title
+      || "data-source";
+    return String(raw).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "data-source";
+  }
+
+  function dataSourceTableRows(ds) {
+    const keys = Array.isArray(ds?.columnKeys) && ds.columnKeys.length
+      ? ds.columnKeys.map(String)
+      : (ds?.columns || []).map((c) => String(c.key || c.Key || "")).filter(Boolean);
+    const cols = Array.isArray(ds?.columns) && ds.columns.length
+      ? ds.columns.map((c) => ({
+          key: String(c.key || c.Key || ""),
+          title: String(c.title || c.Title || c.key || c.Key || "")
+        })).filter((c) => c.key)
+      : keys.map((k) => ({ key: k, title: k }));
+    const headers = cols.map((c) => c.title || c.key);
+    const colKeys = cols.map((c) => c.key);
+    const cells = Array.isArray(ds?.cells) ? ds.cells : [];
+    const byRow = new Map();
+    cells.forEach((cell) => {
+      const idx = Number(cell.index ?? cell.Index ?? 0);
+      if (!Number.isFinite(idx)) return;
+      if (!byRow.has(idx)) byRow.set(idx, {});
+      const key = String(cell.key || cell.Key || "");
+      byRow.get(idx)[key] = cell.cellValue ?? cell.CellValue ?? "";
+    });
+    const indexes = [...byRow.keys()].sort((a, b) => a - b);
+    const rows = indexes.map((idx) => {
+      const map = byRow.get(idx) || {};
+      return colKeys.map((k) => map[k] ?? "");
+    });
+    return { headers, colKeys, columns: cols, rows, cells };
+  }
+
+  function downloadBlobFile(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  function pickProcessDataSource(canvas) {
+    const list = Array.isArray(canvas?.dataSources) ? canvas.dataSources : [];
+    if (!list.length) return null;
+    const start = (canvas.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
+    const masterId = start?.dataSourceId ?? canvas.masterDataSourceId ?? null;
+    if (masterId != null) {
+      const hit = list.find((d) => Number(d.id) === Number(masterId));
+      if (hit) return hit;
+    }
+    return list[0];
+  }
+
+  async function loadProcessDataSource(taskId) {
+    const local = findTask(readTasks(), taskId);
+    if (local?.graph?.dataSources?.length) {
+      const ds = pickProcessDataSource(local.graph);
+      if (ds) return { taskId, ds, taskTitle: local.title };
+    }
+    if (!/^\d+$/.test(String(taskId))) return null;
+    const canvasRes = await fetch(`/api/tasks/${taskId}/canvas`, { credentials: "same-origin" });
+    if (!canvasRes.ok) throw new Error("canvas " + canvasRes.status);
+    const canvas = await canvasRes.json();
+    const thin = pickProcessDataSource(canvas);
+    if (!thin) return null;
+    const sid = Number(thin.id);
+    if (Number.isFinite(sid) && sid > 0) {
+      try {
+        const fullRes = await fetch(`/api/datasources/${sid}`, { credentials: "same-origin" });
+        if (fullRes.ok) {
+          const full = await fullRes.json();
+          return { taskId, ds: full, taskTitle: canvas.title || local?.title || "" };
+        }
+      } catch { /* use canvas snapshot */ }
+    }
+    return { taskId, ds: thin, taskTitle: canvas.title || local?.title || "" };
+  }
+
+  function renderProcessViewerTable(ds) {
+    const table = document.getElementById("da-portal-ds-table");
+    const titleEl = document.getElementById("da-portal-ds-title");
+    const subEl = document.getElementById("da-portal-ds-sub");
+    if (!table) return;
+    const { headers, colKeys, rows } = dataSourceTableRows(ds);
+    if (titleEl) titleEl.textContent = ds.title || dataSourceSafeFileName(ds);
+    if (subEl) {
+      subEl.textContent = `${colKeys.length} ستون · ${rows.length} ردیف${ds.fileName ? ` · ${ds.fileName}` : ""}`;
+    }
+    const thead = table.querySelector("thead");
+    const tbody = table.querySelector("tbody");
+    if (!thead || !tbody) return;
+    thead.innerHTML = `<tr><th class="ds-row-idx">#</th>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="${headers.length + 1}" class="ds-viewer-empty">${escapeHtml(t("tasks.noDataSource") === t("tasks.noDataSource") ? "ردیفی نیست" : "ردیفی نیست")}</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = rows.map((r, i) =>
+      `<tr><th class="ds-row-idx">${i + 1}</th>${r.map((v, ci) =>
+        `<td data-row="${i}" data-col="${escapeHtml(colKeys[ci])}">${escapeHtml(v)}</td>`
+      ).join("")}</tr>`
+    ).join("");
+  }
+
+  async function viewProcessData(taskId, btn) {
+    if (btn) { btn.disabled = true; btn.classList.add("is-busy"); }
+    try {
+      const hit = await loadProcessDataSource(taskId);
+      if (!hit?.ds) {
+        notifyHome(t("tasks.noDataSource"), "warn");
+        return;
+      }
+      renderProcessViewerTable(hit.ds);
+      const modal = document.getElementById("da-portal-ds-viewer");
+      if (modal) modal.hidden = false;
+      else notifyHome("نمایشگر داده در این صفحه نیست.", "error");
+    } catch (e) {
+      notifyHome(String(e.message || e), "error");
+    } finally {
+      if (btn) { btn.disabled = false; btn.classList.remove("is-busy"); }
+    }
+  }
+
+  async function downloadProcessExcel(taskId, btn) {
+    if (btn) { btn.disabled = true; btn.classList.add("is-busy"); }
+    try {
+      const hit = await loadProcessDataSource(taskId);
+      if (!hit?.ds) {
+        notifyHome(t("tasks.noDataSource"), "warn");
+        return;
+      }
+      const ds = hit.ds;
+      const table = dataSourceTableRows(ds);
+      if (!table.colKeys.length) {
+        notifyHome(t("tasks.noDataSource"), "warn");
+        return;
+      }
+      const payload = {
+        title: dataSourceSafeFileName(ds),
+        columns: table.columns.map((c) => ({ key: c.key, title: c.title })),
+        columnKeys: table.colKeys,
+        cells: (ds.cells || []).map((c) => ({
+          key: c.key || c.Key || "",
+          index: Number(c.index ?? c.Index ?? 0),
+          cellValue: c.cellValue ?? c.CellValue ?? ""
+        }))
+      };
+      const res = await fetch("/Panel/Tasks/ExportExcel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/octet-stream" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `خطا در ساخت اکسل (کد ${res.status})`);
+      }
+      downloadBlobFile(await res.blob(), `${dataSourceSafeFileName(ds)}.xlsx`);
+      notifyHome(t("tasks.downloaded", { title: dataSourceSafeFileName(ds) + ".xlsx" }), "success");
+    } catch (e) {
+      notifyHome(String(e.message || e), "error");
+    } finally {
+      if (btn) { btn.disabled = false; btn.classList.remove("is-busy"); }
+    }
   }
 
   function renderCards(normalized) {

@@ -32,6 +32,12 @@ public class CreateTaskRequest
     public string? DesignOrigin { get; set; }
 }
 
+public class UpdateTaskTitleRequest
+{
+    public string? Title { get; set; }
+    public string? EditorSessionId { get; set; }
+}
+
 public class TaskShareDto
 {
     public int UserId { get; set; }

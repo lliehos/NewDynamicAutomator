@@ -58,9 +58,42 @@
   const ICO_STAR_OUT = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
   const ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
   const ICO_OPEN = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14 3h7v7h-2V6.4l-9.3 9.3-1.4-1.4L17.6 5H14V3zM5 5h6v2H7v10h10v-4h2v6H5V5z"/></svg>`;
+  const ICO_RENAME = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 17.5V20h2.5L18 8.5 15.5 6 4 17.5zm16.7-11.2a1 1 0 0 0 0-1.4l-2.1-2.1a1 1 0 0 0-1.4 0l-1.6 1.6 3.5 3.5 1.6-1.6z"/></svg>`;
 
   function iconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
+  }
+
+  async function renameLibrarySource(sourceId, currentTitle) {
+    const next = window.DaNotify?.prompt
+      ? await DaNotify.prompt(t("sources.renamePrompt"), {
+          title: t("sources.rename"),
+          value: currentTitle || "",
+          okText: t("common.save"),
+          cancelText: t("common.cancel"),
+          maxLength: 200
+        })
+      : (() => {
+          const v = window.prompt(t("sources.renamePrompt"), currentTitle || "");
+          return v == null ? null : String(v).trim() || null;
+        })();
+    if (next == null || next === currentTitle) return;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}`, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: next })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || t("sources.renameFail"));
+      }
+      notify(t("sources.renamed"), "success");
+      await renderAsync();
+    } catch (e) {
+      notify(e.message || t("sources.renameFail"), "error");
+    }
   }
 
   async function fetchLibrarySources() {
@@ -504,6 +537,7 @@
       ? iconBtn("js-open", t("sources.openProcess"), ICO_OPEN, `data-task="${tid}"`)
       : "";
     return `
+      ${Number(sid) > 0 ? iconBtn("js-rename", t("sources.rename"), ICO_RENAME, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
       ${row.taskId != null ? iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `data-task="${tid}" data-id="${sid}"`) : ""}
       ${row.taskId != null ? iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`) : ""}
       ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-id="${sid}"`)}
@@ -515,6 +549,9 @@
 
   function bindActions(root) {
     if (!root) return;
+    root.querySelectorAll(".js-rename").forEach((btn) => {
+      btn.addEventListener("click", () => renameLibrarySource(btn.dataset.id, btn.dataset.title || ""));
+    });
     root.querySelectorAll(".js-view").forEach((btn) => {
       btn.addEventListener("click", () => openViewer(btn.dataset.task, btn.dataset.id));
     });

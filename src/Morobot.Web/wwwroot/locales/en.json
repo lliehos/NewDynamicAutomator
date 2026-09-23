@@ -310,7 +310,11 @@
     "openProcess": "Open process",
     "setMaster": "Set as default",
     "master": "Default source",
-    "libraryHint": "Sources are independent; removing from a process only unlinks them."
+    "libraryHint": "Sources are independent; removing from a process only unlinks them.",
+    "rename": "Rename",
+    "renamePrompt": "Enter a new data source title",
+    "renamed": "Data source title saved.",
+    "renameFail": "Could not save title."
   },
   "settings": {
     "title": "Account settings",
@@ -347,6 +351,9 @@
     "importJson": "Import JSON",
     "downloadMrbt": "Download .mrbt",
     "importMrbt": "Import .mrbt",
+    "viewData": "View data",
+    "downloadExcel": "Download Excel",
+    "noDataSource": "This process has no data source.",
     "downloaded": "File “{title}” downloaded.",
     "badFile": "Invalid file or encryption key mismatch.",
     "noGraph": "Process graph not found in file.",
@@ -433,7 +440,11 @@
       "save": "Save",
       "saving": "Saving…",
       "loading": "Loading...",
-      "workflow": "Workflow"
+      "workflow": "Workflow",
+      "rename": "Rename process",
+      "renamePrompt": "Enter a new process title",
+      "renamed": "Process title saved.",
+      "renameFail": "Could not save process title."
     },
     "origin": {
       "fromRecord": "Edit: from recording",
@@ -596,6 +607,10 @@
       "noPathReady": "Path not ready — refresh the portal.",
       "masterBadge": "Default",
       "masterLabel": "Default source",
+      "rename": "Rename data source",
+      "renamePrompt": "Enter a new data source title",
+      "renamed": "Data source title saved.",
+      "renameFail": "Could not save data source title.",
       "columns": "col",
       "rows": "row",
       "uploadParsing": "Parsing and preparing JSON...",

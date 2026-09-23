@@ -766,6 +766,14 @@
   background: #ccfbf1;
 }
 
+.da-task-actions .ds-icon-btn.is-view {
+  color: #0d9488;
+}
+
+.da-task-actions .ds-icon-btn.is-xlsx {
+  color: #28c76f;
+}
+
 .da-task-actions .da-import-btn {
   display: inline-flex;
   align-items: center;

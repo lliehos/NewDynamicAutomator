@@ -1,7 +1,9 @@
 .flow-shell{position:fixed;inset:0;display:grid;grid-template-rows:56px 1fr;background:#f4f5fa;font-family:Vazirmatn,Tahoma,sans-serif;direction:rtl;box-sizing:border-box}
 .flow-shell *,.flow-shell *::before,.flow-shell *::after{box-sizing:border-box}
 .flow-ribbon{display:flex;align-items:center;gap:8px;padding:0 14px;background:#fff;border-bottom:1px solid #e6e6f0;z-index:5}
-.flow-ribbon h1{font-size:15px;margin:0 6px 0 auto;font-weight:700;color:#4b465c}
+.flow-ribbon h1{font-size:15px;margin:0;font-weight:700;color:#4b465c;max-width:min(320px,36vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.flow-ribbon .btn-title-edit{margin:0 0 0 auto;padding:4px 6px;min-width:28px;height:28px}
+.flow-ribbon .btn-title-edit svg{display:block}
 .origin-badge{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:700;display:none}
 .origin-badge.manual{display:inline-block;background:#e7e3fc;color:#5e50ee}
 .origin-badge.recorded{display:inline-block;background:#fce4e4;color:#ea5455}
@@ -219,6 +221,7 @@ rect.flow-marquee{pointer-events:none}
 #flow-svg g.node:hover .port-idle{opacity:.55}
 #flow-svg g.node .port:hover{filter:brightness(1.12);opacity:1}
 #flow-svg g.node .node-clone-btn,
+#flow-svg g.node .node-rename-btn,
 #flow-svg g.node .node-promote-btn{
   opacity:0;
   pointer-events:none;
@@ -227,6 +230,8 @@ rect.flow-marquee{pointer-events:none}
 }
 #flow-svg g.node:hover .node-clone-btn,
 #flow-svg g.node.node-on .node-clone-btn,
+#flow-svg g.node:hover .node-rename-btn,
+#flow-svg g.node.node-on .node-rename-btn,
 #flow-svg g.node:hover .node-promote-btn,
 #flow-svg g.node.node-on .node-promote-btn{
   opacity:1;
@@ -236,6 +241,7 @@ rect.flow-marquee{pointer-events:none}
 #flow-svg g.node .node-clone-btn[data-tone="group"]:hover .clone-ico{stroke:#5eead4}
 #flow-svg g.node .node-clone-btn[data-tone="condition"]:hover .clone-ico{stroke:#8b9098}
 #flow-svg g.node .node-clone-btn[data-tone="action"]:hover .clone-ico{stroke:#ff9f43}
+#flow-svg g.node .node-rename-btn:hover .rename-ico{opacity:.9;fill:#0d9488}
 #flow-svg g.node .node-promote-btn:hover .promote-bg{fill:#ff9f43}
 #flow-svg g.node .node-promote-btn:hover .promote-ico{stroke:#fff}
 .btn-canvas-save{
@@ -654,9 +660,10 @@ rect.flow-marquee{pointer-events:none}
   text-align:end;
 }
 .ds-list{list-style:none;margin:0;padding:0}
-.ds-list li{background:#f7f7fb;border-radius:10px;padding:8px 10px;margin-bottom:6px;font-size:12px}
-.ds-row-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:2px}
-.ds-list .ds-title{font-weight:700;color:#4b465c;display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:0;line-height:1.35}
+.ds-list li{background:#f7f7fb;border-radius:10px;padding:8px 10px;margin-bottom:6px;font-size:12px;position:relative}
+.ds-row-top{display:flex;flex-direction:column;align-items:stretch;gap:6px;margin-bottom:2px;position:relative;z-index:2}
+.ds-list .ds-title-row{display:flex;align-items:center;gap:4px;min-width:0;position:relative;z-index:2}
+.ds-list .ds-title{font-weight:700;color:#4b465c;display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:0;line-height:1.35;flex:1}
 .ds-badge-master{display:inline-flex;align-items:center;font-size:10px;font-weight:700;color:#28c76f;background:#e8f9f0;border-radius:999px;padding:1px 7px}
 .ds-icon-btn{
   display:inline-flex;align-items:center;justify-content:center;
@@ -668,6 +675,7 @@ rect.flow-marquee{pointer-events:none}
 .ds-icon-btn:disabled,.ds-icon-btn.is-master{opacity:.55;cursor:default;color:#28c76f;background:#e8f9f0}
 .ds-icon-btn.is-danger:hover{background:#fce4e4;color:#ea5455}
 .ds-icon-btn.is-busy{opacity:.45;pointer-events:none}
+.ds-icon-btn.js-ds-rename{width:26px;height:26px;color:#0d9488}
 .ds-meta,.ds-list .ds-meta{
   color:#a8aaae;
   font-size:10px;
@@ -683,7 +691,7 @@ rect.flow-marquee{pointer-events:none}
 }
 .insp-status b{font-weight:600;color:#8a8699}
 .ds-list .ds-keys{color:#0d9488;font-size:11px;word-break:break-all}
-.ds-list .ds-actions{display:flex;gap:2px;flex-wrap:nowrap;flex-shrink:0;align-items:center}
+.ds-list .ds-actions{display:flex;gap:2px;flex-wrap:wrap;flex-shrink:0;align-items:center;position:relative;z-index:1}
 .ds-viewer[hidden]{display:none!important}
 .ds-viewer{
   position:fixed;
@@ -945,13 +953,14 @@ rect.flow-marquee{pointer-events:none}
   .flow-ribbon::-webkit-scrollbar{display:none}
   .flow-ribbon h1{
     font-size:13px;
-    margin:0 4px 0 auto;
+    margin:0;
     max-width:34vw;
     overflow:hidden;
     text-overflow:ellipsis;
     white-space:nowrap;
     flex:0 1 auto;
   }
+  .flow-ribbon .btn-title-edit{margin:0 0 0 auto}
   .flow-ribbon .status,
   .flow-ribbon .origin-badge{display:none!important}
   .flow-ribbon .btn-flow,

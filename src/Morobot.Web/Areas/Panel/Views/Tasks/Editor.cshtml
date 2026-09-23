@@ -52,6 +52,9 @@
         <span data-i18n="editor.ribbon.autoLayout">@L["editor.ribbon.autoLayout"]</span>
       </button>
       <h1 id="flow-title" data-i18n="editor.ribbon.workflow">@L["editor.ribbon.workflow"]</h1>
+      <button type="button" class="btn-flow btn-ghost btn-title-edit" id="btn-rename-process" data-i18n-title="editor.ribbon.rename" title="@L["editor.ribbon.rename"]" hidden>
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M4 17.5V20h2.5L18 8.5 15.5 6 4 17.5zm16.7-11.2a1 1 0 0 0 0-1.4l-2.1-2.1a1 1 0 0 0-1.4 0l-1.6 1.6 3.5 3.5 1.6-1.6z"/></svg>
+      </button>
       <span class="origin-badge" id="flow-origin"></span>
       <span class="status" id="flow-status" data-i18n="editor.ribbon.loading">@L["editor.ribbon.loading"]</span>
       <button type="button" class="btn-flow btn-ghost" data-lang-switch data-lang-next="@nextLang" data-i18n-title="@(L.IsRtl ? "common.switchLangTitle" : "common.switchLangTitleFa")" title="@langTitle">@langLabel</button>
@@ -201,13 +204,13 @@
     window.__DA_ENTITLEMENTS__ = @Html.Raw(ViewBag.EntitlementsJson ?? "{}");
   </script>
   <script src="~/js/i18n.js?v=4"></script>
-  <script src="~/js/da-notify.js?v=share-1"></script>
+  <script src="~/js/da-notify.js?v=prompt-1"></script>
   <script src="~/js/entitlements.js?v=share-1"></script>
   <script src="~/js/da-device.js?v=1"></script>
   <script src="~/js/da-telemetry.js?v=1"></script>
   <script src="~/js/da-crypto.js?v=3"></script>
   <script src="~/js/da-secure-store.js?v=4"></script>
   <script src="~/js/extension-gate.js?v=plan-1"></script>
-  <script src="~/editor/flow.js?v=ds-conflict-2"></script>
+  <script src="~/editor/flow.js?v=rename-ds-1"></script>
 </body>
 </html>
