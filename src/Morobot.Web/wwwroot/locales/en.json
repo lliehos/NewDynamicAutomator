@@ -241,6 +241,56 @@
       "events": "Events",
       "devices": "Devices"
     },
+    "live": {
+      "connecting": "Connecting live…",
+      "live": "Live",
+      "offline": "Offline",
+      "byUser": "by {user}",
+      "action": {
+        "created": "Created",
+        "updated": "Updated",
+        "deleted": "Deleted",
+        "renamed": "Renamed",
+        "attached": "Attached",
+        "detached": "Detached",
+        "shared": "Shared"
+      }
+    },
+    "processes": {
+      "title": "Processes",
+      "colId": "Id",
+      "colTitle": "Title",
+      "colOwner": "Owner",
+      "colOrigin": "Origin",
+      "colCounts": "Groups/Steps/Sources",
+      "colCreated": "Created",
+      "colChange": "Last change",
+      "colPlay": "Play",
+      "playing": "Playing",
+      "playingBy": "Playing by {user}",
+      "delete": "Delete",
+      "deleteConfirm": "Delete this process?",
+      "empty": "No processes yet."
+    },
+    "sources": {
+      "title": "Sources",
+      "intro": "User data-source library (independent entity — deleting a process does not remove the source).",
+      "colId": "Id",
+      "colTitle": "Title",
+      "colLinked": "Linked processes",
+      "colOwner": "Owner",
+      "colColumns": "Columns",
+      "colRows": "Rows",
+      "colChange": "Last change",
+      "colOps": "Actions",
+      "viewData": "View data",
+      "downloadExcel": "Download Excel",
+      "viewerTitle": "Data source",
+      "viewFail": "Failed to load source.",
+      "downloadFail": "Excel download failed.",
+      "noRows": "No rows.",
+      "empty": "No sources in the library."
+    },
     "dashboard": {
       "title": "Admin dashboard",
       "intro": "System settings only: plans, password policies, prices, users, and logs. Process design and playback live in the user panel."

@@ -241,6 +241,56 @@
       "events": "رویدادها",
       "devices": "دستگاه‌ها"
     },
+    "live": {
+      "connecting": "در حال اتصال زنده…",
+      "live": "زنده",
+      "offline": "آفلاین",
+      "byUser": "توسط {user}",
+      "action": {
+        "created": "ایجاد",
+        "updated": "به‌روزرسانی",
+        "deleted": "حذف",
+        "renamed": "تغییر عنوان",
+        "attached": "اتصال",
+        "detached": "جداسازی",
+        "shared": "اشتراک"
+      }
+    },
+    "processes": {
+      "title": "فرآیندها",
+      "colId": "شناسه",
+      "colTitle": "عنوان",
+      "colOwner": "مالک",
+      "colOrigin": "منشأ",
+      "colCounts": "گروه/اقدام/منبع",
+      "colCreated": "ایجاد",
+      "colChange": "آخرین تغییر",
+      "colPlay": "اجرا",
+      "playing": "در حال اجرا",
+      "playingBy": "در حال اجرا توسط {user}",
+      "delete": "حذف",
+      "deleteConfirm": "این فرآیند حذف شود؟",
+      "empty": "فرآیندی ثبت نشده."
+    },
+    "sources": {
+      "title": "منابع",
+      "intro": "کتابخانه منابع کاربران (موجودیت مستقل — حذف فرآیند منبع را پاک نمی‌کند).",
+      "colId": "شناسه",
+      "colTitle": "عنوان",
+      "colLinked": "فرآیندهای متصل",
+      "colOwner": "مالک",
+      "colColumns": "ستون",
+      "colRows": "ردیف",
+      "colChange": "آخرین تغییر",
+      "colOps": "عملیات",
+      "viewData": "مشاهده دیتا",
+      "downloadExcel": "دانلود اکسل",
+      "viewerTitle": "منبع داده",
+      "viewFail": "بارگذاری منبع ناموفق بود.",
+      "downloadFail": "دانلود اکسل ناموفق بود.",
+      "noRows": "ردیفی نیست.",
+      "empty": "منبعی در کتابخانه نیست."
+    },
     "dashboard": {
       "title": "داشبورد ادمین",
       "intro": "مدیریت کامل سامانه: پلن‌ها، کاربران، فرآیندها، منابع، قیمت‌ها و لاگ‌ها."
