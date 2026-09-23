@@ -113,6 +113,13 @@ app.MapControllerRoute(
 
 using (var scope = app.Services.CreateScope())
 {
+    var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+    var cs = config.GetConnectionString("Default")
+             ?? throw new InvalidOperationException("Connection string 'Default' is missing.");
+    var log = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("CanvasBackfill");
+    // Must run while legacy Groups/… tables still exist (before Migrate DROP).
+    await Morobot.Infrastructure.Services.CanvasBackfillService.RunIfNeededAsync(cs, log);
+
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
     await DbSeeder.SeedAsync(db);

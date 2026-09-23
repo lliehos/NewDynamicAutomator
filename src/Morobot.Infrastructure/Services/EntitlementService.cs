@@ -114,7 +114,7 @@ public class EntitlementService
             ? fromClaims
             : await ResolveForUserAsync(dbUser, ct);
 
-        entitlements.TaskCount = await _db.UserTaskAccess.CountAsync(a => a.UserId == userId, ct);
+        entitlements.TaskCount = await _db.ProcessShares.CountAsync(a => a.UserId == userId, ct);
         entitlements.DataSourceCount = await CountCanvasDataSourcesAsync(userId, ct);
         return entitlements;
     }
@@ -123,7 +123,7 @@ public class EntitlementService
     {
         if (entitlements.MaxTasks is null)
             return;
-        var count = await _db.UserTaskAccess.CountAsync(a => a.UserId == userId, ct);
+        var count = await _db.ProcessShares.CountAsync(a => a.UserId == userId, ct);
         if (count >= entitlements.MaxTasks.Value)
             throw new InvalidOperationException($"Task limit reached ({entitlements.MaxTasks}).");
     }
@@ -141,45 +141,26 @@ public class EntitlementService
     {
         if (entitlements.MaxDataSources is null)
             return;
-        var inCanvas = CountSourcesInCanvasJson(canvasJson);
-        // Other tasks' sources + this canvas (replace) — approximate: sum all canvases excluding current happens on save with task id.
-        var total = await CountCanvasDataSourcesAsync(userId, ct);
-        // When saving, caller should pass delta; here we reject if this single canvas alone exceeds max.
+        var inCanvas = GraphJsonHelper.CountSources(canvasJson);
         if (inCanvas > entitlements.MaxDataSources.Value)
             throw new InvalidOperationException($"Data source limit reached ({entitlements.MaxDataSources}).");
-        _ = total;
         await Task.CompletedTask;
     }
 
     public async Task<int> CountCanvasDataSourcesAsync(int userId, CancellationToken ct = default)
     {
-        var jsons = await _db.Tasks
-            .Where(t => t.CreatorUserId == userId || t.UserAccess.Any(a => a.UserId == userId))
-            .Select(t => t.CanvasJson)
+        var jsons = await _db.Processes
+            .Where(t => t.CreatorUserId == userId || t.Shares.Any(a => a.UserId == userId))
+            .Select(t => t.GraphJson)
             .ToListAsync(ct);
         var sum = 0;
         foreach (var j in jsons)
-            sum += CountSourcesInCanvasJson(j);
-        // Also count relational sources owned by user
-        sum += await _db.DataSources.CountAsync(d => d.UserId == userId, ct);
+            sum += GraphJsonHelper.CountSources(j);
         return sum;
     }
 
     /// <summary>Count dataSources array entries inside editor canvas JSON.</summary>
-    public static int CountSourcesInCanvasJson(string? canvasJson)
-    {
-        if (string.IsNullOrWhiteSpace(canvasJson)) return 0;
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(canvasJson);
-            if (doc.RootElement.TryGetProperty("dataSources", out var arr) && arr.ValueKind == System.Text.Json.JsonValueKind.Array)
-                return arr.GetArrayLength();
-            if (doc.RootElement.TryGetProperty("DataSources", out var arr2) && arr2.ValueKind == System.Text.Json.JsonValueKind.Array)
-                return arr2.GetArrayLength();
-        }
-        catch { /* ignore */ }
-        return 0;
-    }
+    public static int CountSourcesInCanvasJson(string? canvasJson) => GraphJsonHelper.CountSources(canvasJson);
 
     private static int? ParseNullableInt(string? value)
     {

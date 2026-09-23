@@ -1,13 +1,11 @@
 namespace Morobot.Domain.Entities;
 
-public class UserTaskAccess
+/// <summary>Per-user ACL on a process (table ProcessShares).</summary>
+public class ProcessShare
 {
     public int Id { get; set; }
     public int UserId { get; set; }
-    public int TaskId { get; set; }
-
-    /// <summary>Legacy; kept in sync with CanEdit.</summary>
-    public bool CanModify { get; set; }
+    public int ProcessId { get; set; }
 
     public bool CanView { get; set; } = true;
     public bool CanEdit { get; set; }
@@ -19,5 +17,5 @@ public class UserTaskAccess
     public int? GrantedByUserId { get; set; }
 
     public AppUser User { get; set; } = null!;
-    public AutomationTask Task { get; set; } = null!;
+    public Process Process { get; set; } = null!;
 }

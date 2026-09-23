@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Morobot.Contracts.Auth;
 using Morobot.Contracts.Recordings;
 using Morobot.Contracts.Tasks;
@@ -28,85 +29,105 @@ public class TaskService
         var canSharePlan = entitlementsUser?.Plan?.CanShare == true
                            && !(entitlementsUser.Plan != null && PasswordPolicy.IsLocal(entitlementsUser.Plan.Code));
 
-        var list = await _db.UserTaskAccess
+        var rows = await _db.ProcessShares
+            .AsNoTracking()
             .Where(a => a.UserId == userId)
-            .Select(a => new TaskListItemDto
+            .Select(a => new
             {
-                Id = a.Task.Id,
-                Title = a.Task.Title,
-                CreatedAtUtc = a.Task.CreatedAtUtc,
-                GroupCount = a.Task.Groups.Count,
-                StepCount = a.Task.Groups.SelectMany(g => g.Steps).Count(),
-                IsOwner = a.Task.CreatorUserId == userId,
-                CanView = true,
-                CanEdit = a.CanEdit || a.CanModify || a.Task.CreatorUserId == userId,
-                CanModify = a.CanEdit || a.CanModify || a.Task.CreatorUserId == userId,
-                CanDelete = a.CanDelete || a.Task.CreatorUserId == userId,
-                CanExecute = a.CanExecute || a.Task.CreatorUserId == userId,
-                CanChangeDataSource = a.CanChangeDataSource || a.CanEdit || a.CanModify || a.Task.CreatorUserId == userId,
-                CanShare = canSharePlan && (a.Task.CreatorUserId == userId || a.CanEdit || a.CanModify),
-                DesignOrigin = a.Task.DesignOrigin.ToString(),
-                OwnerUserName = a.Task.Creator != null ? a.Task.Creator.UserName : null,
-                SharedWithCount = a.Task.UserAccess.Count(x => x.UserId != a.Task.CreatorUserId)
+                a.Process.Id,
+                a.Process.Title,
+                a.Process.CreatedAtUtc,
+                a.Process.GraphJson,
+                a.Process.DesignOrigin,
+                a.Process.CreatorUserId,
+                OwnerUserName = a.Process.Creator != null ? a.Process.Creator.UserName : null,
+                a.CanEdit,
+                a.CanDelete,
+                a.CanExecute,
+                a.CanChangeDataSource,
+                SharedWithCount = a.Process.Shares.Count(x => x.UserId != a.Process.CreatorUserId)
             })
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
 
-        await FillDataSourceCountsAsync(list, ct);
-        return list;
+        return rows.Select(a =>
+        {
+            var (groups, steps) = GraphJsonHelper.CountNodes(a.GraphJson);
+            var isOwner = a.CreatorUserId == userId;
+            var canEdit = a.CanEdit || isOwner;
+            return new TaskListItemDto
+            {
+                Id = a.Id,
+                Title = a.Title,
+                CreatedAtUtc = a.CreatedAtUtc,
+                GroupCount = groups,
+                StepCount = steps,
+                DataSourceCount = GraphJsonHelper.CountSources(a.GraphJson),
+                IsOwner = isOwner,
+                CanView = true,
+                CanEdit = canEdit,
+                CanModify = canEdit,
+                CanDelete = a.CanDelete || isOwner,
+                CanExecute = a.CanExecute || isOwner,
+                CanChangeDataSource = a.CanChangeDataSource || canEdit,
+                CanShare = canSharePlan && (isOwner || canEdit),
+                DesignOrigin = a.DesignOrigin.ToString(),
+                OwnerUserName = a.OwnerUserName,
+                SharedWithCount = a.SharedWithCount
+            };
+        }).ToList();
     }
 
     public async Task<List<TaskListItemDto>> ListAllForAdminAsync(CancellationToken ct = default)
     {
-        var list = await _db.Tasks
-            .Select(t => new TaskListItemDto
+        var rows = await _db.Processes.AsNoTracking()
+            .Select(t => new
             {
-                Id = t.Id,
-                Title = t.Title,
-                CreatedAtUtc = t.CreatedAtUtc,
-                GroupCount = t.Groups.Count,
-                StepCount = t.Groups.SelectMany(g => g.Steps).Count(),
-                CanModify = true,
-                DesignOrigin = t.DesignOrigin.ToString(),
+                t.Id,
+                t.Title,
+                t.CreatedAtUtc,
+                t.GraphJson,
+                t.DesignOrigin,
                 OwnerUserName = t.Creator != null ? t.Creator.UserName : null
             })
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
-        await FillDataSourceCountsAsync(list, ct);
-        return list;
+
+        return rows.Select(t =>
+        {
+            var (groups, steps) = GraphJsonHelper.CountNodes(t.GraphJson);
+            return new TaskListItemDto
+            {
+                Id = t.Id,
+                Title = t.Title,
+                CreatedAtUtc = t.CreatedAtUtc,
+                GroupCount = groups,
+                StepCount = steps,
+                DataSourceCount = GraphJsonHelper.CountSources(t.GraphJson),
+                CanModify = true,
+                DesignOrigin = t.DesignOrigin.ToString(),
+                OwnerUserName = t.OwnerUserName
+            };
+        }).ToList();
     }
 
-    private async Task FillDataSourceCountsAsync(List<TaskListItemDto> list, CancellationToken ct)
-    {
-        if (list.Count == 0) return;
-        var ids = list.Select(x => x.Id).ToList();
-        var canvases = await _db.Tasks.AsNoTracking()
-            .Where(t => ids.Contains(t.Id))
-            .Select(t => new { t.Id, t.CanvasJson })
-            .ToListAsync(ct);
-        var map = canvases.ToDictionary(x => x.Id, x => EntitlementService.CountSourcesInCanvasJson(x.CanvasJson));
-        foreach (var item in list)
-            item.DataSourceCount = map.GetValueOrDefault(item.Id);
-    }
-
-    /// <summary>Flatten canvas-embedded data sources for admin oversight.</summary>
     public async Task<List<AdminCanvasSourceRow>> ListCanvasSourcesForAdminAsync(CancellationToken ct = default)
     {
-        var tasks = await _db.Tasks.AsNoTracking()
+        var tasks = await _db.Processes.AsNoTracking()
             .Include(t => t.Creator)
-            .Select(t => new { t.Id, t.Title, Owner = t.Creator != null ? t.Creator.UserName : "—", t.CanvasJson })
+            .Select(t => new { t.Id, t.Title, Owner = t.Creator != null ? t.Creator.UserName : "—", t.GraphJson })
             .ToListAsync(ct);
         var rows = new List<AdminCanvasSourceRow>();
         foreach (var t in tasks)
         {
-            if (string.IsNullOrWhiteSpace(t.CanvasJson)) continue;
+            if (string.IsNullOrWhiteSpace(t.GraphJson)) continue;
             try
             {
-                using var doc = System.Text.Json.JsonDocument.Parse(t.CanvasJson);
+                using var doc = JsonDocument.Parse(t.GraphJson);
                 if (!doc.RootElement.TryGetProperty("dataSources", out var arr)
                     && !doc.RootElement.TryGetProperty("DataSources", out arr))
                     continue;
-                if (arr.ValueKind != System.Text.Json.JsonValueKind.Array) continue;
+                if (arr.ValueKind != JsonValueKind.Array) continue;
                 foreach (var el in arr.EnumerateArray())
                 {
                     var id = el.TryGetProperty("id", out var idEl) ? idEl.ToString()
@@ -116,7 +137,7 @@ public class TaskService
                     title ??= el.TryGetProperty("fileName", out var fn) ? fn.GetString() : "منبع";
                     var cols = 0;
                     if (el.TryGetProperty("columnCount", out var cc) && cc.TryGetInt32(out var cci)) cols = cci;
-                    else if (el.TryGetProperty("columnKeys", out var ck) && ck.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    else if (el.TryGetProperty("columnKeys", out var ck) && ck.ValueKind == JsonValueKind.Array)
                         cols = ck.GetArrayLength();
                     var rowCount = 0;
                     if (el.TryGetProperty("rowCount", out var rc) && rc.TryGetInt32(out var rci)) rowCount = rci;
@@ -137,10 +158,10 @@ public class TaskService
         return rows.OrderByDescending(r => r.TaskId).ToList();
     }
 
-    public async Task<AutomationTask> CreateAsync(int userId, CreateTaskRequest request, CancellationToken ct = default)
+    public async Task<Process> CreateAsync(int userId, CreateTaskRequest request, CancellationToken ct = default)
         => await CreateAsync(userId, request, entitlements: null, ct);
 
-    public async Task<AutomationTask> CreateAsync(int userId, CreateTaskRequest request, EntitlementsDto? entitlements, CancellationToken ct)
+    public async Task<Process> CreateAsync(int userId, CreateTaskRequest request, EntitlementsDto? entitlements, CancellationToken ct)
     {
         if (entitlements is null && userId > 0)
         {
@@ -153,12 +174,11 @@ public class TaskService
         if (userId > 0)
             await _entitlements.EnsureCanCreateTaskAsync(userId, entitlements, ct);
 
-        var task = new AutomationTask
+        var process = new Process
         {
             Title = request.Title.Trim(),
             DelayBeforeMs = request.DelayBeforeMs,
             DelayAfterMs = request.DelayAfterMs,
-            UseGlobalDataSources = request.UseGlobalDataSources,
             CreatorUserId = userId > 0 ? userId : null,
             CreatedAtUtc = DateTime.UtcNow,
             UpdatedAtUtc = DateTime.UtcNow,
@@ -168,10 +188,9 @@ public class TaskService
         };
         if (userId > 0)
         {
-            task.UserAccess.Add(new UserTaskAccess
+            process.Shares.Add(new ProcessShare
             {
                 UserId = userId,
-                CanModify = true,
                 CanView = true,
                 CanEdit = true,
                 CanDelete = true,
@@ -181,16 +200,16 @@ public class TaskService
                 GrantedByUserId = userId
             });
         }
-        _db.Tasks.Add(task);
+        _db.Processes.Add(process);
         await _db.SaveChangesAsync(ct);
-        return task;
+        return process;
     }
 
     public async Task<bool> DeleteAsync(int taskId, CancellationToken ct = default)
     {
-        var task = await _db.Tasks.FirstOrDefaultAsync(t => t.Id == taskId, ct);
-        if (task is null) return false;
-        _db.Tasks.Remove(task);
+        var process = await _db.Processes.FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (process is null) return false;
+        _db.Processes.Remove(process);
         await _db.SaveChangesAsync(ct);
         return true;
     }
@@ -200,52 +219,52 @@ public class TaskService
 
     public async Task<bool> CanEditAsync(int userId, int taskId, CancellationToken ct = default)
     {
-        return await _db.UserTaskAccess.AnyAsync(a =>
+        return await _db.ProcessShares.AnyAsync(a =>
             a.UserId == userId &&
-            a.TaskId == taskId &&
-            (a.CanEdit || a.CanModify || a.Task.CreatorUserId == userId), ct);
+            a.ProcessId == taskId &&
+            (a.CanEdit || a.Process.CreatorUserId == userId), ct);
     }
 
     public async Task<bool> CanDeleteAsync(int userId, int taskId, CancellationToken ct = default)
     {
-        return await _db.UserTaskAccess.AnyAsync(a =>
+        return await _db.ProcessShares.AnyAsync(a =>
             a.UserId == userId &&
-            a.TaskId == taskId &&
-            (a.CanDelete || a.Task.CreatorUserId == userId), ct);
+            a.ProcessId == taskId &&
+            (a.CanDelete || a.Process.CreatorUserId == userId), ct);
     }
 
     public async Task<bool> CanExecuteAsync(int userId, int taskId, CancellationToken ct = default)
     {
-        return await _db.UserTaskAccess.AnyAsync(a =>
+        return await _db.ProcessShares.AnyAsync(a =>
             a.UserId == userId &&
-            a.TaskId == taskId &&
-            (a.CanExecute || a.Task.CreatorUserId == userId), ct);
+            a.ProcessId == taskId &&
+            (a.CanExecute || a.Process.CreatorUserId == userId), ct);
     }
 
     public async Task<bool> CanChangeDataSourceAsync(int userId, int taskId, CancellationToken ct = default)
     {
-        return await _db.UserTaskAccess.AnyAsync(a =>
+        return await _db.ProcessShares.AnyAsync(a =>
             a.UserId == userId &&
-            a.TaskId == taskId &&
-            (a.CanChangeDataSource || a.CanEdit || a.CanModify || a.Task.CreatorUserId == userId), ct);
+            a.ProcessId == taskId &&
+            (a.CanChangeDataSource || a.CanEdit || a.Process.CreatorUserId == userId), ct);
     }
 
     public async Task<bool> CanViewAsync(int userId, int taskId, CancellationToken ct = default)
     {
-        return await _db.UserTaskAccess.AnyAsync(a => a.UserId == userId && a.TaskId == taskId, ct);
+        return await _db.ProcessShares.AnyAsync(a => a.UserId == userId && a.ProcessId == taskId, ct);
     }
 
     public async Task<(string? json, DateTime updatedAtUtc)?> GetCanvasAsync(int userId, int taskId, CancellationToken ct = default)
     {
         if (!await CanViewAsync(userId, taskId, ct))
             return null;
-        var row = await _db.Tasks.AsNoTracking()
+        var row = await _db.Processes.AsNoTracking()
             .Where(t => t.Id == taskId)
-            .Select(t => new { t.CanvasJson, t.UpdatedAtUtc, t.CreatedAtUtc })
+            .Select(t => new { t.GraphJson, t.UpdatedAtUtc, t.CreatedAtUtc })
             .FirstOrDefaultAsync(ct);
         if (row is null) return null;
         var updated = row.UpdatedAtUtc == default ? row.CreatedAtUtc : row.UpdatedAtUtc;
-        return (row.CanvasJson, DateTime.SpecifyKind(updated, DateTimeKind.Utc));
+        return (row.GraphJson, DateTime.SpecifyKind(updated, DateTimeKind.Utc));
     }
 
     public async Task<string?> GetCanvasJsonAsync(int userId, int taskId, CancellationToken ct = default)
@@ -260,14 +279,12 @@ public class TaskService
     {
         if (!await CanModifyAsync(userId, taskId, ct))
             return (false, "forbidden", null);
-        var task = await _db.Tasks.FirstOrDefaultAsync(t => t.Id == taskId, ct);
-        if (task is null) return (false, "notfound", null);
+        var process = await _db.Processes.FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (process is null) return (false, "notfound", null);
 
-        var currentUpdated = task.UpdatedAtUtc == default ? task.CreatedAtUtc : task.UpdatedAtUtc;
+        var currentUpdated = process.UpdatedAtUtc == default ? process.CreatedAtUtc : process.UpdatedAtUtc;
         if (baseUpdatedAtUtc.HasValue)
         {
-            // DB stores UTC wall-clock as Unspecified; never use ToUniversalTime on Unspecified
-            // (that treats it as local and shifts by timezone — e.g. +03:30 → false conflict).
             var client = AsUtcWallClock(baseUpdatedAtUtc.Value);
             var server = AsUtcWallClock(currentUpdated);
             if (Math.Abs((server - client).TotalSeconds) > 1.0)
@@ -284,26 +301,24 @@ public class TaskService
 
         if (entitlements.MaxDataSources is int maxSrc)
         {
-            var otherJsons = await _db.Tasks
-                .Where(t => t.Id != taskId && (t.CreatorUserId == userId || t.UserAccess.Any(a => a.UserId == userId)))
-                .Select(t => t.CanvasJson)
+            var otherJsons = await _db.Processes
+                .Where(t => t.Id != taskId && (t.CreatorUserId == userId || t.Shares.Any(a => a.UserId == userId)))
+                .Select(t => t.GraphJson)
                 .ToListAsync(ct);
-            var other = otherJsons.Sum(EntitlementService.CountSourcesInCanvasJson);
-            var relational = await _db.DataSources.CountAsync(d => d.UserId == userId, ct);
-            var inThis = EntitlementService.CountSourcesInCanvasJson(canvasJson);
-            if (other + relational + inThis > maxSrc)
+            var other = otherJsons.Sum(GraphJsonHelper.CountSources);
+            var inThis = GraphJsonHelper.CountSources(canvasJson);
+            if (other + inThis > maxSrc)
                 return (false, $"Data source limit reached ({maxSrc}).", null);
         }
 
-        task.CanvasJson = canvasJson;
+        process.GraphJson = canvasJson;
         if (!string.IsNullOrWhiteSpace(title))
-            task.Title = title.Trim();
-        task.UpdatedAtUtc = DateTime.UtcNow;
+            process.Title = title.Trim();
+        process.UpdatedAtUtc = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
-        return (true, null, DateTime.SpecifyKind(task.UpdatedAtUtc, DateTimeKind.Utc));
+        return (true, null, DateTime.SpecifyKind(process.UpdatedAtUtc, DateTimeKind.Utc));
     }
 
-    /// <summary>Treat Unspecified as already-UTC (SQL datetime2); convert Local → UTC.</summary>
     private static DateTime AsUtcWallClock(DateTime dt) =>
         dt.Kind switch
         {
@@ -315,6 +330,12 @@ public class TaskService
 
 public class RecordingService
 {
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true
+    };
+
     private readonly AppDbContext _db;
     private readonly TaskService _tasks;
 
@@ -326,81 +347,145 @@ public class RecordingService
 
     public async Task<SaveRecordingResponse> SaveAsync(int userId, SaveRecordingRequest request, CancellationToken ct = default)
     {
-        AutomationTask task;
+        Process process;
         if (request.TaskId is int taskId)
         {
             if (!await _tasks.CanModifyAsync(userId, taskId, ct))
                 throw new UnauthorizedAccessException("No modify access to this task.");
-            task = await _db.Tasks.FirstAsync(t => t.Id == taskId, ct);
-            task.DesignOrigin = TaskDesignOrigin.Recorded;
+            process = await _db.Processes.FirstAsync(t => t.Id == taskId, ct);
+            process.DesignOrigin = TaskDesignOrigin.Recorded;
         }
         else
         {
             var title = string.IsNullOrWhiteSpace(request.NewTaskTitle)
                 ? $"ضبط {DateTime.Now:yyyy-MM-dd HH:mm}"
                 : request.NewTaskTitle.Trim();
-            task = await _tasks.CreateAsync(userId, new CreateTaskRequest
+            process = await _tasks.CreateAsync(userId, new CreateTaskRequest
             {
                 Title = title,
                 DesignOrigin = nameof(TaskDesignOrigin.Recorded)
             }, ct);
         }
 
-        var group = new Group
+        var root = string.IsNullOrWhiteSpace(process.GraphJson)
+            ? new JsonObject
+            {
+                ["taskId"] = process.Id,
+                ["title"] = process.Title,
+                ["nodes"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["id"] = "start",
+                        ["kind"] = "start",
+                        ["title"] = "شروع",
+                        ["x"] = 40,
+                        ["y"] = 220
+                    }
+                },
+                ["edges"] = new JsonArray(),
+                ["dataSources"] = new JsonArray(),
+                ["viewport"] = new JsonObject { ["x"] = 80, ["y"] = 40, ["zoom"] = 1 }
+            }
+            : JsonNode.Parse(process.GraphJson)!.AsObject();
+
+        var nodes = root["nodes"] as JsonArray ?? new JsonArray();
+        root["nodes"] = nodes;
+        var edges = root["edges"] as JsonArray ?? new JsonArray();
+        root["edges"] = edges;
+
+        var groupUid = $"group-rec-{Guid.NewGuid():N}"[..20];
+        var groupTitle = string.IsNullOrWhiteSpace(request.GroupTitle) ? "ضبط‌شده" : request.GroupTitle.Trim();
+        var gx = 280 + nodes.Count(n =>
+            string.Equals(n?["kind"]?.GetValue<string>(), "group", StringComparison.OrdinalIgnoreCase)) * 360;
+
+        nodes.Add(new JsonObject
         {
-            TaskId = task.Id,
-            Title = string.IsNullOrWhiteSpace(request.GroupTitle) ? "ضبط‌شده" : request.GroupTitle.Trim(),
-            Priority = await _db.Groups.Where(g => g.TaskId == task.Id).Select(g => (int?)g.Priority).MaxAsync(ct) ?? 0
-        };
-        group.Priority += 1;
-        _db.Groups.Add(group);
-        await _db.SaveChangesAsync(ct);
+            ["id"] = groupUid,
+            ["kind"] = "group",
+            ["title"] = groupTitle,
+            ["repeatSourceType"] = "None",
+            ["x"] = gx,
+            ["y"] = 80
+        });
 
-        var priority = 1;
-        foreach (var item in request.Actions)
+        if (!edges.Any(e =>
+                string.Equals(e?["from"]?.GetValue<string>(), "start", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(e?["kind"]?.GetValue<string>(), "next", StringComparison.OrdinalIgnoreCase)))
         {
-            var selector = new Selector
+            edges.Add(new JsonObject
             {
-                ElementBy = ParseBy(item.ElementBy),
-                ElementValue = item.ElementValue,
-                FramePathJson = JsonSerializer.Serialize(item.FramePath)
-            };
-            _db.Selectors.Add(selector);
-
-            var action = new StepAction
-            {
-                ActionType = ParseAction(item.ActionType),
-                ConstantValue = item.Value,
-                NavigateUrl = item.ActionType.Equals("GoToUrl", StringComparison.OrdinalIgnoreCase) ? item.Url : null,
-                Selector = selector
-            };
-            _db.Actions.Add(action);
-
-            _db.Steps.Add(new Step
-            {
-                GroupId = group.Id,
-                Title = $"{action.ActionType} {priority}",
-                Priority = priority,
-                Action = action,
-                IsActive = true
+                ["id"] = $"e-start-{groupUid}",
+                ["from"] = "start",
+                ["to"] = groupUid,
+                ["kind"] = "next"
             });
-            priority++;
         }
 
+        string? prevStepId = null;
+        var sy = 0;
+        var stepIndex = 0;
+        foreach (var item in request.Actions)
+        {
+            stepIndex++;
+            var stepId = $"step-rec-{Guid.NewGuid():N}"[..22];
+            var framePath = JsonSerializer.SerializeToNode(item.FramePath, JsonOpts) ?? new JsonArray();
+            var node = new JsonObject
+            {
+                ["id"] = stepId,
+                ["kind"] = "step",
+                ["title"] = $"{item.ActionType} {stepIndex}",
+                ["groupNodeId"] = groupUid,
+                ["actionType"] = item.ActionType,
+                ["isActive"] = true,
+                ["selectorValue"] = item.ElementValue,
+                ["elementBy"] = item.ElementBy,
+                ["framePath"] = framePath,
+                ["constantValue"] = item.Value,
+                ["navigateUrl"] = item.ActionType.Equals("GoToUrl", StringComparison.OrdinalIgnoreCase) ? item.Url : null,
+                ["x"] = gx + 28,
+                ["y"] = 150 + sy
+            };
+            nodes.Add(node);
+            sy += 110;
+
+            if (prevStepId is null)
+            {
+                edges.Add(new JsonObject
+                {
+                    ["id"] = $"e-g-{groupUid}",
+                    ["from"] = groupUid,
+                    ["to"] = stepId,
+                    ["kind"] = "contains"
+                });
+            }
+            else
+            {
+                edges.Add(new JsonObject
+                {
+                    ["id"] = $"e-n-{prevStepId}",
+                    ["from"] = prevStepId,
+                    ["to"] = stepId,
+                    ["kind"] = "next"
+                });
+            }
+            prevStepId = stepId;
+        }
+
+        root["taskId"] = process.Id;
+        root["title"] = process.Title;
+        root["designOrigin"] = nameof(TaskDesignOrigin.Recorded);
+        process.GraphJson = root.ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+
         return new SaveRecordingResponse
         {
-            TaskId = task.Id,
-            GroupId = group.Id,
+            TaskId = process.Id,
+            GroupId = 0,
             StepCount = request.Actions.Count
         };
     }
-
-    private static SelectorBy ParseBy(string value) =>
-        Enum.TryParse<SelectorBy>(value, true, out var by) ? by : SelectorBy.CssSelector;
-
-    private static ActionType ParseAction(string value) =>
-        Enum.TryParse<ActionType>(value, true, out var t) ? t : ActionType.Click;
 }
 
 public class AdminCanvasSourceRow

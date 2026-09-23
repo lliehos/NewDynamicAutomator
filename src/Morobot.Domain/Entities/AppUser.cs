@@ -24,6 +24,6 @@ public class AppUser
     public DateTime? PlanExpiresAtUtc { get; set; }
 
     public Plan? Plan { get; set; }
-    public ICollection<AutomationTask> CreatedTasks { get; set; } = new List<AutomationTask>();
-    public ICollection<UserTaskAccess> TaskAccess { get; set; } = new List<UserTaskAccess>();
+    public ICollection<Process> CreatedProcesses { get; set; } = new List<Process>();
+    public ICollection<ProcessShare> ProcessShares { get; set; } = new List<ProcessShare>();
 }

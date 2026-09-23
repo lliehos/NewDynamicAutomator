@@ -17,6 +17,7 @@
 - نام‌های رزرو (`admin`,`free`,`pro`,`guest`,`test`,…) برای ساخت کاربر جدید مجاز نیست
 - همه فرآیند/منبع روی سرور؛ EventLog + Devices در ادمین
 - فقط یک اپ: `dotnet run --project src/Morobot.Web`
+- **پاکسازی schema (Canvas-first):** گراف فقط در `Processes.GraphJson`؛ جداول Groups/Steps/Actions/Conditions/Selectors/DataSources* حذف؛ نام دامنه Process/ProcessShare؛ مسیر HTTP `/api/tasks*` برای سازگاری کلاینت حفظ شده. پروژه `Morobot.Api` و پوشه‌های یتیم `DynamicAutomator.*` حذف شدند. آرشیو V2: [legacy-windows-v2.md](legacy-windows-v2.md)
 
 پرتال: `https://localhost:7201`  
 افزونه‌ها: `%LocalAppData%\morobot.soras.ir\extension-{recorder|player|selector|smart-recorder}`
@@ -27,6 +28,8 @@ dotnet run --project src/Morobot.Web --launch-profile https
 
 ## مستندات مرتبط
 
+- دامنه Canvas-first: [domain.md](domain.md)
+- آرشیو ویندوز V2 / جداول میانی: [legacy-windows-v2.md](legacy-windows-v2.md)
 - سطوح و پلن‌ها: [plans-and-tiers.md](plans-and-tiers.md)
 - معماری: [architecture.md](architecture.md)
 - رمزنگاری و `.mrbt`: [encryption-and-mrbt.md](encryption-and-mrbt.md)

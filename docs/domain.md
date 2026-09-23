@@ -1,55 +1,45 @@
-# دامنه
+# دامنه (Canvas-first)
 
-مرجع رفتار کسب‌وکار: پروژهٔ قدیمی `C:\Projects\dynamicAutomatorV2` (به‌ویژه `FormRecord`).
-اینجا فقط UI، محل ذخیره (مرورگر)، و جایگزینی Selenium با افزونه Chrome عوض می‌شود — نه مدل دامنه.
+منبع حقیقت هر فرآیند یک سند **Graph JSON** است (`Processes.GraphJson`). مدل رابطه‌ای گروه/مرحله/اکشن/شرط/سلکتور/منبع جدولی حذف شده است.
 
-## ضبط (منطق V2 — الزامی)
-
-در V2 با **Start**:
-1. یک **Group خالی** روی Task جاری ساخته می‌شود.
-2. رویدادهای مرورگر **Step** را به **آخرین Group** اضافه می‌کنند.
-3. Pause و Start دوباره → Group خالی بعدی.
-4. ذخیره → همان گروه‌ها (با Steps تو در تو) persist می‌شوند.
-
-V3 همان را نگه می‌دارد: `recordingGroups[]`؛ اولین Start یک گروه خالی می‌سازد؛ اکشن‌ها داخل آخرین گروه.
+آرشیو اسکیمای ویندوزی V2 و جداول میانی برای مهاجرت بعدی: [legacy-windows-v2.md](legacy-windows-v2.md).
 
 ## هدف محصول
 
-کاربر یک **فرآیند** با **گروه، حلقه و شرط** می‌سازد و آن را اجرا می‌کند روی یکی از:
+کاربر یک **فرآیند** با **گروه، حلقه و شرط** می‌سازد و با افزونه Chrome MV3 اجرا می‌کند.
 
-| `RepeatSourceType` | معنی |
-|--------------------|------|
+| `repeatSourceType` (روی node گروه) | معنی |
+|------------------------------------|------|
 | `None` | یک‌بار |
-| `DataSource` | به‌ازای هر ردیف منبع داده |
-| `Elements` | به‌ازای هر المان صفحه (مثلاً ردیف جدول) — سلکتور روی گروه |
+| `DataSource` | به‌ازای هر ردیف منبع داخل همان Graph JSON |
+| `Elements` | به‌ازای هر المان صفحه (سلکتور روی گروه) |
 | `Loops` | تعداد ثابت تکرار |
 
-## موجودیت‌ها
+## موجودیت‌های پایدار (DB)
 
-- `AutomationTask` فرآیند
-- `Group` بلوک منطقی + حلقه (`ParentGroupId`, `MoveLoop`, `RepeatSourceType`, `Selector` برای Elements، `DataSourceId`)
-- `Step` مرحله — **همیشه داخل یک گروه** (`GroupId`)
-- `StepAction` اکشن + `OnFailedType`
-- `ConditionGroup` / `Condition` — شاخه بین گروه‌ها (یال success/fail)
-- `Selector` + `FramePathJson`
-- `DataSource` / `DataSourceCell` — هر فرآیند چند منبع؛ بارگذاری از اکسل
-- `UserTaskAccess`
+- **`Process`** — عنوان، `GraphJson`, `DesignOrigin`, تأخیر پیش‌فرض، سازنده، زمان آخرین اجرا
+- **`ProcessShare`** — ACL کاربر روی فرآیند (`CanView` / `CanEdit` / `CanDelete` / `CanExecute` / `CanChangeDataSource`)
+- **`AppUser`**, **`Plan`**, **`PlanPrice`**, **`SystemSetting`**
+- **`DeviceSession`**, **`AppEventLog`**
 
-## منابع داده (Excel)
+مفهوم‌های گروه/مرحله/شرط/سلکتور/منبع فقط داخل JSON هستند، نه ردیف جداگانه.
 
-- کاربر در ویرایشگر فرآیند یک یا چند فایل `.xlsx` بارگذاری می‌کند.
-- ردیف اول شیت = هدر ستون‌ها → ستون‌ها به‌صورت **key/value**.
-- هر سلول داده به‌صورت **key / index / cellValue**.
-- گروه با `RepeatSourceType = DataSource` و `DataSourceId` روی ردیف‌های منبع حلقه می‌زند.
+## Graph JSON
 
-## سناریوی مرجع
+- `nodes[]`: `kind` ∈ `start` | `group` | `condition` | `step` | `action`
+- `edges[]`: `kind` ∈ `next` | `contains` | `success` | `fail` | `parent`
+- `dataSources[]`: منابع اکسل توکار (هدر = کلید ستون؛ ردیف‌ها key/value)
+- `viewport`, `stepDelayMs`, `ignorePlayError`, … متادیتای ادیتور/پخش
 
-رکورد → URL → شرط «فرم لاگین؟» → گروه لاگین یا منو → فرم → شرط «جدول ردیف دارد؟» → گروه حلقه `Elements` روی ردیف‌ها → تکرار بیرونی در صورت نیاز.
+سلکتور المان: `framePath[]` با `{ by, value, srcHint, indexInParent }` — بدون Selenium.
 
-ضبط خطی مادهٔ خام است؛ شکستن به شرط/حلقه در ویرایشگر (علامت‌گذاری حین رکورد فاز بعد).
+## ضبط
+
+کلاینت: `recordingGroups[]` (Start → گروه خالی؛ اکشن‌ها داخل آخرین گروه؛ Pause/Start → گروه بعدی).
+
+سرور: ذخیره فقط با merge به `GraphJson` (بدون جداول Groups/Steps).
 
 ## اجرا
 
-- بدون Selenium: افزونه Chrome MV3 برای ضبط و پخش.
-- `RunMode.Play`: پخش؛ حلقه/شرط هوک دارند و کامل می‌شوند.
-- `RunMode.Learn`: فاز بعدی.
+- `RunMode.Play`: پخش روی تب هدف
+- `RunMode.Learn`: فاز بعدی (پلن Gold)

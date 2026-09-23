@@ -1,6 +1,5 @@
 using System.Security.Claims;
 using Morobot.Contracts.DataSources;
-using Morobot.Contracts.Tasks;
 using Morobot.Infrastructure.Services;
 using Morobot.Web.Hubs;
 using Morobot.Web.Services;
@@ -15,29 +14,23 @@ namespace Morobot.Web.Areas.Panel.Controllers;
 public class TasksController : Controller
 {
     private readonly TaskService _tasks;
-    private readonly GraphService _graph;
     private readonly DataSourceService _dataSources;
     private readonly IHubContext<PlayDataHub> _playHub;
     private readonly PlaySessionTracker _plays;
 
     public TasksController(
         TaskService tasks,
-        GraphService graph,
         DataSourceService dataSources,
         IHubContext<PlayDataHub> playHub,
         PlaySessionTracker plays)
     {
         _tasks = tasks;
-        _graph = graph;
         _dataSources = dataSources;
         _playHub = playHub;
         _plays = plays;
     }
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-    private bool IsLocalSession =>
-        User.FindFirstValue(EntitlementService.ClaimIsLocal) == "1"
-        || string.Equals(User.FindFirstValue(EntitlementService.ClaimPlan), "Local", StringComparison.OrdinalIgnoreCase);
 
     [HttpPost]
     [ValidateAntiForgeryToken]
@@ -53,7 +46,6 @@ public class TasksController : Controller
     {
         ViewBag.TaskId = id ?? "";
         ViewBag.CanModify = true;
-        // Server is source of truth for all tiers (anti-bypass). localStorage is cache only.
         ViewBag.LocalMode = false;
         ViewBag.EntitlementsJson = System.Text.Json.JsonSerializer.Serialize(
             EntitlementService.FromClaims(User),
@@ -62,33 +54,27 @@ public class TasksController : Controller
     }
 
     [HttpGet]
-    public async Task<IActionResult> Graph(int id, CancellationToken ct)
+    public Task<IActionResult> Graph(int id, CancellationToken ct)
+        => RedirectToCanvasJson(id, ct);
+
+    private async Task<IActionResult> RedirectToCanvasJson(int id, CancellationToken ct)
     {
-        var graph = await _graph.GetAsync(UserId, id, ct);
-        return graph is null ? NotFound() : Json(graph);
+        var hit = await _tasks.GetCanvasAsync(UserId, id, ct);
+        if (hit is null) return NotFound();
+        var (json, _) = hit.Value;
+        if (string.IsNullOrWhiteSpace(json))
+            return Json(new { taskId = id, nodes = Array.Empty<object>(), edges = Array.Empty<object>(), dataSources = Array.Empty<object>() });
+        return Content(json, "application/json");
     }
 
     [HttpPost]
     [IgnoreAntiforgeryToken]
-    public async Task<IActionResult> SaveGraph(int id, [FromBody] SaveTaskGraphRequest request, CancellationToken ct)
-    {
-        try
-        {
-            return Json(await _graph.SaveAsync(UserId, id, request, ct));
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return Forbid();
-        }
-    }
+    public IActionResult SaveGraph(int id) =>
+        StatusCode(StatusCodes.Status410Gone, new { message = "Use PUT /api/tasks/{id}/canvas", code = "gone" });
 
     [HttpGet]
-    public async Task<IActionResult> DataSources(int id, CancellationToken ct)
-    {
-        if (!await _tasks.CanViewAsync(UserId, id, ct))
-            return Forbid();
-        return Json(await _dataSources.ListForTaskAsync(UserId, id, ct));
-    }
+    public IActionResult DataSources(int id) =>
+        StatusCode(StatusCodes.Status410Gone, new { message = "Sources live in canvas JSON.", code = "gone" });
 
     [HttpPost]
     [AllowAnonymous]
@@ -96,8 +82,6 @@ public class TasksController : Controller
     [RequestSizeLimit(20_000_000)]
     public IActionResult ParseExcel(IFormFile file)
     {
-        // Local-first: parse only — sources attach to process properties in the browser.
-        // Title is always the uploaded file name (no separate title field).
         if (file is null || file.Length == 0)
             return BadRequest(new { message = "فایل اکسل لازم است." });
         var name = file.FileName ?? "";
@@ -155,9 +139,6 @@ public class TasksController : Controller
         }
     }
 
-    /// <summary>
-    /// Player posts cell read/write events; editor viewers subscribed via SignalR receive them live.
-    /// </summary>
     [HttpPost]
     [AllowAnonymous]
     [IgnoreAntiforgeryToken]
@@ -233,56 +214,17 @@ public class TasksController : Controller
 
     [HttpPost]
     [IgnoreAntiforgeryToken]
-    [RequestSizeLimit(20_000_000)]
-    public async Task<IActionResult> UploadDataSource(int id, IFormFile file, string? title, CancellationToken ct)
-    {
-        if (file is null || file.Length == 0)
-            return BadRequest(new { message = "فایل اکسل لازم است." });
-        var name = file.FileName ?? "";
-        if (!name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase)
-            && !name.EndsWith(".xlsm", StringComparison.OrdinalIgnoreCase))
-            return BadRequest(new { message = "فقط فایل .xlsx پشتیبانی می‌شود." });
-
-        try
-        {
-            await using var stream = file.OpenReadStream();
-            var result = await _dataSources.UploadExcelAsync(
-                UserId, id, title ?? Path.GetFileNameWithoutExtension(name), stream, ct);
-            return Json(result);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return Forbid();
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { message = ex.Message });
-        }
-    }
+    public IActionResult UploadDataSource(int id) =>
+        StatusCode(StatusCodes.Status410Gone, new { message = "Use editor canvas upload.", code = "gone" });
 
     [HttpPost]
     [IgnoreAntiforgeryToken]
-    public async Task<IActionResult> DeleteDataSource(int id, int sourceId, CancellationToken ct)
-    {
-        try
-        {
-            var ok = await _dataSources.DeleteAsync(UserId, sourceId, ct);
-            return ok ? Ok(new { ok = true }) : NotFound();
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return Forbid();
-        }
-    }
+    public IActionResult DeleteDataSource(int id, int sourceId) =>
+        StatusCode(StatusCodes.Status410Gone, new { message = "Use editor canvas.", code = "gone" });
 
     [HttpGet]
-    public async Task<IActionResult> DataSourceDetail(int id, int sourceId, CancellationToken ct)
-    {
-        if (!await _tasks.CanViewAsync(UserId, id, ct))
-            return Forbid();
-        var dto = await _dataSources.GetAsync(UserId, sourceId, ct);
-        return dto is null ? NotFound() : Json(dto);
-    }
+    public IActionResult DataSourceDetail(int id, int sourceId) =>
+        StatusCode(StatusCodes.Status410Gone, new { message = "Use editor canvas.", code = "gone" });
 }
 
 public class PlayRegisterDto

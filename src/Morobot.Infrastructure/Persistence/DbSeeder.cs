@@ -160,20 +160,6 @@ public static class DbSeeder
         await EnsureUser("pro", "Pro123!", "کاربر", "حرفه‌ای", UserRole.User, proPlan);
         await db.SaveChangesAsync();
 
-        // Backfill granular share flags for owners (legacy rows only had CanModify).
-        var owners = await db.UserTaskAccess
-            .Where(a => a.CanModify && (!a.CanView || !a.CanEdit || !a.CanDelete || !a.CanExecute || !a.CanChangeDataSource))
-            .ToListAsync();
-        foreach (var a in owners)
-        {
-            a.CanView = true;
-            a.CanEdit = true;
-            a.CanModify = true;
-            a.CanDelete = true;
-            a.CanExecute = true;
-            a.CanChangeDataSource = true;
-        }
-        if (owners.Count > 0)
-            await db.SaveChangesAsync();
+        // Owner shares already have full ACL on create; no CanModify backfill after Canvas-first.
     }
 }

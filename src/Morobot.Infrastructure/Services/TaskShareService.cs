@@ -60,16 +60,16 @@ public class TaskShareService
         if (!await CanManageSharesAsync(userId, taskId, ct))
             return (null, "forbidden");
 
-        var rows = await _db.UserTaskAccess.AsNoTracking()
+        var rows = await _db.ProcessShares.AsNoTracking()
             .Include(a => a.User)
-            .Where(a => a.TaskId == taskId)
+            .Where(a => a.ProcessId == taskId)
             .ToListAsync(ct);
 
-        var task = await _db.Tasks.AsNoTracking().FirstAsync(t => t.Id == taskId, ct);
+        var process = await _db.Processes.AsNoTracking().FirstAsync(t => t.Id == taskId, ct);
         var list = rows
-            .OrderByDescending(a => a.UserId == task.CreatorUserId)
+            .OrderByDescending(a => a.UserId == process.CreatorUserId)
             .ThenBy(a => a.User?.UserName)
-            .Select(a => MapShare(a, task.CreatorUserId))
+            .Select(a => MapShare(a, process.CreatorUserId))
             .ToList();
         return (list, null);
     }
@@ -80,8 +80,8 @@ public class TaskShareService
         if (req.UserId <= 0 || req.UserId == actorId)
             return (null, "invalid_user");
 
-        var task = await _db.Tasks.Include(t => t.UserAccess).FirstOrDefaultAsync(t => t.Id == taskId, ct);
-        if (task is null) return (null, "notfound");
+        var process = await _db.Processes.Include(t => t.Shares).FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (process is null) return (null, "notfound");
         if (!await CanManageSharesAsync(actorId, taskId, ct))
             return (null, "forbidden");
 
@@ -90,7 +90,7 @@ public class TaskShareService
         if (!entitlements.CanShare || entitlements.IsLocal)
             return (null, "plan_no_share");
 
-        if (task.CreatorUserId == req.UserId)
+        if (process.CreatorUserId == req.UserId)
             return (null, "cannot_change_owner");
 
         var target = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == req.UserId && u.IsActive, ct);
@@ -104,23 +104,22 @@ public class TaskShareService
         if (!view && !edit && !delete && !exec && !ds)
             return (null, "no_permissions");
 
-        var access = task.UserAccess.FirstOrDefault(a => a.UserId == req.UserId);
+        var access = process.Shares.FirstOrDefault(a => a.UserId == req.UserId);
         var isNew = access is null;
         if (isNew)
         {
             if (entitlements.MaxSharesPerTask is int max)
             {
-                var others = task.UserAccess.Count(a => a.UserId != task.CreatorUserId);
+                var others = process.Shares.Count(a => a.UserId != process.CreatorUserId);
                 if (others >= max)
                     return (null, "share_limit");
             }
-            access = new UserTaskAccess { UserId = req.UserId, TaskId = taskId };
-            _db.UserTaskAccess.Add(access);
+            access = new ProcessShare { UserId = req.UserId, ProcessId = taskId };
+            _db.ProcessShares.Add(access);
         }
 
         access!.CanView = view;
         access.CanEdit = edit;
-        access.CanModify = edit; // legacy
         access.CanDelete = delete;
         access.CanExecute = exec;
         access.CanChangeDataSource = ds;
@@ -129,7 +128,7 @@ public class TaskShareService
         await _db.SaveChangesAsync(ct);
 
         access.User = target;
-        return (MapShare(access, task.CreatorUserId), null);
+        return (MapShare(access, process.CreatorUserId), null);
     }
 
     public async Task<(bool ok, string? error)> RevokeShareAsync(int actorId, int taskId, int targetUserId, CancellationToken ct = default)
@@ -137,25 +136,25 @@ public class TaskShareService
         if (!await CanManageSharesAsync(actorId, taskId, ct))
             return (false, "forbidden");
 
-        var task = await _db.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == taskId, ct);
-        if (task is null) return (false, "notfound");
-        if (task.CreatorUserId == targetUserId)
+        var process = await _db.Processes.AsNoTracking().FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (process is null) return (false, "notfound");
+        if (process.CreatorUserId == targetUserId)
             return (false, "cannot_revoke_owner");
 
-        var access = await _db.UserTaskAccess.FirstOrDefaultAsync(a => a.TaskId == taskId && a.UserId == targetUserId, ct);
+        var access = await _db.ProcessShares.FirstOrDefaultAsync(a => a.ProcessId == taskId && a.UserId == targetUserId, ct);
         if (access is null) return (false, "notfound");
-        _db.UserTaskAccess.Remove(access);
+        _db.ProcessShares.Remove(access);
         await _db.SaveChangesAsync(ct);
         return (true, null);
     }
 
     public async Task<bool> CanManageSharesAsync(int userId, int taskId, CancellationToken ct = default)
     {
-        var task = await _db.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == taskId, ct);
-        if (task is null) return false;
-        if (task.CreatorUserId == userId) return true;
-        return await _db.UserTaskAccess.AnyAsync(a =>
-            a.UserId == userId && a.TaskId == taskId && (a.CanEdit || a.CanModify), ct);
+        var process = await _db.Processes.AsNoTracking().FirstOrDefaultAsync(t => t.Id == taskId, ct);
+        if (process is null) return false;
+        if (process.CreatorUserId == userId) return true;
+        return await _db.ProcessShares.AnyAsync(a =>
+            a.UserId == userId && a.ProcessId == taskId && a.CanEdit, ct);
     }
 
     private static (bool view, bool edit, bool delete, bool exec, bool ds) ClampGrants(
@@ -166,19 +165,19 @@ public class TaskShareService
         var delete = req.CanDelete && plan.ShareAllowDelete;
         var exec = req.CanExecute && plan.ShareAllowExecute;
         var ds = req.CanChangeDataSource && plan.ShareAllowChangeDataSource;
-        if (edit || delete || ds) view = true; // edit implies view
+        if (edit || delete || ds) view = true;
         return (view, edit, delete, exec, ds);
     }
 
-    private static TaskShareDto MapShare(UserTaskAccess a, int? creatorId) => new()
+    private static TaskShareDto MapShare(ProcessShare a, int? creatorId) => new()
     {
         UserId = a.UserId,
         UserName = a.User?.UserName ?? "",
         DisplayName = $"{a.User?.FirstName} {a.User?.LastName}".Trim(),
         Email = a.User?.Email,
         NationalId = a.User?.NationalId,
-        CanView = a.CanView || a.CanEdit || a.CanModify,
-        CanEdit = a.CanEdit || a.CanModify,
+        CanView = a.CanView || a.CanEdit,
+        CanEdit = a.CanEdit,
         CanDelete = a.CanDelete,
         CanExecute = a.CanExecute,
         CanChangeDataSource = a.CanChangeDataSource,

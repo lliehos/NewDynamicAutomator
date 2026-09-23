@@ -1,6 +1,5 @@
 using System.Security.Claims;
 using Morobot.Contracts.Auth;
-using Morobot.Contracts.DataSources;
 using Morobot.Contracts.Recordings;
 using Morobot.Contracts.Tasks;
 using Morobot.Infrastructure.Services;
@@ -14,6 +13,7 @@ namespace Morobot.Web.Controllers.Api;
 
 /// <summary>
 /// JSON API for the Chrome extension and portal AJAX — hosted on the Web app (no separate API process).
+/// HTTP paths stay under /api/tasks for client compatibility; domain entity is Process.
 /// </summary>
 [ApiController]
 [Authorize]
@@ -21,7 +21,6 @@ namespace Morobot.Web.Controllers.Api;
 public class TasksApiController : ControllerBase
 {
     private readonly TaskService _tasks;
-    private readonly GraphService _graph;
     private readonly EntitlementService _entitlements;
     private readonly EventLogService _events;
     private readonly IHubContext<CanvasHub> _canvasHub;
@@ -31,7 +30,6 @@ public class TasksApiController : ControllerBase
 
     public TasksApiController(
         TaskService tasks,
-        GraphService graph,
         EntitlementService entitlements,
         EventLogService events,
         IHubContext<CanvasHub> canvasHub,
@@ -40,7 +38,6 @@ public class TasksApiController : ControllerBase
         PlaySessionTracker plays)
     {
         _tasks = tasks;
-        _graph = graph;
         _entitlements = entitlements;
         _events = events;
         _canvasHub = canvasHub;
@@ -104,27 +101,19 @@ public class TasksApiController : ControllerBase
         }
     }
 
+    /// <summary>Legacy alias — returns the same GraphJson payload as /canvas.</summary>
     [HttpGet("{id:int}/graph")]
-    public async Task<ActionResult<TaskGraphDto>> Graph(int id, CancellationToken ct)
-    {
-        var graph = await _graph.GetAsync(UserId, id, ct);
-        return graph is null ? NotFound() : Ok(graph);
-    }
+    public Task<IActionResult> Graph(int id, CancellationToken ct) => GetCanvas(id, ct);
 
+    /// <summary>Legacy write path retired — use PUT /canvas. Returns 410.</summary>
     [HttpPut("{id:int}/graph")]
-    public async Task<ActionResult<TaskGraphDto>> SaveGraph(int id, [FromBody] SaveTaskGraphRequest request, CancellationToken ct)
-    {
-        try
+    public IActionResult SaveGraph(int id) =>
+        StatusCode(StatusCodes.Status410Gone, new
         {
-            return Ok(await _graph.SaveAsync(UserId, id, request, ct));
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return Forbid();
-        }
-    }
+            message = "Relational graph API retired. Use PUT /api/tasks/{id}/canvas.",
+            code = "gone"
+        });
 
-    /// <summary>Editor freestyle canvas JSON (L2+ server source of truth).</summary>
     [HttpGet("{id:int}/canvas")]
     public async Task<IActionResult> GetCanvas(int id, CancellationToken ct)
     {
@@ -204,7 +193,6 @@ public class TasksApiController : ControllerBase
             });
         }
 
-        // Strip concurrency/session meta before persisting canvas JSON.
         var json = StripCanvasMeta(body);
         var (ok, error, newUpdated) = await _tasks.SaveCanvasJsonAsync(UserId, id, json, title, baseUpdatedAt, entitlements: null, ct);
         if (!ok && error == "forbidden") return Forbid();
@@ -243,7 +231,6 @@ public class TasksApiController : ControllerBase
             userName = User.Identity?.Name
         }, ct);
 
-        // Refresh list counters (steps/groups/sources) for live catalogs.
         var list = await _tasks.ListForUserAsync(UserId, ct);
         var item = list.FirstOrDefault(x => x.Id == id);
         if (item != null)
@@ -338,62 +325,27 @@ public class RecordingsApiController : ControllerBase
     }
 }
 
+/// <summary>Relational datasources API retired — sources live in GraphJson via /canvas.</summary>
 [ApiController]
 [Authorize]
 [Route("api/tasks/{taskId:int}/datasources")]
 public class TaskDataSourcesApiController : ControllerBase
 {
-    private readonly DataSourceService _sources;
-    private readonly EntitlementService _entitlements;
-
-    public TaskDataSourcesApiController(DataSourceService sources, EntitlementService entitlements)
-    {
-        _sources = sources;
-        _entitlements = entitlements;
-    }
-
-    private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
     [HttpGet]
-    public async Task<ActionResult<List<DataSourceListItemDto>>> List(int taskId, CancellationToken ct)
-        => Ok(await _sources.ListForTaskAsync(UserId, taskId, ct));
+    public IActionResult List(int taskId) =>
+        StatusCode(StatusCodes.Status410Gone, new
+        {
+            message = "Relational datasources retired. Use process canvas dataSources.",
+            code = "gone"
+        });
 
     [HttpPost("upload")]
-    [RequestSizeLimit(20_000_000)]
-    public async Task<ActionResult<UploadDataSourceResponse>> Upload(
-        int taskId,
-        IFormFile file,
-        [FromForm] string? title,
-        CancellationToken ct)
-    {
-        if (file is null || file.Length == 0)
-            return BadRequest(new { message = "فایل اکسل لازم است." });
-
-        var name = file.FileName ?? "";
-        if (!name.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase)
-            && !name.EndsWith(".xlsm", StringComparison.OrdinalIgnoreCase))
-            return BadRequest(new { message = "فقط فایل .xlsx پشتیبانی می‌شود." });
-
-        var entitlements = await _entitlements.ResolveWithCountsAsync(UserId, User, ct);
-        try
+    public IActionResult Upload(int taskId) =>
+        StatusCode(StatusCodes.Status410Gone, new
         {
-            if (!entitlements.IsLocal)
-                await _entitlements.EnsureCanCreateDataSourceAsync(UserId, entitlements, ct);
-
-            await using var stream = file.OpenReadStream();
-            var result = await _sources.UploadExcelAsync(
-                UserId, taskId, title ?? Path.GetFileNameWithoutExtension(name), stream, ct);
-            return Ok(result);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return Forbid();
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { message = ex.Message, code = "limit" });
-        }
-    }
+            message = "Upload into canvas via editor ParseExcel + PUT /canvas.",
+            code = "gone"
+        });
 }
 
 [ApiController]
@@ -401,30 +353,11 @@ public class TaskDataSourcesApiController : ControllerBase
 [Route("api/datasources")]
 public class DataSourcesApiController : ControllerBase
 {
-    private readonly DataSourceService _sources;
-
-    public DataSourcesApiController(DataSourceService sources) => _sources = sources;
-
-    private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
     [HttpGet("{id:int}")]
-    public async Task<ActionResult<DataSourceDetailDto>> Get(int id, CancellationToken ct)
-    {
-        var dto = await _sources.GetAsync(UserId, id, ct);
-        return dto is null ? NotFound() : Ok(dto);
-    }
+    public IActionResult Get(int id) =>
+        StatusCode(StatusCodes.Status410Gone, new { message = "Relational datasources retired.", code = "gone" });
 
     [HttpDelete("{id:int}")]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
-    {
-        try
-        {
-            var ok = await _sources.DeleteAsync(UserId, id, ct);
-            return ok ? NoContent() : NotFound();
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return Forbid();
-        }
-    }
+    public IActionResult Delete(int id) =>
+        StatusCode(StatusCodes.Status410Gone, new { message = "Relational datasources retired.", code = "gone" });
 }

@@ -32,4 +32,4 @@
 - روی نود **شروع** (ریشه یا داخل گروه): None / Loops / Elements / DataSource
 - منابع اکسل و دیتاسورس مادر روی شروع فرآیند
 
-ذخیره: گراف در `CanvasJson` / localStorage؛ `POST` ذخیره پرتال در صورت اتصال سرور.
+ذخیره: گراف در `GraphJson` (`Processes`) / کش localStorage؛ `PUT /api/tasks/{id}/canvas` روی سرور.

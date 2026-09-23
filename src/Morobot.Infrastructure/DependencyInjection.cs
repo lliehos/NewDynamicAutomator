@@ -22,7 +22,6 @@ public static class DependencyInjection
         services.AddScoped<TaskService>();
         services.AddScoped<TaskShareService>();
         services.AddScoped<RecordingService>();
-        services.AddScoped<GraphService>();
         services.AddScoped<DataSourceService>();
         services.AddSingleton<SmartLearningService>();
         return services;
