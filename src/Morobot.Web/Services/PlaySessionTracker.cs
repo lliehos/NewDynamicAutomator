@@ -63,4 +63,7 @@ public class PlaySessionTracker
 
     public bool PeekAbort(string taskId) =>
         !string.IsNullOrWhiteSpace(taskId) && _abort.ContainsKey(taskId.Trim());
+
+    public IReadOnlyList<PlaySessionInfo> ListPlaying() =>
+        _byTask.Values.OrderByDescending(x => x.StartedAtUtc).ToList();
 }

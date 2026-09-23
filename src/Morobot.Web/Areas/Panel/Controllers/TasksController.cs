@@ -17,17 +17,20 @@ public class TasksController : Controller
     private readonly DataSourceService _dataSources;
     private readonly IHubContext<PlayDataHub> _playHub;
     private readonly PlaySessionTracker _plays;
+    private readonly CatalogLiveService _catalog;
 
     public TasksController(
         TaskService tasks,
         DataSourceService dataSources,
         IHubContext<PlayDataHub> playHub,
-        PlaySessionTracker plays)
+        PlaySessionTracker plays,
+        CatalogLiveService catalog)
     {
         _tasks = tasks;
         _dataSources = dataSources;
         _playHub = playHub;
         _plays = plays;
+        _catalog = catalog;
     }
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -182,6 +185,7 @@ public class TasksController : Controller
             playing = true,
             userName
         }, ct);
+        await _catalog.NotifyPlayStateAsync(taskId, true, userName, ct);
         return Ok(new { ok = true });
     }
 
@@ -198,6 +202,7 @@ public class TasksController : Controller
             taskId,
             playing = false
         }, ct);
+        await _catalog.NotifyPlayStateAsync(taskId, false, null, ct);
         return Ok(new { ok = true });
     }
 

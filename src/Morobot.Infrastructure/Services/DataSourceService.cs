@@ -168,6 +168,14 @@ public class DataSourceService
         return d is null ? null : ToDetail(d);
     }
 
+    /// <summary>Admin-only: load any library source by id (no owner check).</summary>
+    public async Task<DataSourceDetailDto?> GetForAdminAsync(int id, CancellationToken ct = default)
+    {
+        var d = await _db.DataSources.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id, ct);
+        return d is null ? null : ToDetail(d);
+    }
+
     public async Task<UploadDataSourceResponse> CreateAsync(
         int userId, CreateDataSourceRequest req, EntitlementsDto? entitlements = null, CancellationToken ct = default)
     {

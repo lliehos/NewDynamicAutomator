@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using Morobot.Contracts.Tasks;
 using Morobot.Infrastructure.Persistence;
 using Morobot.Web.Hubs;
@@ -21,25 +20,44 @@ public class CatalogLiveService
     public async Task TaskUpsertedAsync(TaskListItemDto item, string action, string? actorUserName, CancellationToken ct = default)
     {
         var recipients = await ResolveAccessUserIdsAsync(item.Id, ct);
-        if (recipients.Count == 0) return;
         var payload = new { action, actorUserName, task = item };
-        await SendToUsersAsync("taskChanged", payload, recipients, ct);
+        if (recipients.Count > 0)
+            await SendToUsersAsync("taskChanged", payload, recipients, ct);
+        await NotifyAdminsAsync("taskChanged", payload, ct);
     }
 
     public async Task TaskDeletedAsync(
         int taskId, IReadOnlyList<int> recipientUserIds, string? actorUserName, CancellationToken ct = default)
     {
-        if (recipientUserIds.Count == 0) return;
         var payload = new { action = "deleted", actorUserName, task = new { id = taskId } };
-        await SendToUsersAsync("taskChanged", payload, recipientUserIds, ct);
+        if (recipientUserIds.Count > 0)
+            await SendToUsersAsync("taskChanged", payload, recipientUserIds, ct);
+        await NotifyAdminsAsync("taskChanged", payload, ct);
     }
 
     public async Task SourceChangedAsync(int taskId, object sourceSummary, string action, string? actorUserName, CancellationToken ct = default)
     {
         var recipients = await ResolveAccessUserIdsAsync(taskId, ct);
-        if (recipients.Count == 0) return;
         var payload = new { action, actorUserName, taskId, source = sourceSummary };
-        await SendToUsersAsync("sourceChanged", payload, recipients, ct);
+        if (recipients.Count > 0)
+            await SendToUsersAsync("sourceChanged", payload, recipients, ct);
+        await NotifyAdminsAsync("sourceChanged", payload, ct);
+    }
+
+    /// <summary>Library-level source events (create / rename / delete) — always to admins; owner if known.</summary>
+    public async Task LibrarySourceChangedAsync(
+        object sourceSummary, string action, string? actorUserName, int? ownerUserId = null, CancellationToken ct = default)
+    {
+        var payload = new { action, actorUserName, taskId = (int?)null, source = sourceSummary };
+        if (ownerUserId is int oid && oid > 0)
+            await SendToUsersAsync("sourceChanged", payload, new[] { oid }, ct);
+        await NotifyAdminsAsync("sourceChanged", payload, ct);
+    }
+
+    public Task NotifyPlayStateAsync(string taskId, bool playing, string? userName, CancellationToken ct = default)
+    {
+        var payload = new { taskId, playing, userName };
+        return NotifyAdminsAsync("playState", payload, ct);
     }
 
     public async Task<List<int>> ResolveAccessUserIdsAsync(int processId, CancellationToken ct = default)
@@ -56,6 +74,9 @@ public class CatalogLiveService
             shareIds.Add(cid);
         return shareIds;
     }
+
+    private Task NotifyAdminsAsync(string method, object payload, CancellationToken ct)
+        => _hub.Clients.Group(CatalogHub.AdminGroup).SendAsync(method, payload, ct);
 
     private Task SendToUsersAsync(string method, object payload, IEnumerable<int> userIds, CancellationToken ct)
     {

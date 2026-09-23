@@ -436,6 +436,14 @@ public class DataSourcesApiController : ControllerBase
         try
         {
             var created = await _sources.CreateAsync(UserId, req, ct: ct);
+            await _catalog.LibrarySourceChangedAsync(new
+            {
+                id = created.Id,
+                title = created.Title,
+                columnCount = created.ColumnCount,
+                rowCount = created.RowCount,
+                fileName = created.FileName
+            }, "created", User.Identity?.Name, UserId, ct);
             return Ok(created);
         }
         catch (InvalidOperationException ex)
@@ -452,6 +460,7 @@ public class DataSourcesApiController : ControllerBase
         if (!ok) return BadRequest(new { message = error });
 
         var title = req.Title?.Trim();
+        await _catalog.LibrarySourceChangedAsync(new { id, title }, "renamed", User.Identity?.Name, UserId, ct);
         foreach (var processId in linked)
         {
             await _catalog.SourceChangedAsync(processId, new { id, title }, "renamed", User.Identity?.Name, ct);
@@ -473,7 +482,9 @@ public class DataSourcesApiController : ControllerBase
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
         var ok = await _sources.DeleteLibraryAsync(UserId, id, ct);
-        return ok ? Ok(new { ok = true }) : NotFound();
+        if (!ok) return NotFound();
+        await _catalog.LibrarySourceChangedAsync(new { id }, "deleted", User.Identity?.Name, UserId, ct);
+        return Ok(new { ok = true });
     }
 
     [HttpGet("count")]

@@ -1,9 +1,9 @@
 /**
- * Live catalog SignalR — process/source list pages.
+ * Live catalog SignalR — process/source list pages + optional admin overview.
  */
 (function () {
   let conn = null;
-  const listeners = { taskChanged: [], sourceChanged: [] };
+  const listeners = { taskChanged: [], sourceChanged: [], playState: [] };
 
   function on(event, fn) {
     if (!listeners[event]) listeners[event] = [];
@@ -16,9 +16,17 @@
     });
   }
 
-  async function ensure() {
+  /**
+   * @param {{ admin?: boolean }} [opts]
+   */
+  async function ensure(opts) {
     if (typeof signalR === "undefined") return null;
-    if (conn) return conn;
+    if (conn) {
+      if (opts?.admin) {
+        try { await conn.invoke("JoinAdminCatalog"); } catch { /* ignore */ }
+      }
+      return conn;
+    }
     try {
       const c = new signalR.HubConnectionBuilder()
         .withUrl("/hubs/catalog")
@@ -27,11 +35,18 @@
         .build();
       c.on("taskChanged", (p) => emit("taskChanged", p));
       c.on("sourceChanged", (p) => emit("sourceChanged", p));
+      c.on("playState", (p) => emit("playState", p));
       c.onreconnected(async () => {
         try { await c.invoke("JoinCatalog"); } catch { /* ignore */ }
+        if (opts?.admin) {
+          try { await c.invoke("JoinAdminCatalog"); } catch { /* ignore */ }
+        }
       });
       await c.start();
       await c.invoke("JoinCatalog");
+      if (opts?.admin) {
+        try { await c.invoke("JoinAdminCatalog"); } catch { /* ignore */ }
+      }
       conn = c;
       return c;
     } catch (e) {
@@ -41,5 +56,9 @@
   }
 
   window.DaCatalog = { ensure, on };
-  document.addEventListener("DOMContentLoaded", () => { ensure(); });
+  document.addEventListener("DOMContentLoaded", () => {
+    const admin = document.body?.dataset?.adminCatalog === "1"
+      || document.documentElement?.dataset?.adminCatalog === "1";
+    ensure({ admin });
+  });
 })();
