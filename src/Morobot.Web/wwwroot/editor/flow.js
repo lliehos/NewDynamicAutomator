@@ -1180,7 +1180,9 @@
         cells: data.cells || []
       };
 
-      // Persist into user library first (independent entity), then attach to this process.
+      // Persist into user library first (independent entity). Do NOT attach here —
+      // Attach used to bump Process.UpdatedAtUtc and caused a false concurrency conflict
+      // on the subsequent canvas save. SyncFromCanvas on save creates the process link.
       try {
         const createRes = await fetch("/api/datasources", {
           method: "POST",
@@ -1209,10 +1211,6 @@
             columnKeys: created.columnKeys || entry.columnKeys,
             cells: created.cells || entry.cells
           };
-          await fetch(`/api/tasks/${taskId}/datasources/${entry.id}/attach?setDefault=${prevMaster ? "false" : "true"}`, {
-            method: "POST",
-            credentials: "same-origin"
-          });
         } else if (createRes.status === 400) {
           const err = await createRes.json().catch(() => ({}));
           throw new Error(err.message || t("plan.limitSources", { max: entitlements?.maxDataSources ?? "?" }));

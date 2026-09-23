@@ -247,7 +247,7 @@ public class DataSourceService
             {
                 foreach (var l in process.DataSourceLinks) l.IsDefault = l.DataSourceId == dataSourceId;
                 await _db.SaveChangesAsync(ct);
-                await PatchMasterInGraphAsync(processId, dataSourceId, ct);
+                // Do not patch GraphJson / UpdatedAtUtc here — open editors own concurrency via PUT /canvas.
             }
             return (true, null);
         }
@@ -265,7 +265,7 @@ public class DataSourceService
             SortOrder = sort
         });
         await _db.SaveChangesAsync(ct);
-        await EnsureGraphHasSourceSnapshotAsync(processId, ds, makeDefault, ct);
+        // Graph snapshot is written by the editor canvas save (SyncFromCanvas).
         return (true, null);
     }
 
@@ -280,11 +280,7 @@ public class DataSourceService
         var link = await _db.ProcessDataSources
             .FirstOrDefaultAsync(l => l.ProcessId == processId && l.DataSourceId == dataSourceId, ct);
         if (link is null)
-        {
-            // Still scrub graph snapshot if present
-            await ScrubSourceFromProcessGraphAsync(processId, dataSourceId, ct);
             return (true, null);
-        }
 
         var wasDefault = link.IsDefault;
         _db.ProcessDataSources.Remove(link);
@@ -300,13 +296,10 @@ public class DataSourceService
             {
                 next.IsDefault = true;
                 await _db.SaveChangesAsync(ct);
-                await PatchMasterInGraphAsync(processId, next.DataSourceId, ct);
             }
-            else
-                await PatchMasterInGraphAsync(processId, null, ct);
         }
 
-        await ScrubSourceFromProcessGraphAsync(processId, dataSourceId, ct);
+        // Do not mutate GraphJson / UpdatedAtUtc — editor save owns the canvas document.
         return (true, null);
     }
 
