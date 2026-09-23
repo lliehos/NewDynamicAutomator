@@ -13,6 +13,7 @@
       <th>@L["admin.plans.name"]</th>
       <th>@L["admin.plans.maxTasks"]</th>
       <th>@L["admin.plans.maxSources"]</th>
+      <th>@L["admin.plans.maxProcessSteps"]</th>
       <th>@L["admin.plans.caps"]</th>
       <th>@L["admin.plans.password"]</th>
       <th></th>
@@ -26,6 +27,7 @@
       <td>@p.NameEn / @p.NameFa</td>
       <td>@(p.MaxTasks?.ToString() ?? "∞")</td>
       <td>@(p.MaxDataSources?.ToString() ?? "∞")</td>
+      <td>@(p.MaxProcessSteps?.ToString() ?? "∞")</td>
       <td>
         @(p.CanPlay ? "Play " : "")@(p.CanSelector ? "Sel " : "")@(p.CanRecord ? "Rec " : "")@(p.CanSmart ? "Smart" : "")
       </td>

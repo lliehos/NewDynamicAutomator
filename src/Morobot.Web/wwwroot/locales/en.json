@@ -262,6 +262,7 @@
       "nameEn": "Name (EN)",
       "maxTasks": "Max tasks (empty = ∞)",
       "maxSources": "Max sources (empty = ∞)",
+      "maxProcessSteps": "Max steps per process (empty = ∞)",
       "sort": "Sort order",
       "caps": "Capabilities",
       "password": "Password policy",

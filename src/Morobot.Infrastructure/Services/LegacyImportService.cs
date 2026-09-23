@@ -55,7 +55,6 @@ public class LegacyImportService
             var hasFirst = await ColumnExists(conn, "Users", "FirstName", ct);
             var hasLast = await ColumnExists(conn, "Users", "LastName", ct);
             var hasCreator = await ColumnExists(conn, "Tasks", "CreatorUserId", ct);
-            var hasUserTasks = await CanvasBackfillService.LegacyTableExistsAsync(conn, "UserTasks", ct);
 
             var sql = $@"
 SELECT u.Id, u.UserName,
@@ -64,7 +63,6 @@ SELECT u.Id, u.UserName,
        (
          SELECT COUNT(1) FROM Tasks t WHERE
            {(hasCreator ? "t.CreatorUserId = u.Id" : "1=0")}
-           {(hasUserTasks ? " OR EXISTS (SELECT 1 FROM UserTasks ut WHERE ut.UserId = u.Id AND ut.TaskId = t.Id)" : "")}
        ) AS ProcessCount
 FROM Users u
 ORDER BY u.UserName";
@@ -107,7 +105,8 @@ ORDER BY u.UserName";
 
         var freePlan = await _db.Plans.FirstOrDefaultAsync(p => p.Code == nameof(PlanCode.Free), ct);
         var hasCreator = await ColumnExists(conn, "Tasks", "CreatorUserId", ct);
-        var hasUserTasks = await CanvasBackfillService.LegacyTableExistsAsync(conn, "UserTasks", ct);
+        // Only processes this user owns (CreatorUserId) — not shared UserTasks.
+        var hasUserTasks = false;
 
         foreach (var legacyUserId in legacyUserIds.Distinct())
         {
@@ -201,13 +200,7 @@ ORDER BY u.UserName";
             await using var r = await cmd.ExecuteReaderAsync(ct);
             while (await r.ReadAsync(ct)) taskIds.Add(r.GetInt32(0));
         }
-        if (hasUserTasks)
-        {
-            await using var cmd = new SqlCommand("SELECT TaskId FROM UserTasks WHERE UserId=@uid", conn);
-            cmd.Parameters.AddWithValue("@uid", legacyUserId);
-            await using var r = await cmd.ExecuteReaderAsync(ct);
-            while (await r.ReadAsync(ct)) taskIds.Add(r.GetInt32(0));
-        }
+        // Shared UserTasks are intentionally not imported — only owned processes.
 
         foreach (var taskId in taskIds.OrderBy(x => x))
         {
@@ -240,6 +233,10 @@ ORDER BY u.UserName";
                     report.Lines.Add($"  ✗ فرآیند قدیمی #{taskId} («{title}»): گراف خالی/نامعتبر");
                     continue;
                 }
+
+                // Sources are independent library entities — do not import them with the process.
+                graphJson = StripDataSourcesFromGraph(graphJson);
+
                 var process = new Process
                 {
                     Title = title.Length > 100 ? title[..100] : title,
@@ -273,6 +270,8 @@ ORDER BY u.UserName";
                         {
                             node["taskId"] = process.Id;
                             node["designOrigin"] = nameof(TaskDesignOrigin.Transferred);
+                            node["dataSources"] = new System.Text.Json.Nodes.JsonArray();
+                            node.Remove("dataSourceId");
                             process.GraphJson = node.ToJsonString(new System.Text.Json.JsonSerializerOptions
                             {
                                 PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
@@ -284,13 +283,51 @@ ORDER BY u.UserName";
                 }
 
                 report.ProcessesImported++;
-                report.Lines.Add($"  ✓ فرآیند «{title}» → #{process.Id}");
+                report.Lines.Add($"  ✓ فرآیند «{title}» → #{process.Id} (بدون منبع داده)");
             }
             catch (Exception ex)
             {
                 report.Errors++;
                 report.Lines.Add($"  ✗ فرآیند قدیمی #{taskId}: {ex.Message}");
             }
+        }
+    }
+
+    /// <summary>Keep groups/steps/conditions; drop embedded Excel sources (library is separate).</summary>
+    private static string StripDataSourcesFromGraph(string graphJson)
+    {
+        try
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(graphJson)?.AsObject();
+            if (node is null) return graphJson;
+            node["dataSources"] = new System.Text.Json.Nodes.JsonArray();
+            node.Remove("dataSourceId");
+            node.Remove("DataSources");
+            if (node["nodes"] is System.Text.Json.Nodes.JsonArray nodes)
+            {
+                foreach (var n in nodes)
+                {
+                    if (n is not System.Text.Json.Nodes.JsonObject no) continue;
+                    // Clear DS id refs; keep column name strings for later remapping.
+                    foreach (var prop in new[]
+                             {
+                                 "dataSourceId", "sourceId", "selectorDataSourceId",
+                                 "equalSelectorDataSourceId", "attributeDataSourceId",
+                                 "equalAttributeDataSourceId", "saveDataSourceId"
+                             })
+                    {
+                        if (no.ContainsKey(prop)) no[prop] = null;
+                    }
+                }
+            }
+            return node.ToJsonString(new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+            });
+        }
+        catch
+        {
+            return graphJson;
         }
     }
 

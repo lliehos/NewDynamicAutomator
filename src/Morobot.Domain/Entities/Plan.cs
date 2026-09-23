@@ -13,6 +13,8 @@ public class Plan
     public int? MaxTasks { get; set; }
     /// <summary>Null = unlimited.</summary>
     public int? MaxDataSources { get; set; }
+    /// <summary>Max step/action nodes per process graph. Null = unlimited.</summary>
+    public int? MaxProcessSteps { get; set; }
     public bool CanPlay { get; set; }
     public bool CanSelector { get; set; }
     public bool CanRecord { get; set; }

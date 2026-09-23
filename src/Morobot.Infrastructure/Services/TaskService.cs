@@ -181,6 +181,7 @@ public class TaskService
 
     public async Task<bool> DeleteAsync(int taskId, CancellationToken ct = default)
     {
+        // ProcessDataSources links cascade; DataSources library rows are kept (independent entities).
         var process = await _db.Processes.FirstOrDefaultAsync(t => t.Id == taskId, ct);
         if (process is null) return false;
         _db.Processes.Remove(process);
@@ -283,6 +284,13 @@ public class TaskService
             var newOnes = await CountUnknownSourcesInCanvasAsync(canvasJson, ct);
             if (libraryCount + newOnes > maxSrc)
                 return (false, $"Data source limit reached ({maxSrc}).", null);
+        }
+
+        if (entitlements.MaxProcessSteps is int maxSteps)
+        {
+            var steps = GraphJsonHelper.CountProcessSteps(canvasJson);
+            if (steps > maxSteps)
+                return (false, $"Process step limit reached ({maxSteps}).", null);
         }
 
         // Sync embedded canvas sources into the user library + process links (detach ≠ delete library).

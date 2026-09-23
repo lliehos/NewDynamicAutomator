@@ -1,8 +1,10 @@
-# دامنه (Canvas-first)
+# دامنه (Canvas-first + کتابخانه منابع)
 
-منبع حقیقت هر فرآیند یک سند **Graph JSON** است (`Processes.GraphJson`). مدل رابطه‌ای گروه/مرحله/اکشن/شرط/سلکتور/منبع جدولی حذف شده است.
+منبع حقیقت **گراف فرآیند** سند **Graph JSON** است (`Processes.GraphJson`). گروه/مرحله/شرط/سلکتور داخل JSON هستند.
 
-آرشیو اسکیمای ویندوزی V2 و جداول میانی برای مهاجرت بعدی: [legacy-windows-v2.md](legacy-windows-v2.md).
+**منابع داده (Excel)** موجودیت مستقل در جدول `DataSources` هستند و با جدول واسط `ProcessDataSources` به فرآیند وصل می‌شوند. حذف فرآیند فقط لینک را پاک می‌کند؛ کتابخانه می‌ماند. جدا کردن منبع از فرآیند ≠ حذف از کتابخانه.
+
+آرشیو اسکیمای ویندوزی V2: [legacy-windows-v2.md](legacy-windows-v2.md).
 
 ## هدف محصول
 
@@ -11,35 +13,29 @@
 | `repeatSourceType` (روی node گروه) | معنی |
 |------------------------------------|------|
 | `None` | یک‌بار |
-| `DataSource` | به‌ازای هر ردیف منبع داخل همان Graph JSON |
+| `DataSource` | به‌ازای هر ردیف منبع لینک‌شده |
 | `Elements` | به‌ازای هر المان صفحه (سلکتور روی گروه) |
 | `Loops` | تعداد ثابت تکرار |
 
 ## موجودیت‌های پایدار (DB)
 
-- **`Process`** — عنوان، `GraphJson`, `DesignOrigin`, تأخیر پیش‌فرض، سازنده، زمان آخرین اجرا
-- **`ProcessShare`** — ACL کاربر روی فرآیند (`CanView` / `CanEdit` / `CanDelete` / `CanExecute` / `CanChangeDataSource`)
-- **`AppUser`**, **`Plan`**, **`PlanPrice`**, **`SystemSetting`**
+- **`Process`** — عنوان، `GraphJson`, `DesignOrigin`, تأخیر، سازنده
+- **`ProcessShare`** — ACL (`CanView` / `CanEdit` / `CanDelete` / `CanExecute` / `CanChangeDataSource`)
+- **`DataSource`** — کتابخانهٔ کاربر (Title، ColumnsJson، CellsJson، مالک)
+- **`ProcessDataSource`** — لینک فرآیند↔منبع (`IsDefault`, `SortOrder`)؛ cascade با حذف فرآیند؛ Restrict روی منبع
+- **`AppUser`**, **`Plan`** (`MaxTasks`, `MaxDataSources`, `MaxProcessSteps`), **`PlanPrice`**, **`SystemSetting`**
 - **`DeviceSession`**, **`AppEventLog`**
-
-مفهوم‌های گروه/مرحله/شرط/سلکتور/منبع فقط داخل JSON هستند، نه ردیف جداگانه.
 
 ## Graph JSON
 
-- `nodes[]`: `kind` ∈ `start` | `group` | `condition` | `step` | `action`
-- `edges[]`: `kind` ∈ `next` | `contains` | `success` | `fail` | `parent`
-- `dataSources[]`: منابع اکسل توکار (هدر = کلید ستون؛ ردیف‌ها key/value)
-- `viewport`, `stepDelayMs`, `ignorePlayError`, … متادیتای ادیتور/پخش
+- `nodes[]` / `edges[]` — گراف ادیتور/پخش
+- `dataSources[]` — اسنپ‌شات هیدراته‌شده از کتابخانه برای ادیتور/افزونه (SoT کتابخانه است)
+- نام ستون سلکتور (`selectorDynamicColumn` و …) با جدا شدن منبع حفظ می‌شود؛ با تغییر منبع پیش‌فرض می‌توان سلکتورهای با ستون متناظر را یکجا به‌روز کرد
 
-سلکتور المان: `framePath[]` با `{ by, value, srcHint, indexInParent }` — بدون Selenium.
+## انتقال از دیتابیس قدیمی (ادمین)
 
-## ضبط
+فقط فرآیندهایی که کاربر **مالک** آن‌هاست (`CreatorUserId`) با گروه/مرحله/شرط به مبدأ `Transferred` منتقل می‌شوند. **منابع منتقل نمی‌شوند.**
 
-کلاینت: `recordingGroups[]` (Start → گروه خالی؛ اکشن‌ها داخل آخرین گروه؛ Pause/Start → گروه بعدی).
+## ضبط / اجرا
 
-سرور: ذخیره فقط با merge به `GraphJson` (بدون جداول Groups/Steps).
-
-## اجرا
-
-- `RunMode.Play`: پخش روی تب هدف
-- `RunMode.Learn`: فاز بعدی (پلن Gold)
+همان Graph JSON؛ ضبط merge به بوم؛ پخش روی تب هدف.

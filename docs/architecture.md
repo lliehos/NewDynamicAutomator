@@ -8,15 +8,18 @@
 پروژهٔ `Morobot.Api` حذف شده است؛ همهٔ API روی Web است. مسیرهای `/api/*` فقط روی Morobot.Web هستند.
 
 ```
-ورود → JWT (plan + role) → EF/SQL (Processes.GraphJson)
+ورود → JWT (plan + role + max_tasks/sources/steps) → EF/SQL
+  Processes.GraphJson  +  DataSources library  +  ProcessDataSources links
 افزونه REC (Pro) → POST /api/recordings → merge به GraphJson
 ویرایش → /Panel/Tasks/Editor/{id}
-  GET/PUT /api/tasks/{id}/canvas  (alias HTTP؛ entity = Process)
-پخش (Free+) → Player از همان Graph JSON
-ادمین → /Admin (Role=Admin)
+  GET/PUT /api/tasks/{id}/canvas
+  POST/DELETE /api/tasks/{id}/datasources/{dsId}  (attach/detach)
+  POST /api/datasources  (کتابخانه)
+پخش (Free+) → Player از Graph JSON هیدراته‌شده
+ادمین → /Admin (Role=Admin) incl. Migrate / Plans caps / Sources library
 ```
 
-بدون Selenium. بدون dual-write به جداول گراف رابطه‌ای.
+بدون Selenium. منابع اکسل موجودیت مستقل‌اند؛ حذف فرآیند لینک را می‌بُرد نه کتابخانه را.
 
 `RunMode`: `Play` فعال؛ `Learn` / Smart فاز بعد (پلن Gold).
 

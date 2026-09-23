@@ -331,6 +331,7 @@ public class AuthService
             new(EntitlementService.ClaimCanShare, entitlements.CanShare ? "1" : "0"),
             new(EntitlementService.ClaimMaxTasks, entitlements.MaxTasks?.ToString() ?? "*"),
             new(EntitlementService.ClaimMaxSources, entitlements.MaxDataSources?.ToString() ?? "*"),
+            new(EntitlementService.ClaimMaxProcessSteps, entitlements.MaxProcessSteps?.ToString() ?? "*"),
             new("display_name", FormatDisplayName(user)),
             new("profile_complete", IsProfileComplete(user) ? "1" : "0")
         };

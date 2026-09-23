@@ -19,6 +19,7 @@ public class EntitlementService
     public const string ClaimCanShare = "can_share";
     public const string ClaimMaxTasks = "max_tasks";
     public const string ClaimMaxSources = "max_sources";
+    public const string ClaimMaxProcessSteps = "max_process_steps";
     public const string ClaimIsLocal = "is_local";
 
     private readonly AppDbContext _db;
@@ -37,7 +38,8 @@ public class EntitlementService
         CanSmart = false,
         CanShare = false,
         MaxTasks = 1,
-        MaxDataSources = 1
+        MaxDataSources = 1,
+        MaxProcessSteps = 30
     };
 
     public static EntitlementsDto FromPlan(Plan plan, DateTime? expires = null) => new()
@@ -60,6 +62,7 @@ public class EntitlementService
         ShareAllowChangeDataSource = plan.ShareAllowChangeDataSource,
         MaxTasks = plan.MaxTasks,
         MaxDataSources = plan.MaxDataSources,
+        MaxProcessSteps = plan.MaxProcessSteps,
         PlanExpiresAtUtc = expires
     };
 
@@ -80,7 +83,8 @@ public class EntitlementService
             CanSmart = user.FindFirstValue(ClaimCanSmart) == "1",
             CanShare = user.FindFirstValue(ClaimCanShare) == "1",
             MaxTasks = ParseNullableInt(user.FindFirstValue(ClaimMaxTasks)),
-            MaxDataSources = ParseNullableInt(user.FindFirstValue(ClaimMaxSources))
+            MaxDataSources = ParseNullableInt(user.FindFirstValue(ClaimMaxSources)),
+            MaxProcessSteps = ParseNullableInt(user.FindFirstValue(ClaimMaxProcessSteps))
         };
     }
 

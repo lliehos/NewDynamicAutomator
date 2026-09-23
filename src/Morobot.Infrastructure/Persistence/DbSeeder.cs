@@ -18,7 +18,7 @@ public static class DbSeeder
     private static async Task EnsurePlansAsync(AppDbContext db)
     {
         async Task UpsertPlan(
-            string code, string fa, string en, int? maxTasks, int? maxSources,
+            string code, string fa, string en, int? maxTasks, int? maxSources, int? maxSteps,
             bool play, bool selector, bool record, bool smart, int sort,
             int minPwd, bool letterDigit, bool selfUpgrade,
             bool canShare, bool canReceiveShare, int? maxShares,
@@ -35,6 +35,7 @@ public static class DbSeeder
             plan.NameEn = en;
             plan.MaxTasks = maxTasks;
             plan.MaxDataSources = maxSources;
+            plan.MaxProcessSteps = maxSteps;
             plan.CanPlay = play;
             plan.CanSelector = selector;
             plan.CanRecord = record;
@@ -55,13 +56,13 @@ public static class DbSeeder
         }
 
         // Local/guest: no share. Free can share (actor); Pro+ can receive (admin-tunable).
-        await UpsertPlan(nameof(PlanCode.Local), "محلی / تست", "Local / Test", 1, 1, false, false, false, false, 1, 3, false, false,
+        await UpsertPlan(nameof(PlanCode.Local), "محلی / تست", "Local / Test", 1, 1, 30, false, false, false, false, 1, 3, false, false,
             false, false, null, false, false, false, false, false);
-        await UpsertPlan(nameof(PlanCode.Free), "رایگان", "Free", 3, 3, true, true, false, false, 2, 3, false, false,
+        await UpsertPlan(nameof(PlanCode.Free), "رایگان", "Free", 3, 3, 80, true, true, false, false, 2, 3, false, false,
             true, false, 3, true, true, false, true, false);
-        await UpsertPlan(nameof(PlanCode.Pro), "حرفه‌ای", "Pro", null, null, true, true, true, false, 3, 8, true, true,
+        await UpsertPlan(nameof(PlanCode.Pro), "حرفه‌ای", "Pro", null, null, null, true, true, true, false, 3, 8, true, true,
             true, true, null, true, true, true, true, true);
-        await UpsertPlan(nameof(PlanCode.Gold), "طلایی", "Gold", null, null, true, true, true, true, 4, 8, true, true,
+        await UpsertPlan(nameof(PlanCode.Gold), "طلایی", "Gold", null, null, null, true, true, true, true, 4, 8, true, true,
             true, true, null, true, true, true, true, true);
         await db.SaveChangesAsync();
 

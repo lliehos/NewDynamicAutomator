@@ -99,6 +99,8 @@ public class EntitlementsDto
     public int? MaxTasks { get; set; } = 1;
     /// <summary>Null = unlimited.</summary>
     public int? MaxDataSources { get; set; } = 1;
+    /// <summary>Max step/action nodes per process. Null = unlimited.</summary>
+    public int? MaxProcessSteps { get; set; }
     public int? TaskCount { get; set; }
     public int? DataSourceCount { get; set; }
     public DateTime? PlanExpiresAtUtc { get; set; }

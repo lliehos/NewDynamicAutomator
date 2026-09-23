@@ -4,39 +4,33 @@
 
 برنچ فعال توسعه: `feature/tiers-admin-stage1`
 
-## حالت فعلی: سطوح کاربر + سرور + ادمین (بدون AI)
+## حالت فعلی
 
-- **سطح Local (تست):** لاگین حالت محلی؛ سقف ۱ فرآیند / ۱ منبع؛ بدون Play / Selector / Record
-- **سطح Free:** لاگین سرور (`free` / `Free123!`)؛ سقف ۳/۳؛ Play + Selector
-- **سطح Pro:** لاگین سرور (`pro` / `Pro123!`)؛ نامحدود + Record
-- **سطح Gold:** اسکلت پلن در DB؛ Smart بعداً
-- **ادمین:** `admin` / `Admin123!` → Area `/Admin` (کاربران، پلن‌ها، قیمت‌ها، فرآیندها)
-- **سطح Local:** حساب سیستمی `guest` (پلن Local؛ سقف ۱/۱؛ بدون Play/Selector/Record)
-- **سطح Free / Pro / Admin:** پلن از روی یوزرنیم حساب در DB
-- فرم لاگین فقط یوزر/پسورد — بدون انتخاب حالت local/server
-- نام‌های رزرو (`admin`,`free`,`pro`,`guest`,`test`,…) برای ساخت کاربر جدید مجاز نیست
-- همه فرآیند/منبع روی سرور؛ EventLog + Devices در ادمین
-- فقط یک اپ: `dotnet run --project src/Morobot.Web`
-- **پاکسازی schema (Canvas-first):** گراف فقط در `Processes.GraphJson`؛ جداول Groups/Steps/Actions/Conditions/Selectors/DataSources* حذف؛ نام دامنه Process/ProcessShare؛ مسیر HTTP `/api/tasks*` برای سازگاری کلاینت حفظ شده. پروژه `Morobot.Api` و پوشه‌های یتیم `DynamicAutomator.*` حذف شدند. آرشیو V2: [legacy-windows-v2.md](legacy-windows-v2.md)
+- **پلن‌ها (ادمین‌قابل‌ویرایش):** `MaxTasks` / `MaxDataSources` / `MaxProcessSteps` (خالی = ∞)
+  - Local ۱/۱/۳۰ — Free ۳/۳/۸۰ — Pro/Gold نامحدود (پیش‌فرض seed)
+- **منابع مستقل:** جدول `DataSources` + لینک `ProcessDataSources`؛ detach ≠ حذف؛ حذف فرآیند کتابخانه را پاک نمی‌کند
+- **انتقال قدیمی (Admin → Migrate):** فقط فرآیندهای مالک کاربر + گراف (گروه/مرحله/شرط)؛ بدون منبع
+- **پروفایل اجباری:** نام/فامیل/ایمیل/موبایل قبل از استفاده پنل؛ ناو نمایش display name
+- **کاتالوگ زنده:** نوتیف فقط به مالک/share
+- **افزونه‌ها:** فقط `extension-{recorder|player|selector|smart-recorder}` (mono `extension/` حذف شد)
+- Seed: `guest`/`free`/`pro`/`admin` — رمزها در [plans-and-tiers.md](plans-and-tiers.md)
 
-پرتال: `https://localhost:7201`  
-افزونه‌ها: `%LocalAppData%\morobot.soras.ir\extension-{recorder|player|selector|smart-recorder}`
+پرتال: `https://localhost:7201`
 
 ```bash
 dotnet run --project src/Morobot.Web --launch-profile https
 ```
 
-## مستندات مرتبط
+## مستندات
 
-- دامنه Canvas-first: [domain.md](domain.md)
-- آرشیو ویندوز V2 / جداول میانی: [legacy-windows-v2.md](legacy-windows-v2.md)
-- سطوح و پلن‌ها: [plans-and-tiers.md](plans-and-tiers.md)
+- دامنه: [domain.md](domain.md)
+- پلن‌ها: [plans-and-tiers.md](plans-and-tiers.md)
 - معماری: [architecture.md](architecture.md)
-- رمزنگاری و `.mrbt`: [encryption-and-mrbt.md](encryption-and-mrbt.md)
+- آرشیو V2: [legacy-windows-v2.md](legacy-windows-v2.md)
 - ویرایشگر: [visual-editor.md](visual-editor.md)
 - رکورد/پخش: [record-play.md](record-play.md)
 
 ## خارج از اسکوپ این برنچ
 
 - Learn / Smart / قابلیت‌های سطح طلایی (AI)
-- درگاه پرداخت (قیمت‌ها فقط مدیریت ادمین)
+- درگاه پرداخت

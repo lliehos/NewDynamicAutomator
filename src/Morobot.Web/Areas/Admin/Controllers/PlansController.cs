@@ -76,6 +76,7 @@ public class PlansController : Controller
         plan.NameEn = model.NameEn?.Trim() ?? plan.NameEn;
         plan.MaxTasks = model.MaxTasks;
         plan.MaxDataSources = model.MaxDataSources;
+        plan.MaxProcessSteps = model.MaxProcessSteps;
         plan.CanPlay = model.CanPlay;
         plan.CanSelector = model.CanSelector;
         plan.CanRecord = model.CanRecord;

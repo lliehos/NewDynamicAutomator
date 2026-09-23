@@ -2,42 +2,46 @@
 
 ## Codes
 
-| Code | Auth | Max tasks / sources | Play | Selector | Record | Smart |
-|------|------|---------------------|------|----------|--------|-------|
-| Local | Fake local login | 1 / 1 | no | no | no | no |
-| Free | Server | 3 / 3 | yes | yes | no | no |
+| Code | Auth | Max tasks / sources / steps | Play | Selector | Record | Smart |
+|------|------|-----------------------------|------|----------|--------|-------|
+| Local | Fake local login | 1 / 1 / 30 | no | no | no | no |
+| Free | Server | 3 / 3 / 80 | yes | yes | no | no |
 | Pro | Server | unlimited | yes | yes | yes | no |
 | Gold | Server (stub) | unlimited | yes | yes | yes | later |
 
-Each tier includes capabilities of lower tiers.
+Each tier includes capabilities of lower tiers. Limits are **admin-editable** per plan (`MaxTasks`, `MaxDataSources`, `MaxProcessSteps`; empty = ∞).
 
 ## Entities
 
 - `Plan`, `PlanPrice` — admin-managed; no payment gateway yet
 - `AppUser.PlanId`, `AppUser.Role` (`User` | `Admin`)
+- `DataSource` — user library (independent of processes)
+- `ProcessDataSource` — attach/detach only; process delete does not delete library rows
+
+## Limits enforcement
+
+- **MaxTasks** — create process
+- **MaxDataSources** — create library source (not per-canvas duplicates)
+- **MaxProcessSteps** — step/action node count on canvas save
 
 ## APIs
 
 - `GET /api/auth/me` — user + entitlements
-- `GET /api/auth/entitlements` — plan flags and limits (with counts for server users)
-- Task/source create enforces limits; recordings require `CanRecord`
+- `GET /api/auth/entitlements` — plan flags and limits (with counts)
+- `GET/POST/DELETE /api/datasources` — library CRUD
+- `POST /api/tasks/{id}/datasources/{dsId}/attach` — link
+- `DELETE /api/tasks/{id}/datasources/{dsId}` — unlink (library kept)
 
-## Portal
+## Portal / Admin
 
-- Login: username + password only; guest tip on form; Free users register at `/Panel/Account/Register`
-- New registrations get plan from system setting `DefaultRegisterPlan` (default Free); password policy comes from that plan (admin-editable)
-- Plan password policy: `MinPasswordLength`, `RequireLetterAndDigit`; self-upgrade targets use `AllowSelfUpgrade`
-- Admin area = system settings only (plans, prices, users, events/devices, settings) — no process design/play/record
-- Reserved usernames (`ReservedUserNames`) cannot be used when registering or creating users
-- Pro/Gold also assignable by admin (must set password matching target plan policy when promoting)
-
-- All process/source CRUD uses `/api/tasks` + canvas; localStorage is cache only
-- Device fingerprint recorded on login/register
-- Client errors/events: `da-telemetry.js` → `/api/events` (Admin → Events / Devices)
+- Admin → Plans: edit all three caps
+- Admin → Sources: library inventory
+- Admin → Migrate: owner-owned processes only; no data sources imported
+- Panel → منابع: library list; hard-delete only here / API delete
 
 ## Seed accounts
 
-- `guest` / `Guest123!` — Local plan (trial tip on login)
-- `free` / `Free123!` — demo Free (reserved name)
-- `pro` / `Pro123!` — demo Pro (reserved)
-- `admin` / `Admin123!` — Admin + Pro (not shown on public login)
+- `guest` / `Guest123!` — Local
+- `free` / `Free123!` — Free
+- `pro` / `Pro123!` — Pro
+- `admin` / `Admin123!` — Admin + Pro

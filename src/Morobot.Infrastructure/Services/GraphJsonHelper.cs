@@ -49,4 +49,7 @@ public static class GraphJsonHelper
             return (0, 0);
         }
     }
+
+    /// <summary>Step + action nodes that count toward MaxProcessSteps.</summary>
+    public static int CountProcessSteps(string? graphJson) => CountNodes(graphJson).steps;
 }
