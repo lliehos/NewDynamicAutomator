@@ -1,0 +1,73 @@
+<Window x:Class="Morobot.VendorStudio.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Morobot Vendor Studio" Height="720" Width="980" MinHeight="600" MinWidth="840">
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <TextBlock Text="Morobot Vendor Studio" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,12"/>
+    <TabControl Grid.Row="1">
+      <TabItem Header="License">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="8">
+            <TextBlock Text="Sign customer license (.morobot)" FontWeight="SemiBold" Margin="0,0,0,8"/>
+            <UniformGrid Columns="2" Margin="0,0,0,8">
+              <TextBlock Text="Activation request" VerticalAlignment="Center"/>
+              <DockPanel LastChildFill="True">
+                <Button Content="Browse" Width="80" Margin="4,0,0,0" DockPanel.Dock="Right" Click="BrowseRequest_Click"/>
+                <TextBox x:Name="RequestPath"/>
+              </DockPanel>
+              <TextBlock Text="Private key (.pem)" VerticalAlignment="Center"/>
+              <DockPanel LastChildFill="True">
+                <Button Content="Browse" Width="80" Margin="4,0,0,0" DockPanel.Dock="Right" Click="BrowsePrivateKey_Click"/>
+                <TextBox x:Name="PrivateKeyPath"/>
+              </DockPanel>
+              <TextBlock Text="Valid until" VerticalAlignment="Center"/>
+              <DatePicker x:Name="ValidUntil"/>
+              <TextBlock Text="Organization" VerticalAlignment="Center"/>
+              <TextBox x:Name="Organization"/>
+              <TextBlock Text="Max users" VerticalAlignment="Center"/>
+              <TextBox x:Name="MaxUsers"/>
+              <TextBlock Text="Sequence" VerticalAlignment="Center"/>
+              <TextBox x:Name="Sequence" Text="1"/>
+              <TextBlock Text="Trial days" VerticalAlignment="Center"/>
+              <TextBox x:Name="TrialDays" Text="3"/>
+              <TextBlock Text="DB connection string" VerticalAlignment="Center"/>
+              <TextBox x:Name="DbConnection" AcceptsReturn="True" Height="48" TextWrapping="Wrap"/>
+              <TextBlock Text="Update server URL" VerticalAlignment="Center"/>
+              <TextBox x:Name="UpdateUrl" Text="https://morobot.ir/checkupdate"/>
+            </UniformGrid>
+            <CheckBox x:Name="AllowUpdates" Content="Allow online updates" IsChecked="True" Margin="0,0,0,8"/>
+            <DockPanel Margin="0,0,0,8">
+              <Button Content="Sign license" Width="120" Click="SignLicense_Click"/>
+              <Button Content="Save .morobot" Width="120" Margin="8,0,0,0" Click="SaveLicense_Click"/>
+            </DockPanel>
+            <TextBox x:Name="LicenseOutput" AcceptsReturn="True" TextWrapping="Wrap" Height="220" VerticalScrollBarVisibility="Auto"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+      <TabItem Header="Package">
+        <StackPanel Margin="8">
+          <TextBlock Text="Build customer server package (dotnet publish + zip)" FontWeight="SemiBold" Margin="0,0,0,8"/>
+          <UniformGrid Columns="2" Margin="0,0,0,8">
+            <TextBlock Text="Morobot.Web.csproj" VerticalAlignment="Center"/>
+            <DockPanel LastChildFill="True">
+              <Button Content="Browse" Width="80" Margin="4,0,0,0" DockPanel.Dock="Right" Click="BrowseProject_Click"/>
+              <TextBox x:Name="ProjectPath"/>
+            </DockPanel>
+            <TextBlock Text="Output folder" VerticalAlignment="Center"/>
+            <DockPanel LastChildFill="True">
+              <Button Content="Browse" Width="80" Margin="4,0,0,0" DockPanel.Dock="Right" Click="BrowseOutput_Click"/>
+              <TextBox x:Name="OutputPath"/>
+            </DockPanel>
+          </UniformGrid>
+          <Button Content="Build package" Width="140" HorizontalAlignment="Left" Click="BuildPackage_Click"/>
+        </StackPanel>
+      </TabItem>
+    </TabControl>
+    <TextBlock x:Name="StatusText" Grid.Row="2" Margin="0,12,0,0" Foreground="#555"/>
+  </Grid>
+</Window>
