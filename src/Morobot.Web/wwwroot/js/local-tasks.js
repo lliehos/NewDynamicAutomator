@@ -23,14 +23,24 @@
     }
   }
 
-  function writeTasks(tasks) {
-    if (window.DaSecureStore) {
-      DaSecureStore.writeTasks(tasks);
-      return;
+  let suppressLocalTasksRender = false;
+
+  function writeTasks(tasks, opts) {
+    const silent = !!(opts && opts.silent);
+    if (silent) suppressLocalTasksRender = true;
+    try {
+      if (window.DaSecureStore) {
+        DaSecureStore.writeTasks(tasks);
+        return;
+      }
+      localStorage.setItem(tasksKey(), JSON.stringify(tasks));
+      localStorage.setItem("da_local_user", currentUser());
+      if (!silent) {
+        window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: currentUser(), tasks } }));
+      }
+    } finally {
+      if (silent) suppressLocalTasksRender = false;
     }
-    localStorage.setItem(tasksKey(), JSON.stringify(tasks));
-    localStorage.setItem("da_local_user", currentUser());
-    window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: currentUser(), tasks } }));
   }
 
   function notifyHome(message, type) {
@@ -627,20 +637,14 @@
           if (!o) return true;
           return String(o.title || "") !== String(n.title || "")
             || String(o.ownerUser || "") !== String(n.ownerUser || "")
-            || Number(o.stepCount) !== Number(n.stepCount)
-            || Number(o.groupCount) !== Number(n.groupCount)
-            || Number(o.dataSourceCount) !== Number(n.dataSourceCount)
-            || Number(o.sharedWithCount) !== Number(n.sharedWithCount)
+            || Number(o.stepCount || 0) !== Number(n.stepCount || 0)
+            || Number(o.groupCount || 0) !== Number(n.groupCount || 0)
+            || Number(o.dataSourceCount || 0) !== Number(n.dataSourceCount || 0)
+            || Number(o.sharedWithCount || 0) !== Number(n.sharedWithCount || 0)
             || (!!o.graph?.nodes?.length) !== (!!n.graph?.nodes?.length);
         });
-      if (changed) {
-        if (window.DaSecureStore) {
-          const u = currentUser();
-          DaSecureStore.writeTasks(toStore, u);
-        } else {
-          localStorage.setItem(tasksKey(), JSON.stringify(toStore));
-        }
-      }
+      // Silent write: avoid writeTasks → da-local-tasks → render → writeTasks loop.
+      if (changed) writeTasks(toStore, { silent: true });
 
       if (body) {
         try {
@@ -836,6 +840,15 @@
     const tasks = readTasks();
     let hit = findTask(tasks, id);
     if (hit?.graph && Array.isArray(hit.graph.nodes) && hit.graph.nodes.length) {
+      // Memory may be richer than encrypted disk — flush so Player sync sees the graph.
+      if (window.DaSecureStore && typeof DaSecureStore.writeTasksAsync === "function") {
+        suppressLocalTasksRender = true;
+        try {
+          await DaSecureStore.writeTasksAsync(tasks);
+        } finally {
+          suppressLocalTasksRender = false;
+        }
+      }
       return hit;
     }
     if (!/^\d+$/.test(id)) {
@@ -851,7 +864,7 @@
     if (!graph || !Array.isArray(graph.nodes)) {
       throw new Error(t("tasks.noGraph") || "گراف فرآیند پیدا نشد.");
     }
-    graph.taskId = graph.taskId ?? Number(id) || id;
+    graph.taskId = graph.taskId ?? (Number(id) || id);
     if (!hit) {
       hit = normalizeTask({
         id,
@@ -870,7 +883,17 @@
       hit.stepCount = counts.steps;
       hit.dataSourceCount = counts.sources;
     }
-    writeTasks(tasks);
+    // Must flush encrypted localStorage before Player sync reads the disk.
+    if (window.DaSecureStore && typeof DaSecureStore.writeTasksAsync === "function") {
+      suppressLocalTasksRender = true;
+      try {
+        await DaSecureStore.writeTasksAsync(tasks);
+      } finally {
+        suppressLocalTasksRender = false;
+      }
+    } else {
+      writeTasks(tasks, { silent: true });
+    }
     return hit;
   }
 
@@ -900,6 +923,7 @@
   });
 
   window.addEventListener("da-local-tasks", (ev) => {
+    if (suppressLocalTasksRender) return;
     const detail = ev.detail;
     if (detail && detail.tasks && detail.user && detail.user !== currentUser()) return;
     render((detail && detail.tasks) || readTasks());
@@ -1024,15 +1048,24 @@
     const startPlay = async (scope) => {
       closePlayTargetMenu();
       setTasksBusy(true, "آماده‌سازی افزونهٔ اجرا…");
+      let cached = null;
       try {
-        await ensureTaskGraphCached(taskId);
+        cached = await ensureTaskGraphCached(taskId);
+        if (!cached?.graph?.nodes?.length) {
+          throw new Error("فرآیند در حافظهٔ محلی پیدا نشد. صفحه را رفرش کنید.");
+        }
       } catch (e) {
         setTasksBusy(false);
         notifyHome(String(e.message || e), "error");
         return;
       }
       window.dispatchEvent(new CustomEvent("da-play", {
-        detail: { taskId, ...(scope || {}) }
+        detail: {
+          taskId,
+          task: cached,
+          graph: cached.graph,
+          ...(scope || {})
+        }
       }));
     };
 
@@ -1123,12 +1156,13 @@
         try {
           const rows = await loadServerTasks();
           const merged = mergeServerTasksWithLocal(rows);
-          writeTasks(merged);
           render(merged);
           return;
         } catch (e) {
           console.warn(e);
           notifyHome(String(e.message || e), "error");
+          render(readTasks());
+          return;
         }
       }
       if (window.DaSecureStore && typeof DaSecureStore.whenReady === "function") {

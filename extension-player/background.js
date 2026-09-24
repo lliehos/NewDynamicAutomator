@@ -724,8 +724,20 @@ async function syncTasksFromPortal(message = {}) {
     };
   }
   if (message.user) await chrome.storage.local.set({ localUser: String(message.user) });
-  await saveUserTasks(tasks);
-  return { ok: true, count: tasks.length };
+  // Prefer richer graphs already in extension storage (avoid wiping hydrate race).
+  const existing = await loadUserTasks();
+  const byId = new Map((existing || []).map((t) => [String(t.id), t]));
+  const merged = tasks.map((t) => {
+    const old = byId.get(String(t.id));
+    if (!old) return t;
+    const oldN = Array.isArray(old?.graph?.nodes) ? old.graph.nodes.length : 0;
+    const newN = Array.isArray(t?.graph?.nodes) ? t.graph.nodes.length : 0;
+    if (newN >= oldN && newN > 0) return { ...old, ...t, graph: t.graph };
+    if (oldN > 0 && newN === 0) return { ...t, graph: old.graph };
+    return { ...old, ...t, graph: t.graph?.nodes?.length ? t.graph : old.graph };
+  });
+  await saveUserTasks(merged);
+  return { ok: true, count: merged.length };
 }
 
 async function persistPlayDataSourcesMessage(message) {

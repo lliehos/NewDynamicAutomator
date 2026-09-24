@@ -196,6 +196,24 @@
     try {
       global.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: u, tasks: list } }));
     } catch { /* ignore */ }
+    return list;
+  }
+
+  /** Same as writeTasks but waits until encrypted localStorage is flushed (needed before Player sync). */
+  async function writeTasksAsync(tasks, user) {
+    const u = user || currentUser();
+    let list = Array.isArray(tasks) ? tasks : [];
+    const key = tasksKey(u);
+    const cached = cache[key];
+    if (Array.isArray(cached) && cached.length) {
+      list = mergePreferRicherPerId(cached, list);
+    }
+    cache[key] = list;
+    await persistTasks(u, list);
+    try {
+      global.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: u, tasks: list } }));
+    } catch { /* ignore */ }
+    return list;
   }
 
   // Extension content-scripts run in an isolated world — they postMessage here so the
@@ -257,6 +275,7 @@
     profileKey,
     readTasks,
     writeTasks,
+    writeTasksAsync,
     readProfile,
     writeProfile,
     bootstrap,

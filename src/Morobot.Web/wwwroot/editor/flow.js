@@ -200,6 +200,40 @@
     }
     window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: currentUser(), tasks } }));
   }
+
+  /** Flush current diagram into encrypted localStorage before Player sync. */
+  async function flushGraphForPlay() {
+    const id = stableTaskId(taskId);
+    if (!id || !graph?.nodes?.length) return null;
+    const g = structuredClone
+      ? structuredClone(graph)
+      : JSON.parse(JSON.stringify(graph));
+    g.taskId = id;
+    const tasks = (readLocalTasks() || []).map((t) => ({ ...t }));
+    let hit = tasks.find((t) => String(t.id) === String(id));
+    if (!hit) {
+      hit = {
+        id,
+        title: g.title || `#${id}`,
+        designOrigin: g.designOrigin || "Manual",
+        createdBy: currentUser(),
+        ownerUser: currentUser(),
+        graph: g
+      };
+      tasks.push(hit);
+    } else {
+      hit.graph = g;
+      if (g.title) hit.title = g.title;
+      hit.stepCount = (g.nodes || []).filter((n) => n.kind === "action" || n.kind === "step").length;
+      hit.groupCount = (g.nodes || []).filter((n) => n.kind === "group").length;
+    }
+    if (window.DaSecureStore && typeof DaSecureStore.writeTasksAsync === "function") {
+      await DaSecureStore.writeTasksAsync(tasks);
+    } else {
+      writeLocalTasks(tasks);
+    }
+    return hit;
+  }
   function findLocalTask(id) {
     return readLocalTasks().find((t) => String(t.id) === String(id));
   }
@@ -4276,59 +4310,75 @@
       setStatus("شناسهٔ تب نامعتبر است.", "warn");
       return;
     }
-    const detail = {
-      taskId: stableTaskId(taskId),
-      groupNodeId: scope?.groupNodeId || null,
-      stepNodeId: scope?.stepNodeId || null,
-      conditionNodeId: scope?.conditionNodeId || null,
-      playScope: scope?.conditionNodeId
-        ? "condition"
-        : scope?.stepNodeId
-          ? "step"
-          : scope?.groupNodeId
-            ? "group"
-            : "task",
-      tabId: hasTab ? rawTab : null,
-      openNewTab: false
-    };
-    const send = () => {
-      // postMessage crosses isolated worlds reliably (CustomEvent detail can be lost).
+
+    const run = async () => {
+      let cached = null;
       try {
-        window.postMessage({ source: "da-editor", type: "play", ...detail }, "*");
-      } catch {
-        window.dispatchEvent(new CustomEvent("da-play", { detail }));
+        cached = await flushGraphForPlay();
+      } catch (e) {
+        setStatus(String(e.message || e), "error");
+        return;
       }
-      const msg = scope?.conditionNodeId
-        ? (hasTab ? `بررسی شرط در تب #${rawTab}…` : "بررسی شرط…")
-        : scope?.groupNodeId
-          ? `اجرای گروه در تب #${rawTab}…`
+      if (!cached?.graph?.nodes?.length) {
+        setStatus("گراف فرآیند برای اجرا آماده نشد.", "error");
+        return;
+      }
+      const detail = {
+        taskId: stableTaskId(taskId),
+        groupNodeId: scope?.groupNodeId || null,
+        stepNodeId: scope?.stepNodeId || null,
+        conditionNodeId: scope?.conditionNodeId || null,
+        playScope: scope?.conditionNodeId
+          ? "condition"
           : scope?.stepNodeId
-            ? `اجرای اقدام در تب #${rawTab}…`
-            : `اجرای فرآیند در تب #${rawTab}…`;
-      setStatus(msg, "info");
-      // Show pause/stop on diagram for any play (including condition checks).
-      playSessionActive = true;
-      playSessionPaused = false;
-      updatePlayControlsUi();
-    };
-    if (typeof window.daRequirePlayer === "function") {
-      window.daRequirePlayer({
-        reason: "برای اجرا در مرورگر، افزونهٔ Player لازم است.",
-        pending: { kind: "da-play", detail }
-      }).then((ok) => {
+            ? "step"
+            : scope?.groupNodeId
+              ? "group"
+              : "task",
+        tabId: hasTab ? rawTab : null,
+        openNewTab: false,
+        task: cached,
+        graph: cached.graph
+      };
+      const send = () => {
+        // postMessage crosses isolated worlds reliably (CustomEvent detail can be lost).
+        try {
+          window.postMessage({ source: "da-editor", type: "play", ...detail }, "*");
+        } catch {
+          window.dispatchEvent(new CustomEvent("da-play", { detail }));
+        }
+        const msg = scope?.conditionNodeId
+          ? (hasTab ? `بررسی شرط در تب #${rawTab}…` : "بررسی شرط…")
+          : scope?.groupNodeId
+            ? `اجرای گروه در تب #${rawTab}…`
+            : scope?.stepNodeId
+              ? `اجرای اقدام در تب #${rawTab}…`
+              : `اجرای فرآیند در تب #${rawTab}…`;
+        setStatus(msg, "info");
+        // Show pause/stop on diagram for any play (including condition checks).
+        playSessionActive = true;
+        playSessionPaused = false;
+        updatePlayControlsUi();
+      };
+      if (typeof window.daRequirePlayer === "function") {
+        const ok = await window.daRequirePlayer({
+          reason: "برای اجرا در مرورگر، افزونهٔ Player لازم است.",
+          pending: { kind: "da-play", detail }
+        });
         if (!ok) {
           setStatus("افزونهٔ اجرا متصل نیست — راهنمای نصب را ببینید.", "warn");
           return;
         }
         send();
-      });
-      return;
-    }
-    if (!extOkHint()) {
-      setStatus("افزونهٔ اجرا متصل نیست — صفحه را در Chrome رفرش کنید یا Player را Reload کنید.", "warn");
-      return;
-    }
-    send();
+        return;
+      }
+      if (!extOkHint()) {
+        setStatus("افزونهٔ اجرا متصل نیست — صفحه را در Chrome رفرش کنید یا Player را Reload کنید.", "warn");
+        return;
+      }
+      send();
+    };
+    run().catch((e) => setStatus(String(e.message || e), "error"));
   }
 
   // نتیجهٔ بررسی شرط از Player → ناتیفای + آلرت رنگی

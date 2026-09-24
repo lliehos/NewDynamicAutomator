@@ -51,8 +51,52 @@
     }
   }
 
-  async function syncTasksIntoPlayer() {
-    const tasks = await readPortalTasksAsync();
+  function mergePreferRicherPerId(prev, incoming) {
+    const prevById = new Map((prev || []).map((t) => [String(t.id), t]));
+    return (incoming || []).map((t) => {
+      const old = prevById.get(String(t.id));
+      if (!old) return t;
+      const oldNodes = Array.isArray(old?.graph?.nodes) ? old.graph.nodes.length : 0;
+      const nextNodes = Array.isArray(t?.graph?.nodes) ? t.graph.nodes.length : 0;
+      if (nextNodes >= oldNodes && nextNodes > 0) {
+        return { ...old, ...t, graph: t.graph };
+      }
+      if (oldNodes > 0 && !(t.graph?.nodes?.length)) {
+        return { ...t, graph: old.graph, stepCount: old.stepCount ?? t.stepCount, groupCount: old.groupCount ?? t.groupCount };
+      }
+      return { ...old, ...t, graph: t.graph?.nodes?.length ? t.graph : old.graph };
+    });
+  }
+
+  async function syncTasksIntoPlayer(preferredTask) {
+    let tasks = await readPortalTasksAsync();
+    if (preferredTask && preferredTask.id != null) {
+      const id = String(preferredTask.id);
+      const idx = tasks.findIndex((t) => String(t.id) === id);
+      if (idx >= 0) {
+        tasks[idx] = {
+          ...tasks[idx],
+          ...preferredTask,
+          graph: preferredTask.graph || tasks[idx].graph
+        };
+      } else {
+        tasks = tasks.concat([preferredTask]);
+      }
+    }
+    // If disk decrypt lagged, retry once.
+    const needGraph = preferredTask && preferredTask.graph?.nodes?.length;
+    const hasGraph = needGraph && tasks.some((t) => String(t.id) === String(preferredTask.id) && t.graph?.nodes?.length);
+    if (needGraph && !hasGraph) {
+      await new Promise((r) => setTimeout(r, 80));
+      const again = await readPortalTasksAsync();
+      tasks = mergePreferRicherPerId(again, tasks);
+      const idx = tasks.findIndex((t) => String(t.id) === String(preferredTask.id));
+      if (idx >= 0) {
+        tasks[idx] = { ...tasks[idx], ...preferredTask, graph: preferredTask.graph || tasks[idx].graph };
+      } else {
+        tasks = tasks.concat([preferredTask]);
+      }
+    }
     const user = portalUser();
     if (!tasks.length) {
       return { ok: false, error: "در پورتال فرآیندی نیست یا هنوز رمزگشایی نشده — صفحه را رفرش کنید." };
@@ -164,8 +208,11 @@
       /* ignore */
     }
 
+    const preferred = scope?.task
+      || (scope?.graph ? { id, graph: scope.graph, title: scope.graph.title } : null);
+
     // Push portal process list into Player chrome.storage BEFORE startPlay.
-    const sync = await syncTasksIntoPlayer();
+    const sync = await syncTasksIntoPlayer(preferred);
     if (!sync?.ok) {
       const msg = sync?.error || "همگام‌سازی فرآیندها با افزونهٔ اجرا ناموفق بود.";
       setPortalStatus(msg, "error");
@@ -357,7 +404,9 @@
         conditionNodeId: d.conditionNodeId,
         playScope: d.playScope || null,
         tabId: d.tabId,
-        openNewTab: d.openNewTab
+        openNewTab: d.openNewTab,
+        task: d.task || null,
+        graph: d.graph || null
       });
       return;
     }
@@ -392,7 +441,9 @@
       conditionNodeId: d.conditionNodeId,
       playScope: d.playScope || null,
       tabId: d.tabId,
-      openNewTab: d.openNewTab
+      openNewTab: d.openNewTab,
+      task: d.task || null,
+      graph: d.graph || null
     });
   });
 
