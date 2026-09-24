@@ -106,7 +106,7 @@ function stepShowsTargetSelector(n) {
 }
 
 function conditionNeedsCompare(ct) {
-  return ["Url", "ElementValue", "SourceValue", "FindElements", "DriverTabs"].includes(ct);
+  return ["Url", "ElementValue", "SourceValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
 }
 
 function conditionNeedsCompareOperand(ct, eq) {
@@ -1740,6 +1740,16 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
       return compareConditionValues(left, right, node.equalityType || "equal");
     }
 
+    // System date / system time: the left operand is the machine clock formatted
+    // with the condition's own format, the right operand is the compare value.
+    // Formatting is explicit so a comparison is predictable regardless of the
+    // UI locale (fa-IR digits would otherwise never match a stored literal).
+    if (ct === "SystemDate" || ct === "SystemTime") {
+      const left = formatSystemClock(ct, node.systemClockFormat);
+      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
+      return compareConditionValues(left, right, node.equalityType || "equal");
+    }
+
     // Unknown type — take success path so flow continues.
     appendPlayLog("info", `نوع شرط پشتیبانی‌نشده: ${ct} — شاخه success`);
     return true;
@@ -2507,6 +2517,43 @@ function resolveSystemValue(kind) {
   }
   if (k === "RandomInt") return String(Math.floor(Math.random() * 1e9));
   return "";
+}
+
+/**
+ * Format the machine clock for the SystemDate / SystemTime condition types.
+ * Kept to ASCII digits on purpose: comparing against a constant typed in the
+ * editor must not depend on the browser's locale digits.
+ * Supported formats — date: `yyyy-MM-dd` (default), `yyyy/MM/dd`, `dd-MM-yyyy`,
+ * `yyyyMMdd`, `Timestamp`; time: `HH:mm:ss` (default), `HH:mm`, `HHmmss`.
+ */
+function formatSystemClock(kind, format) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const yyyy = String(d.getFullYear());
+  const MM = p(d.getMonth() + 1);
+  const dd = p(d.getDate());
+  const HH = p(d.getHours());
+  const mm = p(d.getMinutes());
+  const ss = p(d.getSeconds());
+  const fmt = String(format || "").trim();
+
+  if (kind === "SystemDate") {
+    switch (fmt) {
+      case "yyyy/MM/dd": return `${yyyy}/${MM}/${dd}`;
+      case "dd-MM-yyyy": return `${dd}-${MM}-${yyyy}`;
+      case "yyyyMMdd": return `${yyyy}${MM}${dd}`;
+      case "Timestamp": return String(d.getTime());
+      case "yyyy-MM-dd":
+      default: return `${yyyy}-${MM}-${dd}`;
+    }
+  }
+  switch (fmt) {
+    case "HH:mm": return `${HH}:${mm}`;
+    case "HHmmss": return `${HH}${mm}${ss}`;
+    case "Timestamp": return String(d.getTime());
+    case "HH:mm:ss":
+    default: return `${HH}:${mm}:${ss}`;
+  }
 }
 
 function resolveStepParam(step, graph, rowIndex, opts = {}) {

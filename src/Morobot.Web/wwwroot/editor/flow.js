@@ -5393,6 +5393,14 @@
         if (k === "navigateUrl" && isActionNode(n)) {
           n.constantValue = n.navigateUrl;
         }
+        if (k === "systemClockFormat") {
+          // The format defines the shape the compare literal must have, so the
+          // inspector (placeholder/hint) and validity both need re-evaluating.
+          renderInspector();
+          syncNodeValidity(n);
+          render();
+          return;
+        }
         render();
       };
       inp.addEventListener("change", apply);
@@ -5546,6 +5554,56 @@
     return SYSTEM_VALUE_OPTIONS.map(([v, t]) =>
       `<option value="${v}" ${c === v ? "selected" : ""}>${t}</option>`
     ).join("");
+  }
+
+  /**
+   * Does a typed compare literal have the same shape as the machine clock
+   * formatted with `fmt`? Mirrors formatSystemClock() in the player engine so an
+   * impossible comparison is reported while editing instead of silently failing
+   * on every play.
+   */
+  function clockValueConforms(value, fmt) {
+    const v = String(value || "").trim();
+    if (!v) return false;
+    // Range-check the numeric parts too: a shape-only test would accept 24:99.
+    const hhmmss = /^(\d{2}):(\d{2}):(\d{2})$/;
+    const hhmm = /^(\d{2}):(\d{2})$/;
+    const dateParts = (a, b, c, order) => {
+      // order: "ymd" | "dmy" — the year is the 4-digit part either way.
+      const y = order === "ymd" ? a : c;
+      const mo = order === "ymd" ? b : b;
+      const d = order === "ymd" ? c : a;
+      if (Number(mo) < 1 || Number(mo) > 12) return false;
+      if (Number(d) < 1 || Number(d) > 31) return false;
+      const dt = new Date(Number(y), Number(mo) - 1, Number(d));
+      return dt.getFullYear() === Number(y) && dt.getMonth() === Number(mo) - 1 && dt.getDate() === Number(d);
+    };
+    let m;
+    switch (fmt) {
+      case "yyyy-MM-dd":
+        m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+        return !!m && dateParts(m[1], m[2], m[3], "ymd");
+      case "yyyy/MM/dd":
+        m = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(v);
+        return !!m && dateParts(m[1], m[2], m[3], "ymd");
+      case "dd-MM-yyyy":
+        m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(v);
+        return !!m && dateParts(m[1], m[2], m[3], "dmy");
+      case "yyyyMMdd":
+        m = /^(\d{4})(\d{2})(\d{2})$/.exec(v);
+        return !!m && dateParts(m[1], m[2], m[3], "ymd");
+      case "HH:mm:ss":
+        m = hhmmss.exec(v);
+        return !!m && Number(m[1]) < 24 && Number(m[2]) < 60 && Number(m[3]) < 60;
+      case "HH:mm":
+        m = hhmm.exec(v);
+        return !!m && Number(m[1]) < 24 && Number(m[2]) < 60;
+      case "HHmmss":
+        m = /^(\d{2})(\d{2})(\d{2})$/.exec(v);
+        return !!m && Number(m[1]) < 24 && Number(m[2]) < 60 && Number(m[3]) < 60;
+      case "Timestamp": return /^\d+$/.test(v);
+      default: return true;
+    }
   }
 
   /** Legacy capture used contentSourceType as destination (Memory/DataSource). */
@@ -5817,7 +5875,7 @@
       }
     }
 
-    if (conditionNeedsCompareOperand(ct, eq)) {
+      if (conditionNeedsCompareOperand(ct, eq)) {
       if (src === "Constant") {
         const val = ct === "Url"
           ? String(n.navigation || n.constantEqualValue || n.constantValue || "").trim()
@@ -5829,6 +5887,13 @@
           }
         } else if (!val) {
           reasons.push("مقدار مقایسه خالی است");
+        } else if (ct === "SystemDate" || ct === "SystemTime") {
+          // The left operand is machine-formatted with a fixed shape; reject a
+          // literal that can never match so the mistake surfaces in the editor.
+          const fmt = n.systemClockFormat || (ct === "SystemDate" ? "yyyy-MM-dd" : "HH:mm:ss");
+          if (!clockValueConforms(val, fmt)) {
+            reasons.push(`مقدار مقایسه با قالب «${fmt}» هم‌شکل نیست`);
+          }
         }
       } else if (src === "UserSystemDate") {
         const val = String(n.constantEqualValue ?? n.userSystemDateValue ?? "").trim();
@@ -6713,6 +6778,8 @@
       case "NotFindElement": return "نبود المان";
       case "FindElements": return "تعداد المان‌ها";
       case "DriverTabs": return "تعداد تب‌ها";
+      case "SystemDate": return "تاریخ سیستم";
+      case "SystemTime": return "زمان سیستم";
       default: return "نوع؟";
     }
   }
@@ -6733,7 +6800,7 @@
   }
 
   function conditionNeedsCompare(ct) {
-    return ["Url", "ElementValue", "SourceValue", "FindElements", "DriverTabs"].includes(ct);
+    return ["Url", "ElementValue", "SourceValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
   }
 
   /** Whether a compare operand (constant / element / DS) is needed. */
@@ -6803,8 +6870,26 @@
           <option value="NotFindElement" ${ct === "NotFindElement" ? "selected" : ""}>نبود المان</option>
           <option value="FindElements" ${ct === "FindElements" ? "selected" : ""}>تعداد المان‌های صفحه</option>
           <option value="DriverTabs" ${ct === "DriverTabs" ? "selected" : ""}>تعداد تب‌های مرورگر</option>
+          <option value="SystemDate" ${ct === "SystemDate" ? "selected" : ""}>تاریخ سیستم</option>
+          <option value="SystemTime" ${ct === "SystemTime" ? "selected" : ""}>زمان سیستم</option>
         </select>
       </div>`;
+
+    // تاریخ/زمان سیستم: مقدار از ساعت ماشین خوانده می‌شود؛ فقط قالبی که باید با
+    // مقدار مقایسه هم‌شکل باشد انتخاب می‌شود (بدون حالت مرورگر).
+    if (ct === "SystemDate" || ct === "SystemTime") {
+      const clockFormat = n.systemClockFormat
+        || (ct === "SystemDate" ? "yyyy-MM-dd" : "HH:mm:ss");
+      const formats = ct === "SystemDate"
+        ? [["yyyy-MM-dd", "2026-09-24"], ["yyyy/MM/dd", "2026/09/24"], ["dd-MM-yyyy", "24-09-2026"], ["yyyyMMdd", "20260924"], ["Timestamp", t("editor.cond.clockTimestamp")]]
+        : [["HH:mm:ss", "14:05:09"], ["HH:mm", "14:05"], ["HHmmss", "140509"], ["Timestamp", t("editor.cond.clockTimestamp")]];
+      html += `<div class="insp-field"><label>${t("editor.cond.clockFormat")}</label>
+          <select data-k="systemClockFormat">
+            ${formats.map(([v, sample]) => `<option value="${esc(v)}" ${clockFormat === v ? "selected" : ""}>${esc(v)} — ${esc(sample)}</option>`).join("")}
+          </select>
+        </div>
+        <p class="palette-hint" style="margin:0 0 8px;line-height:1.7">${t("editor.cond.clockHint")}</p>`;
+    }
 
     if (needsSubjectSelector) {
       html += `<div class="insp-section-title">المان مورد بررسی</div>` +
@@ -6837,11 +6922,22 @@
 
       if (src === "Constant") {
         const isUrl = ct === "Url";
+        const isClock = ct === "SystemDate" || ct === "SystemTime";
+        const clockFmt = n.systemClockFormat || (ct === "SystemDate" ? "yyyy-MM-dd" : "HH:mm:ss");
+        const clockSample = ct === "SystemDate"
+          ? (clockFmt === "yyyy/MM/dd" ? "2026/09/24" : clockFmt === "dd-MM-yyyy" ? "24-09-2026" : clockFmt === "yyyyMMdd" ? "20260924" : clockFmt === "Timestamp" ? "1758720000000" : "2026-09-24")
+          : (clockFmt === "HH:mm" ? "14:05" : clockFmt === "HHmmss" ? "140509" : clockFmt === "Timestamp" ? "1758720000000" : "14:05:09");
+        const placeholder = isUrl
+          ? "مثلاً google.com یا /login"
+          : isClock
+            ? `${clockSample} (${clockFmt})`
+            : "مقدار برای مقایسه";
         html += `<div class="insp-field">
-          <label>${isUrl ? "آدرس / الگو" : "مقدار ثابت"}</label>
+          <label>${isUrl ? "آدرس / الگو" : isClock ? t("editor.cond.clockCompareValue") : "مقدار ثابت"}</label>
           <input data-k="${isUrl ? "navigation" : "constantEqualValue"}"
             value="${esc(isUrl ? (n.navigation || n.constantEqualValue || "") : (n.constantEqualValue || ""))}"
-            placeholder="${isUrl ? "مثلاً google.com یا /login" : "مقدار برای مقایسه"}" />
+            placeholder="${esc(placeholder)}" />
+          ${isClock ? `<p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${esc(t("editor.cond.clockCompareHint", { fmt: clockFmt }))}</p>` : ""}
         </div>`;
       } else if (src === "UserSystemDate") {
         const dateVal = normalizeUserSystemDateInput(n.constantEqualValue || n.userSystemDateValue || "");

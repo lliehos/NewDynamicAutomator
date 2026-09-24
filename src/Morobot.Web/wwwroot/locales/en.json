@@ -1022,6 +1022,13 @@
       "indexParent": "Parent index",
       "indexOwn": "Own index"
     },
+    "cond": {
+      "clockFormat": "Date/time output format",
+      "clockHint": "The value is read from this machine's clock (independent of the site). The compare value must match this exact format.",
+      "clockTimestamp": "milliseconds since 1970",
+      "clockCompareValue": "Compare value",
+      "clockCompareHint": "Enter the value in the \"{fmt}\" format, otherwise the condition can never pass."
+    },
     "insp": {
       "title": "Title",
       "actionType": "Action type",
