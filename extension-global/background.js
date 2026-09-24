@@ -1,6 +1,6 @@
-/** Recorder-only extension — play messages are rejected. */
+importScripts("player/engine.js", "bg-selector.js");
 
-/** Single-app mode: portal hosts UI + /api/* — no separate API process. */
+/** Morobot Global extension — record, play, and selector in one package. */
 const DEFAULT_PORTAL = "https://localhost:7201";
 
 async function portalBase() {
@@ -88,14 +88,38 @@ async function handleMessage(message, sender) {
     case "getTaskGraph":
       return getLocalTaskGraph(message.taskId);
     case "startPlay":
+      return startPlayWithAutoReload(message, sender);
     case "stopPlay":
+      return stopPlay();
     case "pausePlay":
+      return pausePlay();
     case "resumePlay":
+      return resumePlay();
     case "getPlayState":
+      return getPlayStatus();
+    case "clearPlayLogs":
+      return clearPlayLogs();
+    case "persistPlayDataSources":
+      return persistPlayDataSourcesMessage(message);
+    case "broadcastDsCellEvent":
+      return broadcastDsCellEventMessage(message);
+    case "reloadPlayerNow":
+      return reloadPlayerNow(message.pendingPlay || null);
+    case "getCopiedSelector":
+      return getCopiedSelector();
+    case "setCopiedSelector":
+      return setCopiedSelector(message.payload, message.text);
+    case "clearCopiedSelector":
+      await chrome.storage.local.remove(["copiedSelector", "copiedSelectorText", "copiedMode"]);
+      return { ok: true };
+    case "devtoolsCopy":
+      return handleDevtoolsCopy(message);
+    case "ping":
       return {
-        ok: false,
-        error: "این افزونه فقط ضبط است. برای اجرا، افزونهٔ Player را نصب کنید.",
-        needExtension: "player"
+        ok: true,
+        role: "global",
+        version: chrome.runtime.getManifest().version,
+        ...(await getCopiedSelectorPreview())
       };
     case "startRecordSession":
       return startRecordSession(message);
@@ -111,13 +135,6 @@ async function handleMessage(message, sender) {
       return setRecordOptions(message.options);
     case "rerecord":
       return resumeRecord();
-    case "getCopiedSelector":
-    case "setCopiedSelector":
-    case "clearCopiedSelector":
-      return {
-        ok: false,
-        error: "کپی سلکتور به افزونهٔ Selector منتقل شد — آن را جداگانه نصب کنید."
-      };
     default:
       return { ok: false, error: "unknown" };
   }
@@ -436,7 +453,7 @@ async function injectRecordFab(tabId, attempt = 0) {
         "content/selector.js",
         "content/frames.js",
         "content/recorder.js",
-        "content/fab.js"
+        "content/fab-record.js"
       ]
     });
     await broadcastRecordState();
@@ -1231,19 +1248,65 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
   await appendNavStep(details.url, details.tabId);
 });
 
+/** Re-mount play HUD after refresh/navigation (storage-aware; retries for blank tabs). */
+async function reinjectPlayHudForTab(tabId, reason) {
+  if (!tabId) return;
+  try {
+    let playing = !!(typeof playStatus !== "undefined" && playStatus?.playing);
+    let activePlayTab = (typeof playTabId !== "undefined" && playTabId) || null;
+    if (!playing || !activePlayTab) {
+      const st = await chrome.storage.local.get(["playing", "playTabId"]);
+      if (st.playing && st.playTabId) {
+        if (!playing) {
+          await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
+          if (typeof playStatus !== "undefined") {
+            playStatus.playing = false;
+            playStatus.paused = false;
+            playStatus.lastError = "اجرا قطع شد (ریستارت افزونه). دوباره اجرا کنید.";
+          }
+          if (typeof broadcastPlayState === "function") broadcastPlayState();
+          return;
+        }
+        activePlayTab = Number(st.playTabId) || activePlayTab;
+      }
+    }
+    if (!playing || !activePlayTab || Number(tabId) !== Number(activePlayTab)) return;
+    if (typeof injectPlayFab !== "function") return;
+    for (let i = 0; i < 4; i++) {
+      const ok = await injectPlayFab(tabId);
+      if (ok) {
+        if (typeof notifyTab === "function" && typeof getPlayStatus === "function") {
+          notifyTab(tabId, { type: "playStateChanged", ...getPlayStatus() });
+        }
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 150 + i * 120));
+    }
+  } catch (err) {
+    console.warn("[Morobot Global] reinjectPlayHudForTab", reason, err?.message || err);
+  }
+}
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.url || changeInfo.title || changeInfo.status === "complete" || changeInfo.status === "loading") {
     scheduleOpenTabsBroadcast(changeInfo.url ? "url" : "update");
   }
+  if (changeInfo.status === "complete") {
+    reinjectPlayHudForTab(tabId, "tabs.onUpdated").catch(() => {});
+  }
   const { recording, recordTabId } = await chrome.storage.local.get(["recording", "recordTabId"]);
   if (!recording || !recordTabId || tabId !== recordTabId) return;
   if (changeInfo.status === "complete") {
-    // about:blank has no content_scripts; http(s) pages get them automatically — still safe (idempotent).
     injectRecordFab(tabId).catch(() => {});
   }
   if (changeInfo.url) {
     await appendNavStep(changeInfo.url, tabId);
   }
+});
+
+chrome.webNavigation.onCompleted.addListener((details) => {
+  if (details.frameId !== 0) return;
+  reinjectPlayHudForTab(details.tabId, "webNavigation.onCompleted").catch(() => {});
 });
 
 chrome.tabs.onCreated.addListener(() => scheduleOpenTabsBroadcast("created"));

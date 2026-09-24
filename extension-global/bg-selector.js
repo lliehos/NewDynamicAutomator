@@ -1,49 +1,3 @@
-﻿/** Selector extension — 6 copy modes (3 unique + 3 relative) + portal memory + DevTools bridge. */
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  let answered = false;
-  const reply = (payload) => {
-    if (answered) return;
-    answered = true;
-    try { sendResponse(payload); } catch { /* channel closed */ }
-  };
-  handleMessage(message, sender)
-    .then(reply)
-    .catch((err) => reply({ ok: false, error: err?.message || String(err) }));
-  return true;
-});
-
-async function handleMessage(message) {
-  switch (message?.type) {
-    case "ping":
-    case "getState":
-      return {
-        ok: true,
-        role: "selector",
-        version: chrome.runtime.getManifest().version,
-        ...(await getCopiedSelectorPreview())
-      };
-    case "session":
-      return {
-        ok: true,
-        role: "selector",
-        version: chrome.runtime.getManifest().version,
-        userName: "local"
-      };
-    case "getCopiedSelector":
-      return getCopiedSelector();
-    case "setCopiedSelector":
-      return setCopiedSelector(message.payload, message.text);
-    case "clearCopiedSelector":
-      await chrome.storage.local.remove(["copiedSelector", "copiedSelectorText", "copiedMode"]);
-      return { ok: true };
-    case "devtoolsCopy":
-      return handleDevtoolsCopy(message);
-    default:
-      return { ok: false, error: "این افزونه فقط سلکتور است." };
-  }
-}
-
 async function getCopiedSelectorPreview() {
   const data = await chrome.storage.local.get(["copiedSelector", "copiedMode"]);
   const sel = data.copiedSelector?.elementValue || data.copiedSelector?.selector || "";
@@ -59,7 +13,7 @@ async function getCopiedSelectorPreview() {
 
 async function getCopiedSelector() {
   const data = await chrome.storage.local.get(["copiedSelector", "copiedSelectorText"]);
-  if (!data.copiedSelector) return { ok: false, error: "آبجکت سلکتوری در حافظه نیست." };
+  if (!data.copiedSelector) return { ok: false, error: "????? ??????? ?? ????? ????." };
   const payload = normalizeAppSelector(data.copiedSelector);
   return {
     ok: true,
@@ -70,11 +24,11 @@ async function getCopiedSelector() {
 
 async function setCopiedSelector(payload, text) {
   if (!payload || typeof payload !== "object") {
-    return { ok: false, error: "payload نامعتبر است." };
+    return { ok: false, error: "payload ??????? ???." };
   }
   const normalized = normalizeAppSelector(payload);
   if (!String(normalized.elementValue || "").trim()) {
-    return { ok: false, error: "سلکتور خالی است." };
+    return { ok: false, error: "?????? ???? ???." };
   }
   const encoded = text || encodeDaSelector(normalized);
   await chrome.storage.local.set({
@@ -173,7 +127,6 @@ function encodeDaSelector(payload) {
   return "DASEL:" + JSON.stringify(payload);
 }
 
-/* ── 6 context menus ─────────────────────────────────────────── */
 const CTX_PARENT = "da-selector-parent";
 const CTX_U_EL = "da-copy-element-unique";
 const CTX_U_FR = "da-copy-frame-unique";
@@ -188,16 +141,16 @@ function ensureContextMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: CTX_PARENT,
-      title: "مروبات — سلکتور",
+      title: "?????? ? ??????",
       contexts: ["all"]
     });
     const items = [
-      [CTX_U_EL, "کپی سلکتور المنت (یونیک)"],
-      [CTX_U_FR, "کپی فریم المنت (یونیک)"],
-      [CTX_U_OBJ, "کپی آبجکت سلکتور (یونیک)"],
-      [CTX_R_EL, "کپی سلکتور المنت (نسبی)"],
-      [CTX_R_FR, "کپی فریم المنت (نسبی)"],
-      [CTX_R_OBJ, "کپی آبجکت سلکتور (نسبی)"]
+      [CTX_U_EL, "??? ?????? ????? (?????)"],
+      [CTX_U_FR, "??? ???? ????? (?????)"],
+      [CTX_U_OBJ, "??? ????? ?????? (?????)"],
+      [CTX_R_EL, "??? ?????? ????? (????)"],
+      [CTX_R_FR, "??? ???? ????? (????)"],
+      [CTX_R_OBJ, "??? ????? ?????? (????)"]
     ];
     for (const [id, title] of items) {
       chrome.contextMenus.create({
@@ -228,12 +181,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       result = await copySelectorObject(info, tab, unique);
     }
     if (result.ok) {
-      console.info("[DA Selector]", id, result.preview || result.selector || "");
+      console.info("[Morobot Global Selector]", id, result.preview || result.selector || "");
     } else {
-      console.warn("[DA Selector] failed", result.error);
+      console.warn("[Morobot Global Selector] failed", result.error);
     }
   } catch (err) {
-    console.warn("[DA Selector] error", err?.message || err);
+    console.warn("[Morobot Global Selector] error", err?.message || err);
   }
 });
 
@@ -249,7 +202,7 @@ async function captureLeaf(tab, frameId, unique) {
     captured = null;
   }
   if (!captured?.ok || !captured.selector) {
-    return { ok: false, error: captured?.error || "سلکتور گرفته نشد — صفحه را رفرش کنید." };
+    return { ok: false, error: captured?.error || "?????? ????? ??? ? ???? ?? ???? ????." };
   }
   return { ok: true, captured };
 }
@@ -279,7 +232,7 @@ async function copyFrameElement(info, tab, unique = true) {
     return {
       ok: true,
       selector: msg,
-      preview: "سند اصلی — فریمی نیست",
+      preview: "??? ???? ? ????? ????",
       clipped,
       mode: unique ? "frame-unique" : "frame-relative",
       frameHops: 0
@@ -336,12 +289,11 @@ async function copySelectorObject(info, tab, unique = true) {
   };
 }
 
-/** DevTools sidebar → copy for $0 (element / object; frame uses current inspected tab frame if any). */
 async function handleDevtoolsCopy(message) {
   const tabId = message.tabId;
-  if (!tabId) return { ok: false, error: "tabId لازم است." };
+  if (!tabId) return { ok: false, error: "tabId ???? ???." };
   const unique = message.unique !== false;
-  const kind = message.kind || "element"; // element | frame | object
+  const kind = message.kind || "element";
   const info = { frameId: message.frameId ?? 0 };
   const tab = { id: tabId, url: message.url || "" };
   if (kind === "element") return copyElementSelector(info, tab, unique);
@@ -435,7 +387,6 @@ async function buildFramePath(tabId, leafFrameId, unique = true) {
   return path;
 }
 
-/** Injected into parent frame — builds unique or relative CSS for child iframe. */
 function describeIframeInPage(childUrl, indexInParent, mode) {
   const nodes = Array.from(document.querySelectorAll("iframe, frame"));
   let el = nodes.find((n) => {

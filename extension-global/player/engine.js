@@ -509,7 +509,7 @@ async function injectPlayFab(tabId) {
     }).catch(() => {});
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["lib/ext-i18n.js", "content/fab.js"]
+      files: ["lib/ext-i18n.js", "content/fab-play.js"]
     });
     notifyTab(tabId, { type: "playStateChanged", ...getPlayStatus() });
     return true;

@@ -1,9 +1,19 @@
 ﻿{
   "manifest_version": 3,
-  "name": "Morobot Player",
-  "version": "1.0.54",
-  "description": "Morobot process player — runs flows on real pages",
-  "permissions": ["storage", "cookies", "scripting", "webNavigation", "tabs", "activeTab", "windows"],
+  "name": "Morobot Global",
+  "version": "2.0.0",
+  "description": "Morobot — ضبط، اجرا و سلکتور در یک افزونه",
+  "permissions": [
+    "storage",
+    "cookies",
+    "scripting",
+    "webNavigation",
+    "tabs",
+    "activeTab",
+    "windows",
+    "contextMenus",
+    "clipboardWrite"
+  ],
   "host_permissions": [
     "http://localhost/*",
     "https://localhost/*",
@@ -21,9 +31,10 @@
   "background": {
     "service_worker": "background.js"
   },
+  "devtools_page": "devtools.html",
   "action": {
     "default_popup": "popup.html",
-    "default_title": "اجرا — مروبات",
+    "default_title": "Morobot Global — مروبات",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -33,27 +44,28 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["content/selector.js", "content/frames.js", "content/player.js"],
+      "js": ["content/selector.js", "content/frames.js", "content/recorder.js", "content/player.js", "content/context-selector.js"],
       "all_frames": true,
       "run_at": "document_idle"
     },
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["content/fab.js"],
+      "js": ["content/fab-play.js"],
       "css": ["styles/fab.css"],
       "all_frames": false,
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "http://localhost/*",
-        "https://localhost/*",
-        "http://127.0.0.1/*",
-        "https://127.0.0.1/*"
-      ],
-      "js": ["lib/da-crypto.js", "content/portal-bridge.js", "content/portal-ui.js"],
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["lib/portal-detect.js", "lib/da-crypto.js", "lib/ext-i18n.js", "content/portal-bridge.js", "content/portal-ui.js"],
       "run_at": "document_start",
       "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["blank.html", "icons/*", "styles/*", "content/*", "lib/*"],
+      "matches": ["http://*/*", "https://*/*"]
     }
   ]
 }

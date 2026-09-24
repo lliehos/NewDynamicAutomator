@@ -38,13 +38,8 @@
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "http://localhost/*",
-        "https://localhost/*",
-        "http://127.0.0.1/*",
-        "https://127.0.0.1/*"
-      ],
-      "js": ["content/portal-bridge.js", "content/portal-ui.js"],
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["lib/portal-detect.js", "content/portal-bridge.js", "content/portal-ui.js"],
       "run_at": "document_start",
       "all_frames": false
     }

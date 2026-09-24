@@ -1,5 +1,7 @@
 /** Portal handshake — Smart Recorder role. */
 (function () {
+  if (window.DaPortalDetect && !DaPortalDetect.isMorobotPortalPage()) return;
+
   const ROLE = "smart";
 
   function mark() {

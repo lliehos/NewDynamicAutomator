@@ -1,6 +1,8 @@
-/** Portal handshake + encrypted local task sync — Player role. */
+/** Portal handshake + encrypted local task sync — Recorder role. */
 (function () {
-  const ROLE = "player";
+  if (window.DaPortalDetect && !DaPortalDetect.isMorobotPortalPage()) return;
+
+  const ROLE = "recorder";
 
   function isActionNode(n) {
     return !!n && (n.kind === "action" || n.kind === "step");
@@ -92,14 +94,18 @@
   function mark() {
     try {
       const version = chrome.runtime.getManifest().version;
+      document.documentElement.dataset.daRecorderExtension = "1";
+      document.documentElement.dataset.daRecorderVersion = version;
       document.documentElement.dataset.daPlayerExtension = "1";
       document.documentElement.dataset.daPlayerVersion = version;
+      document.documentElement.dataset.daSelectorExtension = "1";
+      document.documentElement.dataset.daSelectorVersion = version;
       window.dispatchEvent(new CustomEvent("da-extension-ready", {
-        detail: { version, role: ROLE }
+        detail: { version, role: "global" }
       }));
-      window.dispatchEvent(new CustomEvent("da-player-ready", {
-        detail: { version }
-      }));
+      window.dispatchEvent(new CustomEvent("da-recorder-ready", { detail: { version } }));
+      window.dispatchEvent(new CustomEvent("da-player-ready", { detail: { version } }));
+      window.dispatchEvent(new CustomEvent("da-selector-ready", { detail: { version } }));
     } catch {
       /* ignore */
     }
@@ -115,7 +121,7 @@
       portalBase: origin,
       apiBase: origin,
       localUser: user,
-      extensionRole: ROLE,
+      extensionRole: "global",
       uiCulture: culture
     });
     chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
@@ -149,7 +155,8 @@
       if (list.length === 0 && prev.length > 0) return;
       const prevRich = prev.reduce((s, t) => s + richnessOf(t), 0);
       const nextRich = list.reduce((s, t) => s + richnessOf(t), 0);
-      // Never let a stale chrome.storage copy wipe a richer portal graph after Recorder save.
+      // Never let a stale Player/Recorder chrome.storage copy wipe a richer portal graph
+      // (classic bug: re-record save OK, then Player pull reverts the process).
       const toSave = (list.length && nextRich < prevRich)
         ? mergePreferRicherPerId(prev, list)
         : list;
@@ -195,6 +202,13 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "portalPing") {
       sendResponse({ ok: true, extension: true, role: ROLE, version: chrome.runtime.getManifest().version });
+      return true;
+    }
+    if (message.type === "requestPortalTasks") {
+      const user = currentUser();
+      readTasksDisk(user).then((tasks) => {
+        sendResponse({ ok: true, user, tasks: Array.isArray(tasks) ? tasks : [] });
+      }).catch(() => sendResponse({ ok: false, tasks: [] }));
       return true;
     }
     if (message.type === "localTasksUpdated") {
