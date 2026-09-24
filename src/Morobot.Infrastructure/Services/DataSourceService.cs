@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClosedXML.Excel;
@@ -275,8 +277,81 @@ public class DataSourceService
         {
             RowIndex = rowIndex,
             Values = map,
-            DataRevision = d.DataRevision
+            DataRevision = Math.Max(d.DataRevision, cells.Count == 0 ? 0 : cells.Max(c => c.CellRevision))
         };
+    }
+
+    /// <summary>
+    /// Bulk row page for "view all rows" screens: one round trip instead of one request per row.
+    /// Optionally filtered to a column-key set so callers only pull what they render.
+    /// </summary>
+    public async Task<DataSourcePageDto?> GetRowsPageAsync(
+        int userId, int id, int fromRow, int count, IReadOnlyList<string>? columnKeys, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (d is null) return null;
+        if (fromRow < 0) fromRow = 0;
+        count = Math.Clamp(count, 1, 5000);
+
+        var q = _db.DataSourceCells.AsNoTracking()
+            .Where(c => c.DataSourceId == id && c.RowIndex >= fromRow && c.RowIndex < fromRow + count);
+
+        if (columnKeys is { Count: > 0 })
+        {
+            var keys = columnKeys.Where(k => !string.IsNullOrWhiteSpace(k)).Select(k => k.Trim()).Distinct().ToList();
+            if (keys.Count > 0)
+                q = q.Where(c => keys.Contains(c.ColumnKey));
+        }
+
+        var rows = await q
+            .OrderBy(c => c.RowIndex)
+            .ThenBy(c => c.ColumnKey)
+            .Select(c => new { c.RowIndex, c.ColumnKey, c.CellValue, c.CellRevision })
+            .ToListAsync(ct);
+
+        var byRow = new Dictionary<int, DataSourceRowDto>();
+        var revisions = new Dictionary<int, Dictionary<string, long>>();
+        long maxCellRevision = 0;
+        foreach (var c in rows)
+        {
+            if (!byRow.TryGetValue(c.RowIndex, out var row))
+            {
+                row = new DataSourceRowDto { RowIndex = c.RowIndex };
+                byRow[c.RowIndex] = row;
+                revisions[c.RowIndex] = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            }
+            row.Values[c.ColumnKey] = c.CellValue ?? "";
+            revisions[c.RowIndex][c.ColumnKey] = c.CellRevision;
+            if (c.CellRevision > maxCellRevision) maxCellRevision = c.CellRevision;
+        }
+
+        var cols = DeserializeColumns(d.ColumnsJson);
+        return new DataSourcePageDto
+        {
+            Id = d.Id,
+            Title = d.Title,
+            Columns = cols,
+            ColumnKeys = cols.Select(c => c.Key).ToList(),
+            FromRow = fromRow,
+            Count = count,
+            ColumnCount = d.ColumnCount,
+            RowCount = Math.Max(d.RowCount, byRow.Count == 0 ? 0 : byRow.Keys.Max() + 1),
+            DataRevision = d.DataRevision == 0 ? maxCellRevision : d.DataRevision,
+            HexRevision = BuildRevisionToken(rows.Select(r => (r.RowIndex, r.ColumnKey, r.CellRevision))),
+            Rows = byRow.Values.OrderBy(r => r.RowIndex).ToList(),
+            CellRevisions = revisions
+        };
+    }
+
+    /// <summary>Stable token over the returned cell revisions — lets callers skip re-rendering unchanged pages.</summary>
+    public static string BuildRevisionToken(IEnumerable<(int row, string col, long rev)> cells)
+    {
+        var sb = new StringBuilder();
+        foreach (var (row, col, rev) in cells.OrderBy(c => c.row).ThenBy(c => c.col, StringComparer.Ordinal))
+            sb.Append(row).Append(':').Append(col).Append(':').Append(rev).Append(';');
+        if (sb.Length == 0) return "0";
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(bytes, 0, 8).ToLowerInvariant();
     }
 
     public async Task<PatchDataSourceCellResponse> PatchCellAsync(
@@ -301,89 +376,117 @@ public class DataSourceService
         var value = req.CellValue ?? "";
         var expectedRev = req.ExpectedCellRevision;
 
-        for (var attempt = 0; attempt < 30; attempt++)
+        // One shot, no server-side retry loop: the caller (player/editor) owns retry policy.
+        // Retrying here while holding a transaction would keep a row lock alive and make
+        // concurrent writers on *different* cells of the same source queue up.
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
         {
-            await using var tx = await _db.Database.BeginTransactionAsync(ct);
-            try
+            var ds = await _db.DataSources.FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (ds is null)
             {
-                var ds = await _db.DataSources.FirstOrDefaultAsync(x => x.Id == id, ct);
-                if (ds is null)
-                {
-                    await tx.RollbackAsync(ct);
-                    return new PatchDataSourceCellResponse { Ok = false, Message = "forbidden" };
-                }
+                await tx.RollbackAsync(ct);
+                return new PatchDataSourceCellResponse { Ok = false, Message = "forbidden" };
+            }
 
-                var locked = await _db.DataSourceCells
-                    .FromSqlInterpolated(
-                        $"SELECT * FROM DataSourceCells WITH (UPDLOCK, ROWLOCK) WHERE DataSourceId = {id} AND RowIndex = {req.RowIndex} AND ColumnKey = {key}")
-                    .AsTracking()
-                    .FirstOrDefaultAsync(ct);
+            var locked = await _db.DataSourceCells
+                .FromSqlInterpolated(
+                    $"SELECT * FROM DataSourceCells WITH (UPDLOCK, ROWLOCK) WHERE DataSourceId = {id} AND RowIndex = {req.RowIndex} AND ColumnKey = {key}")
+                .AsTracking()
+                .FirstOrDefaultAsync(ct);
 
-                if (locked is not null
-                    && expectedRev is long exp
-                    && locked.CellRevision != exp)
-                {
-                    await tx.RollbackAsync(ct);
-                    expectedRev = locked.CellRevision;
-                    await Task.Delay(40 + attempt * 25, ct);
-                    continue;
-                }
-
-                if (locked is null)
-                {
-                    var exists = await _db.DataSourceCells.AsNoTracking()
-                        .AnyAsync(c => c.DataSourceId == id && c.RowIndex == req.RowIndex && c.ColumnKey == key, ct);
-                    if (exists)
-                    {
-                        await tx.RollbackAsync(ct);
-                        await Task.Delay(40 + attempt * 25, ct);
-                        continue;
-                    }
-
-                    locked = new DataSourceCell
-                    {
-                        DataSourceId = id,
-                        RowIndex = req.RowIndex,
-                        ColumnKey = key,
-                        CellValue = value,
-                        CellRevision = 1
-                    };
-                    _db.DataSourceCells.Add(locked);
-                }
-                else
-                {
-                    locked.CellValue = value;
-                    locked.CellRevision++;
-                }
-
-                ds.DataRevision++;
-                ds.RowCount = Math.Max(ds.RowCount, req.RowIndex + 1);
-                ds.UpdatedAtUtc = DateTime.UtcNow;
-                StampDataEditor(ds, userId);
-                await _db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-
+            if (locked is not null
+                && expectedRev is long exp
+                && locked.CellRevision != exp)
+            {
+                await tx.RollbackAsync(ct);
                 return new PatchDataSourceCellResponse
                 {
-                    Ok = true,
+                    Ok = false,
+                    Conflict = true,
+                    Message = "سلول توسط کاربر دیگری تغییر کرده است.",
                     DataRevision = ds.DataRevision,
-                    CellRevision = locked.CellRevision,
-                    CellValue = value
+                    CurrentDataRevision = ds.DataRevision,
+                    CurrentCellRevision = locked.CellRevision,
+                    CurrentCellValue = locked.CellValue
                 };
             }
-            catch (Exception ex) when (attempt < 29)
-            {
-                try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
-                _log.LogDebug(ex, "PatchCell retry {Attempt} ds={Ds} r={Row} c={Col}", attempt, id, req.RowIndex, key);
-                await Task.Delay(50 + attempt * 25, ct);
-            }
-        }
 
-        return new PatchDataSourceCellResponse
+            if (locked is null)
+            {
+                // A concurrent writer may have inserted the same cell between our lock attempt and now.
+                var exists = await _db.DataSourceCells.AsNoTracking()
+                    .AnyAsync(c => c.DataSourceId == id && c.RowIndex == req.RowIndex && c.ColumnKey == key, ct);
+                if (exists)
+                {
+                    await tx.RollbackAsync(ct);
+                    return new PatchDataSourceCellResponse
+                    {
+                        Ok = false,
+                        Conflict = true,
+                        Message = "سلول همزمان توسط نویسنده دیگری ایجاد شد."
+                    };
+                }
+
+                locked = new DataSourceCell
+                {
+                    DataSourceId = id,
+                    RowIndex = req.RowIndex,
+                    ColumnKey = key,
+                    CellValue = value,
+                    CellRevision = 1
+                };
+                _db.DataSourceCells.Add(locked);
+            }
+            else
+            {
+                locked.CellValue = value;
+                locked.CellRevision++;
+            }
+
+            // Do NOT touch the DataSources row on the hot path: writing DataRevision/RowCount/
+            // UpdatedAtUtc here would take a second lock on the parent row and serialise every
+            // writer of this source, even when they edit entirely different cells.
+            // DataRevision is derived from MAX(CellRevision) and RowCount from MAX(RowIndex).
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            // Parent row is untouched on purpose, so report the derived source revision.
+            var (derivedRevision, _) = await GetDerivedCountersAsync(id, ct);
+
+            return new PatchDataSourceCellResponse
+            {
+                Ok = true,
+                DataRevision = Math.Max(derivedRevision, locked.CellRevision),
+                CellRevision = locked.CellRevision,
+                CellValue = value
+            };
+        }
+        catch (Exception ex)
         {
-            Ok = false,
-            Message = "نوشتن سلول بعد از چند تلاش ممکن نشد — صبر کنید و دوباره اجرا کنید."
-        };
+            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+            _log.LogDebug(ex, "PatchCell failed ds={Ds} r={Row} c={Col}", id, req.RowIndex, key);
+            return new PatchDataSourceCellResponse
+            {
+                Ok = false,
+                Message = "نوشتن سلول انجام نشد — دوباره تلاش کنید."
+            };
+        }
+    }
+
+    /// <summary>Derived counters — avoids writing the parent row on every cell write.</summary>
+    public async Task<(long dataRevision, int rowCount)> GetDerivedCountersAsync(int id, CancellationToken ct = default)
+    {
+        var agg = await _db.DataSourceCells.AsNoTracking()
+            .Where(c => c.DataSourceId == id)
+            .GroupBy(c => 1)
+            .Select(g => new
+            {
+                MaxCellRevision = g.Max(c => (long?)c.CellRevision) ?? 0L,
+                MaxRowIndex = g.Max(c => (int?)c.RowIndex) ?? -1
+            })
+            .FirstOrDefaultAsync(ct);
+        return (agg?.MaxCellRevision ?? 0L, (agg?.MaxRowIndex ?? -1) + 1);
     }
 
     async Task ReplaceAllCellsAsync(int dataSourceId, IReadOnlyList<DataSourceCellDto> cells, CancellationToken ct)
@@ -446,8 +549,15 @@ public class DataSourceService
         return ds;
     }
 
+    /// <summary>
+    /// Guard for the legacy CellsJson materialisation. Cached per service instance so the common
+    /// read path does not pay an extra EXISTS query on every single cell access.
+    /// </summary>
+    private readonly HashSet<int> _materializedChecked = new();
+
     async Task EnsureLegacyCellsMaterializedAsync(DataSource d, CancellationToken ct)
     {
+        if (!_materializedChecked.Add(d.Id)) return;
         if (await _db.DataSourceCells.AnyAsync(c => c.DataSourceId == d.Id, ct))
             return;
         var legacy = DeserializeCells(d.CellsJson);
@@ -930,6 +1040,24 @@ public class DataSourceService
     }
 
     private static DataSourceMetaDto ToMeta(DataSource d)
+        => ToMeta(d, null);
+
+    /// <summary>
+    /// Builds meta from the cell table when available, falling back to the stored columns.
+    /// Cell writes no longer touch the parent row, so RowCount/DataRevision must be derived
+    /// here instead of read from stale DataSource columns.
+    /// </summary>
+    public async Task<DataSourceMetaDto?> GetMetaDerivedAsync(int userId, int id, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (d is null) return null;
+        var (dataRevision, rowCount) = await GetDerivedCountersAsync(id, ct);
+        if (dataRevision == 0) dataRevision = d.DataRevision;
+        if (rowCount < d.RowCount) rowCount = d.RowCount;
+        return ToMeta(d, dataRevision, rowCount);
+    }
+
+    private static DataSourceMetaDto ToMeta(DataSource d, long? dataRevision, int? rowCount = null)
     {
         var cols = DeserializeColumns(d.ColumnsJson);
         return new DataSourceMetaDto
@@ -940,8 +1068,8 @@ public class DataSourceService
             Columns = cols,
             ColumnKeys = cols.Select(c => c.Key).ToList(),
             ColumnCount = d.ColumnCount,
-            RowCount = d.RowCount,
-            DataRevision = d.DataRevision
+            RowCount = Math.Max(rowCount ?? 0, d.RowCount),
+            DataRevision = dataRevision ?? d.DataRevision
         };
     }
 

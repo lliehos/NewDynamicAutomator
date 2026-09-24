@@ -428,7 +428,8 @@ public class DataSourcesApiController : ControllerBase
     [HttpGet("{id:int}/meta")]
     public async Task<IActionResult> GetMeta(int id, CancellationToken ct)
     {
-        var dto = await _sources.GetMetaAsync(UserId, id, ct);
+        // Derived so counts stay correct now that cell writes no longer update the parent row.
+        var dto = await _sources.GetMetaDerivedAsync(UserId, id, ct);
         return dto is null ? NotFound() : Ok(dto);
     }
 
@@ -444,6 +445,25 @@ public class DataSourcesApiController : ControllerBase
     public async Task<IActionResult> GetRow(int id, int rowIndex, CancellationToken ct)
     {
         var dto = await _sources.GetRowAsync(UserId, id, rowIndex, ct);
+        return dto is null ? NotFound() : Ok(dto);
+    }
+
+    /// <summary>
+    /// Bulk row page for table views — replaces the per-row request loop (N round trips → 1).
+    /// Pass <paramref name="keys"/> to pull only the columns being rendered.
+    /// </summary>
+    [HttpGet("{id:int}/rows")]
+    public async Task<IActionResult> GetRows(
+        int id,
+        [FromQuery] int from = 0,
+        [FromQuery] int count = 500,
+        [FromQuery] string? keys = null,
+        CancellationToken ct = default)
+    {
+        var keyList = string.IsNullOrWhiteSpace(keys)
+            ? null
+            : keys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var dto = await _sources.GetRowsPageAsync(UserId, id, from, count, keyList, ct);
         return dto is null ? NotFound() : Ok(dto);
     }
 

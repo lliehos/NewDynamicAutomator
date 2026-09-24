@@ -74,8 +74,6 @@ public class PatchDataSourceCellRequest
     public string? CellValue { get; set; }
     /// <summary>Must match server cell revision when updating an existing cell (omit for new cells).</summary>
     public long? ExpectedCellRevision { get; set; }
-    [Obsolete("Use ExpectedCellRevision")]
-    public long? ExpectedDataRevision { get; set; }
 }
 
 public class PatchDataSourceCellResponse
@@ -96,6 +94,28 @@ public class DataSourceRowDto
     public int RowIndex { get; set; }
     public Dictionary<string, string> Values { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public long DataRevision { get; set; }
+}
+
+/// <summary>
+/// Bulk row page — one request for a whole table view instead of one request per row.
+/// <see cref="CellRevisions"/> carries per-cell revisions so writers keep cell-level concurrency.
+/// </summary>
+public class DataSourcePageDto
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public List<DataSourceColumnDto> Columns { get; set; } = new();
+    public List<string> ColumnKeys { get; set; } = new();
+    public int FromRow { get; set; }
+    public int Count { get; set; }
+    public int ColumnCount { get; set; }
+    public int RowCount { get; set; }
+    public long DataRevision { get; set; }
+    /// <summary>Opaque token over the returned cell revisions — unchanged token means nothing to re-render.</summary>
+    public string HexRevision { get; set; } = string.Empty;
+    public List<DataSourceRowDto> Rows { get; set; } = new();
+    /// <summary>rowIndex → columnKey → cellRevision (for optimistic writes from the grid).</summary>
+    public Dictionary<int, Dictionary<string, long>> CellRevisions { get; set; } = new();
 }
 
 public class CreateDataSourceRequest

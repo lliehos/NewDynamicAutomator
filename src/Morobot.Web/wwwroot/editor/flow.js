@@ -1299,15 +1299,25 @@
       ds.dataRevision = meta.dataRevision;
       if (Array.isArray(meta.columns)) ds.columns = meta.columns;
       ds.cells = [];
-      const rowCount = Math.min(Number(meta.rowCount) || 0, 2000);
-      for (let r = 0; r < rowCount; r++) {
-        const rowRes = await fetch(`/api/datasources/${sourceId}/rows/${r}`, { credentials: "same-origin" });
-        if (!rowRes.ok) continue;
-        const row = await rowRes.json();
-        const values = row.values || row.Values || {};
-        for (const [key, val] of Object.entries(values)) {
-          ds.cells.push({ key, index: r, cellValue: val ?? "" });
+      // One bulk page request instead of one request per row (was N+1 round trips).
+      const total = Math.min(Number(meta.rowCount) || 0, 5000);
+      const PAGE = 1000;
+      for (let from = 0; from < total; from += PAGE) {
+        const pageRes = await fetch(
+          `/api/datasources/${sourceId}/rows?from=${from}&count=${Math.min(PAGE, total - from)}`,
+          { credentials: "same-origin" }
+        );
+        if (!pageRes.ok) continue;
+        const page = await pageRes.json();
+        const rows = page.rows || page.Rows || [];
+        for (const row of rows) {
+          const idx = Number(row.rowIndex ?? row.RowIndex ?? 0);
+          const values = row.values || row.Values || {};
+          for (const [key, val] of Object.entries(values)) {
+            ds.cells.push({ key, index: idx, cellValue: val ?? "" });
+          }
         }
+        if (page.dataRevision != null) ds.dataRevision = page.dataRevision;
       }
     } catch { /* use in-graph fallback */ }
     return ds;

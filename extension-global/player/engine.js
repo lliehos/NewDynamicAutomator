@@ -2520,6 +2520,20 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
         return { ok: true, body: res.body };
       }
       if (res?.error === "auth") return { ok: false, error: "auth" };
+      // 409 conflict: adopt the server's current revision and retry immediately.
+      if (res?.conflict) {
+        const cur = res.body?.currentCellRevision ?? res.body?.CurrentCellRevision;
+        if (cur != null) {
+          expectedCellRevision = cur;
+          applyCellToLocalCache(
+            ds, row, col,
+            res.body?.currentCellValue ?? res.body?.CurrentCellValue ?? "",
+            cur,
+            res.body?.currentDataRevision ?? res.body?.CurrentDataRevision
+          );
+          continue;
+        }
+      }
       await sleep(Math.min(800, 80 + Math.floor((Date.now() - start) / 40)));
     }
     return { ok: false, error: "cell_write_timeout" };

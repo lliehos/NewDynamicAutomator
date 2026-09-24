@@ -37,44 +37,42 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                 table: "Processes",
                 column: "LastEditorUserId",
                 principalTable: "Users",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.SetNull);
+                principalColumn: "Id");
 
             migrationBuilder.AddForeignKey(
                 name: "FK_DataSources_Users_LastEditorUserId",
                 table: "DataSources",
                 column: "LastEditorUserId",
                 principalTable: "Users",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.SetNull);
+                principalColumn: "Id");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropForeignKey(
-                name: "FK_Processes_Users_LastEditorUserId",
-                table: "Processes");
-
-            migrationBuilder.DropForeignKey(
                 name: "FK_DataSources_Users_LastEditorUserId",
                 table: "DataSources");
 
-            migrationBuilder.DropIndex(
-                name: "IX_Processes_LastEditorUserId",
+            migrationBuilder.DropForeignKey(
+                name: "FK_Processes_Users_LastEditorUserId",
                 table: "Processes");
 
             migrationBuilder.DropIndex(
                 name: "IX_DataSources_LastEditorUserId",
                 table: "DataSources");
 
-            migrationBuilder.DropColumn(
-                name: "LastEditorUserId",
+            migrationBuilder.DropIndex(
+                name: "IX_Processes_LastEditorUserId",
                 table: "Processes");
 
             migrationBuilder.DropColumn(
                 name: "LastEditorUserId",
                 table: "DataSources");
+
+            migrationBuilder.DropColumn(
+                name: "LastEditorUserId",
+                table: "Processes");
         }
     }
 }
