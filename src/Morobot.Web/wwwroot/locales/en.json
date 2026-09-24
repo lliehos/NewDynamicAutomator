@@ -940,7 +940,11 @@
       "CloseLastTab": "Close last tab",
       "WaitTime": "Wait (time)",
       "WaitForLoading": "Wait for loading",
-      "Refresh": "Refresh"
+      "Refresh": "Refresh",
+      "waitForUrlLoad": "Wait for the page to finish loading",
+      "waitForUrlLoadHint": "On (default): waits until the target page finishes loading. Off: the next step runs immediately.",
+      "waitMaxMs": "Max wait (ms)",
+      "waitMaxMsHint": "Upper bound for the load wait; if it takes longer, execution continues."
     },
     "nodes": {
       "start": "Start",

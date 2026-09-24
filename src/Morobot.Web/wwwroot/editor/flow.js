@@ -5393,6 +5393,14 @@
         if (k === "navigateUrl" && isActionNode(n)) {
           n.constantValue = n.navigateUrl;
         }
+        if (k === "waitForLoad" || k === "waitMaxMs") {
+          if (k === "waitMaxMs") n.waitMaxMs = Math.max(0, Number(inp.value) || 0);
+          // Toggling the switch shows/hides the max-wait field, so re-render.
+          renderInspector();
+          syncNodeValidity(n);
+          render();
+          return;
+        }
         if (k === "systemClockFormat") {
           // The format defines the shape the compare literal must have, so the
           // inspector (placeholder/hint) and validity both need re-evaluating.
@@ -6176,6 +6184,27 @@
         <select data-k="systemValueType">${systemValueOptionsHtml(n.systemValueType)}</select>
       </div>
       <p class="palette-hint">مقدار در لحظهٔ اجرا توسط سیستم تولید می‌شود.</p>`;
+    }
+
+    // ناوبری: سوئیچ انتظار برای تکمیل بارگذاری + سقف انتظار (فقط وقتی روشن است).
+    if (isUrl) {
+      const waitOn = n.waitForLoad !== false;
+      const waitMs = Number(n.waitMaxMs) > 0 ? Number(n.waitMaxMs) : 15000;
+      html += `
+        <div class="insp-field">
+          <label class="da-switch">
+            <input type="checkbox" data-k="waitForLoad" ${waitOn ? "checked" : ""}/>
+            <span class="da-switch-ui" aria-hidden="true"></span>
+            <span class="da-switch-text">${t("editor.actions.waitForUrlLoad")}</span>
+          </label>
+          <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">${t("editor.actions.waitForUrlLoadHint")}</p>
+        </div>`;
+      if (waitOn) {
+        html += `<div class="insp-field"><label>${t("editor.actions.waitMaxMs")}</label>
+          <input type="number" min="0" step="100" data-k="waitMaxMs" value="${esc(waitMs)}" />
+          <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.waitMaxMsHint")}</p>
+        </div>`;
+      }
     }
     return html;
   }

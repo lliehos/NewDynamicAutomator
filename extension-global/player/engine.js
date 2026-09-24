@@ -2176,7 +2176,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     }
     const created = await chrome.tabs.create({ url, active: true });
     const newId = created.id;
-    if (newId) await waitTabComplete(newId);
+    if (newId) await waitTabComplete(newId, resolveNavigationWaitMs(step));
     return { ok: true, tabId: newId, navigated: true };
   }
 
@@ -2197,7 +2197,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
       });
     }
     await chrome.tabs.update(tabId, { url });
-    await waitTabComplete(tabId);
+    await waitTabComplete(tabId, resolveNavigationWaitMs(step));
     return { ok: true };
   }
 
@@ -3577,12 +3577,19 @@ function matchChildIframe(hop) {
   };
 }
 
-function waitTabComplete(tabId) {
+/**
+ * Wait for a tab's load to finish.
+ * `maxMs` bounds the wait; the caller decides the value (GoToUrl uses the step's
+ * `waitMaxMs`). 0 disables the wait entirely and resolves on the next tick.
+ */
+function waitTabComplete(tabId, maxMs) {
+  const limit = maxMs == null ? 15000 : Math.max(0, Number(maxMs) || 0);
+  if (limit === 0) return Promise.resolve();
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
       resolve();
-    }, 15000);
+    }, limit);
 
     function listener(id, info) {
       if (id === tabId && info.status === "complete") {
@@ -3601,6 +3608,16 @@ function waitTabComplete(tabId) {
     }).catch(() => {});
   });
 }
+
+/** GoToUrl / NewPage: wait for load unless the step switched it off; cap by waitMaxMs. */
+function resolveNavigationWaitMs(step) {
+  if (!step || step.waitForLoad === false) return 0;
+  const raw = Number(step.waitMaxMs);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  // Default keeps the historical behaviour (15 s) when no explicit cap is set.
+  return 15000;
+}
+
 
 function notifyTab(tabId, message) {
   chrome.tabs.sendMessage(tabId, message).catch(() => {});
