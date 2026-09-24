@@ -1078,6 +1078,8 @@
       "waitForElHintOff": "Off: search once; if not found, error (not found).",
       "waitForElHintOn": "On: waits up to the timeout below; then not found.",
       "waitMaxMs": "Max wait (ms)",
+      "stepGapMs": "Gap between steps (ms)",
+      "stepGapMsHint": "Pause after each step before moving to the next one (0 = no delay).",
       "frameChain": "Frame chain (JSON)",
       "hasAttr": "Has attribute / property",
       "hasAttrHint": "e.g. options with a specific value: selector \"select option\" + attribute \"value\".",

@@ -1837,10 +1837,11 @@
     return `
       <div class="insp-field"><label>${t("editor.insp.title")}</label>
         <input data-task-k="title" value="${esc(graph.title || "")}" ${disabled} /></div>
-      <div class="insp-field"><label>${t("editor.insp.waitMaxMs")} (${t("editor.insp.constMs")})</label>
-        <input type="number" min="0" data-task-k="delayBeforeMs" value="${Number(graph.delayBeforeMs) || 0}" ${disabled} /></div>
-      <div class="insp-field"><label>${t("editor.insp.waitMaxMs")}</label>
-        <input type="number" min="0" data-task-k="delayAfterMs" value="${Number(graph.delayAfterMs) || 0}" ${disabled} /></div>
+      <div class="insp-field">
+        <label>${t("editor.insp.stepGapMs")}</label>
+        <input type="number" min="0" step="50" data-task-k="stepDelayMs" value="${Number(start?.stepDelayMs ?? graph.stepDelayMs) || 0}" ${disabled} />
+        <p class="palette-hint" style="margin:4px 0 0">${t("editor.insp.stepGapMsHint")}</p>
+      </div>
       <div class="insp-field">
         <label>${t("editor.insp.selectorLabel")}</label>
         <div class="insp-color-row">
@@ -1865,8 +1866,13 @@
         if (k === "title") {
           graph.title = inp.value;
           titleEl.textContent = graph.title || t("editor.ribbon.workflow");
-        } else if (k === "delayBeforeMs" || k === "delayAfterMs") {
-          graph[k] = Math.max(0, Number(inp.value) || 0);
+        } else if (k === "stepDelayMs") {
+          // Single source of truth: the start node drives the play-time gap, and
+          // graph.stepDelayMs is kept mirrored for payloads without a start node.
+          const num = Math.max(0, Number(inp.value) || 0);
+          graph.stepDelayMs = num;
+          const start = processStart();
+          if (start) start.stepDelayMs = num;
         } else if (k === "highlightColor") {
           const raw = String(inp.value || "").trim();
           if (inp.type === "text" && !/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(raw)) {
