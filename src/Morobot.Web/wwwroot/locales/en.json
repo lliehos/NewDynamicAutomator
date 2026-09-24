@@ -18,6 +18,15 @@
       "unlicensed": "{brand} — Unlicensed edition"
     }
   },
+  "crop": {
+    "title": "Crop image",
+    "zoom": "Zoom",
+    "rotate": "Rotate",
+    "reset": "Reset",
+    "apply": "Apply",
+    "free": "Free",
+    "hint": "Drag the image to reposition, and scroll or use the slider to zoom."
+  },
   "common": {
     "panel": "Open Panel",
     "site": "Site",

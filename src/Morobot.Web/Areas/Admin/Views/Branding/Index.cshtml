@@ -123,20 +123,79 @@
 @section Scripts {
 <script>
 (function () {
+  var NO_FILE = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.branding.noFileChosen"].ToString()));
+  var CROP_STRINGS = {
+    zoom: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["crop.zoom"].ToString())),
+    rotate: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["crop.rotate"].ToString())),
+    reset: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["crop.reset"].ToString())),
+    cancel: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["common.cancel"].ToString())),
+    apply: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["crop.apply"].ToString())),
+    free: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["crop.free"].ToString()))
+  };
+
+  function setPreview(input, file) {
+    var imgId = input.getAttribute('data-preview-target');
+    var phId = input.getAttribute('data-placeholder-id');
+    var img = imgId ? document.getElementById(imgId) : null;
+    var ph = phId ? document.getElementById(phId) : null;
+    if (!file || !img) return;
+    // Revoke the previous object URL so repeated crops don't leak memory.
+    if (img.dataset.blobUrl) { try { URL.revokeObjectURL(img.dataset.blobUrl); } catch (e) { /* ignore */ } }
+    var url = URL.createObjectURL(file);
+    img.dataset.blobUrl = url;
+    img.src = url;
+    img.hidden = false;
+    if (ph) ph.hidden = true;
+  }
+
+  /** Put the cropped output back into the input so the form post sends it. */
+  function replaceFile(input, blob, name, type) {
+    try {
+      var dt = new DataTransfer();
+      dt.items.add(new File([blob], name, { type: type || blob.type || "image/png" }));
+      input.files = dt.files;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   document.querySelectorAll('.admin-file-input').forEach(function (input) {
     input.addEventListener('change', function () {
       var nameEl = document.querySelector('[data-file-name-for="' + input.id + '"]');
       var file = input.files && input.files[0];
-      if (nameEl) nameEl.textContent = file ? file.name : @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.branding.noFileChosen"].ToString()));
-      var imgId = input.getAttribute('data-preview-target');
-      var phId = input.getAttribute('data-placeholder-id');
-      var img = imgId ? document.getElementById(imgId) : null;
-      var ph = phId ? document.getElementById(phId) : null;
-      if (!file || !img) return;
-      var url = URL.createObjectURL(file);
-      img.src = url;
-      img.hidden = false;
-      if (ph) ph.hidden = true;
+      if (!file) {
+        if (nameEl) nameEl.textContent = NO_FILE;
+        return;
+      }
+      if (nameEl) nameEl.textContent = file.name;
+      setPreview(input, file);
+
+      // Every raster image is cropped first; SVG passes straight through.
+      if (!window.DaCropper || DaCropper.isVector(file)) return;
+      DaCropper.open({
+        file: file,
+        // Logo keeps a wide lockup; favicon is square.
+        aspect: input.id === "faviconFile" ? 1 : null,
+        maxWidth: input.id === "faviconFile" ? 512 : 1600,
+        maxHeight: input.id === "faviconFile" ? 512 : 600,
+        title: input.id === "faviconFile"
+          ? @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.branding.favicon"].ToString()))
+          : @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.branding.logo"].ToString())),
+        strings: CROP_STRINGS,
+        onApply: function (blob, meta) {
+          if (meta && meta.passthrough) return;
+          if (!replaceFile(input, blob, meta.name, meta.type)) {
+            // Browser without DataTransfer.files — fall back to File.name spoofing.
+            try {
+              Object.defineProperty(blob, "name", { value: meta.name, configurable: true });
+              input.files = Object.assign([blob], { item: function (i) { return this[i]; } });
+            } catch (e2) { /* keep the original file */ }
+          }
+          if (nameEl) nameEl.textContent = meta.name;
+          setPreview(input, blob);
+        }
+      });
     });
   });
 })();

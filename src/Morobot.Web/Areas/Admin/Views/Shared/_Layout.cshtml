@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
   <link rel="stylesheet" href="~/css/admin-app.css?v=9" />
   <link rel="stylesheet" href="~/css/da-switch.css?v=1" />
+  <link rel="stylesheet" href="~/css/da-cropper.css?v=1" />
   <link rel="stylesheet" href="~/css/morobot-copyright.css?v=1" />
 </head>
 <body data-admin-catalog="1">
@@ -83,6 +84,7 @@
   <script>window.AdminI18n = { strings: { pager: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.label"])), page: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.page"])), first: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.first"])), prev: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.prev"])), next: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.next"])), last: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.last"])) } };</script>
   <script src="~/js/admin-pager.js?v=1"></script>
   <script src="~/js/da-switch.js?v=1"></script>
+  <script src="~/js/da-cropper.js?v=1"></script>
   @await RenderSectionAsync("Scripts", required: false)
   @await Component.InvokeAsync("SiteChrome")
 </body>
