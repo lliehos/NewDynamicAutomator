@@ -568,6 +568,8 @@
     },
     "users": {
       "title": "Users",
+      "processCount": "Processes",
+      "sourceCount": "Sources",
       "summary": "{count} users — {active} active.",
       "summaryOnline": "{count} users — {active} active, {online} online.",
       "create": "New user",

@@ -567,6 +567,8 @@
     },
     "users": {
       "title": "کاربران",
+      "processCount": "فرآیندها",
+      "sourceCount": "منابع",
       "summary": "{count} کاربر — {active} فعال.",
       "summaryOnline": "{count} کاربر — {active} فعال، {online} آنلاین.",
       "create": "کاربر جدید",

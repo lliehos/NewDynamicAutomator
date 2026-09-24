@@ -50,6 +50,17 @@ public class UsersController : Controller
             .ToHashSet();
         ViewBag.LastSeenByUserId = lastSeen;
         ViewBag.PlayingUserIds = playingIds;
+        // Ownership counts per user. AppUser has CreatedProcesses (not Processes) and no
+        // DataSources navigation, so both are grouped projections over the owner column.
+        ViewBag.ProcessCountByUserId = await _db.Processes.AsNoTracking()
+            .Where(p => p.CreatorUserId != null)
+            .GroupBy(p => p.CreatorUserId!.Value)
+            .Select(g => new { UserId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.UserId, x => x.Count, ct);
+        ViewBag.SourceCountByUserId = await _db.DataSources.AsNoTracking()
+            .GroupBy(d => d.OwnerUserId)
+            .Select(g => new { UserId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.UserId, x => x.Count, ct);
         return View(users);
     }
 

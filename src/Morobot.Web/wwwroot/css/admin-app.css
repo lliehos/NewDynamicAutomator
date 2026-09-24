@@ -1030,3 +1030,8 @@ label { font-size: .9rem; }
   padding: 0 .45rem;
   font-variant-numeric: tabular-nums;
 }
+
+/* ?? Users page: per-user ownership counts ?? */
+.admin-count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:30px;padding:2px 8px;border-radius:999px;background:var(--brand-bg-soft,#eef4f2);color:var(--brand-ink,#283937);font-size:.8rem;font-weight:600;font-variant-numeric:tabular-nums;}
+.admin-count-badge.is-zero{background:transparent;color:#a5a3ae;font-weight:500;}
+

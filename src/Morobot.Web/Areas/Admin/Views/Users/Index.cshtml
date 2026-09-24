@@ -8,6 +8,8 @@
   var isFa = L.IsRtl;
   var lastSeen = ViewBag.LastSeenByUserId as Dictionary<int, DateTime> ?? new Dictionary<int, DateTime>();
   var playingIds = ViewBag.PlayingUserIds as HashSet<int> ?? new HashSet<int>();
+  var processCounts = ViewBag.ProcessCountByUserId as Dictionary<int, int> ?? new Dictionary<int, int>();
+  var sourceCounts = ViewBag.SourceCountByUserId as Dictionary<int, int> ?? new Dictionary<int, int>();
   var now = DateTime.UtcNow;
   var onlineCount = list.Count(u =>
   {
@@ -32,6 +34,8 @@
       <th>@L["admin.users.presence"]</th>
       <th>@L["admin.users.role"]</th>
       <th>@L["admin.users.plan"]</th>
+      <th class="text-center">@L["admin.users.processCount"]</th>
+      <th class="text-center">@L["admin.users.sourceCount"]</th>
       <th>@L["admin.users.active"]</th>
       <th></th>
     </tr>
@@ -67,6 +71,8 @@
       </td>
       <td>@u.Role</td>
       <td>@((isFa ? u.Plan?.NameFa : u.Plan?.NameEn) ?? "—")</td>
+      <td class="text-center"><span class="admin-count-badge">@(processCounts.TryGetValue(u.Id, out var pc) ? pc : 0)</span></td>
+      <td class="text-center"><span class="admin-count-badge">@(sourceCounts.TryGetValue(u.Id, out var sc) ? sc : 0)</span></td>
       <td><partial name="_AdminStatus" model="u.IsActive" /></td>
       <td>
         <a class="btn-admin secondary icon-only" asp-action="Edit" asp-route-id="@u.Id" title="@L["admin.common.edit"]">
