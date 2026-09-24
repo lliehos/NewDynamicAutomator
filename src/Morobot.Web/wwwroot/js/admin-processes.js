@@ -110,6 +110,7 @@
     setChangeBadge(row, action, actor);
     flashCell(row);
     pushFeed(`${tAction(action)} #${task.id}${actor ? " — " + formatBy(actor) : ""}`);
+    if (window.AdminPager) AdminPager.refresh();
   }
 
   function removeRow(taskId, actor) {
@@ -118,7 +119,7 @@
     setChangeBadge(row, "deleted", actor);
     row.classList.add("admin-row-gone");
     pushFeed(`${tAction("deleted")} #${taskId}${actor ? " — " + formatBy(actor) : ""}`);
-    setTimeout(() => row.remove(), 1800);
+    setTimeout(() => { row.remove(); if (window.AdminPager) AdminPager.refresh(); }, 1800);
   }
 
   function applyInitialPlaying() {

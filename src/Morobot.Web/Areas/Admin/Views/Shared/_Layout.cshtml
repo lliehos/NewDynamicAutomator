@@ -79,6 +79,8 @@
   <script src="~/js/da-catalog.js?v=admin-1"></script>
   <script src="~/js/admin-ui.js?v=1"></script>
   <script src="~/js/admin-charts.js?v=1"></script>
+  <script>window.AdminI18n = { strings: { pager: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.label"])), page: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.page"])), first: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.first"])), prev: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.prev"])), next: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.next"])), last: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.last"])) } };</script>
+  <script src="~/js/admin-pager.js?v=1"></script>
   @await RenderSectionAsync("Scripts", required: false)
   @await Component.InvokeAsync("SiteChrome")
 </body>

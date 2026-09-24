@@ -311,6 +311,14 @@
       "licenseSafeFields": "Only non-sensitive fields are shown. Signatures and internal keys are never displayed.",
       "updatesManual": "Manual update check for online servers. Offline servers show the last cached result."
     },
+    "pager": {
+      "label": "Pagination",
+      "page": "Page",
+      "first": "First",
+      "prev": "Previous",
+      "next": "Next",
+      "last": "Last"
+    },
     "nav": {
       "dashboard": "Dashboard",
       "settings": "System settings",

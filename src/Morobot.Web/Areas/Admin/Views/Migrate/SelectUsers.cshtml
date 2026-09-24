@@ -8,7 +8,7 @@
   Summary = L.T("admin.migrate.selectSummary", ("count", users.Count.ToString()))
 }' />
 
-<div class="admin-table-wrap">
+<div class="admin-table-wrap" data-no-page="1">
 <form method="post" asp-area="Admin" asp-controller="Migrate" asp-action="Run">
   @Html.AntiForgeryToken()
   <input type="hidden" name="connectionString" value="@ViewBag.ConnectionString" />

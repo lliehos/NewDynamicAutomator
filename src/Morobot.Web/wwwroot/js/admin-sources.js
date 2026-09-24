@@ -98,6 +98,7 @@
     }
     setChangeBadge(row, action, actor);
     flashCell(row);
+    if (window.AdminPager) AdminPager.refresh();
     pushFeed(`${tAction(action)} #${id}${actor ? " — " + formatBy(actor) : ""}`);
   }
 
@@ -107,7 +108,7 @@
     setChangeBadge(row, "deleted", actor);
     row.classList.add("admin-row-gone");
     pushFeed(`${tAction("deleted")} #${sourceId}${actor ? " — " + formatBy(actor) : ""}`);
-    setTimeout(() => row.remove(), 1800);
+    setTimeout(() => { row.remove(); if (window.AdminPager) AdminPager.refresh(); }, 1800);
   }
 
   function dataSourceTableRows(ds) {
