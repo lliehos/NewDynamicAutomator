@@ -390,7 +390,7 @@
         if (res.ok) {
           const data = await res.json();
           if (data && (data.nodes || data.Nodes)) {
-            applyLocalGraph({
+            const serverItem = {
               id: taskId,
               title: data.title || data.Title || t("editor.ribbon.workflow"),
               designOrigin: data.designOrigin || data.DesignOrigin || "Manual",
@@ -408,8 +408,14 @@
                 ignorePlayError: data.ignorePlayError,
                 repeatSourceType: data.repeatSourceType
               }
-            });
+            };
+            applyLocalGraph(serverItem);
+            loadedUpdatedAtUtc = serverItem.updatedAtUtc
+              || data.updatedAtUtc
+              || data.UpdatedAtUtc
+              || null;
             serverCanvasLoaded = true;
+            await syncLocalCacheAfterSave();
             ensureCanvasHub();
             return;
           }
@@ -527,6 +533,16 @@
               })
               .catch(() => {});
           }
+          return;
+        }
+        // Extension / recorder PUT canvas (no editorSessionId) — server is authoritative.
+        if (!remoteSid && /^\d+$/.test(String(taskId))) {
+          loadedUpdatedAtUtc = payload.updatedAtUtc || payload.UpdatedAtUtc || loadedUpdatedAtUtc;
+          await load();
+          setStatus(t("editor.status.conflictReloaded") || "فرآیند از سرور به‌روز شد.", "success");
+          try {
+            window.dispatchEvent(new CustomEvent("da-task-list-sync"));
+          } catch { /* ignore */ }
           return;
         }
         const remoteAt = payload.updatedAtUtc || payload.UpdatedAtUtc || null;
@@ -1269,8 +1285,36 @@
     ).join("");
   }
 
-  async function openDsViewer(sourceId) {
+  async function loadDataSourceForViewer(sourceId) {
     const ds = findDataSourceById(sourceId);
+    if (!ds) return null;
+    if (isLocalMode || !(Number(sourceId) > 0)) return ds;
+    try {
+      const metaRes = await fetch(`/api/datasources/${sourceId}/meta`, { credentials: "same-origin" });
+      if (!metaRes.ok) return ds;
+      const meta = await metaRes.json();
+      ds.title = meta.title ?? ds.title;
+      ds.rowCount = meta.rowCount ?? ds.rowCount;
+      ds.columnCount = meta.columnCount ?? ds.columnCount;
+      ds.dataRevision = meta.dataRevision;
+      if (Array.isArray(meta.columns)) ds.columns = meta.columns;
+      ds.cells = [];
+      const rowCount = Math.min(Number(meta.rowCount) || 0, 2000);
+      for (let r = 0; r < rowCount; r++) {
+        const rowRes = await fetch(`/api/datasources/${sourceId}/rows/${r}`, { credentials: "same-origin" });
+        if (!rowRes.ok) continue;
+        const row = await rowRes.json();
+        const values = row.values || row.Values || {};
+        for (const [key, val] of Object.entries(values)) {
+          ds.cells.push({ key, index: r, cellValue: val ?? "" });
+        }
+      }
+    } catch { /* use in-graph fallback */ }
+    return ds;
+  }
+
+  async function openDsViewer(sourceId) {
+    const ds = await loadDataSourceForViewer(sourceId);
     if (!ds) {
       setStatus(t("editor.ds.notFound"), "error");
       return;
@@ -5226,6 +5270,7 @@
             || k === "selectorRequireVisible" || k === "equalSelectorRequireVisible"
             || k === "selectorRequireEnabled" || k === "equalSelectorRequireEnabled"
             || k === "selectorRequireClickable" || k === "equalSelectorRequireClickable"
+            || k === "dsReadUseCache"
           );
           if (isSwitch) {
             clearTimeout(window.__daInspSwitchT);
@@ -5241,6 +5286,11 @@
         }
         if (k === "selectorWaitMs" || k === "equalSelectorWaitMs") {
           n[k] = Math.max(0, Number(inp.value) || 0);
+          syncNodeValidity(n);
+          return;
+        }
+        if (k === "dsReadCacheTtlSec") {
+          n[k] = Math.max(1, Number(inp.value) || 60);
           syncNodeValidity(n);
           return;
         }
@@ -5941,6 +5991,9 @@
     } else if (src === "Elements" && isCapture) {
       html += `<p class="palette-hint">سلکتور المان در بخش پایین («المان صفحه») تنظیم می‌شود.</p>`;
     } else if (src === "DataSource") {
+      const dsCacheOn = n.dsReadUseCache === true;
+      const dsCacheTtl = Math.max(1, Number(n.dsReadCacheTtlSec) || 60);
+      if (n.dsReadUseCache !== true) n.dsReadUseCache = false;
       html += `
         <div class="insp-field"><label>منبع داده</label>
           <select data-k="dataSourceId"><option value="">— انتخاب منبع —</option>${dsOpts}</select>
@@ -5949,6 +6002,20 @@
           <select data-k="dynamicSourceColumnName"><option value="">— انتخاب ستون —</option>${colOpts}</select>
         </div>
         ${emptyDs}
+        <div class="insp-field">
+          <label class="da-switch">
+            <input type="checkbox" data-k="dsReadUseCache" ${dsCacheOn ? "checked" : ""}/>
+            <span class="da-switch-ui" aria-hidden="true"></span>
+            <span class="da-switch-text">استفاده از کش برای خواندن</span>
+          </label>
+          <p class="palette-hint" style="margin:4px 0 0">برای داده‌ای که روی سرور عوض نمی‌شود یا تغییرش مهم نیست؛ پیش‌فرض خاموش است.</p>
+        </div>
+        ${dsCacheOn ? `
+        <div class="insp-field">
+          <label>اعتبار کش (ثانیه)</label>
+          <input type="number" min="1" step="1" data-k="dsReadCacheTtlSec" value="${esc(String(dsCacheTtl))}" />
+          <p class="palette-hint" style="margin:4px 0 0">پیش‌فرض ۶۰ ثانیه (۱ دقیقه).</p>
+        </div>` : ""}
         <p class="palette-hint">در اجرا مقدار سلول ردیف جاری خوانده می‌شود.</p>`;
     } else if (src === "Memory") {
       const memKey = isCapture ? "sourceMemoryVariableName" : "memoryVariableName";

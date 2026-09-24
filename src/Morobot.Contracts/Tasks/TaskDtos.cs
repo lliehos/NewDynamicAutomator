@@ -20,6 +20,12 @@ public class TaskListItemDto
     public string DesignOrigin { get; set; } = "Manual";
     public string? OwnerUserName { get; set; }
     public int SharedWithCount { get; set; }
+    /// <summary>Last canvas/process save (UTC).</summary>
+    public DateTime? UpdatedAtUtc { get; set; }
+    public string? LastEditorUserName { get; set; }
+    /// <summary>Latest cell/metadata change on any linked library source (UTC).</summary>
+    public DateTime? DataUpdatedAtUtc { get; set; }
+    public string? DataLastEditorUserName { get; set; }
 }
 
 public class CreateTaskRequest

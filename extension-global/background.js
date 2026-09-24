@@ -49,10 +49,99 @@ async function resolveAccessToken() {
 }
 
 async function authHeaders() {
-  const headers = { "Content-Type": "application/json" };
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
   const access = await resolveAccessToken();
   if (access) headers.Authorization = `Bearer ${access}`;
   return headers;
+}
+
+/** Server canvas is authoritative for numeric process ids. */
+async function fetchCanvasFromServer(taskId) {
+  const id = String(taskId ?? "").trim();
+  if (!/^\d+$/.test(id)) return null;
+  const portal = String(await portalBase()).replace(/\/$/, "");
+  try {
+    const res = await fetch(`${portal}/api/tasks/${id}/canvas`, {
+      method: "GET",
+      headers: await authHeaders()
+    });
+    if (res.status === 401 || res.status === 403) return { error: "auth" };
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || !(data.nodes || data.Nodes)) return null;
+    return {
+      taskId: Number(id),
+      title: data.title || data.Title,
+      nodes: data.nodes || data.Nodes || [],
+      edges: data.edges || data.Edges || [],
+      viewport: data.viewport || data.Viewport,
+      dataSources: data.dataSources || data.DataSources || [],
+      designOrigin: data.designOrigin || data.DesignOrigin,
+      stepDelayMs: data.stepDelayMs,
+      highlightColor: data.highlightColor,
+      ignorePlayError: data.ignorePlayError,
+      repeatSourceType: data.repeatSourceType,
+      updatedAtUtc: data.updatedAtUtc || data.UpdatedAtUtc || null
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function refreshTaskCacheFromServer(taskId, titleHint) {
+  const id = normalizeTaskId(taskId);
+  if (!id) return false;
+  const graph = await fetchCanvasFromServer(id);
+  if (!graph || graph.error) return false;
+  const nodes = graph.nodes || [];
+  const tasks = await loadUserTasks();
+  const idx = findTaskIndex(tasks, id);
+  const item = {
+    ...(idx >= 0 ? tasks[idx] : {}),
+    id,
+    title: titleHint || graph.title || tasks[idx]?.title || `#${id}`,
+    designOrigin: graph.designOrigin || tasks[idx]?.designOrigin || "Recorded",
+    stepCount: nodes.filter((n) => n.kind === "action" || n.kind === "step").length,
+    groupCount: nodes.filter((n) => n.kind === "group").length,
+    dataSourceCount: Array.isArray(graph.dataSources) ? graph.dataSources.length : 0,
+    graph,
+    updatedAtUtc: graph.updatedAtUtc || null
+  };
+  if (idx >= 0) tasks[idx] = item;
+  else tasks.push(item);
+  await saveUserTasks(tasks);
+  await pushTasksToPortalTabs(tasks).catch(() => false);
+  return true;
+}
+
+/** Server-backed tasks (numeric id): editor reads PUT /canvas — local cache alone is not enough. */
+async function persistCanvasToServer(taskId, graph, title) {
+  const id = String(taskId ?? "").trim();
+  if (!/^\d+$/.test(id) || !graph || typeof graph !== "object") {
+    return { ok: true, skipped: true };
+  }
+  const portal = String(await portalBase()).replace(/\/$/, "");
+  const payload = JSON.parse(JSON.stringify(graph));
+  payload.taskId = Number(id);
+  if (title) payload.title = title;
+  delete payload.updatedAtUtc;
+  delete payload.baseUpdatedAtUtc;
+  delete payload.editorSessionId;
+  try {
+    const res = await fetch(`${portal}/api/tasks/${id}/canvas`, {
+      method: "PUT",
+      headers: await authHeaders(),
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return { ok: false, error: err.message || err.Message || `canvas ${res.status}` };
+    }
+    const body = await res.json().catch(() => ({}));
+    return { ok: true, updatedAtUtc: body.updatedAtUtc || body.UpdatedAtUtc || null };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -101,6 +190,14 @@ async function handleMessage(message, sender) {
       return clearPlayLogs();
     case "persistPlayDataSources":
       return persistPlayDataSourcesMessage(message);
+    case "readDataSourceCell":
+      return readDataSourceCellMessage(message);
+    case "readDataSourceMeta":
+      return readDataSourceMetaMessage(message);
+    case "readDataSourceRow":
+      return readDataSourceRowMessage(message);
+    case "patchDataSourceCell":
+      return patchDataSourceCellMessage(message);
     case "broadcastDsCellEvent":
       return broadcastDsCellEventMessage(message);
     case "reloadPlayerNow":
@@ -346,6 +443,8 @@ async function startRecordSession(message = {}) {
   const { playing, recordOptions: prevOpts } = await chrome.storage.local.get(["playing", "recordOptions"]);
   if (playing) return { ok: false, error: "هنگام پخش نمی‌توان ضبط کرد." };
 
+  await syncPortalSession().catch(() => {});
+
   const targetTaskId = normalizeTaskId(message.taskId);
   if (!targetTaskId) {
     return { ok: false, error: "ضبط فقط روی فرآیند موجود — از دکمهٔ ضبط همان فرآیند شروع کنید." };
@@ -539,6 +638,9 @@ async function resumeRecord() {
     lastNavUrl: null,
     recordOptions: defaultRecordOptions(data.recordOptions)
   });
+  if (data.recordTabId) {
+    await injectRecordFab(data.recordTabId).catch(() => false);
+  }
   return broadcastRecordState();
 }
 
@@ -817,6 +919,7 @@ function describeIframe(childUrl, indexInParent) {
 }
 
 async function saveDraft(payload) {
+  await syncPortalSession().catch(() => {});
   const {
     draft,
     recordingGroups,
@@ -877,35 +980,44 @@ async function saveDraft(payload) {
   }
 
   const existing = tasks[existingIdx];
-  if (!existing.graph || typeof existing.graph !== "object") {
+  const id = existing.id;
+  const title = existing.title || recordTargetTitle || `فرآیند #${id}`;
+  let baseGraph = existing.graph;
+  const numericServer = /^\d+$/.test(String(id));
+
+  if (numericServer) {
+    const serverGraph = await fetchCanvasFromServer(id);
+    if (serverGraph?.error === "auth") {
+      return {
+        ok: false,
+        error: "برای ذخیره روی سرور وارد پورتال شوید (نشست منقضی شده)."
+      };
+    }
+    if (serverGraph?.nodes) {
+      baseGraph = serverGraph;
+    } else if (!baseGraph?.nodes?.length) {
+      return {
+        ok: false,
+        error: "گراف فرآیند از سرور خوانده نشد. تب پورتال را باز کنید، وارد شوید و دوباره ذخیره کنید."
+      };
+    }
+  } else if (!baseGraph || typeof baseGraph !== "object") {
     return {
       ok: false,
       error: "گراف فرآیند هدف خالی/نامعتبر است. ابتدا فرآیند را در ویرایشگر باز کنید."
     };
   }
 
-  const existingGroups = (existing.graph?.nodes || []).filter((n) => n.kind === "group");
+  const existingGroups = (baseGraph?.nodes || []).filter((n) => n.kind === "group");
   const nextGroupOrdinal = existingGroups.length + 1;
   const groups = [{ id: `group-${nextGroupOrdinal}`, title: groupTitle, steps: allSteps }];
 
-  const id = existing.id;
-  const title = existing.title || recordTargetTitle || `فرآیند #${id}`;
-  const graph = mergeRecordingGroupsIntoGraph(existing.graph, groups, id, title);
+  const graph = mergeRecordingGroupsIntoGraph(baseGraph, groups, id, title);
   const nodes = graph.nodes || [];
   const stepCount = nodes.filter((n) => n.kind === "action" || n.kind === "step").length;
   const groupCount = nodes.filter((n) => n.kind === "group").length;
 
-  tasks[existingIdx] = {
-    ...existing,
-    title,
-    designOrigin: existing.designOrigin || "Recorded",
-    groupCount,
-    stepCount,
-    dataSourceCount: Array.isArray(graph.dataSources) ? graph.dataSources.length : 0,
-    graph
-  };
-
-  const beforeSteps = (existing.graph?.nodes || []).filter((n) => n.kind === "action" || n.kind === "step").length;
+  const beforeSteps = (baseGraph?.nodes || []).filter((n) => n.kind === "action" || n.kind === "step").length;
   if (stepCount < beforeSteps + allSteps.length) {
     console.warn("[recorder] merge produced fewer steps than expected", { beforeSteps, stepCount, added: allSteps.length });
   }
@@ -916,13 +1028,34 @@ async function saveDraft(payload) {
     };
   }
 
-  await saveUserTasks(tasks);
-  const pushed = await pushTasksToPortalTabs(tasks);
-  if (!pushed) {
-    return {
-      ok: false,
-      error: "ذخیره در افزونه انجام شد ولی پورتال به‌روز نشد — تب پورتال را باز نگه دارید و دوباره ذخیره کنید."
+  if (numericServer) {
+    const serverSave = await persistCanvasToServer(id, graph, title);
+    if (!serverSave.ok && !serverSave.skipped) {
+      return {
+        ok: false,
+        error: serverSave.error
+          || "ذخیره روی سرور انجام نشد — وارد شوید و دوباره ذخیره کنید."
+      };
+    }
+    await refreshTaskCacheFromServer(id, title);
+  } else {
+    tasks[existingIdx] = {
+      ...existing,
+      title,
+      designOrigin: existing.designOrigin || "Recorded",
+      groupCount,
+      stepCount,
+      dataSourceCount: Array.isArray(graph.dataSources) ? graph.dataSources.length : 0,
+      graph
     };
+    await saveUserTasks(tasks);
+    const pushed = await pushTasksToPortalTabs(tasks);
+    if (!pushed) {
+      return {
+        ok: false,
+        error: "ذخیره در افزونه انجام شد ولی پورتال به‌روز نشد — تب پورتال را باز نگه دارید."
+      };
+    }
   }
 
   const continueRecording = payload?.continueRecording !== false;
@@ -938,6 +1071,9 @@ async function saveDraft(payload) {
       recordTargetTitle: title,
       recordOptions: defaultRecordOptions(recordOptions)
     });
+    if (recordTabId) {
+      await injectRecordFab(recordTabId).catch(() => false);
+    }
   } else {
     await chrome.storage.local.set({
       recording: false,
@@ -969,6 +1105,36 @@ async function saveDraft(payload) {
   };
 }
 
+function isRecordedActionNode(n) {
+  return !!n && (n.kind === "action" || n.kind === "step");
+}
+
+function processStartNode(nodes) {
+  return (nodes || []).find((n) => n.kind === "start" && !n.groupNodeId) || null;
+}
+
+/** Last node on the root flow chain (start → group/condition/… via `next`). */
+function findProcessFlowTip(nodes, edges) {
+  const byId = new Map((nodes || []).map((n) => [n.id, n]));
+  const isProcessLevel = (n) => {
+    if (!n) return false;
+    if (n.groupNodeId) return false;
+    return n.kind === "start" || n.kind === "group" || n.kind === "condition" || isRecordedActionNode(n);
+  };
+  let tip = processStartNode(nodes)?.id;
+  if (!tip) return null;
+  const seen = new Set();
+  while (tip && !seen.has(tip)) {
+    seen.add(tip);
+    const next = (edges || []).find((e) => e.from === tip && e.kind === "next");
+    if (!next) break;
+    const target = byId.get(next.to);
+    if (!isProcessLevel(target)) break;
+    tip = next.to;
+  }
+  return tip;
+}
+
 /** Append newly recorded groups/steps onto an existing task graph. */
 function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
   const base = existingGraph && typeof existingGraph === "object"
@@ -976,7 +1142,7 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
     : { nodes: [], edges: [], dataSources: [], viewport: { x: 40, y: 40, zoom: 1 } };
   const nodes = Array.isArray(base.nodes) ? base.nodes.slice() : [];
   const edges = Array.isArray(base.edges) ? base.edges.slice() : [];
-  if (!nodes.some((n) => n.id === "start" || n.kind === "start")) {
+  if (!processStartNode(nodes)) {
     nodes.unshift({ id: "start", kind: "start", title: "شروع", x: 40, y: 220 });
   }
 
@@ -986,15 +1152,8 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
     if (n.entityId != null && Number(n.entityId) > maxEntity) maxEntity = Number(n.entityId);
   }
 
-  // Tip of the root "next" chain (start → …)
-  let tip = nodes.find((n) => n.kind === "start")?.id || "start";
-  const seen = new Set();
-  while (tip && !seen.has(tip)) {
-    seen.add(tip);
-    const next = edges.find((e) => e.from === tip && e.kind === "next");
-    if (!next) break;
-    tip = next.to;
-  }
+  let tip = findProcessFlowTip(nodes, edges);
+  if (!tip) tip = processStartNode(nodes)?.id || "start";
 
   const list = Array.isArray(groups) && groups.length
     ? groups
@@ -1003,15 +1162,26 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
   list.forEach((g, gi) => {
     maxEntity += 1;
     const gid = `group-rec-${stamp}-${gi + 1}`;
+    const gstartId = `gstart-${gid}`;
     nodes.push({
       id: gid,
       kind: "group",
       entityId: maxEntity,
       title: g.title || `گروه ضبط ${gi + 1}`,
       x: 280 + gi * 280,
-      y: 80 + (nodes.filter((n) => n.kind === "group").length * 20),
+      y: 80 + (nodes.filter((n) => n.kind === "group" && !n.groupNodeId).length * 20),
       repeatSourceType: "None",
       moveLoop: true
+    });
+    nodes.push({
+      id: gstartId,
+      kind: "start",
+      title: "شروع",
+      groupNodeId: gid,
+      x: 48,
+      y: 80,
+      repeatSourceType: "None",
+      isActive: true
     });
     edges.push({ id: `e-rec-${stamp}-g-${gi}`, from: tip, to: gid, kind: "next" });
     tip = gid;
@@ -1037,8 +1207,12 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
         x: 40,
         y: i * 90
       });
-      if (prevStep) edges.push({ id: `e-rec-${stamp}-${gi}-${i}`, from: prevStep, to: sid, kind: "next" });
-      else edges.push({ id: `e-rec-c-${stamp}-${gi}-${i}`, from: gid, to: sid, kind: "contains" });
+      if (prevStep) {
+        edges.push({ id: `e-rec-${stamp}-${gi}-${i}`, from: prevStep, to: sid, kind: "next" });
+      } else {
+        edges.push({ id: `e-rec-c-${stamp}-${gi}-${i}`, from: gid, to: sid, kind: "contains" });
+        edges.push({ id: `e-rec-gs-${stamp}-${gi}-${i}`, from: gstartId, to: sid, kind: "next" });
+      }
       prevStep = sid;
     });
   });
@@ -1097,6 +1271,93 @@ async function persistPlayDataSourcesMessage(message) {
   await saveUserTasks(tasks);
   await pushTasksToPortalTabs(tasks);
   return { ok: true };
+}
+
+async function readDataSourceCellMessage(message) {
+  const id = Number(message?.dataSourceId);
+  const rowIndex = Number(message?.rowIndex);
+  const columnKey = String(message?.columnKey || "").trim();
+  if (!id || !columnKey || rowIndex < 0) return { ok: false, error: "invalid" };
+  const portal = String(await portalBase()).replace(/\/$/, "");
+  const q = new URLSearchParams({ rowIndex: String(rowIndex), columnKey });
+  try {
+    const res = await fetch(`${portal}/api/datasources/${id}/cells?${q}`, {
+      method: "GET",
+      headers: await authHeaders()
+    });
+    if (res.status === 401 || res.status === 403) return { ok: false, error: "auth" };
+    if (!res.ok) return { ok: false, error: `http ${res.status}` };
+    const body = await res.json();
+    return { ok: true, body };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+/** Lightweight row/column counts — no cell payload (group repeat sizing). */
+async function readDataSourceMetaMessage(message) {
+  const id = Number(message?.dataSourceId);
+  if (!id) return { ok: false, error: "invalid" };
+  const portal = String(await portalBase()).replace(/\/$/, "");
+  try {
+    const res = await fetch(`${portal}/api/datasources/${id}/meta`, {
+      method: "GET",
+      headers: await authHeaders()
+    });
+    if (res.status === 401 || res.status === 403) return { ok: false, error: "auth" };
+    if (!res.ok) return { ok: false, error: `http ${res.status}` };
+    const body = await res.json();
+    return { ok: true, body };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+async function readDataSourceRowMessage(message) {
+  const id = Number(message?.dataSourceId);
+  const rowIndex = Number(message?.rowIndex);
+  if (!id || rowIndex < 0) return { ok: false, error: "invalid" };
+  const portal = String(await portalBase()).replace(/\/$/, "");
+  try {
+    const res = await fetch(`${portal}/api/datasources/${id}/rows/${rowIndex}`, {
+      method: "GET",
+      headers: await authHeaders()
+    });
+    if (res.status === 401 || res.status === 403) return { ok: false, error: "auth" };
+    if (!res.ok) return { ok: false, error: `http ${res.status}` };
+    const body = await res.json();
+    return { ok: true, body };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+async function patchDataSourceCellMessage(message) {
+  const id = Number(message?.dataSourceId);
+  const rowIndex = Number(message?.rowIndex);
+  const columnKey = String(message?.columnKey || "").trim();
+  if (!id || !columnKey || rowIndex < 0) return { ok: false, error: "invalid" };
+  const portal = String(await portalBase()).replace(/\/$/, "");
+  const payload = {
+    rowIndex,
+    columnKey,
+    cellValue: message?.cellValue ?? "",
+    expectedCellRevision: message?.expectedCellRevision ?? message?.cellRevision ?? null
+  };
+  try {
+    const res = await fetch(`${portal}/api/datasources/${id}/cells`, {
+      method: "PATCH",
+      headers: await authHeaders(),
+      body: JSON.stringify(payload)
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 409) return { ok: false, conflict: true, body };
+    if (res.status === 401 || res.status === 403) return { ok: false, error: "auth" };
+    if (!res.ok) return { ok: false, error: body.message || `http ${res.status}`, body };
+    return { ok: true, body };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
 }
 
 async function broadcastDsCellEventMessage(message) {
@@ -1171,6 +1432,7 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
 
   list.forEach((g, gi) => {
     const gid = g.id || `group-${gi + 1}`;
+    const gstartId = `gstart-${gid}`;
     nodes.push({
       id: gid,
       kind: "group",
@@ -1180,6 +1442,16 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
       y: 80,
       repeatSourceType: "None",
       moveLoop: true
+    });
+    nodes.push({
+      id: gstartId,
+      kind: "start",
+      title: "شروع",
+      groupNodeId: gid,
+      x: 48,
+      y: 80,
+      repeatSourceType: "None",
+      isActive: true
     });
     edges.push({ id: `e-g-${gi}`, from: prevNode, to: gid, kind: "next" });
     prevNode = gid;
@@ -1206,7 +1478,10 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
         y: i * 90
       });
       if (prevStep) edges.push({ id: `e-${gid}-${i}`, from: prevStep, to: sid, kind: "next" });
-      else edges.push({ id: `e-c-${gid}-${i}`, from: gid, to: sid, kind: "contains" });
+      else {
+        edges.push({ id: `e-c-${gid}-${i}`, from: gid, to: sid, kind: "contains" });
+        edges.push({ id: `e-gs-${gid}-${i}`, from: gstartId, to: sid, kind: "next" });
+      }
       prevStep = sid;
     });
   });

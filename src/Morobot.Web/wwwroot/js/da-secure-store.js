@@ -74,12 +74,18 @@
     return !!n && (n.kind === "action" || n.kind === "step");
   }
 
+  function isServerBackedTaskId(id) {
+    return /^\d+$/.test(String(id ?? "").trim());
+  }
+
   function stepCountOf(t) {
+    if (isServerBackedTaskId(t?.id)) return Number(t?.stepCount) || 0;
     const fromGraph = t?.graph?.nodes?.filter((n) => isActionNode(n)).length || 0;
     return Math.max(fromGraph, Number(t?.stepCount) || 0);
   }
 
   function richnessOf(t) {
+    if (isServerBackedTaskId(t?.id)) return stepCountOf(t);
     const nodes = Array.isArray(t?.graph?.nodes) ? t.graph.nodes.length : 0;
     return nodes * 1000 + stepCountOf(t);
   }
@@ -88,12 +94,23 @@
     return (Array.isArray(list) ? list : []).reduce((sum, t) => sum + richnessOf(t), 0);
   }
 
-  /** Membership from incoming (allows deletes); per-id graph keeps the richer side. */
+  /** Server-backed tasks: incoming graph/metadata wins. Local-only: keep richer graph. */
   function mergePreferRicherPerId(prev, incoming) {
     const prevById = new Map((prev || []).map((t) => [String(t.id), t]));
     return (incoming || []).map((t) => {
       const old = prevById.get(String(t.id));
       if (!old) return t;
+      if (isServerBackedTaskId(t.id)) {
+        const out = { ...old, ...t };
+        if (Array.isArray(t.graph?.nodes) && t.graph.nodes.length) {
+          out.graph = t.graph;
+        } else {
+          delete out.graph;
+          out.stepCount = Number(t.stepCount) || 0;
+          out.groupCount = Number(t.groupCount) || 0;
+        }
+        return out;
+      }
       if (richnessOf(t) >= richnessOf(old)) {
         return {
           ...old,

@@ -1,5 +1,6 @@
 using Morobot.Contracts.Tasks;
 using Morobot.Infrastructure.Persistence;
+using Morobot.Infrastructure.Services;
 using Morobot.Web.Hubs;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -10,11 +11,13 @@ public class CatalogLiveService
 {
     private readonly IHubContext<CatalogHub> _hub;
     private readonly AppDbContext _db;
+    private readonly TaskService _tasks;
 
-    public CatalogLiveService(IHubContext<CatalogHub> hub, AppDbContext db)
+    public CatalogLiveService(IHubContext<CatalogHub> hub, AppDbContext db, TaskService tasks)
     {
         _hub = hub;
         _db = db;
+        _tasks = tasks;
     }
 
     public async Task TaskUpsertedAsync(TaskListItemDto item, string action, string? actorUserName, CancellationToken ct = default)
@@ -24,6 +27,24 @@ public class CatalogLiveService
         if (recipients.Count > 0)
             await SendToUsersAsync("taskChanged", payload, recipients, ct);
         await NotifyAdminsAsync("taskChanged", payload, ct);
+    }
+
+    /// <summary>Push per-user list rows after linked data-source cell/metadata changes.</summary>
+    public async Task BroadcastProcessListItemAsync(int processId, string action, string? actorUserName, CancellationToken ct = default)
+    {
+        var recipients = await ResolveAccessUserIdsAsync(processId, ct);
+        foreach (var uid in recipients.Distinct())
+        {
+            var list = await _tasks.ListForUserAsync(uid, ct);
+            var item = list.FirstOrDefault(x => x.Id == processId);
+            if (item is null) continue;
+            var payload = new { action, actorUserName, task = item };
+            await SendToUsersAsync("taskChanged", payload, new[] { uid }, ct);
+        }
+
+        var adminItem = (await _tasks.ListAllForAdminAsync(ct)).FirstOrDefault(x => x.Id == processId);
+        if (adminItem is not null)
+            await NotifyAdminsAsync("taskChanged", new { action, actorUserName, task = adminItem }, ct);
     }
 
     public async Task TaskDeletedAsync(

@@ -74,6 +74,8 @@ public class TasksApiController : ControllerBase
                 Id = task.Id,
                 Title = task.Title,
                 CreatedAtUtc = task.CreatedAtUtc,
+                UpdatedAtUtc = task.UpdatedAtUtc,
+                LastEditorUserName = User.Identity?.Name,
                 IsOwner = true,
                 CanView = true,
                 CanEdit = true,
@@ -423,6 +425,45 @@ public class DataSourcesApiController : ControllerBase
     public async Task<ActionResult<List<Morobot.Contracts.DataSources.DataSourceListItemDto>>> List(CancellationToken ct)
         => Ok(await _sources.ListForUserAsync(UserId, ct));
 
+    [HttpGet("{id:int}/meta")]
+    public async Task<IActionResult> GetMeta(int id, CancellationToken ct)
+    {
+        var dto = await _sources.GetMetaAsync(UserId, id, ct);
+        return dto is null ? NotFound() : Ok(dto);
+    }
+
+    [HttpGet("{id:int}/cells")]
+    public async Task<IActionResult> GetCell(
+        int id, [FromQuery] int rowIndex, [FromQuery] string columnKey, CancellationToken ct)
+    {
+        var dto = await _sources.GetCellAsync(UserId, id, rowIndex, columnKey, ct);
+        return dto is null ? NotFound() : Ok(dto);
+    }
+
+    [HttpGet("{id:int}/rows/{rowIndex:int}")]
+    public async Task<IActionResult> GetRow(int id, int rowIndex, CancellationToken ct)
+    {
+        var dto = await _sources.GetRowAsync(UserId, id, rowIndex, ct);
+        return dto is null ? NotFound() : Ok(dto);
+    }
+
+    [HttpPatch("{id:int}/cells")]
+    public async Task<IActionResult> PatchCell(
+        int id, [FromBody] Morobot.Contracts.DataSources.PatchDataSourceCellRequest req, CancellationToken ct)
+    {
+        var result = await _sources.PatchCellAsync(UserId, id, req, ct);
+        if (!result.Ok && result.Message == "forbidden") return Forbid();
+        if (!result.Ok && result.Conflict)
+            return Conflict(result);
+        if (!result.Ok) return BadRequest(result);
+        await _catalog.LibrarySourceChangedAsync(new { id, dataRevision = result.DataRevision }, "cell_patched",
+            User.Identity?.Name, UserId, ct);
+        var linked = await _sources.GetLinkedProcessIdsAsync(id, ct);
+        foreach (var processId in linked)
+            await _catalog.BroadcastProcessListItemAsync(processId, "updated", User.Identity?.Name, ct);
+        return Ok(result);
+    }
+
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id, CancellationToken ct)
     {
@@ -464,6 +505,7 @@ public class DataSourcesApiController : ControllerBase
         foreach (var processId in linked)
         {
             await _catalog.SourceChangedAsync(processId, new { id, title }, "renamed", User.Identity?.Name, ct);
+            await _catalog.BroadcastProcessListItemAsync(processId, "updated", User.Identity?.Name, ct);
             await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
             {
                 taskId = processId,

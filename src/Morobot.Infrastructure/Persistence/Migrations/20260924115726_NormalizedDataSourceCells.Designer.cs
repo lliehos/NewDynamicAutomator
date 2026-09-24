@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Morobot.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using Morobot.Infrastructure.Persistence;
 namespace Morobot.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260924115726_NormalizedDataSourceCells")]
+    partial class NormalizedDataSourceCells
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -188,17 +191,11 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
 
-                    b.Property<long>("DataRevision")
-                        .HasColumnType("bigint");
-
                     b.Property<string>("FileName")
                         .HasMaxLength(260)
                         .HasColumnType("nvarchar(260)");
 
                     b.Property<int>("OwnerUserId")
-                        .HasColumnType("int");
-
-                    b.Property<int?>("LastEditorUserId")
                         .HasColumnType("int");
 
                     b.Property<int>("RowCount")
@@ -216,43 +213,7 @@ namespace Morobot.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("OwnerUserId");
 
-                    b.HasIndex("LastEditorUserId");
-
                     b.ToTable("DataSources", (string)null);
-                });
-
-            modelBuilder.Entity("Morobot.Domain.Entities.DataSourceCell", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
-
-                    b.Property<long>("CellRevision")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("CellValue")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("ColumnKey")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("nvarchar(120)");
-
-                    b.Property<int>("DataSourceId")
-                        .HasColumnType("int");
-
-                    b.Property<int>("RowIndex")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DataSourceId", "RowIndex", "ColumnKey")
-                        .IsUnique();
-
-                    b.ToTable("DataSourceCells", (string)null);
                 });
 
             modelBuilder.Entity("Morobot.Domain.Entities.DeploymentAnchor", b =>
@@ -571,9 +532,6 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.Property<int?>("LastExecuteUserId")
                         .HasColumnType("int");
 
-                    b.Property<int?>("LastEditorUserId")
-                        .HasColumnType("int");
-
                     b.Property<DateTime?>("LastExecutedAtUtc")
                         .HasColumnType("datetime2");
 
@@ -590,8 +548,6 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.HasIndex("CreatorUserId");
 
                     b.HasIndex("DeploymentInstanceId");
-
-                    b.HasIndex("LastEditorUserId");
 
                     b.ToTable("Processes", (string)null);
                 });
@@ -791,31 +747,13 @@ namespace Morobot.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("Morobot.Domain.Entities.DataSource", b =>
                 {
-                    b.HasOne("Morobot.Domain.Entities.AppUser", "LastEditor")
-                        .WithMany()
-                        .HasForeignKey("LastEditorUserId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("Morobot.Domain.Entities.AppUser", "Owner")
                         .WithMany()
                         .HasForeignKey("OwnerUserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("LastEditor");
-
                     b.Navigation("Owner");
-                });
-
-            modelBuilder.Entity("Morobot.Domain.Entities.DataSourceCell", b =>
-                {
-                    b.HasOne("Morobot.Domain.Entities.DataSource", "DataSource")
-                        .WithMany("Cells")
-                        .HasForeignKey("DataSourceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("DataSource");
                 });
 
             modelBuilder.Entity("Morobot.Domain.Entities.DeviceSession", b =>
@@ -847,14 +785,7 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                         .HasForeignKey("CreatorUserId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("Morobot.Domain.Entities.AppUser", "LastEditor")
-                        .WithMany()
-                        .HasForeignKey("LastEditorUserId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.Navigation("Creator");
-
-                    b.Navigation("LastEditor");
                 });
 
             modelBuilder.Entity("Morobot.Domain.Entities.ProcessDataSource", b =>
@@ -904,8 +835,6 @@ namespace Morobot.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("Morobot.Domain.Entities.DataSource", b =>
                 {
-                    b.Navigation("Cells");
-
                     b.Navigation("ProcessLinks");
                 });
 

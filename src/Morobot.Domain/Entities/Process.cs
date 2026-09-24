@@ -9,6 +9,7 @@ public class Process
     public string Title { get; set; } = string.Empty;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public int? LastEditorUserId { get; set; }
     public Guid? DeploymentInstanceId { get; set; }
     public int DelayBeforeMs { get; set; }
     public int DelayAfterMs { get; set; }
@@ -22,6 +23,7 @@ public class Process
     public TaskDesignOrigin DesignOrigin { get; set; } = TaskDesignOrigin.Manual;
 
     public AppUser? Creator { get; set; }
+    public AppUser? LastEditor { get; set; }
     public ICollection<ProcessShare> Shares { get; set; } = new List<ProcessShare>();
     public ICollection<ProcessDataSource> DataSourceLinks { get; set; } = new List<ProcessDataSource>();
 }

@@ -59,6 +59,8 @@
   const t = (key, vars) => (I18n ? I18n.t(key, vars) : key);
   if (I18n) await I18n.init();
 
+  const ICO_CLOSE = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M18.3 5.7L12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>`;
+
   const root = document.createElement("div");
   root.className = "da-recorder-root da-player-root";
   root.id = "da-player-fab";
@@ -66,7 +68,10 @@
   root.innerHTML = `
     <div class="da-fab-panel" id="da-fab-panel" hidden>
       <div class="da-fab-resize" id="da-fab-resize" title="${t("play.resize")}" aria-label="${t("play.resize")}"></div>
-      <div class="da-fab-status" id="da-fab-status">...</div>
+      <div class="da-fab-head">
+        <div class="da-fab-status" id="da-fab-status">...</div>
+        <button type="button" id="da-fab-close" class="da-ico-btn da-fab-close" title="${t("play.closeHud")}" aria-label="${t("play.closeHud")}" hidden>${ICO_CLOSE}</button>
+      </div>
       <div class="da-play-hud">
         <div class="da-play-hud-top">
           <div class="da-fab-play-title" id="da-fab-play-title">—</div>
@@ -86,7 +91,10 @@
         </div>
       </div>
     </div>
-    <button type="button" class="da-fab-btn da-fab-btn-hud" id="da-fab-toggle" title="${t("play.panel")}" hidden>☰</button>
+    <div class="da-fab-chip-row" id="da-fab-chip-row" hidden>
+      <button type="button" class="da-fab-btn da-fab-btn-hud" id="da-fab-toggle" title="${t("play.panel")}">☰</button>
+      <button type="button" id="da-fab-close-chip" class="da-ico-btn da-fab-close da-fab-close-chip" title="${t("play.closeHud")}" aria-label="${t("play.closeHud")}" hidden>${ICO_CLOSE}</button>
+    </div>
   `;
   if (I18n) I18n.applyRoot(root);
   document.documentElement.appendChild(root);
@@ -105,12 +113,54 @@
   const playProgress = root.querySelector("#da-fab-play-progress");
   const playResults = root.querySelector("#da-fab-results");
   const toggleBtn = root.querySelector("#da-fab-toggle");
+  const chipRow = root.querySelector("#da-fab-chip-row");
+  const closeBtn = root.querySelector("#da-fab-close");
+  const closeChipBtn = root.querySelector("#da-fab-close-chip");
 
   const ICO_PLAY = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg>`;
   const ICO_PAUSE = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 5h3v14H7V5zm7 0h3v14h-3V5z"/></svg>`;
 
   let lastPlaySnapshot = null;
   let userCollapsed = false;
+  let userDismissed = false;
+
+  async function isPlaySessionRunning() {
+    try {
+      const st = await chrome.storage.local.get(["playing"]);
+      if (st.playing) return true;
+    } catch { /* ignore */ }
+    try {
+      const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => null);
+      return !!(state?.playing || state?.play?.playing);
+    } catch {
+      return false;
+    }
+  }
+
+  function dismissPlayerHud() {
+    userDismissed = true;
+    window.__daFabInit = false;
+    try { root.remove(); } catch { /* ignore */ }
+  }
+
+  async function tryDismissPlayerHud() {
+    if (await isPlaySessionRunning()) {
+      if (status) status.textContent = t("play.cannotCloseWhileRunning");
+      return;
+    }
+    dismissPlayerHud();
+  }
+
+  closeBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tryDismissPlayerHud();
+  });
+  closeChipBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tryDismissPlayerHud();
+  });
 
   const HUD_SIZE_KEY = "daPlayHudSize";
   const HUD_MIN_W = 280;
@@ -296,7 +346,8 @@
     e.stopPropagation();
     userCollapsed = false;
     panel.hidden = false;
-    toggleBtn.hidden = true;
+    if (chipRow) chipRow.hidden = true;
+    toggleBtn.hidden = false;
     refresh();
   });
 
@@ -417,6 +468,7 @@
     e.preventDefault();
     userCollapsed = true;
     panel.hidden = true;
+    if (chipRow) chipRow.hidden = false;
     toggleBtn.hidden = false;
   });
 
@@ -499,6 +551,14 @@
     clearBtn.title = t("play.clear");
     clearBtn.setAttribute("aria-label", t("play.clear"));
     toggleBtn.title = t("play.panel");
+    if (closeBtn) {
+      closeBtn.title = t("play.closeHud");
+      closeBtn.setAttribute("aria-label", t("play.closeHud"));
+    }
+    if (closeChipBtn) {
+      closeChipBtn.title = t("play.closeHud");
+      closeChipBtn.setAttribute("aria-label", t("play.closeHud"));
+    }
 
     const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({
       playing: false, play: null
@@ -551,25 +611,35 @@
 
     if (!showHud) {
       panel.hidden = true;
+      if (chipRow) chipRow.hidden = true;
       toggleBtn.hidden = true;
       root.hidden = true;
       stopBtn.hidden = true;
       stopBtn.disabled = true;
       playPauseBtn.hidden = false;
+      if (closeBtn) closeBtn.hidden = true;
+      if (closeChipBtn) closeChipBtn.hidden = true;
       return;
     }
 
     root.hidden = false;
+    const canCloseHud = !playing;
 
     if (userCollapsed && !playing) {
       panel.hidden = true;
+      if (chipRow) chipRow.hidden = false;
       toggleBtn.hidden = false;
       toggleBtn.textContent = "☰";
+      if (closeChipBtn) closeChipBtn.hidden = !canCloseHud;
+      if (closeBtn) closeBtn.hidden = true;
       return;
     }
 
     panel.hidden = false;
+    if (chipRow) chipRow.hidden = true;
     toggleBtn.hidden = true;
+    if (closeBtn) closeBtn.hidden = !canCloseHud;
+    if (closeChipBtn) closeChipBtn.hidden = true;
     // Ensure saved size is applied when HUD becomes visible
     if (!panel.classList.contains("is-sized")) restoreHudSize();
 

@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Morobot.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using Morobot.Infrastructure.Persistence;
 namespace Morobot.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260924121022_DataSourceCellRevision")]
+    partial class DataSourceCellRevision
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -198,9 +201,6 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.Property<int>("OwnerUserId")
                         .HasColumnType("int");
 
-                    b.Property<int?>("LastEditorUserId")
-                        .HasColumnType("int");
-
                     b.Property<int>("RowCount")
                         .HasColumnType("int");
 
@@ -215,8 +215,6 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("OwnerUserId");
-
-                    b.HasIndex("LastEditorUserId");
 
                     b.ToTable("DataSources", (string)null);
                 });
@@ -571,9 +569,6 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.Property<int?>("LastExecuteUserId")
                         .HasColumnType("int");
 
-                    b.Property<int?>("LastEditorUserId")
-                        .HasColumnType("int");
-
                     b.Property<DateTime?>("LastExecutedAtUtc")
                         .HasColumnType("datetime2");
 
@@ -590,8 +585,6 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.HasIndex("CreatorUserId");
 
                     b.HasIndex("DeploymentInstanceId");
-
-                    b.HasIndex("LastEditorUserId");
 
                     b.ToTable("Processes", (string)null);
                 });
@@ -791,18 +784,11 @@ namespace Morobot.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("Morobot.Domain.Entities.DataSource", b =>
                 {
-                    b.HasOne("Morobot.Domain.Entities.AppUser", "LastEditor")
-                        .WithMany()
-                        .HasForeignKey("LastEditorUserId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("Morobot.Domain.Entities.AppUser", "Owner")
                         .WithMany()
                         .HasForeignKey("OwnerUserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.Navigation("LastEditor");
 
                     b.Navigation("Owner");
                 });
@@ -847,14 +833,7 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                         .HasForeignKey("CreatorUserId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("Morobot.Domain.Entities.AppUser", "LastEditor")
-                        .WithMany()
-                        .HasForeignKey("LastEditorUserId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.Navigation("Creator");
-
-                    b.Navigation("LastEditor");
                 });
 
             modelBuilder.Entity("Morobot.Domain.Entities.ProcessDataSource", b =>

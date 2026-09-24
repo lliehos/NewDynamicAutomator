@@ -602,6 +602,8 @@ async function stopPlay(reason) {
   playStatus.playing = false;
   playStatus.paused = false;
   wakePlayResumeWaiters();
+  clearPlayDsReadCache();
+  clearPlayCellReadInflight();
   if (playAbortPoll) {
     clearInterval(playAbortPoll);
     playAbortPoll = null;
@@ -879,6 +881,9 @@ async function startPlay(taskId, tabId, runMode, options) {
   if (graphHasInvalidNodesForPlay(graph)) {
     return { ok: false, error: "در فرایند المان نامعتبر وجود دارد" };
   }
+
+  clearPlayDsReadCache();
+  clearPlayCellReadInflight();
 
   const entryId = resolvePlayEntryId(graph, opts);
   if (!entryId) {
@@ -1463,7 +1468,8 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
     }
 
     if (ct === "FindElement" || ct === "NotFindElement") {
-      const selector = resolveDynamicSelector(node, graph, rowIndex) || node.selectorValue || "";
+      const selector = (await resolveDynamicSelectorAsync(node, graph, rowIndex))
+        || node.selectorValue || "";
       if (!selector) return ct === "NotFindElement";
       const waitMs = node.selectorWaitEnabled === true
         ? Math.max(0, Number(node.selectorWaitMs) || 1000)
@@ -1479,7 +1485,8 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
     }
 
     if (ct === "FindElements") {
-      const selector = resolveDynamicSelector(node, graph, rowIndex) || node.selectorValue || "";
+      const selector = (await resolveDynamicSelectorAsync(node, graph, rowIndex))
+        || node.selectorValue || "";
       const count = selector
         ? await elementCountInTab(tabId, selector, parseFramePath(node.framePathJson), selectorStateReqs(node))
         : 0;
@@ -1491,7 +1498,7 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
 
     if (ct === "ElementValue" || ct === "SourceValue") {
       const left = ct === "SourceValue"
-        ? (resolveStepParam(node, graph, rowIndex) || "")
+        ? ((await resolveStepParamAsync(node, graph, rowIndex)) || "")
         : (await readElementText(tabId, node, graph, rowIndex));
       const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
       return compareConditionValues(left, right, node.equalityType || "equal");
@@ -1525,10 +1532,11 @@ async function resolveConditionCompareValue(tabId, node, graph, rowIndex, opts =
       return vars[name] != null ? String(vars[name]) : "";
     }
     if (src === "DataSource") {
-      return resolveStepParam(node, graph, rowIndex) || node.constantEqualValue || node.constantValue || "";
+      return (await resolveStepParamAsync(node, graph, rowIndex))
+        || node.constantEqualValue || node.constantValue || "";
     }
     if (src === "Elements") {
-      const sel = resolveDynamicSelector(node, graph, rowIndex, {
+      const sel = (await resolveDynamicSelectorAsync(node, graph, rowIndex, {
         valueKey: "equalSelectorValue",
         dynFlag: "equalSelectorIsDynamic",
         dynDs: "equalSelectorDataSourceId",
@@ -1539,7 +1547,7 @@ async function resolveConditionCompareValue(tabId, node, graph, rowIndex, opts =
         attrValue: "equalAttributeValue",
         attrDynCol: "equalAttributeDynamicColumn",
         attrDynDs: "equalAttributeDataSourceId"
-      }) || node.equalSelectorValue || "";
+      })) || node.equalSelectorValue || "";
       if (!sel) return "";
       const framePath = parseFramePath(node.framePathJson);
       try {
@@ -1832,7 +1840,8 @@ async function elementCountInTab(tabId, selector, framePath, stateReq = null) {
 }
 
 async function readElementText(tabId, node, graph, rowIndex) {
-  const selector = resolveDynamicSelector(node, graph, rowIndex) || node.selectorValue || "";
+  const selector = (await resolveDynamicSelectorAsync(node, graph, rowIndex))
+    || node.selectorValue || "";
   if (!selector) return "";
   const req = selectorStateReqs(node);
   try {
@@ -1906,9 +1915,8 @@ async function closeWindowTab(currentTabId, which) {
 async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   const actionType = step.actionType || "Click";
   const framePath = parseFramePath(step.framePathJson);
-  const resolvedSelector = resolveDynamicSelector(step, graph, rowIndex ?? 0);
-  const resolvedValue = resolveStepParam(step, graph, rowIndex ?? 0);
-  const resolvedUrl = resolveStepParam(step, graph, rowIndex ?? 0, { preferUrl: true });
+  const resolvedSelector = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0);
+  const resolvedUrl = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { preferUrl: true });
 
   if (actionType === "CloseFirstTab" || actionType === "CloseLastTab") {
     return closeWindowTab(tabId, actionType === "CloseFirstTab" ? "first" : "last");
@@ -1917,7 +1925,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   if (actionType === "NewPage") {
     let url = resolvedUrl || "about:blank";
     const cst0 = step.contentSourceType || "";
-    if (cst0 === "Memory" || cst0 === "Elements" || cst0 === "System") {
+    if (cst0 === "Memory" || cst0 === "Elements" || cst0 === "System" || cst0 === "DataSource") {
       url = (await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath })) || "about:blank";
     }
     const created = await chrome.tabs.create({ url, active: true });
@@ -1929,7 +1937,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   if (actionType === "GoToUrl" || actionType === "Navigate") {
     let url = resolvedUrl;
     const cst0 = step.contentSourceType || "";
-    if (cst0 === "Memory" || cst0 === "Elements" || cst0 === "System") {
+    if (cst0 === "Memory" || cst0 === "Elements" || cst0 === "System" || cst0 === "DataSource") {
       url = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
     }
     if (!url) {
@@ -1948,22 +1956,24 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   }
 
   if (actionType === "WaitTime") {
-    let ms = Number(resolvedValue) || 0;
+    let ms = 0;
     const cst0 = step.contentSourceType || "";
     if (cst0 === "Memory" || cst0 === "DataSource" || cst0 === "System") {
       const v = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
       ms = Number(v) || 0;
+    } else {
+      ms = Number(await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath })) || 0;
     }
     return { ok: true, waitMs: ms };
   }
 
-  // Insert/Load/Input value from Memory, Elements, or System
-  let valueForAction = resolvedValue;
   const cst = step.contentSourceType || "";
-  if ((actionType === "InsertContent" || actionType === "LoadContent" || actionType === "InputContent")
-    && (cst === "Memory" || cst === "Elements" || cst === "System")) {
-    valueForAction = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
-  }
+  const needsAsyncValue = stepUsesDataSourceValue(step)
+    || cst === "Memory" || cst === "Elements" || cst === "System"
+    || (actionType === "InsertContent" || actionType === "LoadContent" || actionType === "InputContent");
+  let valueForAction = needsAsyncValue
+    ? (await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath }) || "")
+    : (step.constantValue || "");
 
   const isCapture = actionType === "TakeContent" || actionType === "SaveContent";
   if (isCapture) {
@@ -2037,7 +2047,7 @@ async function runCaptureStep(tabId, taskId, step, runMode, graph, rowIndex, fra
   let text = "";
 
   if (src === "Elements") {
-    const resolvedSelector = resolveDynamicSelector(step, graph, rowIndex ?? 0);
+    const resolvedSelector = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0);
     if (!resolvedSelector) {
       return onUnexpected(runMode, {
         taskId, stepId: step.entityId, reason: "missing_selector",
@@ -2140,6 +2150,49 @@ function resolveDynamicSelector(step, graph, rowIndex, opts = {}) {
   return appendAttributeFilter(sel, step, graph, rowIndex, opts);
 }
 
+async function resolveDynamicSelectorAsync(step, graph, rowIndex, opts = {}) {
+  const valueKey = opts.valueKey || "selectorValue";
+  const dynFlag = opts.dynFlag || "selectorIsDynamic";
+  const dynDs = opts.dynDs || "selectorDataSourceId";
+  const dynCol = opts.dynCol || "selectorDynamicColumn";
+
+  let sel = step[valueKey] || "";
+  if (!sel) return sel;
+  const hasLegacy = /\{\{[^}]+\}\}/.test(sel);
+  const hasPh = sel.includes(DYN_SEL_PLACEHOLDER);
+  if (step[dynFlag] || hasLegacy || hasPh) {
+    const sources = graph?.dataSources || [];
+    let ds = null;
+    if (step[dynDs] != null) {
+      ds = sources.find((d) => Number(d.id) === Number(step[dynDs])) || null;
+    }
+    if (!ds) ds = findDataSourceForStep(step, graph);
+    const row = rowIndex ?? 0;
+    const col = step[dynCol];
+
+    if (hasPh) {
+      const val = (col && ds)
+        ? ((await readDataSourceCellForPlay(ds, col, row, step, graph)) ?? "")
+        : "";
+      sel = sel.split(DYN_SEL_PLACEHOLDER).join(val);
+    }
+    if (/\{\{[^}]+\}\}/.test(sel)) {
+      const parts = sel.split(/(\{\{\s*[^}]+\s*\}\})/g);
+      const out = [];
+      for (const part of parts) {
+        const m = part.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+        if (m) {
+          out.push((await readDataSourceCellForPlay(ds, m[1], row, step, graph)) ?? "");
+        } else {
+          out.push(part);
+        }
+      }
+      sel = out.join("");
+    }
+  }
+  return appendAttributeFilterAsync(sel, step, graph, rowIndex, opts);
+}
+
 /** Appends [attr="value"] when hasAttribute (or equalHasAttribute) is on. */
 function appendAttributeFilter(sel, step, graph, rowIndex, opts = {}) {
   const hasAttrKey = opts.hasAttr || "hasAttribute";
@@ -2161,6 +2214,32 @@ function appendAttributeFilter(sel, step, graph, rowIndex, opts = {}) {
     attrVal = cellValue(ds, step[dynColKey], rowIndex ?? 0, {
       emitRead: true, graph, stepTitle: step?.title
     }) ?? "";
+  } else {
+    attrVal = step[opts.attrValue || "attributeValue"] ?? "";
+  }
+  const escapedName = String(attrName).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escapedVal = String(attrVal).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `${sel}[${escapedName}="${escapedVal}"]`;
+}
+
+async function appendAttributeFilterAsync(sel, step, graph, rowIndex, opts = {}) {
+  const hasAttrKey = opts.hasAttr || "hasAttribute";
+  if (!step[hasAttrKey] || !sel) return sel;
+  const attrName = String(step[opts.attrName || "attributeName"] || "").trim();
+  if (!attrName) return sel;
+
+  const attrDynFlag = opts.attrDynFlag || "attributeValueIsDynamic";
+  let attrVal = "";
+  if (step[attrDynFlag]) {
+    const dynDsKey = opts.attrDynDs || "attributeDataSourceId";
+    const dynColKey = opts.attrDynCol || "attributeDynamicColumn";
+    const sources = graph?.dataSources || [];
+    let ds = null;
+    if (step[dynDsKey] != null) {
+      ds = sources.find((d) => Number(d.id) === Number(step[dynDsKey])) || null;
+    }
+    if (!ds) ds = findDataSourceForStep(step, graph);
+    attrVal = (await readDataSourceCellForPlay(ds, step[dynColKey], rowIndex ?? 0, step, graph)) ?? "";
   } else {
     attrVal = step[opts.attrValue || "attributeValue"] ?? "";
   }
@@ -2217,6 +2296,17 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
   if (cst === "System") {
     return resolveSystemValue(step.systemValueType || "CurrentDateTime");
   }
+  if (stepUsesDataSourceValue(step)) {
+    const ds = findDataSourceForValue(step, graph);
+    const v = await readDataSourceCellForPlay(
+      ds, step.dynamicSourceColumnName, rowIndex ?? 0, step, graph
+    );
+    if (v != null && String(v).trim() !== "") return String(v);
+    const raw = opts.preferUrl
+      ? (step.navigateUrl || step.constantValue || "")
+      : (step.constantValue || step.navigateUrl || "");
+    return resolveDynamicTextAsync(raw, step, graph, rowIndex ?? 0);
+  }
   if (cst === "Memory") {
     const nameKey = opts.memoryNameKey || "memoryVariableName";
     const name = String(step[nameKey] || step.memoryVariableName || "").trim();
@@ -2227,7 +2317,7 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
   if (cst === "Elements") {
     const tabId = opts.tabId;
     if (!tabId) return "";
-    const valueSel = resolveDynamicSelector(step, graph, rowIndex ?? 0, {
+    const valueSel = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0, {
       valueKey: "equalSelectorValue",
       dynFlag: "equalSelectorIsDynamic",
       dynDs: "equalSelectorDataSourceId",
@@ -2322,6 +2412,173 @@ async function setPlayMemoryVar(name, value) {
   return { ok: true };
 }
 
+const playCellWriteChains = new Map();
+/** TTL read cache when step.dsReadUseCache — key: dsId|row|col → { value, expiresAt } */
+const playDsReadCache = new Map();
+/** In-flight GET /cells dedupe (same key → one network call). */
+const playCellReadInflight = new Map();
+
+function clearPlayDsReadCache() {
+  playDsReadCache.clear();
+}
+
+function clearPlayCellReadInflight() {
+  playCellReadInflight.clear();
+}
+
+function dsReadCacheTtlMs(step) {
+  const sec = Number(step?.dsReadCacheTtlSec);
+  const n = Number.isFinite(sec) && sec > 0 ? sec : 60;
+  return n * 1000;
+}
+
+function playCellKey(dsId, rowIndex, columnKey) {
+  return `${dsId}|${rowIndex}|${columnKey}`;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function readServerCell(dataSourceId, rowIndex, columnKey) {
+  try {
+    return await chrome.runtime.sendMessage({
+      type: "readDataSourceCell",
+      dataSourceId,
+      rowIndex,
+      columnKey
+    });
+  } catch {
+    return null;
+  }
+}
+
+function applyCellToLocalCache(ds, rowIndex, columnKey, value, cellRevision, dataRevision) {
+  if (!ds) return;
+  ds.cells = ds.cells || [];
+  const idx = Number(rowIndex) || 0;
+  const col = String(columnKey || "").trim();
+  let hit = ds.cells.find((c) =>
+    (c.key === col || c.Key === col || c.columnName === col)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === idx
+  );
+  if (hit) {
+    if (hit.cellValue !== undefined) hit.cellValue = value;
+    else hit.CellValue = value;
+    hit.cellRevision = cellRevision;
+  } else {
+    ds.cells.push({ key: col, index: idx, cellValue: value, cellRevision });
+  }
+  if (dataRevision != null) ds.dataRevision = dataRevision;
+}
+
+/** Write one cell on server — waits (retry) until the cell lock/revision allows it. */
+async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = {}) {
+  const id = Number(ds?.id);
+  if (!id) return { ok: true, local: true };
+  const col = String(columnKey || "").trim();
+  const row = Number(rowIndex) || 0;
+  const chainKey = playCellKey(id, row, col);
+  const maxMs = Number(opts.maxWaitMs) || 20000;
+  const run = async () => {
+    const start = Date.now();
+    let expectedCellRevision = null;
+    while (Date.now() - start < maxMs) {
+      const localHit = (ds.cells || []).find((c) =>
+        (c.key === col || c.Key === col || c.columnName === col)
+        && Number(c.index ?? c.Index ?? c.rowIndex) === row
+      );
+      if (localHit?.cellRevision != null) {
+        expectedCellRevision = localHit.cellRevision;
+      } else if (localHit?.CellRevision != null) {
+        expectedCellRevision = localHit.CellRevision;
+      } else {
+        const fresh = await readServerCell(id, row, col);
+        if (fresh?.ok && fresh.body) {
+          expectedCellRevision = fresh.body.cellRevision ?? fresh.body.CellRevision ?? 0;
+          if (fresh.body.dataRevision != null) ds.dataRevision = fresh.body.dataRevision;
+        }
+      }
+      let res;
+      try {
+        res = await chrome.runtime.sendMessage({
+          type: "patchDataSourceCell",
+          dataSourceId: id,
+          rowIndex: row,
+          columnKey: col,
+          cellValue: text,
+          expectedCellRevision
+        });
+      } catch {
+        res = null;
+      }
+      if (res?.ok && res.body) {
+        const rev = res.body.cellRevision ?? res.body.CellRevision;
+        const dRev = res.body.dataRevision ?? res.body.DataRevision;
+        applyCellToLocalCache(ds, row, col, text, rev, dRev);
+        playDsReadCache.delete(playCellKey(id, row, col));
+        return { ok: true, body: res.body };
+      }
+      if (res?.error === "auth") return { ok: false, error: "auth" };
+      await sleep(Math.min(800, 80 + Math.floor((Date.now() - start) / 40)));
+    }
+    return { ok: false, error: "cell_write_timeout" };
+  };
+  const prev = playCellWriteChains.get(chainKey) || Promise.resolve();
+  const next = prev.then(run, run);
+  playCellWriteChains.set(chainKey, next.catch(() => {}));
+  return next;
+}
+
+async function readDataSourceMetaFromServer(dataSourceId) {
+  try {
+    return await chrome.runtime.sendMessage({ type: "readDataSourceMeta", dataSourceId });
+  } catch {
+    return null;
+  }
+}
+
+/** Fetch rowCount only when group-repeat needs it (no row/cell bulk load). */
+async function ensureDataSourceRowCountMeta(ds) {
+  const id = Number(ds?.id);
+  if (!id || Number(ds.rowCount) > 0) return;
+  const res = await readDataSourceMetaFromServer(id);
+  if (!res?.ok || !res.body) return;
+  ds.rowCount = Number(res.body.rowCount ?? res.body.RowCount) || ds.rowCount || 0;
+  if (res.body.dataRevision != null) ds.dataRevision = res.body.dataRevision;
+}
+
+async function fetchServerCellForPlay(id, row, col, ds, graph, step) {
+  const cacheKey = playCellKey(id, row, col);
+  if (playCellReadInflight.has(cacheKey)) {
+    return playCellReadInflight.get(cacheKey);
+  }
+  const work = (async () => {
+    const fresh = await readServerCell(id, row, col);
+    if (!fresh?.ok || !fresh.body) return null;
+    const val = fresh.body.cellValue ?? fresh.body.CellValue ?? "";
+    const rev = fresh.body.cellRevision ?? fresh.body.CellRevision;
+    const dRev = fresh.body.dataRevision ?? fresh.body.DataRevision;
+    applyCellToLocalCache(ds, row, col, val, rev, dRev);
+    if (step?.dsReadUseCache === true) {
+      playDsReadCache.set(cacheKey, {
+        value: val,
+        expiresAt: Date.now() + dsReadCacheTtlMs(step)
+      });
+    }
+    if (graph) {
+      emitDataSourceCellEvent(graph, ds, col, row, "read", val, step?.title);
+    }
+    return val;
+  })();
+  playCellReadInflight.set(cacheKey, work);
+  try {
+    return await work;
+  } finally {
+    playCellReadInflight.delete(cacheKey);
+  }
+}
+
 async function storeCapturedContent(step, graph, text, rowIndex) {
   let dest = step.saveTargetType || "";
   if (!dest) {
@@ -2337,8 +2594,23 @@ async function storeCapturedContent(step, graph, text, rowIndex) {
     if (!ds || !col) {
       return { ok: false, error: "منبع/ستون مقصد ذخیره مشخص نیست.", reason: "missing_save_target" };
     }
-    ds.cells = ds.cells || [];
     const idx = Number(rowIndex) || 0;
+    const id = Number(ds.id);
+    if (id > 0) {
+      emitDataSourceCellEvent(graph, ds, col, idx, "write", text, step?.title);
+      const saved = await writeServerCellWait(ds, graph, idx, col, text);
+      if (!saved.ok) {
+        return {
+          ok: false,
+          error: saved.error === "cell_write_timeout"
+            ? "سلول منبع هنوز آزاد نشده — چند ثانیه بعد دوباره تلاش کنید."
+            : "ذخیرهٔ سلول روی سرور انجام نشد.",
+          reason: saved.error || "cell_patch_failed"
+        };
+      }
+      return { ok: true };
+    }
+    ds.cells = ds.cells || [];
     const hit = ds.cells.find((c) =>
       (c.key === col || c.Key === col || c.columnName === col)
       && Number(c.index ?? c.Index ?? c.rowIndex) === idx
@@ -2353,7 +2625,6 @@ async function storeCapturedContent(step, graph, text, rowIndex) {
     const rc = Number(ds.rowCount) || 0;
     if (idx + 1 > rc) ds.rowCount = idx + 1;
     emitDataSourceCellEvent(graph, ds, col, idx, "write", text, step?.title);
-    persistPlayDataSources(graph).catch(() => {});
     return { ok: true };
   }
   return setPlayMemoryVar(step.memoryVariableName || step.constantValue, text);
@@ -2372,6 +2643,42 @@ function cellValue(ds, columnKey, rowIndex, opts = {}) {
     emitDataSourceCellEvent(opts.graph, ds, key, rowIndex, "read", val, opts.stepTitle);
   }
   return val;
+}
+
+function stepUsesDataSourceValue(step) {
+  const cst = step?.contentSourceType || "";
+  return cst === "DataSource" || step?.valueFromSource
+    || (step?.dataSourceId && step?.dynamicSourceColumnName
+      && cst !== "Memory" && cst !== "Elements" && cst !== "System");
+}
+
+async function readDataSourceCellForPlay(ds, columnKey, rowIndex, step, graph) {
+  if (!ds || !columnKey) return null;
+  const col = String(columnKey).trim();
+  const row = Number(rowIndex) || 0;
+  const id = Number(ds.id) || 0;
+
+  if (id <= 0) {
+    return cellValue(ds, col, row, { emitRead: true, graph, stepTitle: step?.title });
+  }
+
+  const cacheKey = playCellKey(id, row, col);
+  if (step?.dsReadUseCache === true) {
+    const cached = playDsReadCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      if (graph) emitDataSourceCellEvent(graph, ds, col, row, "read", cached.value, step?.title);
+      return cached.value;
+    }
+    return fetchServerCellForPlay(id, row, col, ds, graph, step);
+  }
+
+  const mirrored = cellValue(ds, col, row, { emitRead: false });
+  if (mirrored != null) {
+    if (graph) emitDataSourceCellEvent(graph, ds, col, row, "read", mirrored, step?.title);
+    return mirrored;
+  }
+
+  return fetchServerCellForPlay(id, row, col, ds, graph, step);
 }
 
 async function portalFetch(path, opts) {
@@ -2497,7 +2804,6 @@ function findDataSourceForStep(step, graph) {
 
 function resolveDynamicText(text, step, graph, rowIndex) {
   if (text == null || text === "") {
-    // Value-from-source without embedding token in constantValue
     if (step?.dynamicSourceColumnName) {
       const ds = findDataSourceForValue(step, graph);
       const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0, {
@@ -2512,6 +2818,33 @@ function resolveDynamicText(text, step, graph, rowIndex) {
   const ds = findDataSourceForValue(step, graph) || findDataSourceForStep(step, graph);
   return text.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) =>
     cellValue(ds, key, rowIndex ?? 0, { emitRead: true, graph, stepTitle: step?.title }) ?? "");
+}
+
+async function resolveDynamicTextAsync(text, step, graph, rowIndex) {
+  if (text == null || text === "") {
+    if (step?.dynamicSourceColumnName) {
+      const ds = findDataSourceForValue(step, graph);
+      const v = await readDataSourceCellForPlay(
+        ds, step.dynamicSourceColumnName, rowIndex ?? 0, step, graph
+      );
+      return v != null ? String(v) : "";
+    }
+    return text || "";
+  }
+  if (typeof text !== "string") return text || "";
+  if (!/\{\{[^}]+\}\}/.test(text)) return text;
+  const ds = findDataSourceForValue(step, graph) || findDataSourceForStep(step, graph);
+  const parts = text.split(/(\{\{\s*[^}]+\s*\}\})/g);
+  const out = [];
+  for (const part of parts) {
+    const m = part.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+    if (m) {
+      out.push((await readDataSourceCellForPlay(ds, m[1], rowIndex ?? 0, step, graph)) ?? "");
+    } else {
+      out.push(part);
+    }
+  }
+  return out.join("");
 }
 
 function findDataSourceForValue(step, graph) {
@@ -2636,6 +2969,7 @@ async function expandGroupByRepeatSource(tabId, groupOrStart, graph) {
   if (type === "DataSource") {
     const dsId = node.dataSourceId;
     const ds = (graph.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+    if (ds) await ensureDataSourceRowCountMeta(ds);
     let count = Number(ds?.rowCount) || 0;
     if (!count && Array.isArray(ds?.cells) && ds.cells.length) {
       const idxs = new Set(
@@ -2998,10 +3332,6 @@ function waitTabComplete(tabId) {
       }
     }).catch(() => {});
   });
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 function notifyTab(tabId, message) {

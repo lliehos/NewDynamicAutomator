@@ -85,6 +85,26 @@
     });
   }
 
+  function formatEditMeta(iso, userName) {
+    const when = formatCreatedAt(iso);
+    const who = (userName || "").trim();
+    if (when === "—" && !who) return "—";
+    const parts = [];
+    if (when !== "—") parts.push(`<div class="da-edit-meta-when">${escapeHtml(when)}</div>`);
+    if (who) parts.push(`<div class="da-edit-meta-user text-muted small">${escapeHtml(who)}</div>`);
+    return `<div class="da-edit-meta">${parts.join("")}</div>`;
+  }
+
+  function editMetaIso(row, kind) {
+    if (kind === "data") return row.dataUpdatedAtUtc || row.dataUpdatedAt || null;
+    return row.updatedAtUtc || row.updatedAt || row.processUpdatedAt || null;
+  }
+
+  function editMetaUser(row, kind) {
+    if (kind === "data") return row.dataLastEditorUserName || row.dataLastEditor || "";
+    return row.lastEditorUserName || row.lastEditor || "";
+  }
+
   function sharedUsersLabel(users, count) {
     const list = Array.isArray(users) ? users.map((u) => String(u || "").trim()).filter(Boolean) : [];
     if (list.length) return list.join(dateLocale().startsWith("fa") ? "، " : ", ");
@@ -152,10 +172,29 @@
   function iconLink(cls, title, href, iconHtml) {
     return `<a class="ds-icon-btn ${cls}" href="${href}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${iconHtml}</a>`;
   }
+  function isServerBackedTaskId(id) {
+    return /^\d+$/.test(String(id ?? "").trim());
+  }
+
   function taskCounts(t) {
-    const steps = t.graph?.nodes?.filter((n) => n.kind === "action" || n.kind === "step").length || t.stepCount || 0;
-    const groups = t.graph?.nodes?.filter((n) => n.kind === "group").length || t.groupCount || 0;
-    return { steps, groups, sources: dataSourceCount(t) };
+    // Server-backed rows: counts always come from API metadata (GraphJson on server), not stale local graph.
+    if (isServerBackedTaskId(t?.id)) {
+      return {
+        steps: Number(t.stepCount) || 0,
+        groups: Number(t.groupCount) || 0,
+        sources: Number(t.dataSourceCount ?? dataSourceCount(t)) || 0
+      };
+    }
+    if (t.graph?.nodes && Array.isArray(t.graph.nodes)) {
+      const steps = t.graph.nodes.filter((n) => n.kind === "action" || n.kind === "step").length;
+      const groups = t.graph.nodes.filter((n) => n.kind === "group").length;
+      return { steps, groups, sources: dataSourceCount(t) };
+    }
+    return {
+      steps: Number(t.stepCount) || 0,
+      groups: Number(t.groupCount) || 0,
+      sources: dataSourceCount(t)
+    };
   }
 
   function safeFileName(title) {
@@ -292,12 +331,25 @@
     notifyHome(`کپی «${copy.title}» ساخته شد.`, "success");
   }
 
+  function recordAllowed() {
+    const e = window.DaEntitlements?.get?.();
+    if (!e) return true;
+    return !!e.canRecord;
+  }
+
   function actionButtonsHtml(task) {
     const tid = escapeHtml(String(task.id));
     const ttitle = escapeHtml(String(task.title || "").trim());
     const counts = taskCounts(task);
     const isEmpty = !counts.steps;
     const hasData = counts.sources > 0;
+    const canRec = recordAllowed();
+    const recTip = canRec
+      ? t("tasks.record")
+      : (window.DaEntitlements?.upgradeMessage?.("record") || t("plan.upgradeRecord") || "ضبط نیاز به پلن Pro دارد.");
+    const recExtra = canRec
+      ? `data-da-action="start-record-menu" data-task-id="${tid}" data-task-title="${ttitle}" aria-haspopup="menu"`
+      : `data-da-action="start-record-menu" data-task-id="${tid}" data-task-title="${ttitle}" disabled aria-disabled="true" title="${escapeHtml(recTip)}"`;
     const smartBtn = isEmpty
       ? iconBtn("is-smart", t("tasks.smart"), ICO_SMART, `data-da-action="start-smart-record" data-task-id="${tid}" data-task-title="${ttitle}"`)
       : "";
@@ -308,7 +360,7 @@
     return `
       ${iconLink("is-edit", t("tasks.edit"), `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_EDIT)}
       ${iconBtn("is-play", t("tasks.play"), ICO_PLAY, `data-da-action="play-task-menu" data-task-id="${tid}" aria-haspopup="menu"`)}
-      ${iconBtn("is-rec", t("tasks.record"), ICO_REC, `data-da-action="start-record" data-task-id="${tid}" data-task-title="${ttitle}"`)}
+      ${iconBtn("is-rec", recTip, ICO_REC, recExtra)}
       ${smartBtn}
       ${dataBtns}
       ${iconBtn("", t("tasks.clone"), ICO_CLONE, `data-da-clone="${tid}"`)}
@@ -592,6 +644,8 @@
         <ul class="da-task-card-meta">
           <li><i class="ti ti-calendar"></i><span>${escapeHtml(formatCreatedAt(row.createdAt))}</span></li>
           <li><i class="ti ti-user"></i><span>${escapeHtml(row.createdBy)}</span></li>
+          <li><i class="ti ti-edit"></i><span>${formatEditMeta(editMetaIso(row, "process"), editMetaUser(row, "process"))}</span></li>
+          <li><i class="ti ti-database"></i><span>${formatEditMeta(editMetaIso(row, "data"), editMetaUser(row, "data"))}</span></li>
           <li><i class="ti ti-users"></i><span>${escapeHtml(sharedUsersLabel(row.sharedUsers, row.sharedWithCount))}</span></li>
         </ul>
         <div class="da-task-stats">
@@ -621,15 +675,13 @@
 
       const raw = tasks || readTasks();
       const normalized = Array.isArray(raw) ? raw.map(normalizeTask) : [];
-      // Persist list, but never wipe a richer local graph with a graph-less server row.
+      // Persist list metadata only — canvas for server tasks lives on the server (+ explicit mirror cache).
       const existing = readTasks();
       const byId = new Map(existing.map((t) => [String(t.id), t]));
       const toStore = normalized.map((n) => {
-        const prev = byId.get(String(n.id));
-        if (prev?.graph?.nodes?.length && !(n.graph && n.graph.nodes && n.graph.nodes.length)) {
-          return { ...n, graph: prev.graph };
-        }
-        return n;
+        const out = { ...n };
+        if (isServerBackedTaskId(out.id)) delete out.graph;
+        return out;
       });
       const changed = toStore.length !== existing.length
         || toStore.some((n) => {
@@ -641,7 +693,10 @@
             || Number(o.groupCount || 0) !== Number(n.groupCount || 0)
             || Number(o.dataSourceCount || 0) !== Number(n.dataSourceCount || 0)
             || Number(o.sharedWithCount || 0) !== Number(n.sharedWithCount || 0)
-            || (!!o.graph?.nodes?.length) !== (!!n.graph?.nodes?.length);
+            || String(o.updatedAtUtc || "") !== String(n.updatedAtUtc || "")
+            || String(o.lastEditorUserName || "") !== String(n.lastEditorUserName || "")
+            || String(o.dataUpdatedAtUtc || "") !== String(n.dataUpdatedAtUtc || "")
+            || String(o.dataLastEditorUserName || "") !== String(n.dataLastEditorUserName || "");
         });
       // Silent write: avoid writeTasks → da-local-tasks → render → writeTasks loop.
       if (changed) writeTasks(toStore, { silent: true });
@@ -649,7 +704,7 @@
       if (body) {
         try {
           if (!toStore.length) {
-            body.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-6">${t("tasks.empty")}</td></tr>`;
+            body.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-6">${t("tasks.empty")}</td></tr>`;
           } else {
             body.innerHTML = toStore.map((row) => {
               const { steps, groups, sources } = taskCounts(row);
@@ -661,6 +716,8 @@
         </td>
         <td class="text-nowrap">${escapeHtml(formatCreatedAt(row.createdAt))}</td>
         <td>${escapeHtml(row.createdBy)}</td>
+        <td class="text-nowrap" data-flash="processEdit">${formatEditMeta(editMetaIso(row, "process"), editMetaUser(row, "process"))}</td>
+        <td class="text-nowrap" data-flash="dataEdit">${formatEditMeta(editMetaIso(row, "data"), editMetaUser(row, "data"))}</td>
         <td data-flash="shared">${escapeHtml(sharedUsersLabel(row.sharedUsers, row.sharedWithCount))}</td>
         <td data-flash="groups">${groups}</td>
         <td data-flash="steps">${steps}</td>
@@ -674,7 +731,7 @@
           }
         } catch (err) {
           console.error("[local-tasks] rows render failed", err);
-          body.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-6">${escapeHtml(String(err && err.message || err))}</td></tr>`;
+          body.innerHTML = `<tr><td colspan="10" class="text-center text-danger py-6">${escapeHtml(String(err && err.message || err))}</td></tr>`;
         }
       }
 
@@ -804,6 +861,10 @@
       stepCount: row.stepCount || 0,
       dataSourceCount: row.dataSourceCount || 0,
       createdAt: row.createdAtUtc || row.createdAt,
+      updatedAtUtc: row.updatedAtUtc || null,
+      lastEditorUserName: row.lastEditorUserName || "",
+      dataUpdatedAtUtc: row.dataUpdatedAtUtc || null,
+      dataLastEditorUserName: row.dataLastEditorUserName || "",
       createdBy: row.ownerUserName || "",
       sharedUsers: [],
       sharedWithCount: row.sharedWithCount || 0,
@@ -818,72 +879,66 @@
     }));
   }
 
-  /** Keep local graphs when refreshing metadata from the server list (list API has no canvas). */
+  /** Merge API list into cache: drop removed server ids, refresh metadata; refetch canvas when counts changed. */
+  async function syncServerListToLocalCache(serverRows) {
+    const rows = serverRows || [];
+    const serverIds = new Set(rows.map((r) => String(r.id)));
+    let tasks = readTasks().filter((t) => !isServerBackedTaskId(t.id) || serverIds.has(String(t.id)));
+    const prevById = new Map(tasks.map((t) => [String(t.id), t]));
+    const mergedMeta = mergeServerTasksWithLocal(rows);
+
+    for (const row of mergedMeta) {
+      const id = String(row.id);
+      const prev = prevById.get(id);
+      const countsChanged = prev
+        && (Number(prev.stepCount) !== Number(row.stepCount)
+          || Number(prev.groupCount) !== Number(row.groupCount)
+          || String(prev.title || "") !== String(row.title || ""));
+      const next = { ...(prev || {}), ...row };
+      if (isServerBackedTaskId(id)) delete next.graph;
+      prevById.set(id, next);
+      if (countsChanged) {
+        try {
+          await ensureTaskGraphCached(id);
+        } catch { /* list still shows API counts */ }
+      }
+    }
+
+    const out = [...prevById.values()];
+    writeTasks(out, { silent: true });
+    return out;
+  }
+
+  /** List API has no canvas body — metadata only; canvas lives on server and in extension cache after explicit sync. */
   function mergeServerTasksWithLocal(serverRows) {
-    const local = readTasks();
-    const byId = new Map(local.map((t) => [String(t.id), t]));
     return (serverRows || []).map((row) => {
-      const prev = byId.get(String(row.id));
       const next = normalizeTask(row);
-      const prevGraph = prev?.graph;
-      const hasPrev = prevGraph && Array.isArray(prevGraph.nodes) && prevGraph.nodes.length;
-      const hasNext = next.graph && Array.isArray(next.graph.nodes) && next.graph.nodes.length;
-      if (hasPrev && !hasNext) next.graph = prevGraph;
+      delete next.graph;
       return next;
     });
   }
 
-  /** Ensure the process canvas is in the local cache (player reads localStorage only). */
-  async function ensureTaskGraphCached(taskId) {
-    const id = String(taskId || "").trim();
-    if (!id) return null;
-    const tasks = readTasks();
-    let hit = findTask(tasks, id);
-    if (hit?.graph && Array.isArray(hit.graph.nodes) && hit.graph.nodes.length) {
-      // Memory may be richer than encrypted disk — flush so Player sync sees the graph.
-      if (window.DaSecureStore && typeof DaSecureStore.writeTasksAsync === "function") {
-        suppressLocalTasksRender = true;
-        try {
-          await DaSecureStore.writeTasksAsync(tasks);
-        } finally {
-          suppressLocalTasksRender = false;
-        }
-      }
-      return hit;
-    }
-    if (!/^\d+$/.test(id)) {
-      return hit || null;
-    }
-    const res = await fetch(`/api/tasks/${id}/canvas`, { credentials: "same-origin" });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.message || `canvas ${res.status}`);
-    }
-    const canvas = await res.json();
-    const graph = canvas && typeof canvas === "object" ? canvas : null;
-    if (!graph || !Array.isArray(graph.nodes)) {
-      throw new Error(t("tasks.noGraph") || "گراف فرآیند پیدا نشد.");
-    }
-    graph.taskId = graph.taskId ?? (Number(id) || id);
-    if (!hit) {
-      hit = normalizeTask({
-        id,
-        title: graph.title || `#${id}`,
-        designOrigin: graph.designOrigin || "Manual",
-        createdAt: graph.updatedAtUtc || null,
-        createdBy: currentUser(),
-        graph
-      });
-      tasks.push(hit);
-    } else {
-      hit.graph = graph;
-      if (graph.title) hit.title = graph.title;
-      const counts = taskCounts(hit);
-      hit.groupCount = counts.groups;
-      hit.stepCount = counts.steps;
-      hit.dataSourceCount = counts.sources;
-    }
-    // Must flush encrypted localStorage before Player sync reads the disk.
+  /** Write server canvas into encrypted local cache (Player/Recorder read path). */
+  async function mirrorServerCanvasToLocalCache(taskRow) {
+    const id = String(taskRow?.id ?? "").trim();
+    if (!isServerBackedTaskId(id) || !taskRow?.graph?.nodes) return null;
+    const tasks = readTasks().map((t) => ({ ...t }));
+    const counts = taskCounts({
+      ...taskRow,
+      stepCount: (taskRow.graph.nodes || []).filter((n) => n.kind === "action" || n.kind === "step").length,
+      groupCount: (taskRow.graph.nodes || []).filter((n) => n.kind === "group").length
+    });
+    const item = {
+      ...taskRow,
+      id,
+      stepCount: counts.steps,
+      groupCount: counts.groups,
+      dataSourceCount: counts.sources,
+      graph: taskRow.graph
+    };
+    const idx = tasks.findIndex((t) => String(t.id) === id);
+    if (idx >= 0) tasks[idx] = { ...tasks[idx], ...item };
+    else tasks.push(item);
     if (window.DaSecureStore && typeof DaSecureStore.writeTasksAsync === "function") {
       suppressLocalTasksRender = true;
       try {
@@ -894,7 +949,76 @@
     } else {
       writeTasks(tasks, { silent: true });
     }
-    return hit;
+    try {
+      window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: currentUser(), tasks } }));
+    } catch { /* ignore */ }
+    return item;
+  }
+
+  /** Ensure the process canvas is in the local cache (player reads localStorage / extension sync). */
+  async function ensureTaskGraphCached(taskId) {
+    const id = String(taskId || "").trim();
+    if (!id) return null;
+    const tasks = readTasks();
+    let hit = findTask(tasks, id);
+
+    const applyCanvasToHit = (graph) => {
+      graph.taskId = graph.taskId ?? (Number(id) || id);
+      if (!hit) {
+        hit = normalizeTask({
+          id,
+          title: graph.title || `#${id}`,
+          designOrigin: graph.designOrigin || "Manual",
+          createdAt: graph.updatedAtUtc || null,
+          createdBy: currentUser(),
+          graph
+        });
+        tasks.push(hit);
+      } else {
+        hit.graph = graph;
+        if (graph.title) hit.title = graph.title;
+        const counts = taskCounts(hit);
+        hit.groupCount = counts.groups;
+        hit.stepCount = counts.steps;
+        hit.dataSourceCount = counts.sources;
+      }
+    };
+
+    const persistTasks = async () => {
+      if (window.DaSecureStore && typeof DaSecureStore.writeTasksAsync === "function") {
+        suppressLocalTasksRender = true;
+        try {
+          await DaSecureStore.writeTasksAsync(tasks);
+        } finally {
+          suppressLocalTasksRender = false;
+        }
+      } else {
+        writeTasks(tasks, { silent: true });
+      }
+    };
+
+    // Server-backed processes: canvas API is authoritative (list cache may lag after editor save).
+    if (/^\d+$/.test(id)) {
+      const res = await fetch(`/api/tasks/${id}/canvas`, { credentials: "same-origin" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || `canvas ${res.status}`);
+      }
+      const canvas = await res.json();
+      const graph = canvas && typeof canvas === "object" ? canvas : null;
+      if (!graph || !Array.isArray(graph.nodes)) {
+        throw new Error(t("tasks.noGraph") || "گراف فرآیند پیدا نشد.");
+      }
+      applyCanvasToHit(graph);
+      await mirrorServerCanvasToLocalCache(hit);
+      return hit;
+    }
+
+    if (hit?.graph && Array.isArray(hit.graph.nodes) && hit.graph.nodes.length) {
+      await persistTasks();
+      return hit;
+    }
+    return hit || null;
   }
 
   const createModalEl = document.getElementById("da-create-task-modal");
@@ -926,6 +1050,10 @@
     if (suppressLocalTasksRender) return;
     const detail = ev.detail;
     if (detail && detail.tasks && detail.user && detail.user !== currentUser()) return;
+    if (isServerMode()) {
+      scheduleRender();
+      return;
+    }
     render((detail && detail.tasks) || readTasks());
   });
 
@@ -962,6 +1090,27 @@
 
   // Play opens a target-tab menu (not immediate start).
   document.addEventListener("click", (ev) => {
+    const recBtn = ev.target instanceof Element
+      ? ev.target.closest('[data-da-action="start-record-menu"]')
+      : null;
+    if (recBtn) {
+      if (!document.getElementById("da-tasks-panel")) return;
+      if (recBtn.hasAttribute("disabled") || recBtn.getAttribute("aria-disabled") === "true") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (window.DaEntitlements) DaEntitlements.showUpgrade("record");
+        return;
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (document.documentElement.dataset.daRecorderExtension !== "1"
+        && document.documentElement.dataset.daExtension !== "1") {
+        return;
+      }
+      openRecordTargetMenu(recBtn);
+      return;
+    }
+
     const btn = ev.target instanceof Element
       ? ev.target.closest('[data-da-action="play-task-menu"]')
       : null;
@@ -970,7 +1119,8 @@
     ev.preventDefault();
     ev.stopPropagation();
     if (document.documentElement.dataset.daPlayerExtension !== "1"
-      && document.documentElement.dataset.daExtension !== "1") {
+      && document.documentElement.dataset.daExtension !== "1"
+      && document.documentElement.dataset.daRecorderExtension !== "1") {
       return; // gate modal will open instead
     }
     openPlayTargetMenu(btn);
@@ -978,6 +1128,135 @@
 
   let playMenuEl = null;
   let playMenuCloser = null;
+  let recordMenuEl = null;
+  let recordMenuCloser = null;
+
+  function closeRecordTargetMenu() {
+    if (recordMenuEl) {
+      recordMenuEl.remove();
+      recordMenuEl = null;
+    }
+    if (recordMenuCloser) {
+      document.removeEventListener("click", recordMenuCloser, true);
+      recordMenuCloser = null;
+    }
+  }
+
+  async function openRecordTargetMenu(anchor) {
+    closeRecordTargetMenu();
+    closePlayTargetMenu();
+    const taskId = anchor.getAttribute("data-task-id");
+    const taskTitle = anchor.getAttribute("data-task-title") || "";
+    if (!taskId) return;
+
+    const menu = document.createElement("div");
+    menu.className = "da-play-target-menu da-record-target-menu";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = `<div class="da-play-target-loading">در حال بارگذاری…</div>`;
+    document.body.appendChild(menu);
+    recordMenuEl = menu;
+
+    const place = () => {
+      const r = anchor.getBoundingClientRect();
+      const mw = Math.max(220, menu.offsetWidth || 260);
+      let left = r.left + window.scrollX;
+      let top = r.bottom + window.scrollY + 6;
+      if (left + mw > window.scrollX + window.innerWidth - 8) {
+        left = window.scrollX + window.innerWidth - mw - 8;
+      }
+      if (top + menu.offsetHeight > window.scrollY + window.innerHeight - 8) {
+        top = r.top + window.scrollY - menu.offsetHeight - 6;
+      }
+      menu.style.left = `${Math.max(8, left)}px`;
+      menu.style.top = `${Math.max(8, top)}px`;
+    };
+    place();
+
+    recordMenuCloser = (ev) => {
+      if (!(ev.target instanceof Element)) return;
+      if (menu.contains(ev.target) || anchor.contains(ev.target)) return;
+      closeRecordTargetMenu();
+    };
+    setTimeout(() => document.addEventListener("click", recordMenuCloser, true), 0);
+
+    const startRecord = async (scope) => {
+      closeRecordTargetMenu();
+      setTasksBusy(true, "آماده‌سازی ضبط…");
+      let cached = null;
+      try {
+        cached = await ensureTaskGraphCached(taskId);
+        if (!cached?.graph?.nodes?.length) {
+          throw new Error("فرآیند برای ضبط پیدا نشد. صفحه را رفرش کنید.");
+        }
+      } catch (e) {
+        setTasksBusy(false);
+        notifyHome(String(e.message || e), "error");
+        return;
+      }
+      window.dispatchEvent(new CustomEvent("da-start-record", {
+        detail: {
+          taskId,
+          taskTitle: taskTitle || cached.title || "",
+          task: cached,
+          graph: cached.graph,
+          tabId: scope?.tabId ?? null,
+          openNewTab: scope?.openNewTab === true
+        }
+      }));
+    };
+
+    menu.innerHTML = `
+      <button type="button" class="da-play-target-item" data-open-new="1" role="menuitem">
+        <span class="da-play-target-title">تب جدید خالی</span>
+        <span class="da-play-target-sub">صفحهٔ ضبط (ایجاد خودکار)</span>
+      </button>
+      <div class="da-play-target-sep"></div>
+      <div class="da-play-target-loading">بارگذاری تب‌های باز…</div>
+    `;
+    place();
+    menu.querySelector('[data-open-new="1"]')?.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      startRecord({ openNewTab: true });
+    });
+
+    const tabs = await requestOpenTabs();
+    if (!recordMenuEl) return;
+    const listHost = menu.querySelector(".da-play-target-loading");
+    if (!listHost) return;
+    if (!tabs.length) {
+      listHost.className = "da-play-target-empty";
+      listHost.textContent = "تب دیگری باز نیست — «تب جدید خالی» را بزنید";
+      place();
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    const label = document.createElement("div");
+    label.className = "da-play-target-label";
+    label.textContent = "تب‌های باز";
+    frag.appendChild(label);
+    tabs.forEach((tab) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "da-play-target-item";
+      btn.setAttribute("role", "menuitem");
+      btn.setAttribute("data-tab-id", String(tab.id));
+      btn.title = tab.url || "";
+      btn.innerHTML = `<span class="da-play-target-title"></span><span class="da-play-target-sub"></span>`;
+      btn.querySelector(".da-play-target-title").textContent = tab.label || tab.title || `#${tab.id}`;
+      btn.querySelector(".da-play-target-sub").textContent = (tab.url || "").replace(/^https?:\/\//i, "").slice(0, 56);
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const tabId = Number(btn.getAttribute("data-tab-id"));
+        if (!Number.isFinite(tabId)) return;
+        startRecord({ tabId, openNewTab: false });
+      });
+      frag.appendChild(btn);
+    });
+    listHost.replaceWith(frag);
+    place();
+  }
 
   function closePlayTargetMenu() {
     if (playMenuEl) {
@@ -1053,6 +1332,10 @@
         cached = await ensureTaskGraphCached(taskId);
         if (!cached?.graph?.nodes?.length) {
           throw new Error("فرآیند در حافظهٔ محلی پیدا نشد. صفحه را رفرش کنید.");
+        }
+        const actionSteps = cached.graph.nodes.filter((n) => n.kind === "action" || n.kind === "step").length;
+        if (!actionSteps) {
+          throw new Error("مرحله‌ای برای اجرا نیست — در دیاگرام اقدام اضافه کنید.");
         }
       } catch (e) {
         setTasksBusy(false);
@@ -1134,19 +1417,32 @@
     }
     if (d.phase === "error") {
       const msg = d.text || "خطا در اجرا";
-      // Keep error visible on the process list briefly, then clear.
       setTasksBusy(true, msg, { kind: "error" });
       notifyHome(msg, "error");
-      busyErrorTimer = setTimeout(() => setTasksBusy(false), 2800);
+      setTimeout(() => setTasksBusy(false), 3500);
+      return;
+    }
+    if (d.phase === "started" || d.phase === "done") {
+      setTasksBusy(false);
+    }
+  });
+
+  window.addEventListener("da-record-ui", (ev) => {
+    const d = ev.detail || {};
+    if (d.phase === "preparing") {
+      setTasksBusy(true, d.text || "آماده‌سازی ضبط…");
+      return;
+    }
+    if (d.phase === "error") {
+      const msg = d.text || "خطا در ضبط";
+      setTasksBusy(true, msg, { kind: "error" });
+      notifyHome(msg, "error");
+      setTimeout(() => setTasksBusy(false), 3500);
       return;
     }
     if (d.phase === "started") {
-      // Success → clear overlay; Player switches to the play tab.
       setTasksBusy(false);
-      return;
-    }
-    if (d.phase === "done") {
-      setTasksBusy(false);
+      notifyHome(d.text || "ضبط شروع شد — کنترل‌ها روی تب هدف.", "success");
     }
   });
 
@@ -1155,8 +1451,8 @@
       if (isServerMode()) {
         try {
           const rows = await loadServerTasks();
-          const merged = mergeServerTasksWithLocal(rows);
-          render(merged);
+          await syncServerListToLocalCache(rows);
+          render(mergeServerTasksWithLocal(rows));
           return;
         } catch (e) {
           console.warn(e);
@@ -1225,26 +1521,52 @@
       scheduleRender();
       setTimeout(() => {
         const fields = [];
-        if (!prev || prev.title !== (task.title || task.Title)) fields.push("title");
-        if (!prev || Number(prev.stepCount) !== Number(task.stepCount ?? task.StepCount)) fields.push("steps");
-        if (!prev || Number(prev.groupCount) !== Number(task.groupCount ?? task.GroupCount)) fields.push("groups");
-        if (!prev || Number(prev.dataSourceCount ?? prev.sources) !== Number(task.dataSourceCount ?? task.DataSourceCount)) {
+        const titleNext = task.title || task.Title;
+        const stepNext = task.stepCount ?? task.StepCount;
+        const groupNext = task.groupCount ?? task.GroupCount;
+        const srcNext = task.dataSourceCount ?? task.DataSourceCount;
+        const procEditNext = task.updatedAtUtc ?? task.UpdatedAtUtc;
+        const procUserNext = task.lastEditorUserName ?? task.LastEditorUserName;
+        const dataEditNext = task.dataUpdatedAtUtc ?? task.DataUpdatedAtUtc;
+        const dataUserNext = task.dataLastEditorUserName ?? task.DataLastEditorUserName;
+        if (!prev || prev.title !== titleNext) fields.push("title");
+        if (!prev || Number(prev.stepCount) !== Number(stepNext)) fields.push("steps");
+        if (!prev || Number(prev.groupCount) !== Number(groupNext)) fields.push("groups");
+        if (!prev || Number(prev.dataSourceCount ?? prev.sources) !== Number(srcNext)) {
           fields.push("sources");
+        }
+        if (!prev || String(prev.updatedAtUtc || "") !== String(procEditNext || "")
+          || String(prev.lastEditorUserName || "") !== String(procUserNext || "")) {
+          fields.push("processEdit");
+        }
+        if (!prev || String(prev.dataUpdatedAtUtc || "") !== String(dataEditNext || "")
+          || String(prev.dataLastEditorUserName || "") !== String(dataUserNext || "")) {
+          fields.push("dataEdit");
         }
         if (action === "shared" || Number(prev?.sharedWithCount) !== Number(task.sharedWithCount ?? task.SharedWithCount)) {
           fields.push("shared");
         }
-        if (!fields.length) fields.push("steps");
+        if (!fields.length) fields.push("processEdit");
         flashTaskFields(id, fields);
         if (window.daNotify && payload.actorUserName) {
           const key = action === "shared" ? "live.taskShared" : "live.taskUpdated";
           daNotify((t(key) || (action === "shared" ? "اشتراک فرآیند تغییر کرد" : "فرآیند به‌روز شد")) + who, "info");
         }
-      }, 280);
+      }, 320);
+    });
+    DaCatalog.on("sourceChanged", (payload) => {
+      if (!payload || payload.taskId == null) return;
+      const tid = payload.taskId;
+      scheduleRender();
+      setTimeout(() => flashTaskFields(tid, ["dataEdit", "sources"]), 320);
     });
   }
 
   scheduleRender();
   document.addEventListener("da:locale", () => scheduleRender());
+  window.addEventListener("da-task-list-sync", () => scheduleRender());
+  if (window.DaEntitlements?.fetch) {
+    DaEntitlements.fetch().then(() => scheduleRender()).catch(() => {});
+  }
   window.dispatchEvent(new CustomEvent("da-request-local-tasks"));
 })();

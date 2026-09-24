@@ -30,6 +30,19 @@ public class DataSourceService
         _log = log;
     }
 
+    public Task<List<int>> GetLinkedProcessIdsAsync(int dataSourceId, CancellationToken ct = default)
+        => _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.DataSourceId == dataSourceId)
+            .Select(l => l.ProcessId)
+            .Distinct()
+            .ToListAsync(ct);
+
+    static void StampDataEditor(DataSource entity, int userId)
+    {
+        if (userId > 0)
+            entity.LastEditorUserId = userId;
+    }
+
     public ParsedExcelDto ParseExcelOnly(Stream excelStream, string? suggestedTitle = null)
     {
         var (columns, cells) = ParseExcel(excelStream);
@@ -163,9 +176,12 @@ public class DataSourceService
 
     public async Task<DataSourceDetailDto?> GetAsync(int userId, int id, CancellationToken ct = default)
     {
-        var d = await _db.DataSources.AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Id == id && x.OwnerUserId == userId, ct);
-        return d is null ? null : ToDetail(d);
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (d is null) return null;
+        var cells = await LoadCellsFromDbAsync(id, ct);
+        if (cells.Count == 0)
+            cells = DeserializeCells(d.CellsJson);
+        return ToDetail(d, cells);
     }
 
     /// <summary>Admin-only: load any library source by id (no owner check).</summary>
@@ -173,7 +189,11 @@ public class DataSourceService
     {
         var d = await _db.DataSources.AsNoTracking()
             .FirstOrDefaultAsync(x => x.Id == id, ct);
-        return d is null ? null : ToDetail(d);
+        if (d is null) return null;
+        var cells = await LoadCellsFromDbAsync(id, ct);
+        if (cells.Count == 0)
+            cells = DeserializeCells(d.CellsJson);
+        return ToDetail(d, cells);
     }
 
     public async Task<UploadDataSourceResponse> CreateAsync(
@@ -202,11 +222,243 @@ public class DataSourceService
             ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts),
             CellsJson = JsonSerializer.Serialize(cells, JsonOpts),
             CreatedAtUtc = DateTime.UtcNow,
-            UpdatedAtUtc = DateTime.UtcNow
+            UpdatedAtUtc = DateTime.UtcNow,
+            LastEditorUserId = userId > 0 ? userId : null
         };
         _db.DataSources.Add(entity);
         await _db.SaveChangesAsync(ct);
+        await ReplaceAllCellsAsync(entity.Id, cells, ct);
+        entity.DataRevision = 1;
+        entity.CellsJson = JsonSerializer.Serialize(cells, JsonOpts);
+        await _db.SaveChangesAsync(ct);
         return ToUploadResponse(entity, columns, cells);
+    }
+
+    public async Task<DataSourceMetaDto?> GetMetaAsync(int userId, int id, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        return d is null ? null : ToMeta(d);
+    }
+
+    public async Task<DataSourceCellValueDto?> GetCellAsync(
+        int userId, int id, int rowIndex, string columnKey, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (d is null) return null;
+        var key = (columnKey ?? "").Trim();
+        if (string.IsNullOrEmpty(key)) return null;
+        var cell = await _db.DataSourceCells.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.DataSourceId == id && c.RowIndex == rowIndex && c.ColumnKey == key, ct);
+        return new DataSourceCellValueDto
+        {
+            DataSourceId = id,
+            RowIndex = rowIndex,
+            ColumnKey = key,
+            CellValue = cell?.CellValue ?? "",
+            DataRevision = d.DataRevision,
+            CellRevision = cell?.CellRevision ?? 0
+        };
+    }
+
+    public async Task<DataSourceRowDto?> GetRowAsync(
+        int userId, int id, int rowIndex, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (d is null) return null;
+        var cells = await _db.DataSourceCells.AsNoTracking()
+            .Where(c => c.DataSourceId == id && c.RowIndex == rowIndex)
+            .ToListAsync(ct);
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in cells)
+            map[c.ColumnKey] = c.CellValue ?? "";
+        return new DataSourceRowDto
+        {
+            RowIndex = rowIndex,
+            Values = map,
+            DataRevision = d.DataRevision
+        };
+    }
+
+    public async Task<PatchDataSourceCellResponse> PatchCellAsync(
+        int userId, int id, PatchDataSourceCellRequest req, CancellationToken ct = default)
+    {
+        var key = (req.ColumnKey ?? "").Trim();
+        if (string.IsNullOrEmpty(key) || req.RowIndex < 0)
+        {
+            return new PatchDataSourceCellResponse
+            {
+                Ok = false,
+                Message = "ردیف یا ستون نامعتبر است."
+            };
+        }
+
+        var d = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (d is null)
+        {
+            return new PatchDataSourceCellResponse { Ok = false, Message = "forbidden" };
+        }
+
+        var value = req.CellValue ?? "";
+        var expectedRev = req.ExpectedCellRevision;
+
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            await using var tx = await _db.Database.BeginTransactionAsync(ct);
+            try
+            {
+                var ds = await _db.DataSources.FirstOrDefaultAsync(x => x.Id == id, ct);
+                if (ds is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return new PatchDataSourceCellResponse { Ok = false, Message = "forbidden" };
+                }
+
+                var locked = await _db.DataSourceCells
+                    .FromSqlInterpolated(
+                        $"SELECT * FROM DataSourceCells WITH (UPDLOCK, ROWLOCK) WHERE DataSourceId = {id} AND RowIndex = {req.RowIndex} AND ColumnKey = {key}")
+                    .AsTracking()
+                    .FirstOrDefaultAsync(ct);
+
+                if (locked is not null
+                    && expectedRev is long exp
+                    && locked.CellRevision != exp)
+                {
+                    await tx.RollbackAsync(ct);
+                    expectedRev = locked.CellRevision;
+                    await Task.Delay(40 + attempt * 25, ct);
+                    continue;
+                }
+
+                if (locked is null)
+                {
+                    var exists = await _db.DataSourceCells.AsNoTracking()
+                        .AnyAsync(c => c.DataSourceId == id && c.RowIndex == req.RowIndex && c.ColumnKey == key, ct);
+                    if (exists)
+                    {
+                        await tx.RollbackAsync(ct);
+                        await Task.Delay(40 + attempt * 25, ct);
+                        continue;
+                    }
+
+                    locked = new DataSourceCell
+                    {
+                        DataSourceId = id,
+                        RowIndex = req.RowIndex,
+                        ColumnKey = key,
+                        CellValue = value,
+                        CellRevision = 1
+                    };
+                    _db.DataSourceCells.Add(locked);
+                }
+                else
+                {
+                    locked.CellValue = value;
+                    locked.CellRevision++;
+                }
+
+                ds.DataRevision++;
+                ds.RowCount = Math.Max(ds.RowCount, req.RowIndex + 1);
+                ds.UpdatedAtUtc = DateTime.UtcNow;
+                StampDataEditor(ds, userId);
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+
+                return new PatchDataSourceCellResponse
+                {
+                    Ok = true,
+                    DataRevision = ds.DataRevision,
+                    CellRevision = locked.CellRevision,
+                    CellValue = value
+                };
+            }
+            catch (Exception ex) when (attempt < 29)
+            {
+                try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+                _log.LogDebug(ex, "PatchCell retry {Attempt} ds={Ds} r={Row} c={Col}", attempt, id, req.RowIndex, key);
+                await Task.Delay(50 + attempt * 25, ct);
+            }
+        }
+
+        return new PatchDataSourceCellResponse
+        {
+            Ok = false,
+            Message = "نوشتن سلول بعد از چند تلاش ممکن نشد — صبر کنید و دوباره اجرا کنید."
+        };
+    }
+
+    async Task ReplaceAllCellsAsync(int dataSourceId, IReadOnlyList<DataSourceCellDto> cells, CancellationToken ct)
+    {
+        var existing = await _db.DataSourceCells.Where(c => c.DataSourceId == dataSourceId).ToListAsync(ct);
+        if (existing.Count > 0)
+            _db.DataSourceCells.RemoveRange(existing);
+        foreach (var c in cells ?? Array.Empty<DataSourceCellDto>())
+        {
+            var key = (c.Key ?? "").Trim();
+            if (string.IsNullOrEmpty(key)) continue;
+            _db.DataSourceCells.Add(new DataSourceCell
+            {
+                DataSourceId = dataSourceId,
+                RowIndex = c.Index,
+                ColumnKey = key,
+                CellValue = c.CellValue ?? ""
+            });
+        }
+        await _db.SaveChangesAsync(ct);
+    }
+
+    async Task<List<DataSourceCellDto>> LoadCellsFromDbAsync(int dataSourceId, CancellationToken ct)
+    {
+        return await _db.DataSourceCells.AsNoTracking()
+            .Where(c => c.DataSourceId == dataSourceId)
+            .OrderBy(c => c.RowIndex)
+            .ThenBy(c => c.ColumnKey)
+            .Select(c => new DataSourceCellDto
+            {
+                Key = c.ColumnKey,
+                Index = c.RowIndex,
+                CellValue = c.CellValue
+            })
+            .ToListAsync(ct);
+    }
+
+    async Task<DataSource?> GetAccessibleAsync(int userId, int dataSourceId, bool write, CancellationToken ct)
+    {
+        var ds = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == dataSourceId, ct);
+        if (ds is null) return null;
+        if (ds.OwnerUserId == userId)
+        {
+            await EnsureLegacyCellsMaterializedAsync(ds, ct);
+            return ds;
+        }
+
+        var can = await (
+            from l in _db.ProcessDataSources
+            where l.DataSourceId == dataSourceId
+            join p in _db.Processes on l.ProcessId equals p.Id
+            where p.CreatorUserId == userId
+                  || _db.ProcessShares.Any(s =>
+                      s.ProcessId == p.Id && s.UserId == userId
+                      && (!write || s.CanChangeDataSource || s.CanEdit))
+            select l.ProcessId
+        ).AnyAsync(ct);
+        if (!can) return null;
+        await EnsureLegacyCellsMaterializedAsync(ds, ct);
+        return ds;
+    }
+
+    async Task EnsureLegacyCellsMaterializedAsync(DataSource d, CancellationToken ct)
+    {
+        if (await _db.DataSourceCells.AnyAsync(c => c.DataSourceId == d.Id, ct))
+            return;
+        var legacy = DeserializeCells(d.CellsJson);
+        if (legacy.Count == 0) return;
+        await ReplaceAllCellsAsync(d.Id, legacy, ct);
+        if (d.DataRevision == 0)
+        {
+            d.DataRevision = 1;
+            d.UpdatedAtUtc = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
     }
 
     /// <summary>Rename library source and mirror title into linked process GraphJson snapshots.</summary>
@@ -225,6 +477,7 @@ public class DataSourceService
 
         entity.Title = trimmed;
         entity.UpdatedAtUtc = DateTime.UtcNow;
+        StampDataEditor(entity, userId);
         var processIds = entity.ProcessLinks.Select(l => l.ProcessId).Distinct().ToList();
         await _db.SaveChangesAsync(ct);
 
@@ -392,6 +645,10 @@ public class DataSourceService
                 };
                 _db.DataSources.Add(entity);
                 await _db.SaveChangesAsync(ct);
+                await ReplaceAllCellsAsync(entity.Id, parsed.cells, ct);
+                entity.DataRevision = 1;
+                entity.CellsJson = JsonSerializer.Serialize(parsed.cells, JsonOpts);
+                await _db.SaveChangesAsync(ct);
                 dsObj["id"] = entity.Id;
             }
             else if (entity.OwnerUserId == ownerId || entity.OwnerUserId == actingUserId)
@@ -399,10 +656,16 @@ public class DataSourceService
                 entity.Title = Trunc(parsed.title, 200) ?? entity.Title;
                 entity.FileName = Trunc(parsed.fileName, 260) ?? entity.FileName;
                 entity.ColumnCount = parsed.columnCount;
-                entity.RowCount = parsed.rowCount;
-                entity.ColumnsJson = JsonSerializer.Serialize(parsed.columns, JsonOpts);
-                entity.CellsJson = JsonSerializer.Serialize(parsed.cells, JsonOpts);
+                // Cells live in DataSourceCells — never replace entire grid from canvas snapshot (concurrency).
+                if (parsed.columns.Count > 0)
+                {
+                    entity.ColumnsJson = JsonSerializer.Serialize(parsed.columns, JsonOpts);
+                    entity.ColumnCount = parsed.columns.Count;
+                }
+                if (parsed.rowCount > entity.RowCount)
+                    entity.RowCount = parsed.rowCount;
                 entity.UpdatedAtUtc = DateTime.UtcNow;
+                StampDataEditor(entity, actingUserId);
                 dsObj["id"] = entity.Id;
             }
 
@@ -652,7 +915,6 @@ public class DataSourceService
     private static JsonObject ToGraphNode(DataSource d)
     {
         var cols = DeserializeColumns(d.ColumnsJson);
-        var cells = DeserializeCells(d.CellsJson);
         return new JsonObject
         {
             ["id"] = d.Id,
@@ -660,16 +922,33 @@ public class DataSourceService
             ["fileName"] = d.FileName,
             ["columnCount"] = d.ColumnCount,
             ["rowCount"] = d.RowCount,
+            ["dataRevision"] = d.DataRevision,
             ["columnKeys"] = new JsonArray(cols.Select(c => (JsonNode?)JsonValue.Create(c.Key)).ToArray()),
-            ["columns"] = JsonNode.Parse(JsonSerializer.Serialize(cols, JsonOpts))!.AsArray(),
-            ["cells"] = JsonNode.Parse(JsonSerializer.Serialize(cells, JsonOpts))!.AsArray()
+            ["columns"] = JsonNode.Parse(JsonSerializer.Serialize(cols, JsonOpts))!.AsArray()
+            // cells omitted — load via /api/datasources/{id}/cells or /rows
         };
     }
 
-    private static DataSourceDetailDto ToDetail(DataSource d)
+    private static DataSourceMetaDto ToMeta(DataSource d)
     {
         var cols = DeserializeColumns(d.ColumnsJson);
-        var cells = DeserializeCells(d.CellsJson);
+        return new DataSourceMetaDto
+        {
+            Id = d.Id,
+            Title = d.Title,
+            FileName = d.FileName,
+            Columns = cols,
+            ColumnKeys = cols.Select(c => c.Key).ToList(),
+            ColumnCount = d.ColumnCount,
+            RowCount = d.RowCount,
+            DataRevision = d.DataRevision
+        };
+    }
+
+    private static DataSourceDetailDto ToDetail(DataSource d, List<DataSourceCellDto>? cells = null)
+    {
+        var cols = DeserializeColumns(d.ColumnsJson);
+        cells ??= DeserializeCells(d.CellsJson);
         return new DataSourceDetailDto
         {
             Id = d.Id,
@@ -679,7 +958,8 @@ public class DataSourceService
             ColumnKeys = cols.Select(c => c.Key).ToList(),
             Cells = cells,
             ColumnCount = d.ColumnCount,
-            RowCount = d.RowCount
+            RowCount = d.RowCount,
+            DataRevision = d.DataRevision
         };
     }
 

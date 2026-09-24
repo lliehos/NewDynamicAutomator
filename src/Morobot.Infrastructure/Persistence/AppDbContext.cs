@@ -15,6 +15,7 @@ public class AppDbContext : DbContext
     public DbSet<Process> Processes => Set<Process>();
     public DbSet<ProcessShare> ProcessShares => Set<ProcessShare>();
     public DbSet<DataSource> DataSources => Set<DataSource>();
+    public DbSet<DataSourceCell> DataSourceCells => Set<DataSourceCell>();
     public DbSet<ProcessDataSource> ProcessDataSources => Set<ProcessDataSource>();
     public DbSet<DeviceSession> DeviceSessions => Set<DeviceSession>();
     public DbSet<AppEventLog> EventLogs => Set<AppEventLog>();
@@ -162,6 +163,10 @@ public class AppDbContext : DbContext
                 .WithMany(x => x.CreatedProcesses)
                 .HasForeignKey(x => x.CreatorUserId)
                 .OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.LastEditor)
+                .WithMany()
+                .HasForeignKey(x => x.LastEditorUserId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<ProcessShare>(e =>
@@ -189,6 +194,22 @@ public class AppDbContext : DbContext
             e.HasOne(x => x.Owner)
                 .WithMany()
                 .HasForeignKey(x => x.OwnerUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.LastEditor)
+                .WithMany()
+                .HasForeignKey(x => x.LastEditorUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<DataSourceCell>(e =>
+        {
+            e.ToTable("DataSourceCells");
+            e.Property(x => x.ColumnKey).HasMaxLength(120).IsRequired();
+            e.Property(x => x.CellValue).IsRequired();
+            e.HasIndex(x => new { x.DataSourceId, x.RowIndex, x.ColumnKey }).IsUnique();
+            e.HasOne(x => x.DataSource)
+                .WithMany(x => x.Cells)
+                .HasForeignKey(x => x.DataSourceId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

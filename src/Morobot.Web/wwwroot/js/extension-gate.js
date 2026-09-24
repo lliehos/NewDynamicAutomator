@@ -335,7 +335,7 @@
   }
 
   const RECORDER_ACTIONS = new Set([
-    "start-record", "finish-record", "save-draft", "rerecord", "clear-draft", "check-recorder", "resume-record"
+    "start-record", "start-record-menu", "finish-record", "save-draft", "rerecord", "clear-draft", "check-recorder", "resume-record"
   ]);
   const PLAYER_ACTIONS = new Set([
     "play-task", "play-task-menu", "play-group", "play-step",

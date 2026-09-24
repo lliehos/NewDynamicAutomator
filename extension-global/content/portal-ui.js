@@ -29,6 +29,21 @@
     }
   }
 
+  function emitRecordUi(phase, text, extra) {
+    const detail = { phase, text: text || "", ...(extra || {}) };
+    try {
+      window.postMessage({ source: "da-recorder-ext", type: "record-ui", ...detail }, "*");
+      window.dispatchEvent(new CustomEvent("da-record-ui", { detail }));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function recorderOk() {
+    return document.documentElement.dataset.daRecorderExtension === "1"
+      || document.documentElement.dataset.daExtension === "1";
+  }
+
   function portalUser() {
     return localStorage.getItem("da_local_user") || "test";
   }
@@ -52,19 +67,35 @@
   }
 
   function mergePreferRicherPerId(prev, incoming) {
+    const isServerId = (id) => /^\d+$/.test(String(id ?? "").trim());
     const prevById = new Map((prev || []).map((t) => [String(t.id), t]));
     return (incoming || []).map((t) => {
       const old = prevById.get(String(t.id));
       if (!old) return t;
-      const oldNodes = Array.isArray(old?.graph?.nodes) ? old.graph.nodes.length : 0;
-      const nextNodes = Array.isArray(t?.graph?.nodes) ? t.graph.nodes.length : 0;
-      if (nextNodes >= oldNodes && nextNodes > 0) {
+      if (isServerId(t.id)) {
+        const out = { ...old, ...t };
+        if (Array.isArray(t.graph?.nodes) && t.graph.nodes.length) out.graph = t.graph;
+        else if (!Array.isArray(t.graph?.nodes) || !t.graph.nodes.length) {
+          if (!t.graph?.nodes?.length && t.stepCount != null) {
+            delete out.graph;
+            out.stepCount = Number(t.stepCount) || 0;
+            out.groupCount = Number(t.groupCount) || 0;
+          } else if (old.graph) out.graph = old.graph;
+        }
+        return out;
+      }
+      const inHas = Array.isArray(t?.graph?.nodes);
+      const oldHas = Array.isArray(old?.graph?.nodes);
+      if (inHas && (!oldHas || t.graph.nodes.length <= old.graph.nodes.length)) {
         return { ...old, ...t, graph: t.graph };
       }
-      if (oldNodes > 0 && !(t.graph?.nodes?.length)) {
+      if (oldHas && !inHas) {
         return { ...t, graph: old.graph, stepCount: old.stepCount ?? t.stepCount, groupCount: old.groupCount ?? t.groupCount };
       }
-      return { ...old, ...t, graph: t.graph?.nodes?.length ? t.graph : old.graph };
+      if (inHas && oldHas) {
+        return { ...old, ...t, graph: t.graph };
+      }
+      return { ...old, ...t };
     });
   }
 
@@ -73,15 +104,13 @@
     if (preferredTask && preferredTask.id != null) {
       const id = String(preferredTask.id);
       const idx = tasks.findIndex((t) => String(t.id) === id);
-      if (idx >= 0) {
-        tasks[idx] = {
-          ...tasks[idx],
-          ...preferredTask,
-          graph: preferredTask.graph || tasks[idx].graph
-        };
-      } else {
-        tasks = tasks.concat([preferredTask]);
-      }
+      const merged = {
+        ...(idx >= 0 ? tasks[idx] : {}),
+        ...preferredTask,
+        graph: preferredTask.graph || (idx >= 0 ? tasks[idx].graph : null)
+      };
+      if (idx >= 0) tasks[idx] = merged;
+      else tasks = tasks.concat([merged]);
     }
     // If disk decrypt lagged, retry once.
     const needGraph = preferredTask && preferredTask.graph?.nodes?.length;
@@ -91,10 +120,8 @@
       const again = await readPortalTasksAsync();
       tasks = mergePreferRicherPerId(again, tasks);
       const idx = tasks.findIndex((t) => String(t.id) === String(preferredTask.id));
-      if (idx >= 0) {
-        tasks[idx] = { ...tasks[idx], ...preferredTask, graph: preferredTask.graph || tasks[idx].graph };
-      } else {
-        tasks = tasks.concat([preferredTask]);
+      if (idx >= 0 && preferredTask.graph?.nodes) {
+        tasks[idx] = { ...tasks[idx], ...preferredTask, graph: preferredTask.graph };
       }
     }
     const user = portalUser();
@@ -272,6 +299,66 @@
     return res;
   }
 
+  async function recordTask(taskId, scope) {
+    const id = String(taskId || "").trim();
+    if (!id || id === "NaN" || id === "null" || id === "undefined") {
+      setPortalStatus("شناسهٔ فرآیند نامعتبر است.", "error");
+      emitRecordUi("error", "شناسهٔ فرآیند نامعتبر است.");
+      return { ok: false, error: "شناسهٔ فرآیند نامعتبر است." };
+    }
+    if (!recorderOk()) {
+      const msg = "افزونهٔ ضبط متصل نیست — از chrome://extensions آن را Reload کنید.";
+      setPortalStatus(msg, "error");
+      emitRecordUi("error", msg);
+      return { ok: false, error: msg };
+    }
+
+    emitRecordUi("preparing", "آماده‌سازی ضبط…");
+
+    try {
+      await fetch("/extension/sync", { method: "POST", cache: "no-store" });
+    } catch {
+      /* ignore */
+    }
+
+    const preferred = scope?.task
+      || (scope?.graph ? { id, graph: scope.graph, title: scope.graph.title } : null);
+
+    const sync = await syncTasksIntoPlayer(preferred);
+    if (!sync?.ok) {
+      const msg = sync?.error || "همگام‌سازی فرآیند با افزونه ناموفق بود.";
+      setPortalStatus(msg, "error");
+      emitRecordUi("error", msg);
+      return sync;
+    }
+
+    const rawTab = scope?.tabId != null && scope.tabId !== "" ? Number(scope.tabId) : NaN;
+    const hasTab = Number.isFinite(rawTab);
+    const payload = {
+      type: "startRecordSession",
+      taskId: id,
+      taskTitle: scope?.taskTitle || preferred?.title || null,
+      groupTitle: scope?.groupTitle || null
+    };
+    if (hasTab && scope?.openNewTab !== true) {
+      payload.tabId = rawTab;
+    }
+
+    const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
+    if (res?.ok) {
+      const msg = hasTab && scope?.openNewTab !== true
+        ? `ضبط در تب #${rawTab} شروع شد`
+        : "ضبط در تب جدید شروع شد — FAB روی صفحهٔ هدف";
+      setPortalStatus(msg, "success");
+      emitRecordUi("started", msg);
+    } else {
+      const msg = res?.error || "خطا در شروع ضبط";
+      setPortalStatus(msg, "error");
+      emitRecordUi("error", msg);
+    }
+    return res;
+  }
+
   function tabLabel(t) {
     const title = (t.title || "").trim() || "بدون عنوان";
     const url = (t.url || "").replace(/^https?:\/\//i, "").slice(0, 48);
@@ -356,6 +443,10 @@
       ev.preventDefault();
       window.dispatchEvent(new CustomEvent("da-extension-recheck", { detail: { role: "player" } }));
     }
+    if (action === "check-recorder") {
+      ev.preventDefault();
+      window.dispatchEvent(new CustomEvent("da-extension-recheck", { detail: { role: "recorder" } }));
+    }
     if (action === "play-task") {
       ev.preventDefault();
       const taskId = t.getAttribute("data-task-id");
@@ -428,6 +519,29 @@
         window.dispatchEvent(new CustomEvent("da-open-tabs", { detail: res }));
       } catch { /* ignore */ }
     }
+    if (d.type === "record") {
+      if (!d.taskId) return;
+      await recordTask(d.taskId, {
+        tabId: d.tabId,
+        openNewTab: d.openNewTab,
+        taskTitle: d.taskTitle,
+        task: d.task || null,
+        graph: d.graph || null
+      });
+      return;
+    }
+  });
+
+  window.addEventListener("da-start-record", async (ev) => {
+    const d = ev.detail || {};
+    if (!d.taskId) return;
+    await recordTask(d.taskId, {
+      tabId: d.tabId,
+      openNewTab: d.openNewTab,
+      taskTitle: d.taskTitle,
+      task: d.task || null,
+      graph: d.graph || null
+    });
   });
 
   window.addEventListener("da-play", async (ev) => {

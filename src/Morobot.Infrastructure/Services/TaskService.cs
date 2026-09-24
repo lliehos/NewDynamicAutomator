@@ -49,10 +49,19 @@ public class TaskService
                 a.Process.Id,
                 a.Process.Title,
                 a.Process.CreatedAtUtc,
+                a.Process.UpdatedAtUtc,
                 a.Process.GraphJson,
                 a.Process.DesignOrigin,
                 a.Process.CreatorUserId,
                 OwnerUserName = a.Process.Creator != null ? a.Process.Creator.UserName : null,
+                LastEditorUserName = a.Process.LastEditor != null ? a.Process.LastEditor.UserName : null,
+                DataUpdatedAtUtc = a.Process.DataSourceLinks
+                    .Select(l => (DateTime?)l.DataSource!.UpdatedAtUtc)
+                    .Max(),
+                DataLastEditorUserName = a.Process.DataSourceLinks
+                    .OrderByDescending(l => l.DataSource!.UpdatedAtUtc)
+                    .Select(l => l.DataSource!.LastEditor != null ? l.DataSource.LastEditor.UserName : null)
+                    .FirstOrDefault(),
                 a.CanEdit,
                 a.CanDelete,
                 a.CanExecute,
@@ -73,6 +82,10 @@ public class TaskService
                 Id = a.Id,
                 Title = a.Title,
                 CreatedAtUtc = a.CreatedAtUtc,
+                UpdatedAtUtc = a.UpdatedAtUtc == default ? a.CreatedAtUtc : a.UpdatedAtUtc,
+                LastEditorUserName = a.LastEditorUserName,
+                DataUpdatedAtUtc = a.DataUpdatedAtUtc,
+                DataLastEditorUserName = a.DataLastEditorUserName,
                 GroupCount = groups,
                 StepCount = steps,
                 DataSourceCount = a.DataSourceCount,
@@ -99,9 +112,18 @@ public class TaskService
                 t.Id,
                 t.Title,
                 t.CreatedAtUtc,
+                t.UpdatedAtUtc,
                 t.GraphJson,
                 t.DesignOrigin,
                 OwnerUserName = t.Creator != null ? t.Creator.UserName : null,
+                LastEditorUserName = t.LastEditor != null ? t.LastEditor.UserName : null,
+                DataUpdatedAtUtc = t.DataSourceLinks
+                    .Select(l => (DateTime?)l.DataSource!.UpdatedAtUtc)
+                    .Max(),
+                DataLastEditorUserName = t.DataSourceLinks
+                    .OrderByDescending(l => l.DataSource!.UpdatedAtUtc)
+                    .Select(l => l.DataSource!.LastEditor != null ? l.DataSource.LastEditor.UserName : null)
+                    .FirstOrDefault(),
                 DataSourceCount = t.DataSourceLinks.Count
             })
             .OrderByDescending(t => t.Id)
@@ -115,6 +137,10 @@ public class TaskService
                 Id = t.Id,
                 Title = t.Title,
                 CreatedAtUtc = t.CreatedAtUtc,
+                UpdatedAtUtc = t.UpdatedAtUtc == default ? t.CreatedAtUtc : t.UpdatedAtUtc,
+                LastEditorUserName = t.LastEditorUserName,
+                DataUpdatedAtUtc = t.DataUpdatedAtUtc,
+                DataLastEditorUserName = t.DataLastEditorUserName,
                 GroupCount = groups,
                 StepCount = steps,
                 DataSourceCount = t.DataSourceCount,
@@ -166,6 +192,7 @@ public class TaskService
             CreatorUserId = userId > 0 ? userId : null,
             CreatedAtUtc = DateTime.UtcNow,
             UpdatedAtUtc = DateTime.UtcNow,
+            LastEditorUserId = userId > 0 ? userId : null,
             DesignOrigin = Enum.TryParse<TaskDesignOrigin>(request.DesignOrigin, true, out var origin)
                 ? origin
                 : TaskDesignOrigin.Manual
@@ -293,6 +320,7 @@ public class TaskService
             catch { /* keep title on entity even if graph patch fails */ }
         }
         process.UpdatedAtUtc = DateTime.UtcNow;
+        process.LastEditorUserId = userId > 0 ? userId : process.LastEditorUserId;
         await _db.SaveChangesAsync(ct);
         return (true, null, DateTime.SpecifyKind(process.UpdatedAtUtc, DateTimeKind.Utc));
     }
@@ -348,6 +376,7 @@ public class TaskService
         if (!string.IsNullOrWhiteSpace(title))
             process.Title = title.Trim();
         process.UpdatedAtUtc = DateTime.UtcNow;
+        process.LastEditorUserId = userId > 0 ? userId : process.LastEditorUserId;
         await _db.SaveChangesAsync(ct);
         return (true, null, DateTime.SpecifyKind(process.UpdatedAtUtc, DateTimeKind.Utc));
     }

@@ -13,12 +13,18 @@ public class DataSource
     public int RowCount { get; set; }
     /// <summary>JSON array of { key, title }.</summary>
     public string ColumnsJson { get; set; } = "[]";
-    /// <summary>JSON array of { key, index, cellValue }.</summary>
+    /// <summary>Legacy bulk JSON — migrated to <see cref="DataSourceCell"/> rows; kept for export/import fallback.</summary>
     public string CellsJson { get; set; } = "[]";
+    /// <summary>Incremented on any cell/metadata write — optimistic concurrency for patch API.</summary>
+    public long DataRevision { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public int? LastEditorUserId { get; set; }
+
+    public ICollection<DataSourceCell> Cells { get; set; } = new List<DataSourceCell>();
 
     public AppUser? Owner { get; set; }
+    public AppUser? LastEditor { get; set; }
     public ICollection<ProcessDataSource> ProcessLinks { get; set; } = new List<ProcessDataSource>();
 }
 

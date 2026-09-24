@@ -22,6 +22,7 @@
   if (I18n) await I18n.init();
 
   const ICO_SAVE = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>`;
+  const ICO_CLOSE = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M18.3 5.7L12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>`;
 
   const root = document.createElement("div");
   root.className = "da-recorder-root";
@@ -29,7 +30,10 @@
   root.innerHTML = `
     <div class="da-fab-panel" id="da-fab-panel" hidden>
       <div class="da-fab-resize" id="da-fab-resize" title="${t("rec.resize")}" aria-label="${t("rec.resize")}"></div>
-      <div class="da-fab-status" id="da-fab-status">...</div>
+      <div class="da-fab-head">
+        <div class="da-fab-status" id="da-fab-status">...</div>
+        <button type="button" id="da-fab-close" class="da-ico-btn da-fab-close" title="${t("rec.closeHud")}" aria-label="${t("rec.closeHud")}" hidden>${ICO_CLOSE}</button>
+      </div>
       <div class="da-play-hud">
         <div class="da-play-hud-top">
           <div class="da-fab-play-title" id="da-fab-rec-title">—</div>
@@ -64,7 +68,10 @@
         </div>
       </div>
     </div>
-    <button type="button" class="da-fab-btn da-fab-btn-hud" id="da-fab-toggle" title="${t("rec.panel")}" hidden>☰</button>
+    <div class="da-fab-chip-row" id="da-fab-chip-row" hidden>
+      <button type="button" class="da-fab-btn da-fab-btn-hud" id="da-fab-toggle" title="${t("rec.panel")}">☰</button>
+      <button type="button" id="da-fab-close-chip" class="da-ico-btn da-fab-close da-fab-close-chip" title="${t("rec.closeHud")}" aria-label="${t("rec.closeHud")}" hidden>${ICO_CLOSE}</button>
+    </div>
   `;
   if (I18n) I18n.applyRoot(root);
   document.documentElement.appendChild(root);
@@ -85,10 +92,46 @@
   const resumeBtn = root.querySelector("#da-fab-resume");
   const endBtn = root.querySelector("#da-fab-end");
   const toggleBtn = root.querySelector("#da-fab-toggle");
+  const chipRow = root.querySelector("#da-fab-chip-row");
+  const closeBtn = root.querySelector("#da-fab-close");
+  const closeChipBtn = root.querySelector("#da-fab-close-chip");
   const optInputClicks = root.querySelector("#da-opt-input-clicks");
   const optMouse = root.querySelector("#da-opt-mouse");
 
   let userCollapsed = false;
+  let userDismissed = false;
+
+  function dismissRecorderHud() {
+    userDismissed = true;
+    window.__daFabInit = false;
+    try {
+      if (document.documentElement.dataset.daMorobotMode === "record") {
+        delete document.documentElement.dataset.daMorobotMode;
+      }
+    } catch { /* ignore */ }
+    try { root.remove(); } catch { /* ignore */ }
+  }
+
+  async function tryDismissRecorderHud() {
+    const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({}));
+    const phase = state?.recordPhase || "idle";
+    if (state?.recording || phase === "recording") {
+      if (status) status.textContent = t("rec.cannotCloseWhileRecording");
+      return;
+    }
+    dismissRecorderHud();
+  }
+
+  closeBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tryDismissRecorderHud();
+  });
+  closeChipBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tryDismissRecorderHud();
+  });
   const HUD_SIZE_KEY = "daRecHudSize";
   const HUD_MIN_W = 280;
   const HUD_MIN_H = 260;
@@ -316,7 +359,8 @@
     e.stopPropagation();
     userCollapsed = false;
     panel.hidden = false;
-    toggleBtn.hidden = true;
+    if (chipRow) chipRow.hidden = true;
+    toggleBtn.hidden = false;
     refresh();
   });
 
@@ -324,6 +368,7 @@
     e.preventDefault();
     userCollapsed = true;
     panel.hidden = true;
+    if (chipRow) chipRow.hidden = false;
     toggleBtn.hidden = false;
   });
 
@@ -363,33 +408,25 @@
     }
     saveBtn.disabled = true;
     try {
+      const st = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({}));
       const res = await chrome.runtime.sendMessage({
         type: "saveDraft",
         payload: {
+          taskId: st?.targetTaskId ?? null,
           selectedIndexes: indexes,
           continueRecording: true,
           groupTitle
         }
       });
       if (res?.ok) {
-        status.textContent = t("rec.saved", { n: res.result?.groupCount || "?" });
+        status.textContent = t("rec.saved", { n: res.result?.stepCount ?? res.result?.groupCount ?? "?" });
         userCollapsed = false;
-        // Force empty log UI then re-sync from storage (should be empty draft).
-        if (resultsEl) {
-          resultsEl.innerHTML = `
-            <div class="da-fab-res-head">
-              <div>${escapeHtml(t("rec.logHead"))}</div>
-              <div>${escapeHtml(t("rec.items", { n: 0 }))}</div>
-            </div>
-            <div class="da-fab-res-list">
-              <div class="da-fab-res-empty">${escapeHtml(t("rec.logEmpty"))}</div>
-            </div>`;
-        }
+        renderResults({ recordPhase: "recording", steps: [], count: 0 });
       } else {
         status.textContent = res?.error || t("rec.saveError");
-        saveBtn.disabled = false;
       }
     } finally {
+      saveBtn.disabled = false;
       await refresh();
     }
   });
@@ -441,6 +478,14 @@
     endBtn.title = t("rec.end");
     endBtn.setAttribute("aria-label", t("rec.end"));
     toggleBtn.title = t("rec.panel");
+    if (closeBtn) {
+      closeBtn.title = t("rec.closeHud");
+      closeBtn.setAttribute("aria-label", t("rec.closeHud"));
+    }
+    if (closeChipBtn) {
+      closeChipBtn.title = t("rec.closeHud");
+      closeChipBtn.setAttribute("aria-label", t("rec.closeHud"));
+    }
   }
 
   if (I18n) I18n.onChange(() => { applyStaticI18n(); refresh(); });
@@ -472,20 +517,31 @@
 
     if (!active) {
       panel.hidden = true;
+      if (chipRow) chipRow.hidden = true;
       toggleBtn.hidden = true;
+      if (closeBtn) closeBtn.hidden = true;
+      if (closeChipBtn) closeChipBtn.hidden = true;
       return;
     }
 
+    const canCloseHud = phase !== "recording";
+
     if (userCollapsed) {
       panel.hidden = true;
+      if (chipRow) chipRow.hidden = false;
       toggleBtn.hidden = false;
       toggleBtn.textContent = "☰";
       toggleBtn.classList.toggle("recording", phase === "recording");
+      if (closeChipBtn) closeChipBtn.hidden = !canCloseHud;
+      if (closeBtn) closeBtn.hidden = true;
       return;
     }
 
     panel.hidden = false;
+    if (chipRow) chipRow.hidden = true;
     toggleBtn.hidden = true;
+    if (closeBtn) closeBtn.hidden = !canCloseHud;
+    if (closeChipBtn) closeChipBtn.hidden = true;
     if (!panel.classList.contains("is-sized")) restoreHudSize();
 
     const opts = state.options || {};

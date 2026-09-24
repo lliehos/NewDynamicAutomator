@@ -53,10 +53,17 @@
   }
 
   function taskCounts(t) {
-    const steps = t.graph?.nodes?.filter((n) => n.kind === "action" || n.kind === "step").length || t.stepCount || 0;
-    const groups = t.graph?.nodes?.filter((n) => n.kind === "group").length || t.groupCount || 0;
-    const sources = Array.isArray(t.graph?.dataSources) ? t.graph.dataSources.length : (t.dataSourceCount || 0);
-    return { steps, groups, sources };
+    if (t.graph?.nodes && Array.isArray(t.graph.nodes)) {
+      const steps = t.graph.nodes.filter((n) => n.kind === "action" || n.kind === "step").length;
+      const groups = t.graph.nodes.filter((n) => n.kind === "group").length;
+      const sources = Array.isArray(t.graph?.dataSources) ? t.graph.dataSources.length : (t.dataSourceCount || 0);
+      return { steps, groups, sources };
+    }
+    return {
+      steps: Number(t.stepCount) || 0,
+      groups: Number(t.groupCount) || 0,
+      sources: Number(t.dataSourceCount) || 0
+    };
   }
 
   function formatCreatedAt(iso) {

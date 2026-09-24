@@ -313,7 +313,47 @@
   color: #555;
   line-height: 1.4;
   margin-bottom: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.da-fab-head {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 6px;
   flex: 0 0 auto;
+}
+.da-fab-close {
+  flex: 0 0 auto;
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  margin-top: 0 !important;
+  padding: 4px !important;
+  background: #ebe9f1 !important;
+  color: #5e5873 !important;
+  border-radius: 8px !important;
+}
+.da-fab-close:hover:not(:disabled) {
+  background: #d8d6de !important;
+}
+.da-fab-chip-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto !important;
+}
+.da-fab-close-chip {
+  width: 36px !important;
+  height: 36px !important;
+  min-width: 36px !important;
+  margin-top: 0 !important;
+  padding: 6px !important;
+  border-radius: 12px !important;
+  font-size: 18px !important;
+  line-height: 1 !important;
+  font-weight: 700 !important;
 }
 .da-recorder-root[dir="ltr"] {
   direction: ltr !important;

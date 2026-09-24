@@ -96,8 +96,15 @@
       el.toggleAttribute("disabled", !e.canPlay);
     });
     scope.querySelectorAll("[data-da-need-record]").forEach((el) => {
-      el.classList.toggle("d-none", !e.canRecord);
-      el.toggleAttribute("disabled", !e.canRecord);
+      if (!e.canRecord) {
+        el.classList.remove("d-none");
+        el.toggleAttribute("disabled", true);
+        const tip = upgradeMessage("record");
+        if (tip) el.setAttribute("title", tip);
+      } else {
+        el.classList.remove("d-none");
+        el.removeAttribute("disabled");
+      }
     });
     scope.querySelectorAll("[data-da-need-selector]").forEach((el) => {
       el.classList.toggle("d-none", !e.canSelector);

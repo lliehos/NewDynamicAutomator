@@ -23,22 +23,41 @@
     return "da_local_tasks__" + (user || currentUser());
   }
 
+  function isServerBackedTaskId(id) {
+    return /^\d+$/.test(String(id ?? "").trim());
+  }
+
   function stepCountOf(t) {
-    const fromGraph = t?.graph?.nodes?.filter((n) => isActionNode(n)).length || 0;
-    return Math.max(fromGraph, Number(t?.stepCount) || 0);
+    if (isServerBackedTaskId(t?.id)) return Number(t?.stepCount) || 0;
+    if (Array.isArray(t?.graph?.nodes)) {
+      return t.graph.nodes.filter((n) => isActionNode(n)).length;
+    }
+    return Number(t?.stepCount) || 0;
   }
 
   function richnessOf(t) {
+    if (isServerBackedTaskId(t?.id)) return stepCountOf(t);
     const nodes = Array.isArray(t?.graph?.nodes) ? t.graph.nodes.length : 0;
     return nodes * 1000 + stepCountOf(t);
   }
 
-  /** When a stale extension copy is poorer, keep the richer graph per task id. */
+  /** Server-backed: trust incoming canvas/counts. Local-only: keep richer graph. */
   function mergePreferRicherPerId(prev, incoming) {
     const prevById = new Map((prev || []).map((t) => [String(t.id), t]));
     return (incoming || []).map((t) => {
       const old = prevById.get(String(t.id));
       if (!old) return t;
+      if (isServerBackedTaskId(t.id)) {
+        const out = { ...old, ...t };
+        if (Array.isArray(t.graph?.nodes) && t.graph.nodes.length) {
+          out.graph = t.graph;
+        } else {
+          delete out.graph;
+          out.stepCount = Number(t.stepCount) || 0;
+          out.groupCount = Number(t.groupCount) || 0;
+        }
+        return out;
+      }
       if (richnessOf(t) >= richnessOf(old)) {
         return {
           ...old,
@@ -147,20 +166,15 @@
   });
   setInterval(syncCultureFromPortal, 5000);
 
-  async function applyTasks(user, tasks) {
+  async function applyTasks(user, tasks, opts) {
     const u = user || currentUser();
     const list = Array.isArray(tasks) ? tasks : [];
     try {
       const prev = await readTasksDisk(u);
       if (list.length === 0 && prev.length > 0) return;
-      const prevRich = prev.reduce((s, t) => s + richnessOf(t), 0);
-      const nextRich = list.reduce((s, t) => s + richnessOf(t), 0);
-      // Never let a stale Player/Recorder chrome.storage copy wipe a richer portal graph
-      // (classic bug: re-record save OK, then Player pull reverts the process).
-      const toSave = (list.length && nextRich < prevRich)
-        ? mergePreferRicherPerId(prev, list)
-        : list;
-      // Always notify the PAGE world — DaSecureStore is not in this isolated world.
+      const toSave = opts?.authoritative
+        ? list
+        : mergePreferRicherPerId(prev, list);
       writeTasksToPage(u, toSave);
       return;
     } catch {
@@ -212,7 +226,8 @@
       return true;
     }
     if (message.type === "localTasksUpdated") {
-      applyTasks(message.user || currentUser(), message.tasks || []).then(() => sendResponse({ ok: true }));
+      applyTasks(message.user || currentUser(), message.tasks || [], { authoritative: true })
+        .then(() => sendResponse({ ok: true }));
       return true;
     }
     if (message.type === "dsCellEvent") {

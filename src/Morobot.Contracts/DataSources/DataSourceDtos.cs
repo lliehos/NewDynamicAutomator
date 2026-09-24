@@ -42,6 +42,60 @@ public class DataSourceDetailDto
     public List<DataSourceCellDto> Cells { get; set; } = new();
     public int ColumnCount { get; set; }
     public int RowCount { get; set; }
+    public long DataRevision { get; set; }
+}
+
+public class DataSourceMetaDto
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? FileName { get; set; }
+    public List<DataSourceColumnDto> Columns { get; set; } = new();
+    public List<string> ColumnKeys { get; set; } = new();
+    public int ColumnCount { get; set; }
+    public int RowCount { get; set; }
+    public long DataRevision { get; set; }
+}
+
+public class DataSourceCellValueDto
+{
+    public int DataSourceId { get; set; }
+    public int RowIndex { get; set; }
+    public string ColumnKey { get; set; } = string.Empty;
+    public string CellValue { get; set; } = string.Empty;
+    public long DataRevision { get; set; }
+    public long CellRevision { get; set; }
+}
+
+public class PatchDataSourceCellRequest
+{
+    public int RowIndex { get; set; }
+    public string ColumnKey { get; set; } = string.Empty;
+    public string? CellValue { get; set; }
+    /// <summary>Must match server cell revision when updating an existing cell (omit for new cells).</summary>
+    public long? ExpectedCellRevision { get; set; }
+    [Obsolete("Use ExpectedCellRevision")]
+    public long? ExpectedDataRevision { get; set; }
+}
+
+public class PatchDataSourceCellResponse
+{
+    public bool Ok { get; set; }
+    public long DataRevision { get; set; }
+    public long CellRevision { get; set; }
+    public string CellValue { get; set; } = string.Empty;
+    public bool Conflict { get; set; }
+    public long? CurrentDataRevision { get; set; }
+    public long? CurrentCellRevision { get; set; }
+    public string? CurrentCellValue { get; set; }
+    public string? Message { get; set; }
+}
+
+public class DataSourceRowDto
+{
+    public int RowIndex { get; set; }
+    public Dictionary<string, string> Values { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public long DataRevision { get; set; }
 }
 
 public class CreateDataSourceRequest
