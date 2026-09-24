@@ -8,6 +8,7 @@ internal static class VsStrings
 
     public const string TabLicense = "لایسنس";
     public const string TabPackage = "بسته نصب";
+    public const string TabUpdatePackage = "بسته آپدیت";
 
     public const string ErrInvalidRequest = "فایل درخواست فعال‌سازی معتبر نیست.";
     public const string ErrValidUntil = "تاریخ پایان اعتبار را انتخاب کنید.";
@@ -19,10 +20,16 @@ internal static class VsStrings
 
     public const string MsgSignFailed = "خطا در امضای لایسنس";
     public const string MsgPackageFailed = "خطا در ساخت بسته";
+    public const string MsgUpdateFailed = "خطا در ساخت بستهٔ آپدیت";
     public const string StatusSigned = "لایسنس امضا شد: {0}";
     public const string StatusSaved = "ذخیره شد: {0}";
     public const string StatusPublishing = "در حال publish…";
     public const string StatusPackageReady = "بسته آماده: {0}";
+    public const string StatusBuildingUpdate = "در حال ساخت بستهٔ آپدیت…";
+    public const string StatusUpdateReady = "بستهٔ آپدیت نسخه {0} با {1} فایل ساخته شد: {2}";
+
+    public const string ErrUpdateSource = "پوشهٔ فایل‌های publish را انتخاب کنید.";
+    public const string ErrUpdateVersion = "نسخهٔ بسته را به شکل معتبر وارد کنید (مثلاً 1.2.0).";
 
     public const string Browse = "انتخاب…";
     public const string SignLicense = "امضای لایسنس";

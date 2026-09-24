@@ -11,6 +11,9 @@
   // Legacy-DB migration is vendor-granted; hide the entry point entirely when absent.
   var allowsLegacyMigration = (ViewData[Morobot.Web.Filters.TenantBrandingViewDataFilter.LicenseStateKey]
       as Morobot.Licensing.LicenseRuntimeState)?.AllowsLegacyMigration == true;
+  // Offline update likewise only means something when the licence includes updates at all.
+  var allowsUpdates = (ViewData[Morobot.Web.Filters.TenantBrandingViewDataFilter.LicenseStateKey]
+      as Morobot.Licensing.LicenseRuntimeState)?.AllowsUpdates == true;
 }
 <!doctype html>
 <html lang="@culture" dir="@dir" data-admin-catalog="1">
@@ -40,6 +43,10 @@
         <a class="@NavClass("Home")" asp-area="Admin" asp-controller="Home" asp-action="Index"><i class="ti ti-dashboard" aria-hidden="true"></i>@L["admin.nav.dashboard"]</a>
         <a class="@NavClass("Settings")" asp-area="Admin" asp-controller="Settings" asp-action="Index"><i class="ti ti-settings" aria-hidden="true"></i>@L["admin.nav.settings"]</a>
         <a class="@NavClass("License")" asp-area="Admin" asp-controller="License" asp-action="Index"><i class="ti ti-certificate" aria-hidden="true"></i>@L["admin.nav.license"]</a>
+        @if (allowsUpdates)
+        {
+          <a class="@NavClass("OfflineUpdate")" asp-area="Admin" asp-controller="OfflineUpdate" asp-action="Index"><i class="ti ti-package" aria-hidden="true"></i>@L["admin.nav.offlineUpdate"]</a>
+        }
         <a class="@NavClass("Branding")" asp-area="Admin" asp-controller="Branding" asp-action="Index"><i class="ti ti-palette" aria-hidden="true"></i>@L["admin.nav.branding"]</a>
         <a class="@NavClass("Plans")" asp-area="Admin" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]</a>
         <a class="@NavClass("Prices")" asp-area="Admin" asp-controller="Prices" asp-action="Index"><i class="ti ti-currency-dollar" aria-hidden="true"></i>@L["admin.nav.prices"]</a>

@@ -1,0 +1,74 @@
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = L["admin.offlineUpdate.title"];
+  var staged = ViewData["Staged"] as Morobot.Web.Services.StagedUpdateInfo;
+  var maxMb = ViewData["MaxUploadMb"] as int? ?? 512;
+  var restartCommand = ViewData["RestartCommand"] as string;
+}
+
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L["admin.offlineUpdate.intro"]
+}' />
+
+<div class="admin-settings-grid">
+  <div class="card-admin">
+    <h3><i class="ti ti-package" aria-hidden="true"></i>@L["admin.offlineUpdate.uploadTitle"]</h3>
+    <p class="admin-field-hint">@L["admin.offlineUpdate.uploadHint"]</p>
+    <form method="post" asp-action="Upload" enctype="multipart/form-data" class="admin-form-stack">
+      @Html.AntiForgeryToken()
+      <label class="admin-label" for="package">@L["admin.offlineUpdate.file"]</label>
+      <input class="form-control" type="file" id="package" name="package" accept=".zip,application/zip" required />
+      <p class="admin-field-hint">@string.Format(L["admin.offlineUpdate.maxSize"], maxMb)</p>
+      <button type="submit" class="btn-admin">
+        <i class="ti ti-upload" aria-hidden="true"></i> @L["admin.offlineUpdate.uploadSubmit"]
+      </button>
+    </form>
+    <partial name="_AdminHint" model='L["admin.offlineUpdate.uploadSafety"]' />
+  </div>
+
+  <div class="card-admin @(staged is null ? "" : "is-ok")">
+    <h3><i class="ti ti-circle-check" aria-hidden="true"></i>@L["admin.offlineUpdate.stagedTitle"]</h3>
+    @if (staged is null)
+    {
+      <div class="admin-alert is-muted">@L["admin.offlineUpdate.nothingStaged"]</div>
+    }
+    else
+    {
+      <dl class="admin-kv">
+        <dt>@L["admin.offlineUpdate.version"]</dt>
+        <dd><code>@staged.Version</code></dd>
+        <dt>@L["admin.offlineUpdate.stagedAt"]</dt>
+        <dd class="num">@staged.StagedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</dd>
+      </dl>
+      <div class="admin-alert is-warn">@L["admin.offlineUpdate.applyWarn"]</div>
+      <form method="post" asp-action="Apply" class="admin-form-stack">
+        @Html.AntiForgeryToken()
+        <label class="admin-inline-check">
+          <input type="checkbox" name="stopFirst" value="true" />
+          <span>@L["admin.offlineUpdate.confirmStopped"]</span>
+        </label>
+        <div class="admin-btn-row">
+          <button type="submit" class="btn-admin">@L["admin.offlineUpdate.applySubmit"]</button>
+        </div>
+      </form>
+      <form method="post" asp-action="Discard">
+        @Html.AntiForgeryToken()
+        <button type="submit" class="btn-admin secondary">@L["admin.offlineUpdate.discard"]</button>
+      </form>
+    }
+  </div>
+
+  <div class="card-admin">
+    <h3><i class="ti ti-terminal-2" aria-hidden="true"></i>@L["admin.offlineUpdate.manualTitle"]</h3>
+    <p class="admin-field-hint">@L["admin.offlineUpdate.manualHint"]</p>
+    @if (!string.IsNullOrWhiteSpace(restartCommand))
+    {
+      <dl class="admin-kv">
+        <dt>@L["admin.offlineUpdate.restartCommand"]</dt>
+        <dd><code>@restartCommand</code></dd>
+      </dl>
+    }
+    <pre class="admin-code-block"><code>powershell -ExecutionPolicy Bypass -File .\update.ps1 -TargetDir "&lt;app folder&gt;" -Restart</code></pre>
+    <partial name="_AdminHint" model='L["admin.offlineUpdate.manualSafety"]' />
+  </div>
+</div>

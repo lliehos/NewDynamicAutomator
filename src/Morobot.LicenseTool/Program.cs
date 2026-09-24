@@ -14,6 +14,7 @@ return args[0].ToLowerInvariant() switch
     "verify" => Verify(args),
     "info" => Info(args),
     "package" => Package(args),
+    "package-update" => PackageUpdate(args),
     _ => Unknown(args[0])
 };
 
@@ -33,6 +34,7 @@ Commands:
   genkeypair [--out-dir <path>]
   sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--update-url URL] [-o license.morobot]
   package --project <path-to-Morobot.Web.csproj> --output <folder>
+  package-update --version <semver> --source <published-folder> [-o <file.zip>] [--notes "text"] [--channel stable] [--min-current <semver>] [--product-name Morobot]
   verify --license <file.morobot> [--public-key <pem>]
   info --request <activation.json>
 """);
@@ -232,6 +234,29 @@ static int Package(string[] args)
     System.IO.Compression.ZipFile.CreateFromDirectory(output, zipPath);
     Console.WriteLine($"Package folder: {output}");
     Console.WriteLine($"Package zip:    {zipPath}");
+    return 0;
+}
+
+static int PackageUpdate(string[] args)
+{
+    var version = RequireArg(args, "--version");
+    var source = RequireArg(args, "--source");
+    var zip = GetArg(args, "-o") ?? GetArg(args, "--output")
+              ?? Path.Combine(Environment.CurrentDirectory, "dist", $"morobot-update-{version.Trim()}.zip");
+
+    var result = UpdatePackageBuilder.Build(
+        source,
+        zip,
+        version,
+        notes: GetArg(args, "--notes"),
+        channel: GetArg(args, "--channel"),
+        minCurrentVersion: GetArg(args, "--min-current"),
+        productName: GetArg(args, "--product-name"));
+
+    Console.WriteLine($"Update package: {result.ZipPath}");
+    Console.WriteLine($"Version:        {result.Manifest.Version}");
+    Console.WriteLine($"Files:          {result.FileCount}");
+    Console.WriteLine("Upload it at Admin → License → Offline update, then apply.");
     return 0;
 }
 

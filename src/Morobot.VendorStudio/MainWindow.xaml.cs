@@ -144,6 +144,71 @@ public partial class MainWindow : Window
         }
     }
 
+    private void BrowseUpdateSource_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFolderDialog { Title = "انتخاب پوشه فایل‌های publish" };
+        if (dlg.ShowDialog() == true)
+            UpdateSourcePath.Text = dlg.FolderName;
+    }
+
+    private void UseInstallTabSource_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrWhiteSpace(OutputPath.Text))
+            UpdateSourcePath.Text = OutputPath.Text.Trim();
+    }
+
+    private void BrowseUpdateZip_Click(object sender, RoutedEventArgs e)
+    {
+        var suggested = string.IsNullOrWhiteSpace(UpdateVersion.Text) ? "1.0.1" : UpdateVersion.Text.Trim();
+        var dlg = new SaveFileDialog
+        {
+            Filter = "بستهٔ آپدیت|*.zip",
+            FileName = $"morobot-update-{suggested}.zip",
+            Title = "ذخیرهٔ بستهٔ آپدیت"
+        };
+        if (dlg.ShowDialog() == true)
+            UpdateZipPath.Text = dlg.FileName;
+    }
+
+    /// <summary>
+    /// Builds an offline update package from an already-published folder. The manifest is
+    /// produced by the shared builder, so a package made here is byte-compatible with one
+    /// made by the CLI tool and is accepted by the same server-side verification.
+    /// </summary>
+    private void BuildUpdatePackage_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(UpdateSourcePath.Text) || !Directory.Exists(UpdateSourcePath.Text.Trim()))
+                throw new InvalidOperationException(VsStrings.ErrUpdateSource);
+            if (string.IsNullOrWhiteSpace(UpdateVersion.Text) || !Version.TryParse(UpdateVersion.Text.Trim(), out _))
+                throw new InvalidOperationException(VsStrings.ErrUpdateVersion);
+
+            var version = UpdateVersion.Text.Trim();
+            var zip = string.IsNullOrWhiteSpace(UpdateZipPath.Text)
+                ? Path.Combine(FindRepoRoot() ?? Environment.CurrentDirectory, "dist", $"morobot-update-{version}.zip")
+                : UpdateZipPath.Text.Trim();
+
+            StatusText.Text = VsStrings.StatusBuildingUpdate;
+            var result = Licensing.UpdatePackageBuilder.Build(
+                UpdateSourcePath.Text.Trim(),
+                zip,
+                version,
+                notes: UpdateNotes.Text,
+                channel: UpdateChannel.Text,
+                minCurrentVersion: string.IsNullOrWhiteSpace(UpdateMinVersion.Text) ? null : UpdateMinVersion.Text.Trim(),
+                productName: Path.GetFileNameWithoutExtension(ProjectPath.Text));
+
+            UpdateZipPath.Text = result.ZipPath;
+            StatusText.Text = string.Format(VsStrings.StatusUpdateReady, result.Manifest.Version, result.FileCount, result.ZipPath);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = ex.Message;
+            MessageBox.Show(this, ex.Message, VsStrings.MsgUpdateFailed, MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private static async Task<int> RunProcessAsync(string file, string args)
     {
         var psi = new ProcessStartInfo

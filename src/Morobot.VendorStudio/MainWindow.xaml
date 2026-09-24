@@ -271,6 +271,99 @@
           </StackPanel>
         </ScrollViewer>
       </TabItem>
+
+      <TabItem Header="بسته آپدیت">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="4">
+          <StackPanel Margin="8,12,8,16" MaxWidth="920">
+            <TextBlock Style="{StaticResource VsSectionTitle}" Text="ساخت بسته آپدیت آفلاین (morobot-update.json + update.ps1)"/>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE838;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="پوشه فایل‌های publish"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="همان پوشه‌ای که در تب «بسته نصب» ساخته شد. می‌توانید با دکمه زیر از تب نصب پر شود."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="همه فایل‌های این پوشه در بسته قرار می‌گیرند و SHA-256 هرکدام در مانیفست ثبت می‌شود."/>
+              <DockPanel LastChildFill="True">
+                <Button Content="از تب نصب" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="UseInstallTabSource_Click"/>
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowseUpdateSource_Click"/>
+                <TextBox x:Name="UpdateSourcePath" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"/>
+              </DockPanel>
+            </StackPanel>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE8F1;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="نسخه بسته"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="باید از نسخه نصب‌شدهٔ مشتری بزرگ‌تر باشد وگرنه سرور بسته را رد می‌کند."/>
+              </StackPanel>
+              <TextBox x:Name="UpdateVersion" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"
+                       Text="1.0.1" ToolTip="مثال: 1.2.0"/>
+              <TextBlock Style="{StaticResource VsHint}" Text="معادل &lt;Version&gt; اسمبلی سرور."/>
+            </StackPanel>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE7BA;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="یادداشت نسخه"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="در صفحه Admin → License → آپدیت آفلاین نمایش داده می‌شود."/>
+              </StackPanel>
+              <TextBox x:Name="UpdateNotes" Style="{StaticResource VsTextBox}" AcceptsReturn="True" MinHeight="64"
+                       TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+            </StackPanel>
+
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <StackPanel Grid.Column="0" Style="{StaticResource VsFieldBlock}">
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="حداقل نسخه فعلی"/>
+                <TextBlock Style="{StaticResource VsHint}" Text="اگر پر باشد، بسته فقط روی نسخه‌های مساوی یا جدیدتر اعمال می‌شود."/>
+                <TextBox x:Name="UpdateMinVersion" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"/>
+              </StackPanel>
+              <StackPanel Grid.Column="2" Style="{StaticResource VsFieldBlock}">
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="کانال"/>
+                <TextBlock Style="{StaticResource VsHint}" Text="برچسب اطلاعاتی؛ مثلاً stable یا beta."/>
+                <TextBox x:Name="UpdateChannel" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight" Text="stable"/>
+              </StackPanel>
+            </Grid>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE838;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="فایل خروجی zip"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+              </StackPanel>
+              <DockPanel LastChildFill="True">
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowseUpdateZip_Click"/>
+                <TextBox x:Name="UpdateZipPath" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"/>
+              </DockPanel>
+            </StackPanel>
+
+            <Button Content="ساخت بسته آپدیت" Width="170" HorizontalAlignment="Right"
+                    Style="{StaticResource VsButton}" Margin="0,8,0,0" Click="BuildUpdatePackage_Click"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
     </TabControl>
 
     <Border Grid.Row="2" Margin="0,14,0,0" Padding="10,8" Background="{StaticResource VsPrimarySoftBrush}"

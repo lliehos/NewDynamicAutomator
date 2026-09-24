@@ -32,8 +32,9 @@ builder.Services.AddControllersWithViews(o =>
     });
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<Morobot.Web.Services.PlaySessionTracker>();
+builder.Services.AddSingleton<Morobot.Web.Services.UpdateNotifyStateService>();
 builder.Services.AddScoped<Morobot.Web.Services.CatalogLiveService>();
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration, builder.Environment.ContentRootPath);
 builder.Services.AddScoped<Morobot.Infrastructure.Services.ILicenseRequestHostAccessor, HttpLicenseRequestHostAccessor>();
 
 var jwtKey = builder.Configuration["Jwt:Key"] ?? "CHANGE-ME-TO-A-LONG-SECRET-KEY-32+";

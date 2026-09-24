@@ -26,10 +26,10 @@
 | 4 | چارت و آمار در داشبورد ادمین | done | 8535887 |
 | 5 | صفحه‌بندی در لیست‌های پنل ادمین | done | fcb9ee6 |
 | 6 | تبدیل همهٔ checkbox ها به switch در وب‌اپ | done | c372179 |
-| 7 | آپدیت آفلاین (آپلود بسته، جانشینی، restart) + تب ساخت بسته | not-started | |
-| 8 | Migrate پشت لایسنس (پیش‌فرض غیرفعال) + تنظیم در Vendor Studio | not-started | |
-| 9 | اعمال migration دیتابیس بعد از آپدیت | not-started | |
-| 10 | چک دوره‌ای آپدیت آنلاین + اخطار و اعمال | not-started | |
+| 7 | آپدیت آفلاین (آپلود بسته، جانشینی، restart) + تب ساخت بسته | done | (این کامیت) |
+| 8 | Migrate پشت لایسنس (پیش‌فرض غیرفعال) + تنظیم در Vendor Studio | done | 68e83a3 |
+| 9 | اعمال migration دیتابیس بعد از آپدیت | done | 6ace26e |
+| 10 | چک دوره‌ای آپدیت آنلاین + اخطار و اعمال | done | 7686bed |
 | 11 | منابع ادمین: سازنده/ویرایش‌کننده + زمان‌ها | done | 7b2622a |
 | 12 | کاربران ادمین: تعداد فرآیند و منبع | done | 64771f5 |
 | 13 | بازطراحی تنظیمات سامانه (دسته‌بندی، color picker، آپلود حرفه‌ای) | done | c373027 |
@@ -62,6 +62,28 @@
   (`update.ps1` روی Windows) که سرویس را می‌بندد، فایل‌ها را جانشین می‌کند و دوباره
   استارت می‌زند. بعد از استارت، migration (#9) اعمال شود.
 - در `Morobot.VendorStudio` یک تب «ساخت بستهٔ آپدیت» برای تولید zip + manifest نسخه.
+
+**پیاده‌سازی انجام‌شده:**
+- قالب بسته در `Morobot.Licensing` (مشترک بین ابزار فروشنده و سرور):
+  `UpdatePackageManifest` (نسخه، یادداشت، `minCurrentVersion`، فهرست فایل‌ها با
+  SHA-256 و اندازه، `entrypoint`)، `UpdatePackageJson` (سریال‌سازی + هش + مقایسهٔ نسخه)،
+  `UpdatePackageBuilder` (ساخت zip + تولید `update.ps1`).
+- CLI: `dotnet run --project src/Morobot.LicenseTool -- package-update --version 1.2.0
+  --source <published-folder> [-o out.zip] [--notes ...] [--channel stable]
+  [--min-current 1.0.0]`.
+- Vendor Studio: تب «بسته آپدیت» با انتخاب پوشهٔ publish، نسخه، یادداشت، حداقل نسخه،
+  کانال و فایل خروجی؛ از همان builder استفاده می‌کند پس بایت‌به‌بایت با CLI یکسان است.
+- سرور: `OfflineUpdateService` (استخراج فقط پس از بررسی مانیفست و هش هر فایل؛ مسیرهای
+  `..`/مطلق رد می‌شوند) + `OfflineUpdateController` در `Admin` و صفحهٔ
+  `Areas/Admin/Views/OfflineUpdate/Index.cshtml`.
+- امنیت: بسته فقط وقتی پذیرفته می‌شود که نسخهٔ آن **جدیدتر** از نسخهٔ نصب‌شده و
+  ≥ `minCurrentVersion` باشد؛ هیچ فایلی خارج از `updates/staged` نوشته نمی‌شود.
+- اسکریپت `update.ps1` قبل از کپی، قفل‌بودن فایل‌ها را بررسی می‌کند (سرویس در حال اجرا →
+  خروج با کد ۳ و پیام روشن) و بعد از موفقیت برنامه را با `-StartCommand` (یا اولین exe)
+  دوباره اجرا می‌کند. لاگ در `update.log` کنار اسکریپت.
+- تنظیمات: `Morobot:OfflineUpdate` (`UploadDirectory`, `StagingDirectory`,
+  `MaxUploadMegabytes`, `RestartCommand`). `uploads/` و `updates/` در `.gitignore`.
+
 
 ### #8 Migrate پشت لایسنس
 - افزودن فیلد به license document (مثلاً `AllowLegacyMigration`) + نمایش در Vendor Studio

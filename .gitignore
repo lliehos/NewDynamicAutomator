@@ -501,6 +501,10 @@ tools/license-keys/*.pem
 # Built vendor kit zips (regenerate with tools/vendor-kit/BUILD-VENDOR-KIT.ps1)
 dist/
 
+# Runtime uploads and staged offline-update packages (per-install, never commit)
+uploads/
+updates/
+
 # Local DB / canvas backups (do not commit)
 _backup_*.bak
 _morobot*.bak
