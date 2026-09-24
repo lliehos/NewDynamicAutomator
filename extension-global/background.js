@@ -3,6 +3,25 @@ importScripts("lib/branding.js", "player/engine.js", "bg-selector.js");
 /** Morobot Global extension — record, play, and selector in one package. */
 const DEFAULT_PORTAL = "https://localhost:7201";
 
+/**
+ * Engine-generated messages (e.g. node validation reports) follow the portal language.
+ * portal-bridge.js writes chrome.storage.uiCulture whenever the portal language changes.
+ */
+async function syncEngineCulture() {
+  try {
+    const { uiCulture } = await chrome.storage.local.get("uiCulture");
+    if (typeof setPlayCulture === "function") setPlayCulture(uiCulture);
+  } catch { /* ignore */ }
+}
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.uiCulture && typeof setPlayCulture === "function") {
+      setPlayCulture(changes.uiCulture.newValue);
+    }
+  });
+} catch { /* ignore */ }
+syncEngineCulture();
+
 async function portalBase() {
   const { portalBase } = await chrome.storage.local.get("portalBase");
   return portalBase || DEFAULT_PORTAL;

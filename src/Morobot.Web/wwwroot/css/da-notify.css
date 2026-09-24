@@ -53,6 +53,8 @@
   font-size: 0.84rem;
   line-height: 1.5;
   word-break: break-word;
+  /* Validation reports are multi-line; preserve their layout instead of collapsing it. */
+  white-space: pre-line;
 }
 
 .da-toast-x {

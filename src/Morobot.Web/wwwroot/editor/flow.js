@@ -4468,13 +4468,16 @@
 
   function requestPlayInTab(scope) {
     if (graphHasInvalidNodes()) {
-      const msg = "در فرایند المان نامعتبر وجود دارد";
-      setStatus(msg, "warn");
+      const msg = buildInvalidNodesMessage();
+      setStatus(msg.split("\n").filter(Boolean)[0] || msg, "error");
       try {
         window.dispatchEvent(new CustomEvent("da-notify", {
           detail: { message: msg, type: "error" }
         }));
       } catch { /* ignore */ }
+      // Jump to the first offending node so the user can fix it without hunting.
+      const first = collectInvalidNodes()[0];
+      if (first) focusInvalidNode(first.id);
       return;
     }
     const rawTab = scope?.tabId != null && scope.tabId !== "" ? Number(scope.tabId) : NaN;
@@ -7026,6 +7029,69 @@
       if (n.kind === "group") return false; // groups mirror descendants; leaf check is enough
       return !validateNodeLeaf(n).ok;
     });
+  }
+
+  /** Human label for a node kind, used in the validation report. */
+  function nodeKindLabel(n) {
+    if (!n) return t("play.check.unknownNode");
+    if (n.kind === "start") return t("play.check.kindStart");
+    if (n.kind === "condition") return t("play.check.kindCondition");
+    if (isActionNode(n)) return t("play.check.kindAction");
+    if (n.kind === "group") return t("play.check.kindGroup");
+    return n.kind || t("play.check.unknownNode");
+  }
+
+  /** Group a node belongs to, or the process scope for free-standing nodes. */
+  function nodeGroupLabel(n) {
+    if (!n) return t("play.check.noGroup");
+    if (n.kind === "group") return n.title || t("play.check.untitledGroup");
+    if (!n.groupNodeId) return t("play.check.outsideGroup");
+    const g = nodeById(n.groupNodeId);
+    return g ? (g.title || t("play.check.untitledGroup")) : t("play.check.unknownGroup");
+  }
+
+  /** Every node failing validation, with name, group, kind and reasons. */
+  function collectInvalidNodes() {
+    const out = [];
+    for (const n of graph.nodes || []) {
+      if (n.kind === "group") continue;
+      if (n.isActive === false) continue;
+      const v = validateNodeLeaf(n);
+      if (v.ok) continue;
+      out.push({
+        node: n,
+        id: n.id,
+        title: n.title || nodeKindLabel(n),
+        kind: nodeKindLabel(n),
+        group: nodeGroupLabel(n),
+        reasons: (v.reasons && v.reasons.length) ? v.reasons : [t("play.check.unknownReason")]
+      });
+    }
+    return out;
+  }
+
+  /** Detailed, user-facing validation error — names each node, its group, kind and reasons. */
+  function buildInvalidNodesMessage() {
+    const items = collectInvalidNodes();
+    if (!items.length) return "";
+    const lines = items.map((it, i) =>
+      `${i + 1}) ${it.kind} «${it.title}» — ${t("play.check.inGroup")}: ${it.group}`
+      + "\n" + it.reasons.map((r) => `   • ${r}`).join("\n")
+    );
+    return `${t("play.check.header", { n: items.length })}\n\n${lines.join("\n\n")}\n\n${t("play.check.footer")}`;
+  }
+
+  /** Move the viewport/selection to a node so the user can fix it immediately. */
+  function focusInvalidNode(nodeId) {
+    if (!nodeId) return;
+    try {
+      const n = nodeById(nodeId);
+      if (!n) return;
+      if (n.groupNodeId) openGroup(n.groupNodeId);
+      selectNode(nodeId, false);
+      render();
+      renderInspector();
+    } catch { /* focus is best-effort */ }
   }
 
   function extOkHint() {

@@ -374,10 +374,85 @@ function validateNodeLeafForPlay(n, graph) {
 }
 
 function graphHasInvalidNodesForPlay(graph) {
-  return (graph.nodes || []).some((n) => {
-    if (n.kind === "group") return false;
-    return !validateNodeLeafForPlay(n, graph).ok;
+  return collectInvalidNodesForPlay(graph).length > 0;
+}
+
+/** UI culture for engine-generated messages (synced from the portal, defaults to fa). */
+let playCulture = "fa";
+function setPlayCulture(next) {
+  playCulture = next === "en" ? "en" : "fa";
+}
+function playUiCulture() {
+  return playCulture;
+}
+
+/** Human label for a node kind, used in validation reports. */
+function nodeKindLabel(n) {
+  if (!n) return "نود ناشناس";
+  if (n.kind === "start") return "شروع";
+  if (n.kind === "condition") return "شرط";
+  if (isActionNode(n)) return "اقدام";
+  if (n.kind === "group") return "گروه";
+  return n.kind || "نود";
+}
+
+/** Name of the group a node belongs to (or the process scope for free nodes). */
+function nodeGroupLabel(n, graph) {
+  if (!n) return "—";
+  // A group node's own title is the group name; a node inside a group references its parent.
+  if (n.kind === "group") return n.title || "گروه بدون عنوان";
+  const gid = n.groupNodeId;
+  if (!gid) return "بیرون از گروه (سطح فرآیند)";
+  const g = (graph?.nodes || []).find((x) => x.id === gid);
+  return g ? (g.title || "گروه بدون عنوان") : `گروه نامشخص (${gid})`;
+}
+
+/**
+ * Every node that would fail validation, with node name, owning group, kind and reasons.
+ * Group nodes are containers only — their repeat/selector rules are validated on the group's
+ * start node, so they are skipped here to avoid duplicate reports.
+ */
+function collectInvalidNodesForPlay(graph) {
+  const out = [];
+  for (const n of graph?.nodes || []) {
+    if (n.kind === "group") continue;
+    if (n.isActive === false) continue;
+    const v = validateNodeLeafForPlay(n, graph);
+    if (v.ok) continue;
+    out.push({
+      node: n,
+      id: n.id,
+      title: n.title || nodeKindLabel(n),
+      kind: nodeKindLabel(n),
+      group: nodeGroupLabel(n, graph),
+      reasons: v.reasons?.length ? v.reasons : ["دلیل نامشخص"]
+    });
+  }
+  return out;
+}
+
+/** Builds the detailed, user-facing validation error shown before a run starts. */
+function buildInvalidNodesError(graph, lang) {
+  const items = collectInvalidNodesForPlay(graph);
+  if (!items.length) return "";
+  const en = lang === "en";
+
+  const lines = items.map((it, i) => {
+    const head = en
+      ? `${i + 1}) ${it.kind} «${it.title}» — in group: ${it.group}`
+      : `${i + 1}) ${it.kind} «${it.title}» — در گروه: ${it.group}`;
+    const why = it.reasons.map((r) => `   • ${r}`).join("\n");
+    return `${head}\n${why}`;
   });
+
+  const title = en
+    ? `Cannot start: ${items.length} node(s) have invalid settings.`
+    : `اجرا ممکن نیست: ${items.length} نود تنظیمات نامعتبر دارد.`;
+  const tail = en
+    ? "Fix the items above in the editor and save, then run again."
+    : "موارد بالا را در ویرایشگر اصلاح و ذخیره کنید، سپس دوباره اجرا بزنید.";
+
+  return `${title}\n\n${lines.join("\n\n")}\n\n${tail}`;
 }
 
 /** Play engine — imported by background via importScripts. */
@@ -877,8 +952,19 @@ async function startPlay(taskId, tabId, runMode, options) {
     return { ok: false, error: "فرآیند در حافظهٔ محلی پیدا نشد. صفحهٔ فرآیندها را رفرش کنید و دوباره اجرا بزنید." };
   }
 
-  if (graphHasInvalidNodesForPlay(graph)) {
-    return { ok: false, error: "در فرایند المان نامعتبر وجود دارد" };
+  const validationError = buildInvalidNodesError(graph, playUiCulture());
+  if (validationError) {
+    return {
+      ok: false,
+      error: validationError,
+      invalidNodes: collectInvalidNodesForPlay(graph).map((it) => ({
+        id: it.id,
+        title: it.title,
+        kind: it.kind,
+        group: it.group,
+        reasons: it.reasons
+      }))
+    };
   }
 
   clearPlayCellReadInflight();

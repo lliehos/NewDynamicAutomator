@@ -30,7 +30,9 @@
     if (!text) return null;
     const kind = type === "warning" ? "warn" : (type || "info");
     const title = opts?.title || "";
-    const ms = opts?.ms != null ? opts.ms : (kind === "error" ? 6500 : 3800);
+    // Long, multi-line messages (e.g. node validation reports) need time to read.
+    const defaultMs = kind === "error" ? 6500 : 3800;
+    const ms = opts?.ms != null ? opts.ms : (text.length > 160 ? 15000 : defaultMs);
     const host = ensureHost();
 
     while (host.children.length >= MAX) {
