@@ -22,6 +22,8 @@ public sealed class LicenseDisplayDto
     /// <summary>Start of trial (anchor) or license issue time (UTC).</summary>
     public DateTime? ValidityStartsAtUtc { get; set; }
     public bool AllowUpdates { get; set; }
+    /// <summary>Vendor-granted ability to import a legacy database (default off).</summary>
+    public bool AllowLegacyMigration { get; set; }
     public bool ShowCopyright { get; set; }
     public string? DatabaseServerHint { get; set; }
     public string? UpdateServerUrl { get; set; }

@@ -201,6 +201,14 @@
               </TextBlock>
             </CheckBox>
 
+            <CheckBox x:Name="AllowLegacyMigration" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="تا وقتی روشن نشود، صفحهٔ «انتقال از دیتابیس قدیمی» در پنل ادمین وجود ندارد و درخواست‌های آن رد می‌شود.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازه انتقال از دیتابیس قدیمی"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — فقط برای مشتری مجاز)"/>
+              </TextBlock>
+            </CheckBox>
+
             <StackPanel Orientation="Horizontal" Margin="28,8,0,12">
               <Button Content="امضای لایسنس" Width="130" Style="{StaticResource VsButton}" Click="SignLicense_Click"/>
               <Button Content="ذخیره .morobot" Width="130" Margin="10,0,0,0"

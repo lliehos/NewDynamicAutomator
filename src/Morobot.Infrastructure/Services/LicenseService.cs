@@ -225,6 +225,7 @@ public sealed class LicenseService
                     : anchor.ServerFingerprintHash),
             TrialDaysRemaining = runtime.TrialDaysRemaining,
             AllowUpdates = runtime.AllowsUpdates,
+            AllowLegacyMigration = runtime.AllowsLegacyMigration,
             ShowCopyright = runtime.ShowCopyright,
             UpdateServerUrl = updateUrl,
             PendingConnectionRestart = string.IsNullOrWhiteSpace(pendingRestart) ? null : pendingRestart
@@ -358,6 +359,7 @@ public sealed class LicenseService
             MaxUsers = payload.MaxUsers,
             OrganizationName = payload.OrganizationName,
             AllowUpdates = payload.AllowUpdates,
+            AllowLegacyMigration = payload.AllowLegacyMigration,
             TrialDays = payload.TrialDays > 0 ? payload.TrialDays : 3,
             DatabaseServerHint = ExtractServerHint(payload.DatabaseConnectionString),
             AllowedHost = string.IsNullOrWhiteSpace(payload.AllowedHost)

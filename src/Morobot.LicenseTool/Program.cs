@@ -31,7 +31,7 @@ Morobot license tool (vendor-only — never deploy private keys to customers)
 
 Commands:
   genkeypair [--out-dir <path>]
-  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--update-url URL] [-o license.morobot]
+  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--update-url URL] [-o license.morobot]
   package --project <path-to-Morobot.Web.csproj> --output <folder>
   verify --license <file.morobot> [--public-key <pem>]
   info --request <activation.json>
@@ -99,6 +99,8 @@ static int Sign(string[] args)
     var trialDays = ParseNullableInt(GetArg(args, "--trial-days")) ?? 3;
     var allowUpdatesRaw = GetArg(args, "--allow-updates");
     var allowUpdates = !string.Equals(allowUpdatesRaw, "false", StringComparison.OrdinalIgnoreCase);
+    // Opt-in only: absence of the flag must keep migration disabled.
+    var allowLegacyMigration = string.Equals(GetArg(args, "--allow-legacy-migration"), "true", StringComparison.OrdinalIgnoreCase);
     var updateUrl = GetArg(args, "--update-url");
     var allowedHostRaw = GetArg(args, "--allowed-host");
     string? allowedHost = null;
@@ -125,6 +127,7 @@ static int Sign(string[] args)
         DatabaseConnectionString = dbConnection,
         TrialDays = trialDays,
         AllowUpdates = allowUpdates,
+        AllowLegacyMigration = allowLegacyMigration,
         UpdateServerUrl = updateUrl,
         AllowedHost = allowedHost
     };

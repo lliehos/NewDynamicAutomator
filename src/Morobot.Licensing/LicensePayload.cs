@@ -21,6 +21,12 @@ public sealed class LicensePayload
     public int TrialDays { get; set; } = 3;
     /// <summary>Whether admin may check/apply online updates.</summary>
     public bool AllowUpdates { get; set; } = true;
+    /// <summary>
+    /// Whether "migrate from the legacy database" is available. Deliberately
+    /// defaults to <c>false</c>: importing an old database is a deliberate,
+    /// vendor-authorised operation, so a buyer must be granted it explicitly.
+    /// </summary>
+    public bool AllowLegacyMigration { get; set; }
     /// <summary>Optional override for update check URL.</summary>
     public string? UpdateServerUrl { get; set; }
     /// <summary>When set, HTTP Host (or this IP) must match. Empty = no host lock.</summary>

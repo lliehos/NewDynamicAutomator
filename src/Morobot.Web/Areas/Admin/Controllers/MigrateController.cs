@@ -11,16 +11,29 @@ public class MigrateController : Controller
 {
     private readonly LegacyImportService _import;
     private readonly ILocaleService _locale;
+    private readonly LicenseService _license;
 
-    public MigrateController(LegacyImportService import, ILocaleService locale)
+    public MigrateController(LegacyImportService import, ILocaleService locale, LicenseService license)
     {
         _import = import;
         _locale = locale;
+        _license = license;
     }
 
+    /// <summary>
+    /// "Migrate from legacy database" is a vendor-authorised operation. The licence
+    /// must carry <c>AllowLegacyMigration</c>, otherwise the whole feature is hidden
+    /// (GET) and refused (POST) — a buyer cannot enable it themselves.
+    /// </summary>
+    private async Task<bool> IsMigrationAllowedAsync(CancellationToken ct)
+        => (await _license.GetRuntimeStateAsync(ct)).AllowsLegacyMigration;
+
+    private IActionResult MigrationNotAllowed() => NotFound();
+
     [HttpGet]
-    public IActionResult Index()
+    public async Task<IActionResult> Index(CancellationToken ct)
     {
+        if (!await IsMigrationAllowedAsync(ct)) return MigrationNotAllowed();
         ViewData["Title"] = _locale["admin.migrate.title"];
         return View();
     }
@@ -29,6 +42,7 @@ public class MigrateController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Connect(string connectionString, CancellationToken ct)
     {
+        if (!await IsMigrationAllowedAsync(ct)) return MigrationNotAllowed();
         ViewData["Title"] = _locale["admin.migrate.title"];
         connectionString = (connectionString ?? "").Trim();
         if (string.IsNullOrWhiteSpace(connectionString))
@@ -54,6 +68,7 @@ public class MigrateController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Run(string connectionString, int[]? userIds, CancellationToken ct)
     {
+        if (!await IsMigrationAllowedAsync(ct)) return MigrationNotAllowed();
         ViewData["Title"] = _locale["admin.migrate.resultTitle"];
         connectionString = (connectionString ?? "").Trim();
         userIds ??= Array.Empty<int>();

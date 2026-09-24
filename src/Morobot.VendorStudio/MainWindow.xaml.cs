@@ -77,6 +77,7 @@ public partial class MainWindow : Window
                 DatabaseConnectionString = string.IsNullOrWhiteSpace(DbConnection.Text) ? null : DbConnection.Text.Trim(),
                 TrialDays = int.TryParse(TrialDays.Text, out var trial) ? trial : 3,
                 AllowUpdates = AllowUpdates.IsChecked == true,
+                AllowLegacyMigration = AllowLegacyMigration.IsChecked == true,
                 UpdateServerUrl = string.IsNullOrWhiteSpace(UpdateUrl.Text) ? null : UpdateUrl.Text.Trim(),
                 AllowedHost = allowedHost
             };

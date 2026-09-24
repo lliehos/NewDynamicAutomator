@@ -447,6 +447,10 @@
     },
     "license": {
       "title": "License",
+      "legacyTitle": "Migrate from legacy database",
+      "legacyAllowed": "Granted in this license — the migration page appears in the admin menu.",
+      "legacyNotAllowed": "Not granted in this license — the migration page and all of its requests are disabled.",
+      "legacyHint": "Enable \"allow legacy database migration\" in the license generator to grant this.",
       "intro": "Every install (cloud, on-prem, dev) starts with a trial; then a signed license is required. Changing DeploymentMode in appsettings does not disable licensing.",
       "introEnterprise": "The license controls org-wide caps (e.g. active users). Importing a new license never deletes existing data.",
       "introCloud": "This install runs in Cloud mode — no vendor license is required.",

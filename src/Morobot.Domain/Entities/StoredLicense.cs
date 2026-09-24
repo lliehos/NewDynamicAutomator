@@ -11,6 +11,8 @@ public class StoredLicense
     public int? MaxUsers { get; set; }
     public string? OrganizationName { get; set; }
     public bool AllowUpdates { get; set; } = true;
+    /// <summary>Vendor-granted ability to import a legacy database (default off).</summary>
+    public bool AllowLegacyMigration { get; set; }
     public int TrialDays { get; set; } = 3;
     public string? DatabaseServerHint { get; set; }
     public string? AllowedHost { get; set; }

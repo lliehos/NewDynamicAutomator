@@ -168,5 +168,18 @@
           <div class="admin-alert is-warn">@L["admin.updates.notIncluded"]</div>
         }
       </div>
+
+      <div class="admin-settings-card">
+        <h3><i class="ti ti-database-import" aria-hidden="true"></i>@L["admin.license.legacyTitle"]</h3>
+        @if (d.AllowLegacyMigration)
+        {
+          <div class="admin-alert is-ok">@L["admin.license.legacyAllowed"]</div>
+        }
+        else
+        {
+          <div class="admin-alert is-warn">@L["admin.license.legacyNotAllowed"]</div>
+        }
+        <partial name="_AdminHint" model='L["admin.license.legacyHint"]' />
+      </div>
     }
   </div>

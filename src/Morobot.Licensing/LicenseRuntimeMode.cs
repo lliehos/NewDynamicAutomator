@@ -29,6 +29,11 @@ public sealed class LicenseRuntimeState
     public bool ViewOnly => Mode == LicenseRuntimeMode.Restricted;
     public bool AllowsUpdates => Mode == LicenseRuntimeMode.Licensed && (Payload?.AllowUpdates ?? false);
     public bool AllowsBranding => Mode == LicenseRuntimeMode.Licensed;
+    /// <summary>
+    /// Legacy-DB migration must be granted explicitly in the signed license.
+    /// Without a payload (trial / restricted / cloud) it stays unavailable.
+    /// </summary>
+    public bool AllowsLegacyMigration => Mode == LicenseRuntimeMode.Licensed && (Payload?.AllowLegacyMigration ?? false);
 
     public static LicenseRuntimeState Cloud() => new()
     {
