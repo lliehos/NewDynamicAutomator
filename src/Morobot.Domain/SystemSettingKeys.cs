@@ -24,4 +24,32 @@ public static class SystemSettingKeys
     public const string BrandColorInk = "BrandColorInk";
     public const string BrandColorBorderSubtle = "BrandColorBorderSubtle";
     public const string BrandReferralQrVisible = "BrandReferralQrVisible";
+
+    /// <summary>
+    /// Keys owned by Admin → Branding. Admin → Settings must NOT list these: both pages read and
+    /// write the same rows, so exposing them in two places let a stale Settings form silently
+    /// overwrite branding (or vice versa). Branding values are also licence-gated and need the
+    /// dedicated editor with its colour pickers and image uploads.
+    /// </summary>
+    public static readonly IReadOnlySet<string> BrandingOwned = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        BrandAppName,
+        BrandTitle,
+        BrandOrganization,
+        BrandLogoPath,
+        BrandFaviconPath,
+        BrandColorPrimary,
+        BrandColorPrimaryDark,
+        BrandColorPrimaryLight,
+        BrandColorAccent,
+        BrandColorSoft,
+        BrandColorSoft2,
+        BrandColorInk,
+        BrandColorBorderSubtle,
+        BrandReferralQrVisible
+    };
+
+    /// <summary>True when the key belongs to a page other than Admin → Settings.</summary>
+    public static bool IsBrandingOwned(string? key) =>
+        !string.IsNullOrWhiteSpace(key) && BrandingOwned.Contains(key);
 }

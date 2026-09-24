@@ -28,9 +28,12 @@ public class SettingsController : Controller
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         ViewData["Title"] = _locale["admin.settings.title"];
+        var all = await _settings.ListAsync(ct);
         var vm = new AdminSettingsViewModel
         {
-            Settings = await _settings.ListAsync(ct),
+            // Branding keys are edited on Admin → Branding only; showing them here too meant
+            // two pages wrote the same rows and a stale save could clobber the other page.
+            Settings = all.Where(s => !SystemSettingKeys.IsBrandingOwned(s.Key)).ToList(),
             Plans = await _db.Plans.AsNoTracking().OrderBy(p => p.SortOrder).ToListAsync(ct)
         };
         return View(vm);
@@ -43,6 +46,8 @@ public class SettingsController : Controller
         var pairs = form.Keys
             .Where(k => k.StartsWith("setting_", StringComparison.OrdinalIgnoreCase))
             .Select(k => (k["setting_".Length..], form[k].ToString() ?? ""))
+            // Defence in depth: ignore branding keys even if a crafted form posts them.
+            .Where(p => !SystemSettingKeys.IsBrandingOwned(p.Item1))
             .ToList();
         await _settings.SaveAsync(pairs, ct);
         TempData["Ok"] = _locale["admin.settings.saved"];
