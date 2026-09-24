@@ -4,7 +4,14 @@
   Layout = "_Layout";
   ViewData["Title"] = L["admin.settings.title"];
   var isFa = L.IsRtl;
+  // Groups are ordered by their declared presentation order so the page reads
+  // Auth → Updates → Deployment, and any future group without metadata lands last.
+  var groups = Model.Settings
+    .GroupBy(s => s.Group)
+    .OrderBy(g => SystemSettingKeys.SettingGroupInfo.OrderOf(g.Key))
+    .ToList();
 }
+
 <partial name="_AdminPageHead" model='new AdminPageHeadModel {
   Summary = L["admin.settings.intro"],
   ActionText = L["admin.settings.gotoPlans"],
@@ -12,52 +19,88 @@
   ActionIcon = "ti-layers-intersect"
 }' />
 
-<form method="post" class="admin-settings-grid">
+<form method="post" class="admin-settings-form">
   @Html.AntiForgeryToken()
-  @foreach (var group in Model.Settings.GroupBy(s => s.Group))
-  {
-    <div class="admin-settings-card">
-      <h3><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i>@group.Key</h3>
-      @foreach (var s in group)
-      {
-        var hint = isFa ? s.HintFa : s.HintEn;
-        var label = isFa ? s.LabelFa : s.LabelEn;
-        <div class="mb-3">
-          @if (s.Key == SystemSettingKeys.DefaultRegisterPlan)
-          {
+
+  @* Category rail: quick jump between groups, so a long settings page stays navigable. *@
+  <nav class="admin-settings-toc" aria-label="@L["admin.settings.categories"]">
+    @foreach (var group in groups)
+    {
+      var key = SystemSettingKeys.SettingGroupInfo.LocaleKeyOf(group.Key);
+      <a href="#settings-group-@key" class="admin-settings-toc-item">
+        <i class="ti @SystemSettingKeys.SettingGroupInfo.IconOf(group.Key)" aria-hidden="true"></i>
+        <span>@L["admin.settings.groups." + key + ".title"]</span>
+        <span class="admin-settings-toc-count">@group.Count()</span>
+      </a>
+    }
+  </nav>
+
+  <div class="admin-settings-grid">
+    @foreach (var group in groups)
+    {
+      var gkey = SystemSettingKeys.SettingGroupInfo.LocaleKeyOf(group.Key);
+      var gtitle = L["admin.settings.groups." + gkey + ".title"];
+      var gdesc = L["admin.settings.groups." + gkey + ".desc"];
+      <section class="admin-settings-card" id="settings-group-@gkey">
+        <h3>
+          <i class="ti @SystemSettingKeys.SettingGroupInfo.IconOf(group.Key)" aria-hidden="true"></i>
+          <span>@gtitle</span>
+          <span class="admin-settings-card-count">@group.Count()</span>
+        </h3>
+        @if (!string.IsNullOrWhiteSpace(gdesc) && !gdesc.StartsWith("admin.settings.groups."))
+        {
+          <p class="admin-settings-card-desc">@gdesc</p>
+        }
+
+        @foreach (var s in group)
+        {
+          var hint = isFa ? s.HintFa : s.HintEn;
+          var label = isFa ? s.LabelFa : s.LabelEn;
+          var readOnly = SystemSettingKeys.IsReadOnlyForAdmin(s.Key);
+          <div class="admin-settings-field">
             <label class="admin-label" for="setting_@s.Key">
               <span>@label</span>
-              <partial name="_AdminHint" model='L["admin.hints.defaultRegisterPlan"]' />
-            </label>
-            <select class="form-select" id="setting_@s.Key" name="setting_@s.Key">
-              @foreach (var plan in Model.Plans.Where(p => p.IsActive).OrderBy(p => p.SortOrder))
+              @if (readOnly)
               {
-                var planLabel = isFa ? plan.NameFa : plan.NameEn;
-                if (string.Equals(s.Value, plan.Code, StringComparison.OrdinalIgnoreCase))
-                {
-                  <option value="@plan.Code" selected>@planLabel (@plan.Code)</option>
-                }
-                else
-                {
-                  <option value="@plan.Code">@planLabel (@plan.Code)</option>
-                }
+                <span class="admin-settings-ro-badge" title="@L["admin.settings.systemManagedHint"]">
+                  <i class="ti ti-lock" aria-hidden="true"></i>@L["admin.settings.systemManaged"]
+                </span>
               }
-            </select>
-          }
-          else
-          {
-            <label class="admin-label" for="setting_@s.Key"><span>@label</span></label>
-            <input class="form-control" id="setting_@s.Key" name="setting_@s.Key" value="@s.Value" />
-          }
-          @if (!string.IsNullOrWhiteSpace(hint))
-          {
-            <div class="admin-field-hint">@hint</div>
-          }
-        </div>
-      }
-    </div>
-  }
-  <div class="admin-settings-card" style="grid-column:1/-1">
-    <button type="submit" class="btn-admin"><i class="ti ti-device-floppy" aria-hidden="true"></i>@L["admin.settings.save"]</button>
+            </label>
+
+            @if (s.Key == SystemSettingKeys.DefaultRegisterPlan)
+            {
+              <select class="form-select" id="setting_@s.Key" name="setting_@s.Key">
+                @foreach (var plan in Model.Plans.Where(p => p.IsActive).OrderBy(p => p.SortOrder))
+                {
+                  var planLabel = isFa ? plan.NameFa : plan.NameEn;
+                  <option value="@plan.Code" selected="@(string.Equals(s.Value, plan.Code, StringComparison.OrdinalIgnoreCase))">@planLabel (@plan.Code)</option>
+                }
+              </select>
+            }
+            else if (readOnly)
+            {
+              @* Rendered without a name so the POST simply omits it — the owning service keeps authority. *@
+              <input class="form-control admin-settings-ro" id="setting_@s.Key" value="@s.Value" readonly tabindex="-1" />
+            }
+            else
+            {
+              <input class="form-control" id="setting_@s.Key" name="setting_@s.Key" value="@s.Value" />
+            }
+
+            @if (!string.IsNullOrWhiteSpace(hint))
+            {
+              <div class="admin-field-hint">@hint</div>
+            }
+          </div>
+        }
+      </section>
+    }
+  </div>
+
+  <div class="admin-settings-actions">
+    <button type="submit" class="btn-admin">
+      <i class="ti ti-device-floppy" aria-hidden="true"></i>@L["admin.settings.save"]
+    </button>
   </div>
 </form>
