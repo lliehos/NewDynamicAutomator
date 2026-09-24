@@ -9,43 +9,43 @@
 <section class="admin-dash-stats" aria-label="@L["admin.dashboard.stats"]">
   <article class="admin-dash-stat">
     <div class="admin-dash-stat-ico"><i class="ti ti-users" aria-hidden="true"></i></div>
-    <b>@Model.UserCount</b>
-    <span>@L["admin.dashboard.statUsers"]</span>
+    <div class="admin-dash-stat-body"><b>@Model.UserCount</b>
+    <span>@L["admin.dashboard.statUsers"]</span></div>
   </article>
   <article class="admin-dash-stat">
     <div class="admin-dash-stat-ico"><i class="ti ti-user-check" aria-hidden="true"></i></div>
-    <b>@Model.ActiveUserCount</b>
-    <span>@L["admin.dashboard.statActiveUsers"]</span>
+    <div class="admin-dash-stat-body"><b>@Model.ActiveUserCount</b>
+    <span>@L["admin.dashboard.statActiveUsers"]</span></div>
   </article>
   <article class="admin-dash-stat @(Model.OnlineUserCount > 0 ? "is-live" : null)">
     <div class="admin-dash-stat-ico"><i class="ti ti-wifi" aria-hidden="true"></i></div>
-    <b>@Model.OnlineUserCount</b>
-    <span>@L["admin.dashboard.statOnlineUsers"]</span>
+    <div class="admin-dash-stat-body"><b>@Model.OnlineUserCount</b>
+    <span>@L["admin.dashboard.statOnlineUsers"]</span></div>
   </article>
   <article class="admin-dash-stat">
     <div class="admin-dash-stat-ico"><i class="ti ti-git-branch" aria-hidden="true"></i></div>
-    <b>@Model.ProcessCount</b>
-    <span>@L["admin.dashboard.statProcesses"]</span>
+    <div class="admin-dash-stat-body"><b>@Model.ProcessCount</b>
+    <span>@L["admin.dashboard.statProcesses"]</span></div>
   </article>
   <article class="admin-dash-stat">
     <div class="admin-dash-stat-ico"><i class="ti ti-database" aria-hidden="true"></i></div>
-    <b>@Model.SourceCount</b>
-    <span>@L["admin.dashboard.statSources"]</span>
+    <div class="admin-dash-stat-body"><b>@Model.SourceCount</b>
+    <span>@L["admin.dashboard.statSources"]</span></div>
   </article>
   <article class="admin-dash-stat">
     <div class="admin-dash-stat-ico"><i class="ti ti-layers-intersect" aria-hidden="true"></i></div>
-    <b>@Model.PlanCount</b>
-    <span>@L["admin.dashboard.statPlans"]</span>
+    <div class="admin-dash-stat-body"><b>@Model.PlanCount</b>
+    <span>@L["admin.dashboard.statPlans"]</span></div>
   </article>
   <article class="admin-dash-stat @(Model.PlayingCount > 0 ? "is-live" : null)">
     <div class="admin-dash-stat-ico"><i class="ti ti-player-play" aria-hidden="true"></i></div>
-    <b>@Model.PlayingCount</b>
-    <span>@L["admin.dashboard.statPlaying"]</span>
+    <div class="admin-dash-stat-body"><b>@Model.PlayingCount</b>
+    <span>@L["admin.dashboard.statPlaying"]</span></div>
   </article>
   <article class="admin-dash-stat">
     <div class="admin-dash-stat-ico"><i class="ti ti-history" aria-hidden="true"></i></div>
-    <b>@Model.EventCount24h</b>
-    <span>@L["admin.dashboard.statEvents24h"]</span>
+    <div class="admin-dash-stat-body"><b>@Model.EventCount24h</b>
+    <span>@L["admin.dashboard.statEvents24h"]</span></div>
   </article>
 </section>
 
