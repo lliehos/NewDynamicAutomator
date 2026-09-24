@@ -7,11 +7,13 @@ public sealed class SetupGuideService
     private static readonly string RelativePath = Path.Combine("docs", "setup-guide.md");
     private readonly IWebHostEnvironment _env;
     private readonly ILogger<SetupGuideService> _log;
+    private readonly IHttpContextAccessor _http;
 
-    public SetupGuideService(IWebHostEnvironment env, ILogger<SetupGuideService> log)
+    public SetupGuideService(IWebHostEnvironment env, ILogger<SetupGuideService> log, IHttpContextAccessor http)
     {
         _env = env;
         _log = log;
+        _http = http;
     }
 
     public async Task<SetupGuideDocument?> LoadAsync(CancellationToken ct = default)
@@ -24,6 +26,9 @@ public sealed class SetupGuideService
         }
 
         var markdown = await File.ReadAllTextAsync(path, ct);
+        // The vendor-authored guide ships with the stock product name; rebrand it for the
+        // tenant's screen without touching the source document on disk.
+        markdown = RebrandForDisplay(markdown);
         var pipeline = new MarkdownPipelineBuilder()
             .UseAdvancedExtensions()
             .Build();
@@ -37,6 +42,21 @@ public sealed class SetupGuideService
             SourcePath = path,
             LastUpdatedUtc = modified
         };
+    }
+
+    /// <summary>Swaps the stock product name for the tenant's Admin → Branding name.</summary>
+    private string RebrandForDisplay(string markdown)
+    {
+        var ctx = _http.HttpContext;
+        var brand = (ctx?.Items[Models.BrandHeadModel.ItemKey] as Models.BrandHeadModel)?.AppName;
+        if (string.IsNullOrWhiteSpace(brand)) return markdown;
+        if (string.Equals(brand, "Morobot", StringComparison.OrdinalIgnoreCase)) return markdown;
+
+        return markdown
+            .Replace("Morobot", brand, StringComparison.Ordinal)
+            .Replace("مروبات", brand, StringComparison.Ordinal)
+            // Undo the double substitution when the brand itself contains the stock token.
+            .Replace($"{brand} {brand}", brand, StringComparison.Ordinal);
     }
 
     private string? ResolveGuidePath()

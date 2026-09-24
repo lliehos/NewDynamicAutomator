@@ -221,6 +221,11 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         SyncNow("install-path");
         var global = Snapshot(RoleGlobal);
         var smart = Snapshot(RoleSmart);
+        // Manifest names are "<Brand> Global"; strip the role suffix to recover the brand.
+        var brandName = (global.Name ?? "").Trim();
+        if (brandName.EndsWith(" Global", StringComparison.OrdinalIgnoreCase))
+            brandName = brandName[..^" Global".Length].Trim();
+        if (string.IsNullOrWhiteSpace(brandName)) brandName = "Morobot";
         return new
         {
             ok = global.Ok && smart.Ok,
@@ -236,7 +241,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
             error = global.Error ?? smart.Error,
             appInstanceKey = AppInstanceKey,
             instanceRoot = ExtensionInstallPathHelper.InstanceRoot(_config),
-            hint = "دو افزونه: Morobot Global (ضبط + اجرا + سلکتور) و Smart Recorder. هر استقرار Morobot کلید AppInstanceKey جدا دارد — روی یک PC چند دامنه/نسخه بدون تداخل.",
+            hint = $"دو افزونه: {brandName} Global (ضبط + اجرا + سلکتور) و Smart Recorder. هر استقرار {brandName} کلید AppInstanceKey جدا دارد — روی یک PC چند دامنه/نسخه بدون تداخل.",
             branding
         };
     }
@@ -264,8 +269,8 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     {
         var defaults = role switch
         {
-            RoleSmart => ("Morobot Smart Recorder", "افزونهٔ هوشمندسازی", "کانتکس تعاملات برای یادگیری بعدی."),
-            _ => ("Morobot Global", "افزونهٔ Morobot", "ضبط، اجرا و سلکتور — یک افزونه.")
+            RoleSmart => ("Smart Recorder", "افزونهٔ هوشمندسازی", "کانتکس تعاملات برای یادگیری بعدی."),
+            _ => ("Global", "افزونهٔ اتوماسیون", "ضبط، اجرا و سلکتور — یک افزونه.")
         };
 
         try

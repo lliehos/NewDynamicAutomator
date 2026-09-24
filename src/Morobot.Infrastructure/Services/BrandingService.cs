@@ -22,10 +22,17 @@ public sealed class BrandingService
         var state = await _license.GetRuntimeStateAsync(ct);
         if (!state.AllowsBranding)
         {
+            // Still honour the Admin → Branding name/logo; only the paid extras
+            // (copyright-badge removal, referral-QR toggle) stay locked while unlicensed.
+            var appNameFree = await _settings.GetAsync(SystemSettingKeys.BrandAppName, DefaultAppName, ct);
+            var titleFree = await _settings.GetAsync(SystemSettingKeys.BrandTitle, appNameFree, ct);
             return new TenantBrandingDto
             {
-                AppName = DefaultAppName,
-                BrandTitle = DefaultAppName,
+                AppName = string.IsNullOrWhiteSpace(appNameFree) ? DefaultAppName : appNameFree.Trim(),
+                BrandTitle = string.IsNullOrWhiteSpace(titleFree) ? null : titleFree.Trim(),
+                OrganizationName = await _settings.GetAsync(SystemSettingKeys.BrandOrganization, "", ct),
+                LogoUrl = await _settings.GetAsync(SystemSettingKeys.BrandLogoPath, "", ct),
+                FaviconUrl = await _settings.GetAsync(SystemSettingKeys.BrandFaviconPath, "", ct),
                 IsLicensedBranding = false,
                 ShowReferralQrWidget = true
             };

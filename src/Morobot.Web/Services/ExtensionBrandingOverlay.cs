@@ -59,20 +59,12 @@ public sealed class ExtensionBrandingOverlay
 
         if (root is not JsonObject obj) return;
 
-        if (head.IsLicensedBranding)
-        {
-            obj["name"] = $"{head.AppName} Global";
-            obj["description"] = $"{head.BrandTitle} — ضبط، اجرا و سلکتور";
-            if (obj["action"] is JsonObject action)
-                action["default_title"] = $"{head.AppName} — {head.BrandTitle}";
-        }
-        else
-        {
-            obj["name"] = "Morobot Global";
-            obj["description"] = "Morobot — ضبط، اجرا و سلکتور در یک افزونه";
-            if (obj["action"] is JsonObject action)
-                action["default_title"] = "Morobot Global — مروبات";
-        }
+        // Always apply the tenant's Admin → Branding name; the licence only gates
+        // the extra paid surface (copyright badge, referral QR).
+        obj["name"] = $"{head.AppName} Global";
+        obj["description"] = $"{head.BrandTitle} — ضبط، اجرا و سلکتور";
+        if (obj["action"] is JsonObject action)
+            action["default_title"] = $"{head.AppName} — {head.BrandTitle}";
 
         File.WriteAllText(manifestPath, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
@@ -81,7 +73,7 @@ public sealed class ExtensionBrandingOverlay
     {
         if (string.IsNullOrWhiteSpace(installRoot) || !Directory.Exists(installRoot)) return;
         var origin = _branding.ResolveSiteOrigin();
-        var smartName = head.IsLicensedBranding ? $"{head.AppName} Smart Recorder" : "Morobot Smart Recorder";
+        var smartName = $"{head.AppName} Smart Recorder";
         var json = JsonSerializer.Serialize(head.ToExtensionJson(origin), new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(Path.Combine(installRoot, "morobot-branding.json"), json, ct);
 
@@ -92,12 +84,9 @@ public sealed class ExtensionBrandingOverlay
             var root = JsonNode.Parse(File.ReadAllText(manifestPath)) as JsonObject;
             if (root == null) return;
             root["name"] = smartName;
-            if (head.IsLicensedBranding)
-                root["description"] = $"{head.BrandTitle} — Smart Recorder";
+            root["description"] = $"{head.BrandTitle} — Smart Recorder";
             if (root["action"] is JsonObject action)
-                action["default_title"] = head.IsLicensedBranding
-                    ? $"{head.AppName} — Smart Recorder"
-                    : "Morobot Smart Recorder";
+                action["default_title"] = $"{head.AppName} — Smart Recorder";
             File.WriteAllText(manifestPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex)

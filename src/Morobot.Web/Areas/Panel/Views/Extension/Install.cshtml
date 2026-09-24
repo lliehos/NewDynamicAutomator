@@ -6,8 +6,8 @@
     var globalVer = ViewBag.GlobalVersion as string ?? ViewBag.RecorderVersion as string ?? ViewBag.Version as string ?? "";
     var smartVer = ViewBag.SmartVersion as string ?? "";
     var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
-    var globalExtName = brandHead.IsLicensedBranding ? $"{brandHead.AppName} Global" : "Morobot Global";
-    var smartExtName = brandHead.IsLicensedBranding ? $"{brandHead.AppName} Smart Recorder" : "Morobot Smart Recorder";
+    var globalExtName = $"{brandHead.AppName} Global";
+    var smartExtName = $"{brandHead.AppName} Smart Recorder";
 }
 <div class="card mb-4">
   <div class="card-body">

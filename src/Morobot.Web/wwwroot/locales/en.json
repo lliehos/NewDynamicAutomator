@@ -6,16 +6,16 @@
     "name": "English"
   },
   "brand": {
-    "name": "Morobot",
+    "name": "{brand}",
     "tagline": "Smart web process automation",
-    "copyright": "© {year} Morobot — Suras Software Group",
+    "copyright": "© {year} {brand} — Suras Software Group",
     "wordmark": "/img/brand/morobot-wordmark-en.svg",
     "heroImg": "/img/landing/hero-en.png",
     "featuresImg": "/img/landing/features-en.png"
   },
   "site": {
     "copyright": {
-      "unlicensed": "Morobot — Unlicensed edition"
+      "unlicensed": "{brand} — Unlicensed edition"
     }
   },
   "common": {
@@ -44,8 +44,8 @@
     "switchLangTitleFa": "Switch to Persian"
   },
   "landing": {
-    "title": "Morobot — Smart web process automation",
-    "description": "Morobot designs, records, and runs browser workflows — visual automation powered by Excel data sources.",
+    "title": "{brand} — Smart web process automation",
+    "description": "{brand} designs, records, and runs browser workflows — visual automation powered by Excel data sources.",
     "navAria": "Navigation",
     "navFeatures": "Features",
     "navHow": "How it works",
@@ -58,7 +58,7 @@
     "ctaSetup": "Setup & deployment guide",
     "featuresTitle": "From record to run, one pipeline",
     "featuresSub": "No heavy coding — visual editor, data sources, and browser extensions.",
-    "featuresImgAlt": "Recording, data, and playback in Morobot",
+    "featuresImgAlt": "Recording, data, and playback in {brand}",
     "featRecordTitle": "Smart recording",
     "featRecordBody": "Capture clicks and inputs in the browser and turn them into a process graph.",
     "featEditorTitle": "Workflow editor",
@@ -80,7 +80,7 @@
     "extRecorderBody": "Capture user interaction and build the initial graph.",
     "extPlayerBody": "Stable playback of processes on real pages.",
     "extSelectorBody": "Precise element picking for selector mapping.",
-    "ctaBandTitle": "Ready to start with Morobot?",
+    "ctaBandTitle": "Ready to start with {brand}?",
     "ctaBandBody": "Open the panel, create a process, and try automation today."
   },
   "setupGuide": {
@@ -96,7 +96,7 @@
     "navProcesses": "Processes",
     "navResources": "Resources",
     "navSettings": "Settings",
-    "dashBrand": "Morobot",
+    "dashBrand": "{brand}",
     "dashTitle": "Home",
     "dashSub": "Overview of your browser-side activity.",
     "statProcesses": "Processes",
@@ -133,7 +133,7 @@
     "sourcesTitle": "Resources",
     "sourcesSub": "Data sources linked to processes.",
     "extModalTitle": "Recorder extension required",
-    "extModalDesc": "To record a process, install Morobot Recorder once with Load unpacked. The player extension is separate and not required for recording.",
+    "extModalDesc": "To record a process, install {brand} Recorder once with Load unpacked. The player extension is separate and not required for recording.",
     "extPathLabel": "Recorder extension path",
     "extPathPreparing": "Preparing...",
     "extStep1": "chrome://extensions or edge://extensions",
@@ -145,8 +145,8 @@
     "extGuide": "Guide",
     "extLater": "Later",
     "referral": {
-      "fabTitle": "Refer Morobot to friends",
-      "title": "Refer Morobot",
+      "fabTitle": "Refer {brand} to friends",
+      "title": "Refer {brand}",
       "lead": "Product home page",
       "hint": "Scan the code to introduce us to your friends.",
       "whatsapp": "WhatsApp",
@@ -161,19 +161,19 @@
     "extStillMissing": "Recorder extension still not found — Load unpacked with the recorder path.",
     "extConnected": "Recorder extension connected.",
     "extPlayerTitle": "Player extension required",
-    "extPlayerDesc": "To run, stop, or pause a process, install the Morobot Player extension once with Load unpacked. If you only need to record, you do not need the player.",
+    "extPlayerDesc": "To run, stop, or pause a process, install the {brand} Player extension once with Load unpacked. If you only need to record, you do not need the player.",
     "extPlayerPathLabel": "Player extension path",
     "extPlayerMissing": "The player extension is required to run or stop.",
     "extPlayerStillMissing": "Player extension still not found — Load unpacked with the player path.",
     "extPlayerConnected": "Player extension connected.",
     "extSelectorTitle": "Selector extension required",
-    "extSelectorDesc": "To copy element selectors with right-click, install Morobot Selector once with Load unpacked.",
+    "extSelectorDesc": "To copy element selectors with right-click, install {brand} Selector once with Load unpacked.",
     "extSelectorPathLabel": "Selector extension path",
     "extSelectorMissing": "Selector extension is not installed — required for the editor workflow.",
     "extSelectorStillMissing": "Selector extension still not found — Load unpacked with the selector path.",
     "extSelectorConnected": "Selector extension connected.",
     "extSmartTitle": "Smart Recorder extension required",
-    "extSmartDesc": "To smart-learn a process, install Morobot Smart Recorder once with Load unpacked. Interactions are sent to the server as contexts.",
+    "extSmartDesc": "To smart-learn a process, install {brand} Smart Recorder once with Load unpacked. Interactions are sent to the server as contexts.",
     "extSmartPathLabel": "Smart Recorder extension path",
     "extSmartMissing": "Smart Recorder is required for smart learning.",
     "extSmartStillMissing": "Smart Recorder still not found — Load unpacked with the smart path.",
@@ -198,7 +198,7 @@
     "password": "Password",
     "submit": "Sign in",
     "toRegister": "No account? Register",
-    "backSite": "Back to Morobot site"
+    "backSite": "Back to {brand} site"
   },
   "register": {
     "title": "Register",
@@ -272,7 +272,7 @@
   },
   "admin": {
     "menuLabel": "Admin",
-    "brand": "Morobot Admin",
+    "brand": "{brand} Admin",
     "common": {
       "edit": "Edit",
       "save": "Save",
@@ -725,8 +725,8 @@
     "home": "Back to home"
   },
   "editor": {
-    "title": "Morobot — Workflow Designer",
-    "appName": "Morobot",
+    "title": "{brand} — Workflow Designer",
+    "appName": "{brand}",
     "ribbon": {
       "home": "Home",
       "processes": "Processes",

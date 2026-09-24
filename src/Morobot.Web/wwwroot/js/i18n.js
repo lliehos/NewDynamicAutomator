@@ -9,6 +9,13 @@
   let dict = {};
   let culture = DEFAULT;
 
+  /** Product name from Admin → Branding (injected by _BrandHead). Falls back to the locale text. */
+  function brandName() {
+    const b = global.__MOROBOT_BRANDING;
+    const n = b && (b.appName || b.AppName);
+    return typeof n === "string" && n.trim() ? n.trim() : "";
+  }
+
   function readCookie(name) {
     const m = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/([.$?*|{}()[\]\\/+^])/g, "\\$1") + "=([^;]*)"));
     return m ? decodeURIComponent(m[1]) : null;
@@ -49,6 +56,13 @@
     });
   }
 
+  /** Keys whose whole value IS the product name — replaced outright, not token-substituted. */
+  const BRAND_NAME_KEYS = new Set([
+    "brand.name", "common.name", "common.appName", "common.dashBrand",
+    "landing.title", "landing.ctaBandTitle", "landing.backSite", "landing.featuresImgAlt",
+    "admin.brand", "editor.appName"
+  ]);
+
   function t(key, vars) {
     let text = dict[key];
     if (text == null || text === "") text = key;
@@ -58,6 +72,12 @@
       });
     }
     if (text.indexOf("{year}") >= 0) text = text.replace(/\{year\}/g, String(new Date().getFullYear()));
+    // Never surface the stock name from the locale file — prefer the tenant's branding.
+    const brand = brandName();
+    if (brand) {
+      if (BRAND_NAME_KEYS.has(key)) text = brand;
+      else if (text.indexOf("{brand}") >= 0) text = text.replace(/\{brand\}/g, brand);
+    }
     return text;
   }
 

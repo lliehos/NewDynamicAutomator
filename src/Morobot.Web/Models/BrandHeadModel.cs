@@ -4,6 +4,9 @@ namespace Morobot.Web.Models;
 
 public sealed class BrandHeadModel
 {
+    /// <summary>HttpContext.Items key holding the resolved branding for the current request.</summary>
+    public const string ItemKey = "__morobot_brand_head";
+
     public const string DefaultAppName = "Morobot";
     public const string DefaultMarkPath = "/img/brand/morobot-mark.svg";
     public const string DefaultIconPngPath = "/img/brand/morobot-icon.png";
@@ -34,6 +37,20 @@ public sealed class BrandHeadModel
 
     public string PageTitleSuffix => AppName;
 
+    /// <summary>
+    /// Full &lt;title&gt; text: "{page} — {brand}", or the site default when no page title is set.
+    /// Avoids repeating the brand when the page title already contains it.
+    /// </summary>
+    public string ComposeTitle(string? pageTitle, string? siteDefault = null)
+    {
+        if (string.IsNullOrWhiteSpace(pageTitle))
+            return string.IsNullOrWhiteSpace(siteDefault) ? AppName : $"{AppName} — {siteDefault}";
+
+        var page = pageTitle.Trim();
+        if (page.Contains(AppName, StringComparison.OrdinalIgnoreCase)) return page;
+        return $"{page} — {AppName}";
+    }
+
     public static BrandHeadModel FromDto(TenantBrandingDto dto, string? siteOrigin)
     {
         var palette = CopyPalette(dto);
@@ -45,11 +62,13 @@ public sealed class BrandHeadModel
         {
             return new BrandHeadModel
             {
-                AppName = DefaultAppName,
-                BrandTitle = DefaultAppName,
+                // Branding name/logo still apply without a licence; only the paid extras
+                // (copyright-badge removal, referral QR toggle) are gated by IsLicensedBranding.
+                AppName = app,
+                BrandTitle = title,
                 OrganizationName = dto.OrganizationName,
-                MarkPath = DefaultMarkPath,
-                FaviconPath = DefaultMarkPath,
+                MarkPath = ResolveWebPath(dto.LogoUrl, DefaultMarkPath),
+                FaviconPath = ResolveWebPath(dto.FaviconUrl, string.IsNullOrWhiteSpace(dto.LogoUrl) ? DefaultMarkPath : ResolveWebPath(dto.LogoUrl, DefaultMarkPath)),
                 IconPngPath = DefaultIconPngPath,
                 IsLicensedBranding = false,
                 ShowReferralQr = true,
@@ -109,8 +128,8 @@ public sealed class BrandHeadModel
     {
         var origin = string.IsNullOrWhiteSpace(siteOrigin) ? null : siteOrigin.TrimEnd('/');
         var app = AppName;
-        var extName = IsLicensedBranding ? $"{app} Global" : "Morobot Global";
-        var actionTitle = IsLicensedBranding ? $"{app} — {BrandTitle}" : "Morobot Global — مروبات";
+        var extName = $"{app} Global";
+        var actionTitle = $"{app} — {BrandTitle}";
         return new
         {
             appName = app,

@@ -12,7 +12,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>@(string.IsNullOrWhiteSpace(pageTitle) ? brandHead.BrandTitle : $"{pageTitle} — {brandHead.AppName}")</title>
+  <title>@brandHead.ComposeTitle(pageTitle, L["brand.tagline"])</title>
   <meta name="description" content="@L["setupGuide.description"]" />
   <partial name="_BrandHead" model="brandHead" />
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700&family=Vazirmatn:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />

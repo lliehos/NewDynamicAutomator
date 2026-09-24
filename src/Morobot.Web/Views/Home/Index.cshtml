@@ -9,9 +9,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>@brandHead.BrandTitle</title>
+  <title>@brandHead.ComposeTitle(null, L["brand.tagline"])</title>
   <meta name="description" data-i18n="landing.description" content="@L["landing.description"]" />
-  <meta name="theme-color" content="#0d9488" />
+  <meta name="theme-color" content="@brandHead.ColorPrimary" />
   <partial name="_BrandHead" model="brandHead" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -47,7 +47,7 @@
       <div class="lp-hero-copy">
         <p class="lp-kicker" data-i18n="landing.kicker">@L["landing.kicker"]</p>
         <h1 class="lp-logo-word">
-          <span class="lp-logo-name" data-i18n="brand.name">@L["brand.name"]</span>
+          <span class="lp-logo-name" data-i18n="brand.name">@brandHead.AppName</span>
         </h1>
         <p class="lp-lead" data-i18n="landing.lead">@L["landing.lead"]</p>
         <div class="lp-cta">

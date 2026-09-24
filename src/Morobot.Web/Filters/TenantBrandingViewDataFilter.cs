@@ -17,11 +17,14 @@ public sealed class TenantBrandingViewDataFilter : IAsyncActionFilter
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
+        var head = await _branding.GetHeadAsync(context.HttpContext.RequestAborted);
+        // Cached on the request so LocaleService can resolve brand-aware locale keys.
+        context.HttpContext.Items[BrandHeadModel.ItemKey] = head;
+
         var executed = await next();
         if (executed.Result is not ViewResult vr || context.Controller is not Controller controller)
             return;
 
-        var head = await _branding.GetHeadAsync(context.HttpContext.RequestAborted);
         controller.ViewData["BrandHead"] = head;
         if (vr.ViewData != null)
             vr.ViewData["BrandHead"] = head;

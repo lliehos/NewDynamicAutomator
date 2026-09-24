@@ -9,10 +9,9 @@
   let qrReady = false;
 
   function shareText() {
-    const t = window.I18n && typeof I18n.t === "function"
-      ? I18n.t("panel.referral.shareText")
-      : "Morobot — اتوماسیون وب";
-    return `${t} ${url}`;
+    if (window.I18n && typeof I18n.t === "function") return `${I18n.t("panel.referral.shareText")} ${url}`;
+    const brand = (window.__MOROBOT_BRANDING && window.__MOROBOT_BRANDING.appName) || "Morobot";
+    return `${brand} — اتوماسیون وب ${url}`;
   }
 
   function drawQr() {

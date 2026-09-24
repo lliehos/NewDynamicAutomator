@@ -9,13 +9,18 @@ namespace Morobot.Web.Controllers;
 public class HomeController : Controller
 {
     private readonly SetupGuideService _setupGuide;
+    private readonly ILocaleService _locale;
 
-    public HomeController(SetupGuideService setupGuide) => _setupGuide = setupGuide;
+    public HomeController(SetupGuideService setupGuide, ILocaleService locale)
+    {
+        _setupGuide = setupGuide;
+        _locale = locale;
+    }
 
     [HttpGet]
     public IActionResult Index()
     {
-        ViewData["Title"] = "مروبات — اتوماسیون هوشمند فرآیندهای وب";
+        ViewData["Title"] = null;
         return View();
     }
 
@@ -23,13 +28,11 @@ public class HomeController : Controller
     public async Task<IActionResult> SetupGuide(CancellationToken ct)
     {
         var doc = await _setupGuide.LoadAsync(ct);
+        // Brand is appended by the view; keep the page title itself brand-free.
+        ViewData["Title"] = _locale["setupGuide.title"];
         if (doc is null)
-        {
-            ViewData["Title"] = "راهنمای راه‌اندازی Morobot";
             return View("SetupGuideMissing");
-        }
 
-        ViewData["Title"] = "راهنمای راه‌اندازی Morobot";
         return View(doc);
     }
 

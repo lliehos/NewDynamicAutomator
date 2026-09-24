@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
+using Morobot.Web.Models;
 
 namespace Morobot.Web.Services;
 
@@ -23,10 +24,49 @@ public sealed class LocaleService : ILocaleService
     private readonly IHttpContextAccessor _http;
     private readonly IWebHostEnvironment _env;
 
+    /// <summary>
+    /// Locale keys that carry the product name. They are resolved against the tenant's
+    /// Admin → Branding value instead of the hard-coded text in the locale files, so a
+    /// rebranded deployment never shows the stock name. The locale entry is used as the
+    /// fallback when branding is not configured.
+    /// </summary>
+    private static readonly HashSet<string> BrandNameKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "brand.name",
+        "common.name",
+        "common.appName",
+        "common.dashBrand",
+        "landing.title",
+        "landing.ctaBandTitle",
+        "landing.backSite",
+        "landing.featuresImgAlt",
+        "admin.brand",
+        "editor.appName"
+    };
+
+    /// <summary>Keys whose value is a full sentence containing the brand; {brand} is substituted.</summary>
+    private static readonly HashSet<string> BrandTokenKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "brand.copyright",
+        "metadata.title",
+        "metadata.description"
+    };
+
     public LocaleService(IHttpContextAccessor http, IWebHostEnvironment env)
     {
         _http = http;
         _env = env;
+    }
+
+    /// <summary>Product name from Admin → Branding, or null when unused/unbranded.</summary>
+    private string? BrandedAppName()
+    {
+        var ctx = _http.HttpContext;
+        if (ctx is null) return null;
+        // Branding is resolved once per request by TenantBrandingViewDataFilter and cached here.
+        var branding = ctx.Items[BrandHeadModel.ItemKey] as BrandHeadModel;
+        var name = branding?.AppName;
+        return string.IsNullOrWhiteSpace(name) ? null : name;
     }
 
     public string Culture
@@ -60,6 +100,17 @@ public sealed class LocaleService : ILocaleService
         }
         if (text.Contains("{year}", StringComparison.Ordinal))
             text = text.Replace("{year}", DateTime.Now.Year.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
+        // Brand-aware keys always reflect Admin → Branding rather than the stock locale text.
+        var brand = BrandedAppName();
+        if (!string.IsNullOrEmpty(brand))
+        {
+            if (BrandNameKeys.Contains(key))
+                text = brand;
+            else if (BrandTokenKeys.Contains(key))
+                text = text.Replace("{brand}", brand, StringComparison.Ordinal);
+        }
+
         return text;
     }
 
