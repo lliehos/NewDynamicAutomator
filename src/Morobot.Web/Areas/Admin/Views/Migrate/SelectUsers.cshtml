@@ -1,39 +1,60 @@
 @using Morobot.Infrastructure.Services
+@using Morobot.Web.Areas.Admin.Models
 @{
-  ViewData["Title"] = "انتخاب کاربران برای انتقال";
+  ViewData["Title"] = L["admin.migrate.selectTitle"];
   var users = ViewBag.Users as List<LegacyUserRow> ?? new List<LegacyUserRow>();
 }
-<div class="card-admin">
-  <p>کاربران دیتابیس قدیمی — چند مورد را انتخاب کنید.</p>
-  <form method="post" asp-area="Admin" asp-controller="Migrate" asp-action="Run">
-    @Html.AntiForgeryToken()
-    <input type="hidden" name="connectionString" value="@ViewBag.ConnectionString" />
-    <table class="admin-table">
-      <thead>
-        <tr>
-          <th></th>
-          <th>Id</th>
-          <th>نام کاربری</th>
-          <th>نام</th>
-          <th>فرآیندها</th>
-        </tr>
-      </thead>
-      <tbody>
-      @foreach (var u in users)
-      {
-        <tr>
-          <td><input type="checkbox" name="userIds" value="@u.Id" @(u.ProcessCount > 0 ? "checked" : null) /></td>
-          <td>@u.Id</td>
-          <td>@u.UserName</td>
-          <td>@($"{u.FirstName} {u.LastName}".Trim())</td>
-          <td>@u.ProcessCount</td>
-        </tr>
-      }
-      </tbody>
-    </table>
-    <div style="margin-top:1rem;display:flex;gap:.75rem">
-      <button type="submit" class="btn-admin">انتقال انتخاب‌شده‌ها</button>
-      <a class="btn-admin secondary" asp-area="Admin" asp-controller="Migrate" asp-action="Index">بازگشت</a>
-    </div>
-  </form>
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L.T("admin.migrate.selectSummary", ("count", users.Count.ToString()))
+}' />
+
+<div class="admin-table-wrap">
+<form method="post" asp-area="Admin" asp-controller="Migrate" asp-action="Run">
+  @Html.AntiForgeryToken()
+  <input type="hidden" name="connectionString" value="@ViewBag.ConnectionString" />
+  <table class="admin-table">
+    <thead>
+      <tr>
+        <th>
+          <label class="admin-switch is-compact" id="migrate-select-all" title="@L["admin.migrate.selectAll"]">
+            <input type="checkbox" aria-label="@L["admin.migrate.selectAll"]" />
+            <span class="admin-switch-ui" aria-hidden="true"></span>
+            <span class="admin-switch-text">@L["admin.migrate.selectAll"]</span>
+          </label>
+        </th>
+        <th>Id</th>
+        <th>@L["admin.users.userName"]</th>
+        <th>@L["admin.users.firstName"]</th>
+        <th>@L["admin.migrate.processCount"]</th>
+      </tr>
+    </thead>
+    <tbody>
+    @foreach (var u in users)
+    {
+      <tr>
+        <td>
+          <partial name="_AdminSwitch" model='new AdminSwitchModel {
+            Name = "userIds",
+            Value = u.Id.ToString(),
+            Label = "",
+            Checked = u.ProcessCount > 0,
+            Compact = true,
+            HideLabel = true,
+            InputClass = "js-migrate-user-cb",
+            Id = $"migrate-user-{u.Id}"
+          }' />
+        </td>
+        <td>@u.Id</td>
+        <td>@u.UserName</td>
+        <td>@($"{u.FirstName} {u.LastName}".Trim())</td>
+        <td>@u.ProcessCount</td>
+      </tr>
+    }
+    </tbody>
+  </table>
+  <div class="admin-form-actions" style="padding:1rem">
+    <button type="submit" class="btn-admin"><i class="ti ti-database-import" aria-hidden="true"></i>@L["admin.migrate.runSelected"]</button>
+    <a class="btn-admin secondary" asp-area="Admin" asp-controller="Migrate" asp-action="Index">@L["admin.common.back"]</a>
+  </div>
+</form>
 </div>

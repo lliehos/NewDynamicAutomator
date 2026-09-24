@@ -1,42 +1,47 @@
 @model Morobot.Domain.Entities.AppUser
+@using Morobot.Web.Areas.Admin.Models
 @{
-  ViewData["Title"] = "Create user";
+  ViewData["Title"] = L["admin.users.create"];
   var plans = ViewBag.Plans as IEnumerable<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem>;
 }
-<form method="post" class="card-admin" style="max-width:480px">
+<form method="post" class="admin-form-shell is-2col">
   @Html.AntiForgeryToken()
-  <div asp-validation-summary="All" class="text-danger mb-2"></div>
-  <p class="small text-muted">Reserved names (admin, free, pro, guest, test, …) cannot be used.</p>
-  <div class="mb-2"><label>Username</label><input class="form-control" name="userName" value="@Model.UserName" required /></div>
-  <div class="mb-2"><label>Password</label><input class="form-control" type="password" name="password" required /></div>
-  <div class="mb-2"><label>First name</label><input class="form-control" name="firstName" value="@Model.FirstName" /></div>
-  <div class="mb-2"><label>Last name</label><input class="form-control" name="lastName" value="@Model.LastName" /></div>
-  <div class="mb-2"><label>Email</label><input class="form-control" name="email" type="email" value="@Model.Email" /></div>
-  <div class="mb-2"><label>National ID</label><input class="form-control" name="nationalId" value="@Model.NationalId" maxlength="20" /></div>
-  <div class="mb-2">
-    <label>Plan</label>
-    <select name="planId" class="form-select">
-      <option value="">—</option>
-      @if (plans != null)
-      {
-        foreach (var p in plans)
+  <div class="admin-form-card">
+    <div asp-validation-summary="All" class="text-danger mb-2"></div>
+    <p class="admin-field-hint">@L["admin.users.reservedHint"]</p>
+    <div class="mb-2"><label>@L["admin.users.userName"]</label><input class="form-control" name="userName" value="@Model.UserName" required /></div>
+    <div class="mb-2"><label>@L["admin.users.password"]</label><input class="form-control" type="password" name="password" required /></div>
+    <div class="mb-2"><label>@L["admin.users.firstName"]</label><input class="form-control" name="firstName" value="@Model.FirstName" /></div>
+    <div class="mb-2"><label>@L["admin.users.lastName"]</label><input class="form-control" name="lastName" value="@Model.LastName" /></div>
+  </div>
+  <div class="admin-form-card">
+    <div class="mb-2"><label>@L["admin.users.email"]</label><input class="form-control" name="email" type="email" value="@Model.Email" /></div>
+    <div class="mb-2"><label>@L["admin.users.nationalId"]</label><input class="form-control" name="nationalId" value="@Model.NationalId" maxlength="20" /></div>
+    <div class="mb-2">
+      <label>@L["admin.users.plan"]</label>
+      <select name="planId" class="form-select">
+        <option value="">—</option>
+        @if (plans != null)
         {
-          if (Model.PlanId?.ToString() == p.Value) { <option value="@p.Value" selected>@p.Text</option> }
-          else { <option value="@p.Value">@p.Text</option> }
+          foreach (var p in plans)
+          {
+            if (Model.PlanId?.ToString() == p.Value) { <option value="@p.Value" selected>@p.Text</option> }
+            else { <option value="@p.Value">@p.Text</option> }
+          }
         }
-      }
-    </select>
+      </select>
+    </div>
+    <div class="mb-2">
+      <label>@L["admin.users.role"]</label>
+      <select name="role" class="form-select">
+        <option value="User" selected>User</option>
+        <option value="Admin">Admin</option>
+      </select>
+    </div>
+    <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "isActive", Label = L["admin.users.active"], Checked = true, Id = "isActiveCreate", Hint = L["admin.hints.userActive"] }' />
   </div>
-  <div class="mb-2">
-    <label>Role</label>
-    <select name="role" class="form-select">
-      <option value="User" selected>User</option>
-      <option value="Admin">Admin</option>
-    </select>
+  <div class="admin-form-actions" style="grid-column:1/-1">
+    <button type="submit" class="btn-admin">@L["admin.common.create"]</button>
+    <a class="btn-admin secondary" asp-action="Index">@L["admin.common.back"]</a>
   </div>
-  <label><input type="checkbox" name="isActive" value="true" checked /> Active</label>
-  <p style="margin-top:1rem">
-    <button type="submit" class="btn-admin">Create</button>
-    <a class="btn-admin secondary" asp-action="Index">Back</a>
-  </p>
 </form>

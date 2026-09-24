@@ -18,19 +18,22 @@ public class TasksController : Controller
     private readonly IHubContext<PlayDataHub> _playHub;
     private readonly PlaySessionTracker _plays;
     private readonly CatalogLiveService _catalog;
+    private readonly EntitlementService _entitlements;
 
     public TasksController(
         TaskService tasks,
         DataSourceService dataSources,
         IHubContext<PlayDataHub> playHub,
         PlaySessionTracker plays,
-        CatalogLiveService catalog)
+        CatalogLiveService catalog,
+        EntitlementService entitlements)
     {
         _tasks = tasks;
         _dataSources = dataSources;
         _playHub = playHub;
         _plays = plays;
         _catalog = catalog;
+        _entitlements = entitlements;
     }
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -80,10 +83,9 @@ public class TasksController : Controller
         StatusCode(StatusCodes.Status410Gone, new { message = "Sources live in canvas JSON.", code = "gone" });
 
     [HttpPost]
-    [AllowAnonymous]
     [IgnoreAntiforgeryToken]
     [RequestSizeLimit(20_000_000)]
-    public IActionResult ParseExcel(IFormFile file)
+    public async Task<IActionResult> ParseExcel(IFormFile file, CancellationToken ct)
     {
         if (file is null || file.Length == 0)
             return BadRequest(new { message = "فایل اکسل لازم است." });
@@ -94,9 +96,21 @@ public class TasksController : Controller
 
         try
         {
+            var entitlements = await _entitlements.ResolveWithCountsAsync(UserId, User, ct);
+            await _entitlements.EnsureCanCreateDataSourceAsync(UserId, entitlements, ct);
             using var stream = file.OpenReadStream();
             var suggested = Path.GetFileNameWithoutExtension(name);
             return Json(_dataSources.ParseExcelOnly(stream, suggested));
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("limit", StringComparison.OrdinalIgnoreCase))
+        {
+            var entitlements = await _entitlements.ResolveWithCountsAsync(UserId, User, ct);
+            return BadRequest(new
+            {
+                message = ex.Message,
+                code = "limit",
+                max = entitlements.MaxDataSources
+            });
         }
         catch (InvalidOperationException ex)
         {

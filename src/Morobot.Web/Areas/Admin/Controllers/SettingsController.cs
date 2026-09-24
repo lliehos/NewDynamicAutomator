@@ -1,6 +1,11 @@
-using Morobot.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Morobot.Domain;
+using Morobot.Infrastructure.Persistence;
+using Morobot.Infrastructure.Services;
+using Morobot.Web.Areas.Admin.Models;
+using Morobot.Web.Services;
 
 namespace Morobot.Web.Areas.Admin.Controllers;
 
@@ -9,11 +14,13 @@ namespace Morobot.Web.Areas.Admin.Controllers;
 public class SettingsController : Controller
 {
     private readonly SystemSettingsService _settings;
-    private readonly Morobot.Web.Services.ILocaleService _locale;
+    private readonly AppDbContext _db;
+    private readonly ILocaleService _locale;
 
-    public SettingsController(SystemSettingsService settings, Morobot.Web.Services.ILocaleService locale)
+    public SettingsController(SystemSettingsService settings, AppDbContext db, ILocaleService locale)
     {
         _settings = settings;
+        _db = db;
         _locale = locale;
     }
 
@@ -21,7 +28,12 @@ public class SettingsController : Controller
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         ViewData["Title"] = _locale["admin.settings.title"];
-        return View(await _settings.ListAsync(ct));
+        var vm = new AdminSettingsViewModel
+        {
+            Settings = await _settings.ListAsync(ct),
+            Plans = await _db.Plans.AsNoTracking().OrderBy(p => p.SortOrder).ToListAsync(ct)
+        };
+        return View(vm);
     }
 
     [HttpPost]
@@ -41,7 +53,7 @@ public class SettingsController : Controller
     [ValidateAntiForgeryToken]
     public IActionResult SetLanguage(string lang, string? returnUrl = null)
     {
-        Morobot.Web.Services.LocaleService.SetCookie(Response, lang);
+        LocaleService.SetCookie(Response, lang);
         if (!string.IsNullOrWhiteSpace(returnUrl) && Url.IsLocalUrl(returnUrl))
             return Redirect(returnUrl);
         return RedirectToAction(nameof(Index));

@@ -1,73 +1,77 @@
 @model Morobot.Domain.Entities.AppUser
+@using Morobot.Web.Areas.Admin.Models
 @{
   Layout = "_Layout";
-  ViewData["Title"] = "Edit user";
+  ViewData["Title"] = L["admin.users.edit"];
   var plans = ViewBag.Plans as IEnumerable<Microsoft.AspNetCore.Mvc.Rendering.SelectListItem>;
 }
-<form method="post" class="card-admin" style="max-width:480px">
+<form method="post" class="admin-form-shell is-2col">
   @Html.AntiForgeryToken()
-  <p><strong>@Model.UserName</strong> (#@Model.Id)</p>
-  <div class="mb-3">
-    <label class="form-label">First name</label>
-    <input class="form-control" name="firstName" value="@Model.FirstName" />
+  <div class="admin-form-card">
+    <p style="margin:0 0 .75rem"><strong>@Model.UserName</strong> (#@Model.Id)</p>
+    <div class="mb-3">
+      <label class="form-label">@L["admin.users.firstName"]</label>
+      <input class="form-control" name="firstName" value="@Model.FirstName" />
+    </div>
+    <div class="mb-3">
+      <label class="form-label">@L["admin.users.lastName"]</label>
+      <input class="form-control" name="lastName" value="@Model.LastName" />
+    </div>
+    <div class="mb-3">
+      <label class="form-label">@L["admin.users.email"]</label>
+      <input class="form-control" name="email" type="email" value="@Model.Email" />
+    </div>
+    <div class="mb-3">
+      <label class="form-label">@L["admin.users.nationalId"]</label>
+      <input class="form-control" name="nationalId" value="@Model.NationalId" maxlength="20" />
+    </div>
   </div>
-  <div class="mb-3">
-    <label class="form-label">Last name</label>
-    <input class="form-control" name="lastName" value="@Model.LastName" />
-  </div>
-  <div class="mb-3">
-    <label class="form-label">Email</label>
-    <input class="form-control" name="email" type="email" value="@Model.Email" />
-  </div>
-  <div class="mb-3">
-    <label class="form-label">National ID</label>
-    <input class="form-control" name="nationalId" value="@Model.NationalId" maxlength="20" />
-  </div>
-  <div class="mb-3">
-    <label class="form-label">Plan</label>
-    <select name="planId" class="form-select">
-      <option value="">—</option>
-      @if (plans != null)
-      {
-        foreach (var p in plans)
+  <div class="admin-form-card">
+    <div class="mb-3">
+      <label class="form-label">@L["admin.users.plan"]</label>
+      <select name="planId" class="form-select">
+        <option value="">—</option>
+        @if (plans != null)
         {
-          if (Model.PlanId?.ToString() == p.Value)
+          foreach (var p in plans)
           {
-            <option value="@p.Value" selected>@p.Text</option>
-          }
-          else
-          {
-            <option value="@p.Value">@p.Text</option>
+            if (Model.PlanId?.ToString() == p.Value)
+            {
+              <option value="@p.Value" selected>@p.Text</option>
+            }
+            else
+            {
+              <option value="@p.Value">@p.Text</option>
+            }
           }
         }
-      }
-    </select>
+      </select>
+    </div>
+    <div class="mb-3">
+      <label class="form-label">@L["admin.users.role"]</label>
+      <select name="role" class="form-select">
+        @if (Model.Role == Morobot.Domain.Enums.UserRole.User)
+        {
+          <option value="User" selected>User</option>
+          <option value="Admin">Admin</option>
+        }
+        else
+        {
+          <option value="User">User</option>
+          <option value="Admin" selected>Admin</option>
+        }
+      </select>
+    </div>
+    <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "isActive", Label = L["admin.users.active"], Checked = Model.IsActive, Id = "isActive", Hint = L["admin.hints.userActive"] }' />
+    <div class="mb-3" style="margin-top:1rem">
+      <label class="form-label" for="newPassword">@L["admin.users.newPassword"]</label>
+      <input class="form-control" type="password" id="newPassword" name="newPassword" autocomplete="new-password" />
+      <div class="admin-field-hint">@L["admin.users.passwordHint"]</div>
+    </div>
   </div>
-  <div class="mb-3">
-    <label class="form-label">Role</label>
-    <select name="role" class="form-select">
-      @if (Model.Role == Morobot.Domain.Enums.UserRole.User)
-      {
-        <option value="User" selected>User</option>
-        <option value="Admin">Admin</option>
-      }
-      else
-      {
-        <option value="User">User</option>
-        <option value="Admin" selected>Admin</option>
-      }
-    </select>
+  <div asp-validation-summary="All" class="text-danger small" style="grid-column:1/-1"></div>
+  <div class="admin-form-actions" style="grid-column:1/-1">
+    <button type="submit" class="btn-admin">@L["admin.common.save"]</button>
+    <a class="btn-admin secondary" asp-action="Index">@L["admin.common.back"]</a>
   </div>
-  <div class="mb-3 form-check">
-    <input class="form-check-input" type="checkbox" name="isActive" value="true" id="isActive" @(Model.IsActive ? "checked" : null) />
-    <label class="form-check-label" for="isActive">Active</label>
-  </div>
-  <div class="mb-3">
-    <label class="form-label" for="newPassword">New password (required when moving Free → Pro/Gold)</label>
-    <input class="form-control" type="password" id="newPassword" name="newPassword" autocomplete="new-password" />
-    <div class="form-text">Pro/Gold: min 8 chars, letter + digit.</div>
-  </div>
-  <div asp-validation-summary="All" class="text-danger small mb-3"></div>
-  <button type="submit" class="btn-admin">Save</button>
-  <a class="btn-admin secondary" asp-action="Index">Back</a>
 </form>

@@ -1,0 +1,7 @@
+@model Morobot.Web.ViewComponents.SiteChromeModel
+@if (Model.ShowCopyright)
+{
+  <div class="morobot-copyright-bar" role="note" aria-live="polite">
+    <span class="morobot-copyright-watermark">@Model.CopyrightText</span>
+  </div>
+}

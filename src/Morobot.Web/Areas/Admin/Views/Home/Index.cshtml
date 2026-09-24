@@ -1,13 +1,131 @@
+@model Morobot.Web.Areas.Admin.Models.AdminDashboardViewModel
 @{
   Layout = "_Layout";
   ViewData["Title"] = L["admin.dashboard.title"];
+  var maxPlanUsers = Model.PlanStats.Count > 0 ? Math.Max(1, Model.PlanStats.Max(p => p.UserCount)) : 1;
 }
-<div class="card-admin">
-  <p>@L["admin.dashboard.intro"]</p>
-  <p>
-    <a class="btn-admin" asp-controller="Settings" asp-action="Index">@L["admin.nav.settings"]</a>
-    <a class="btn-admin secondary" asp-controller="Plans" asp-action="Index">@L["admin.nav.plans"]</a>
-    <a class="btn-admin secondary" asp-controller="Prices" asp-action="Index">@L["admin.nav.prices"]</a>
-    <a class="btn-admin secondary" asp-controller="Users" asp-action="Index">@L["admin.nav.users"]</a>
-  </p>
+<p class="admin-dash-intro">@L["admin.dashboard.intro"]</p>
+
+<section class="admin-dash-stats" aria-label="@L["admin.dashboard.stats"]">
+  <article class="admin-dash-stat">
+    <div class="admin-dash-stat-ico"><i class="ti ti-users" aria-hidden="true"></i></div>
+    <b>@Model.UserCount</b>
+    <span>@L["admin.dashboard.statUsers"]</span>
+  </article>
+  <article class="admin-dash-stat">
+    <div class="admin-dash-stat-ico"><i class="ti ti-user-check" aria-hidden="true"></i></div>
+    <b>@Model.ActiveUserCount</b>
+    <span>@L["admin.dashboard.statActiveUsers"]</span>
+  </article>
+  <article class="admin-dash-stat @(Model.OnlineUserCount > 0 ? "is-live" : null)">
+    <div class="admin-dash-stat-ico"><i class="ti ti-wifi" aria-hidden="true"></i></div>
+    <b>@Model.OnlineUserCount</b>
+    <span>@L["admin.dashboard.statOnlineUsers"]</span>
+  </article>
+  <article class="admin-dash-stat">
+    <div class="admin-dash-stat-ico"><i class="ti ti-git-branch" aria-hidden="true"></i></div>
+    <b>@Model.ProcessCount</b>
+    <span>@L["admin.dashboard.statProcesses"]</span>
+  </article>
+  <article class="admin-dash-stat">
+    <div class="admin-dash-stat-ico"><i class="ti ti-database" aria-hidden="true"></i></div>
+    <b>@Model.SourceCount</b>
+    <span>@L["admin.dashboard.statSources"]</span>
+  </article>
+  <article class="admin-dash-stat">
+    <div class="admin-dash-stat-ico"><i class="ti ti-layers-intersect" aria-hidden="true"></i></div>
+    <b>@Model.PlanCount</b>
+    <span>@L["admin.dashboard.statPlans"]</span>
+  </article>
+  <article class="admin-dash-stat @(Model.PlayingCount > 0 ? "is-live" : null)">
+    <div class="admin-dash-stat-ico"><i class="ti ti-player-play" aria-hidden="true"></i></div>
+    <b>@Model.PlayingCount</b>
+    <span>@L["admin.dashboard.statPlaying"]</span>
+  </article>
+  <article class="admin-dash-stat">
+    <div class="admin-dash-stat-ico"><i class="ti ti-history" aria-hidden="true"></i></div>
+    <b>@Model.EventCount24h</b>
+    <span>@L["admin.dashboard.statEvents24h"]</span>
+  </article>
+</section>
+
+<div class="admin-dash-grid">
+  <div>
+    <section class="admin-dash-section">
+      <div class="admin-dash-section-head">
+        <h2><i class="ti ti-chart-bar" aria-hidden="true"></i>@L["admin.dashboard.planDistribution"]</h2>
+        <a class="btn-admin secondary" asp-controller="Settings" asp-action="Index" title="@L["admin.hints.defaultRegisterPlan"]">
+          <i class="ti ti-settings" aria-hidden="true"></i>
+          @L["admin.dashboard.defaultPlan"]: @Model.DefaultPlanName
+        </a>
+      </div>
+      @if (Model.PlanStats.Count == 0)
+      {
+        <p class="admin-field-hint">@L["admin.dashboard.noPlans"]</p>
+      }
+      else
+      {
+        <div class="admin-plan-bars">
+          @foreach (var p in Model.PlanStats)
+          {
+            var pct = p.UserCount * 100.0 / maxPlanUsers;
+            <div class="admin-plan-bar-row">
+              <span>@p.Name (@p.Code)</span>
+              <span><strong>@p.UserCount</strong> @if (!p.IsActive) { <span class="admin-badge">@L["admin.plans.inactive"]</span> }</span>
+              <div class="admin-plan-bar-track"><div class="admin-plan-bar-fill" style="width:@pct.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></div></div>
+            </div>
+          }
+        </div>
+      }
+    </section>
+
+    <section class="admin-dash-section">
+      <h2><i class="ti ti-bolt" aria-hidden="true"></i>@L["admin.dashboard.shortcuts"]</h2>
+      <div class="admin-dash-shortcuts">
+        <a class="admin-dash-link" asp-controller="Users" asp-action="Index"><i class="ti ti-users" aria-hidden="true"></i>@L["admin.nav.users"]<small>@L["admin.dashboard.shortUsers"]</small></a>
+        <a class="admin-dash-link" asp-controller="Processes" asp-action="Index"><i class="ti ti-git-branch" aria-hidden="true"></i>@L["admin.nav.processes"]<small>@L["admin.dashboard.shortProcesses"]</small></a>
+        <a class="admin-dash-link" asp-controller="Sources" asp-action="Index"><i class="ti ti-database" aria-hidden="true"></i>@L["admin.nav.sources"]<small>@L["admin.dashboard.shortSources"]</small></a>
+        <a class="admin-dash-link" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]<small>@L["admin.dashboard.shortPlans"]</small></a>
+        <a class="admin-dash-link" asp-controller="Logs" asp-action="Index"><i class="ti ti-history" aria-hidden="true"></i>@L["admin.nav.events"]<small>@L["admin.dashboard.shortEvents"]</small></a>
+        <a class="admin-dash-link" asp-controller="Settings" asp-action="Index"><i class="ti ti-settings" aria-hidden="true"></i>@L["admin.nav.settings"]<small>@L["admin.dashboard.shortSettings"]</small></a>
+      </div>
+    </section>
+  </div>
+
+  <section class="admin-dash-section">
+    <div class="admin-dash-section-head">
+      <h2><i class="ti ti-bell" aria-hidden="true"></i>@L["admin.dashboard.recentEvents"]</h2>
+      <a class="btn-admin secondary" asp-controller="Logs" asp-action="Index">@L["common.all"]</a>
+    </div>
+    @if (Model.RecentEvents.Count == 0)
+    {
+      <p class="admin-field-hint">@L["admin.dashboard.noEvents"]</p>
+    }
+    else
+    {
+      <ul class="admin-event-list">
+        @foreach (var e in Model.RecentEvents)
+        {
+          var badgeClass = e.Level switch
+          {
+            "Error" => "is-err",
+            "Warn" => "is-warn",
+            _ => "is-ok"
+          };
+          <li>
+            <div class="admin-event-meta">
+              <span>@e.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+              <span class="admin-badge @badgeClass">@e.Level</span>
+              <span>@e.Category</span>
+              @if (!string.IsNullOrWhiteSpace(e.UserName))
+              {
+                <span>@e.UserName</span>
+              }
+            </div>
+            <div class="admin-event-msg">@e.Message</div>
+          </li>
+        }
+      </ul>
+    }
+  </section>
 </div>

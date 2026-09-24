@@ -1,0 +1,5 @@
+@model Morobot.Web.Areas.Admin.Models.AdminPresenceModel
+<span class="admin-presence @(Model.Online ? "is-online" : "is-offline")@(Model.Playing ? " is-playing" : "")" title="@Model.Tooltip">
+  <span class="admin-presence-dot" aria-hidden="true"></span>
+  <span>@Model.Label</span>
+</span>

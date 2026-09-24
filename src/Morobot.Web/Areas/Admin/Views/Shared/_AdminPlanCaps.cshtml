@@ -1,0 +1,20 @@
+@model Morobot.Domain.Entities.Plan
+@{
+  var chips = new List<(bool on, string icon, string key)>
+  {
+    (Model.CanPlay, "ti-player-play", "admin.plans.canPlay"),
+    (Model.CanSelector, "ti-cursor-text", "admin.plans.canSelector"),
+    (Model.CanRecord, "ti-video", "admin.plans.canRecord"),
+    (Model.CanSmart, "ti-bulb", "admin.plans.canSmart")
+  };
+}
+<div class="admin-chips" aria-label="@L["admin.plans.caps"]">
+  @foreach (var c in chips.Where(x => x.on))
+  {
+    <span class="admin-chip" title="@L[c.key]"><i class="ti @c.icon" aria-hidden="true"></i><span>@L[c.key]</span></span>
+  }
+  @if (!chips.Any(x => x.on))
+  {
+    <span class="admin-muted">—</span>
+  }
+</div>

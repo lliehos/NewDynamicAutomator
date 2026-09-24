@@ -12,11 +12,15 @@ using Microsoft.IdentityModel.Tokens;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddMemoryCache();
 builder.Services.AddScoped<ILocaleService, LocaleService>();
+builder.Services.AddSingleton<SetupGuideService>();
 builder.Services.AddControllersWithViews(o =>
     {
         o.Filters.Add<Morobot.Web.Filters.BlockAdminFromPanelFilter>();
+        o.Filters.Add<Morobot.Web.Filters.LicenseGateFilter>();
         o.Filters.Add<Morobot.Web.Filters.RequireProfileCompleteFilter>();
+        o.Filters.Add<Morobot.Web.Filters.UserPresenceFilter>();
     })
     .AddJsonOptions(o =>
     {
@@ -86,6 +90,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton<ExtensionSyncService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ExtensionSyncService>());
+builder.Services.AddHostedService<UpdateNotifyBackgroundService>();
 
 var app = builder.Build();
 
@@ -117,13 +122,17 @@ using (var scope = app.Services.CreateScope())
     var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
     var cs = config.GetConnectionString("Default")
              ?? throw new InvalidOperationException("Connection string 'Default' is missing.");
-    var log = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("CanvasBackfill");
-    // Must run while legacy Groups/… tables still exist (before Migrate DROP).
+    var log = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+
+    await Morobot.Infrastructure.Services.DatabaseBootstrapService.EnsureSqlServerDatabaseAsync(cs, log);
     await Morobot.Infrastructure.Services.CanvasBackfillService.RunIfNeededAsync(cs, log);
 
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.MigrateAsync();
-    await DbSeeder.SeedAsync(db);
+    await Morobot.Infrastructure.Services.DatabaseBootstrapService.MigrateAndSeedAsync(db, log);
+
+    var license = scope.ServiceProvider.GetRequiredService<Morobot.Infrastructure.Services.LicenseService>();
+    if (license.IsLicensingEnabled)
+        await license.EnsureAnchorAsync();
 }
 
 app.Run();

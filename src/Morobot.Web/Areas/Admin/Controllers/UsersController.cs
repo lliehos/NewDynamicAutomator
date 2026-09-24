@@ -1,7 +1,9 @@
-using Morobot.Domain;
 using Morobot.Domain.Entities;
 using Morobot.Domain.Enums;
+using Morobot.Domain;
 using Morobot.Infrastructure.Persistence;
+using Morobot.Infrastructure.Services;
+using Morobot.Web.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -15,9 +17,18 @@ namespace Morobot.Web.Areas.Admin.Controllers;
 public class UsersController : Controller
 {
     private readonly AppDbContext _db;
+    private readonly EventLogService _events;
+    private readonly PlaySessionTracker _plays;
+    private readonly LicenseService _license;
     private readonly PasswordHasher<AppUser> _hasher = new();
 
-    public UsersController(AppDbContext db) => _db = db;
+    public UsersController(AppDbContext db, EventLogService events, PlaySessionTracker plays, LicenseService license)
+    {
+        _db = db;
+        _events = events;
+        _plays = plays;
+        _license = license;
+    }
 
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -25,6 +36,13 @@ public class UsersController : Controller
             .Include(u => u.Plan)
             .OrderBy(u => u.UserName)
             .ToListAsync(ct);
+        var lastSeen = await _events.GetLastSeenByUserAsync(ct);
+        var playingIds = _plays.ListPlaying()
+            .Where(p => p.UserId is > 0)
+            .Select(p => p.UserId!.Value)
+            .ToHashSet();
+        ViewBag.LastSeenByUserId = lastSeen;
+        ViewBag.PlayingUserIds = playingIds;
         return View(users);
     }
 
@@ -90,6 +108,24 @@ public class UsersController : Controller
                 UserName = userName, FirstName = firstName, LastName = lastName,
                 Email = email, NationalId = nationalId, PlanId = planId, Role = role, IsActive = isActive
             });
+        }
+
+        if (isActive)
+        {
+            try
+            {
+                await _license.EnsureCanAddActiveUserAsync(ct);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.StartsWith("license.error.", StringComparison.Ordinal))
+            {
+                TempData["Ok"] = ex.Message.Split(':')[0];
+                await FillPlans(ct);
+                return View(new AppUser
+                {
+                    UserName = userName, FirstName = firstName, LastName = lastName,
+                    Email = email, NationalId = nationalId, PlanId = planId, Role = role, IsActive = isActive
+                });
+            }
         }
 
         var user = new AppUser
@@ -169,6 +205,20 @@ public class UsersController : Controller
                 return View(user);
             }
             user.PasswordHash = _hasher.HashPassword(user, newPassword);
+        }
+
+        if (isActive && !user.IsActive)
+        {
+            try
+            {
+                await _license.EnsureCanActivateUserAsync(1, ct);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.StartsWith("license.error.", StringComparison.Ordinal))
+            {
+                TempData["Ok"] = ex.Message.Split(':')[0];
+                await FillPlans(ct);
+                return View(user);
+            }
         }
 
         user.FirstName = string.IsNullOrWhiteSpace(firstName) ? null : firstName.Trim();

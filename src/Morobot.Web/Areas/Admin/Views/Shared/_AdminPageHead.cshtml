@@ -1,0 +1,20 @@
+@model Morobot.Web.Areas.Admin.Models.AdminPageHeadModel
+@if (!string.IsNullOrWhiteSpace(Model.Summary) || !string.IsNullOrWhiteSpace(Model.ActionText))
+{
+  <div class="admin-page-head">
+    @if (!string.IsNullOrWhiteSpace(Model.Summary))
+    {
+      <p class="admin-page-summary">@Model.Summary</p>
+    }
+    @if (!string.IsNullOrWhiteSpace(Model.ActionText) && !string.IsNullOrWhiteSpace(Model.ActionUrl))
+    {
+      <a class="btn-admin" href="@Model.ActionUrl">
+        @if (!string.IsNullOrWhiteSpace(Model.ActionIcon))
+        {
+          <i class="ti @Model.ActionIcon" aria-hidden="true"></i>
+        }
+        <span>@Model.ActionText</span>
+      </a>
+    }
+  </div>
+}

@@ -5,17 +5,21 @@ using System.Text.Json;
 namespace Morobot.Web.Services;
 
 /// <summary>
-/// Keeps two per-user extension folders in sync: Recorder and Player.
+/// Keeps Morobot Global + Smart Recorder extension folders in sync.
 /// Chrome cannot auto-install unpacked extensions — user loads each path once.
 /// </summary>
 public sealed class ExtensionSyncService : IHostedService, IDisposable
 {
     public static readonly string BootId = Guid.NewGuid().ToString("N");
 
+    public const string RoleGlobal = "global";
     public const string RoleRecorder = "recorder";
     public const string RolePlayer = "player";
     public const string RoleSelector = "selector";
     public const string RoleSmart = "smart";
+
+    private const string GlobalFolder = "extension-global";
+    private const string GlobalInstallFolder = "extension-global";
 
     private readonly IWebHostEnvironment _env;
     private readonly IConfiguration _config;
@@ -31,24 +35,17 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         _config = config;
         _log = log;
 
-        // Android-style package folder on the user's machine.
-        var baseInstall = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "morobot.soras.ir");
-        MigrateLegacyInstallRoot(baseInstall);
+        var appKey = ExtensionInstallPathHelper.ResolveAppInstanceKey(_config);
+        var baseInstall = ExtensionInstallPathHelper.InstanceRoot(_config);
+        MigrateLegacyInstallRoot(baseInstall, appKey);
 
-        _packages[RoleRecorder] = new PackageState(
-            RoleRecorder,
-            Path.Combine(baseInstall, "extension-recorder"),
-            "extension-recorder");
-        _packages[RolePlayer] = new PackageState(
-            RolePlayer,
-            Path.Combine(baseInstall, "extension-player"),
-            "extension-player");
-        _packages[RoleSelector] = new PackageState(
-            RoleSelector,
-            Path.Combine(baseInstall, "extension-selector"),
-            "extension-selector");
+        _packages[RoleGlobal] = new PackageState(
+            RoleGlobal,
+            Path.Combine(baseInstall, GlobalInstallFolder),
+            GlobalFolder);
+        _packages[RoleRecorder] = _packages[RoleGlobal];
+        _packages[RolePlayer] = _packages[RoleGlobal];
+        _packages[RoleSelector] = _packages[RoleGlobal];
         _packages[RoleSmart] = new PackageState(
             RoleSmart,
             Path.Combine(baseInstall, "extension-smart-recorder"),
@@ -56,32 +53,55 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// One-time move from legacy %LocalAppData%\DynamicAutomator → morobot.soras.ir
-    /// when the new root is empty.
+    /// Migrates legacy flat folders into morobot.soras.ir/{AppInstanceKey}/.
     /// </summary>
-    private void MigrateLegacyInstallRoot(string newRoot)
+    private void MigrateLegacyInstallRoot(string instanceRoot, string appKey)
     {
         try
         {
+            var brandRoot = ExtensionInstallPathHelper.BrandRoot;
+            Directory.CreateDirectory(instanceRoot);
+
+            foreach (var name in new[]
+                     {
+                         GlobalInstallFolder, "extension-smart-recorder",
+                         "extension-recorder", "extension-player", "extension-selector"
+                     })
+            {
+                var fromFlat = Path.Combine(brandRoot, name);
+                var to = Path.Combine(instanceRoot, name);
+                if (Directory.Exists(fromFlat) && !Directory.Exists(to))
+                {
+                    try
+                    {
+                        Directory.Move(fromFlat, to);
+                        _log.LogInformation("Migrated flat extension {Name} → {To}", name, to);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogWarning(ex, "Could not migrate flat {From} → {To}", fromFlat, to);
+                    }
+                }
+            }
+
             var legacy = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "DynamicAutomator");
             if (!Directory.Exists(legacy)) return;
-            Directory.CreateDirectory(newRoot);
 
             foreach (var name in new[]
                      {
-                         "extension-recorder", "extension-player", "extension-selector",
-                         "extension-smart-recorder"
+                         GlobalInstallFolder, "extension-smart-recorder",
+                         "extension-recorder", "extension-player", "extension-selector"
                      })
             {
                 var from = Path.Combine(legacy, name);
-                var to = Path.Combine(newRoot, name);
+                var to = Path.Combine(instanceRoot, name);
                 if (!Directory.Exists(from) || Directory.Exists(to)) continue;
                 try
                 {
                     Directory.Move(from, to);
-                    _log.LogInformation("Migrated extension package {Name} → {To}", name, to);
+                    _log.LogInformation("Migrated DynamicAutomator extension {Name} → {To}", name, to);
                 }
                 catch (Exception ex)
                 {
@@ -95,6 +115,8 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         }
     }
 
+    public string AppInstanceKey => ExtensionInstallPathHelper.ResolveAppInstanceKey(_config);
+
     /// <summary>Legacy single-path accessor → recorder (most common install first).</summary>
     public string InstallPath => _packages[RoleRecorder].InstallPath;
 
@@ -106,7 +128,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        foreach (var pkg in _packages.Values)
+        foreach (var pkg in _packages.Values.Distinct())
         {
             pkg.SourcePath = ResolveSourceFolder(pkg.SourceFolderName, pkg.Role);
             SyncPackage(pkg, "startup");
@@ -161,10 +183,8 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         lock (_gate)
         {
             SyncResult? last = null;
-            foreach (var pkg in _packages.Values)
-            {
-                last = SyncPackage(pkg, reason);
-            }
+            last = SyncPackage(_packages[RoleGlobal], reason);
+            last = SyncPackage(_packages[RoleSmart], reason);
             return last ?? new SyncResult(false, InstallPath, SourcePath, "", "هیچ بسته‌ای تعریف نشده.");
         }
     }
@@ -193,24 +213,24 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     public object InstallPathsPayload()
     {
         SyncNow("install-path");
-        var recorder = Snapshot(RoleRecorder);
-        var player = Snapshot(RolePlayer);
-        var selector = Snapshot(RoleSelector);
+        var global = Snapshot(RoleGlobal);
         var smart = Snapshot(RoleSmart);
         return new
         {
-            ok = recorder.Ok && player.Ok && selector.Ok && smart.Ok,
-            recorder,
-            player,
-            selector,
+            ok = global.Ok && smart.Ok,
+            global,
+            recorder = global with { Role = RoleRecorder },
+            player = global with { Role = RolePlayer },
+            selector = global with { Role = RoleSelector },
             smart,
-            // Back-compat single fields → recorder
-            path = recorder.Path,
-            source = recorder.Source,
-            stamp = recorder.Stamp,
-            version = recorder.Version,
-            error = recorder.Error ?? player.Error ?? selector.Error ?? smart.Error,
-            hint = "چهار افزونه: Recorder، Player، Selector، Smart Recorder. هر کدام را یک‌بار Load unpacked کنید."
+            path = global.Path,
+            source = global.Source,
+            stamp = global.Stamp,
+            version = global.Version,
+            error = global.Error ?? smart.Error,
+            appInstanceKey = AppInstanceKey,
+            instanceRoot = ExtensionInstallPathHelper.InstanceRoot(_config),
+            hint = "دو افزونه: Morobot Global (ضبط + اجرا + سلکتور) و Smart Recorder. هر استقرار Morobot کلید AppInstanceKey جدا دارد — روی یک PC چند دامنه/نسخه بدون تداخل."
         };
     }
 
@@ -220,10 +240,11 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         var ok = Directory.Exists(pkg.InstallPath) && File.Exists(Path.Combine(pkg.InstallPath, "manifest.json"));
         var (name, title, description) = pkg.Role switch
         {
-            RolePlayer => ("Morobot Player", "افزونهٔ اجرا", "برای اجرای فرآیند، توقف و پاز لازم است."),
-            RoleSelector => ("Morobot Selector", "افزونهٔ سلکتور", "راست‌کلیک روی عنصر → کپی سلکتور به حافظه برای ویرایشگر."),
-            RoleSmart => ("Morobot Smart Recorder", "افزونهٔ هوشمندسازی", "کانتکس تعاملات را برای یادگیری بعدی به سرور می‌فرستد."),
-            _ => ("Morobot Recorder", "افزونهٔ ضبط", "برای شروع/اتمام ضبط و ذخیرهٔ فرآیند لازم است.")
+            RoleSmart => ("Morobot Smart Recorder", "افزونهٔ هوشمندسازی", "کانتکس تعاملات برای یادگیری بعدی."),
+            RolePlayer => ("Morobot Global", "افزونهٔ Morobot", "ضبط، اجرا و سلکتور — یک افزونه."),
+            RoleSelector => ("Morobot Global", "افزونهٔ Morobot", "ضبط، اجرا و سلکتور — یک افزونه."),
+            RoleGlobal => ("Morobot Global", "افزونهٔ Morobot", "ضبط، اجرا و سلکتور — یک افزونه."),
+            _ => ("Morobot Global", "افزونهٔ Morobot", "ضبط، اجرا و سلکتور — یک افزونه.")
         };
         return new PackageSnapshot(
             ok,
@@ -243,7 +264,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     {
         var key = string.IsNullOrWhiteSpace(role) ? RoleRecorder : role.Trim().ToLowerInvariant();
         if (key is "play" or "player") key = RolePlayer;
-        if (key is "record" or "recorder" or "rec") key = RoleRecorder;
+        if (key is "record" or "recorder" or "rec" or "global") key = RoleGlobal;
         if (key is "sel" or "selector" or "pick" or "context") key = RoleSelector;
         if (key is "smart" or "smart-recorder" or "smartrecorder" or "ai" or "learn") key = RoleSmart;
         if (!_packages.TryGetValue(key, out var pkg))
@@ -296,12 +317,15 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     {
         var configKey = role switch
         {
-            RolePlayer => "Extension:PlayerPath",
-            RoleSelector => "Extension:SelectorPath",
             RoleSmart => "Extension:SmartPath",
-            _ => "Extension:RecorderPath"
+            RolePlayer or RoleSelector => "Extension:GlobalPath",
+            _ => "Extension:GlobalPath"
         };
-        var configured = _config[configKey] ?? (role == RoleRecorder ? _config["Extension:Path"] : null);
+        var configured = _config[configKey]
+                         ?? _config["Extension:RecorderPath"]
+                         ?? _config["Extension:PlayerPath"]
+                         ?? _config["Extension:SelectorPath"]
+                         ?? (role == RoleGlobal || role == RoleRecorder ? _config["Extension:Path"] : null);
         if (!string.IsNullOrWhiteSpace(configured) && Directory.Exists(configured))
             return Path.GetFullPath(configured);
 

@@ -1,28 +1,84 @@
 @model Morobot.Domain.Entities.Plan
-<div class="mb-2"><label>@L["admin.plans.nameFa"]</label><input class="form-control" name="NameFa" value="@Model.NameFa" required /></div>
-<div class="mb-2"><label>@L["admin.plans.nameEn"]</label><input class="form-control" name="NameEn" value="@Model.NameEn" required /></div>
-<div class="mb-2"><label>@L["admin.plans.maxTasks"]</label><input class="form-control" name="MaxTasks" value="@Model.MaxTasks" placeholder="∞" /></div>
-<div class="mb-2"><label>@L["admin.plans.maxSources"]</label><input class="form-control" name="MaxDataSources" value="@Model.MaxDataSources" placeholder="∞" /></div>
-<div class="mb-2"><label>@L["admin.plans.maxProcessSteps"]</label><input class="form-control" name="MaxProcessSteps" value="@Model.MaxProcessSteps" placeholder="∞" /></div>
-<div class="mb-2"><label>@L["admin.plans.sort"]</label><input class="form-control" name="SortOrder" type="number" value="@Model.SortOrder" /></div>
-<hr />
-<div class="mb-2"><label>@L["admin.plans.minPassword"]</label><input class="form-control" name="MinPasswordLength" type="number" min="1" max="128" value="@Model.MinPasswordLength" /></div>
-<label><input type="checkbox" name="RequireLetterAndDigit" value="true" @(Model.RequireLetterAndDigit ? "checked" : null) /> @L["admin.plans.requireLetterDigit"]</label><br />
-<label><input type="checkbox" name="AllowSelfUpgrade" value="true" @(Model.AllowSelfUpgrade ? "checked" : null) /> @L["admin.plans.selfUpgrade"]</label><br />
-<hr />
-<label><input type="checkbox" name="CanPlay" value="true" @(Model.CanPlay ? "checked" : null) /> @L["admin.plans.canPlay"]</label><br />
-<label><input type="checkbox" name="CanSelector" value="true" @(Model.CanSelector ? "checked" : null) /> @L["admin.plans.canSelector"]</label><br />
-<label><input type="checkbox" name="CanRecord" value="true" @(Model.CanRecord ? "checked" : null) /> @L["admin.plans.canRecord"]</label><br />
-<label><input type="checkbox" name="CanSmart" value="true" @(Model.CanSmart ? "checked" : null) /> @L["admin.plans.canSmart"]</label><br />
-<label><input type="checkbox" name="IsActive" value="true" @(Model.IsActive ? "checked" : null) /> @L["admin.plans.active"]</label>
-<hr />
-<h4 style="font-size:1rem;margin:.75rem 0">@L["admin.plans.shareSection"]</h4>
-<label><input type="checkbox" name="CanShare" value="true" @(Model.CanShare ? "checked" : null) /> @L["admin.plans.canShare"]</label><br />
-<label><input type="checkbox" name="CanReceiveShare" value="true" @(Model.CanReceiveShare ? "checked" : null) /> @L["admin.plans.canReceiveShare"]</label><br />
-<div class="mb-2"><label>@L["admin.plans.maxShares"]</label><input class="form-control" name="MaxSharesPerTask" value="@Model.MaxSharesPerTask" placeholder="∞" /></div>
-<p style="font-size:.85rem;color:#64748b">@L["admin.plans.shareGrantsHint"]</p>
-<label><input type="checkbox" name="ShareAllowView" value="true" @(Model.ShareAllowView ? "checked" : null) /> @L["admin.plans.shareView"]</label><br />
-<label><input type="checkbox" name="ShareAllowEdit" value="true" @(Model.ShareAllowEdit ? "checked" : null) /> @L["admin.plans.shareEdit"]</label><br />
-<label><input type="checkbox" name="ShareAllowDelete" value="true" @(Model.ShareAllowDelete ? "checked" : null) /> @L["admin.plans.shareDelete"]</label><br />
-<label><input type="checkbox" name="ShareAllowExecute" value="true" @(Model.ShareAllowExecute ? "checked" : null) /> @L["admin.plans.shareExecute"]</label><br />
-<label><input type="checkbox" name="ShareAllowChangeDataSource" value="true" @(Model.ShareAllowChangeDataSource ? "checked" : null) /> @L["admin.plans.shareDs"]</label>
+@using Morobot.Web.Areas.Admin.Models
+<div class="admin-form-shell is-2col">
+  <div class="admin-form-card">
+    <h4><i class="ti ti-tag" aria-hidden="true"></i>@L["admin.plans.name"]</h4>
+    <div class="mb-2">
+      <label class="admin-label"><span>@L["admin.plans.nameFa"]</span><partial name="_AdminHint" model='L["admin.hints.planNameFa"]' /></label>
+      <input class="form-control" name="NameFa" value="@Model.NameFa" required />
+    </div>
+    <div class="mb-2">
+      <label class="admin-label"><span>@L["admin.plans.nameEn"]</span><partial name="_AdminHint" model='L["admin.hints.planNameEn"]' /></label>
+      <input class="form-control" name="NameEn" value="@Model.NameEn" required />
+    </div>
+    <div class="mb-2">
+      <label class="admin-label"><span>@L["admin.plans.sort"]</span><partial name="_AdminHint" model='L["admin.hints.planSort"]' /></label>
+      <input class="form-control" name="SortOrder" type="number" value="@Model.SortOrder" />
+    </div>
+    <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "IsActive", Label = L["admin.plans.active"], Checked = Model.IsActive, Hint = L["admin.hints.planActive"] }' />
+  </div>
+
+  <div class="admin-form-card">
+    <h4><i class="ti ti-adjustments" aria-hidden="true"></i>@L["admin.plans.limits"]</h4>
+    <div class="mb-2">
+      <label class="admin-label"><span>@L["admin.plans.maxTasks"]</span><partial name="_AdminHint" model='L["admin.hints.maxTasks"]' /></label>
+      <input class="form-control" name="MaxTasks" value="@Model.MaxTasks" placeholder="∞" />
+    </div>
+    <div class="mb-2">
+      <label class="admin-label"><span>@L["admin.plans.maxSources"]</span><partial name="_AdminHint" model='L["admin.hints.maxSources"]' /></label>
+      <input class="form-control" name="MaxDataSources" value="@Model.MaxDataSources" placeholder="∞" />
+    </div>
+    <div class="mb-2">
+      <label class="admin-label"><span>@L["admin.plans.maxProcessSteps"]</span><partial name="_AdminHint" model='L["admin.hints.maxSteps"]' /></label>
+      <input class="form-control" name="MaxProcessSteps" value="@Model.MaxProcessSteps" placeholder="∞" />
+    </div>
+  </div>
+
+  <div class="admin-form-card">
+    <h4><i class="ti ti-lock" aria-hidden="true"></i>@L["admin.plans.password"]</h4>
+    <div class="mb-2">
+      <label class="admin-label"><span>@L["admin.plans.minPassword"]</span><partial name="_AdminHint" model='L["admin.hints.minPassword"]' /></label>
+      <input class="form-control" name="MinPasswordLength" type="number" min="1" max="128" value="@Model.MinPasswordLength" />
+    </div>
+    <div class="admin-switch-grid">
+      <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "RequireLetterAndDigit", Label = L["admin.plans.requireLetterDigit"], Checked = Model.RequireLetterAndDigit, Hint = L["admin.hints.requireLetterDigit"] }' />
+      <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "AllowSelfUpgrade", Label = L["admin.plans.selfUpgrade"], Checked = Model.AllowSelfUpgrade, Hint = L["admin.hints.selfUpgrade"] }' />
+    </div>
+  </div>
+
+  <div class="admin-form-card">
+    <h4><i class="ti ti-toggle-right" aria-hidden="true"></i>@L["admin.plans.caps"]</h4>
+    <div class="admin-switch-grid">
+      <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "CanPlay", Label = L["admin.plans.canPlay"], Checked = Model.CanPlay, Hint = L["admin.hints.canPlay"] }' />
+      <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "CanSelector", Label = L["admin.plans.canSelector"], Checked = Model.CanSelector, Hint = L["admin.hints.canSelector"] }' />
+      <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "CanRecord", Label = L["admin.plans.canRecord"], Checked = Model.CanRecord, Hint = L["admin.hints.canRecord"] }' />
+      <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "CanSmart", Label = L["admin.plans.canSmart"], Checked = Model.CanSmart, Hint = L["admin.hints.canSmart"] }' />
+    </div>
+  </div>
+
+  <div class="admin-form-card" style="grid-column:1/-1">
+    <h4><i class="ti ti-share" aria-hidden="true"></i>@L["admin.plans.shareSection"]</h4>
+    <div class="admin-form-shell is-2col">
+      <div>
+        <div class="admin-switch-grid">
+          <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "CanShare", Label = L["admin.plans.canShare"], Checked = Model.CanShare, Hint = L["admin.hints.canShare"] }' />
+          <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "CanReceiveShare", Label = L["admin.plans.canReceiveShare"], Checked = Model.CanReceiveShare, Hint = L["admin.hints.canReceiveShare"] }' />
+        </div>
+        <div class="mb-2" style="margin-top:.75rem">
+          <label class="admin-label"><span>@L["admin.plans.maxShares"]</span><partial name="_AdminHint" model='L["admin.hints.maxShares"]' /></label>
+          <input class="form-control" name="MaxSharesPerTask" value="@Model.MaxSharesPerTask" placeholder="∞" />
+        </div>
+      </div>
+      <div>
+        <p class="admin-field-hint">@L["admin.plans.shareGrantsHint"]</p>
+        <div class="admin-switch-grid">
+          <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "ShareAllowView", Label = L["admin.plans.shareView"], Checked = Model.ShareAllowView, Hint = L["admin.hints.shareView"] }' />
+          <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "ShareAllowEdit", Label = L["admin.plans.shareEdit"], Checked = Model.ShareAllowEdit, Hint = L["admin.hints.shareEdit"] }' />
+          <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "ShareAllowDelete", Label = L["admin.plans.shareDelete"], Checked = Model.ShareAllowDelete, Hint = L["admin.hints.shareDelete"] }' />
+          <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "ShareAllowExecute", Label = L["admin.plans.shareExecute"], Checked = Model.ShareAllowExecute, Hint = L["admin.hints.shareExecute"] }' />
+          <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "ShareAllowChangeDataSource", Label = L["admin.plans.shareDs"], Checked = Model.ShareAllowChangeDataSource, Hint = L["admin.hints.shareDs"] }' />
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

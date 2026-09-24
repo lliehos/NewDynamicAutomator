@@ -19,9 +19,11 @@
   <meta name="theme-color" content="#0f766e" />
   <meta name="application-name" content="@L["admin.brand"]" />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
   <link rel="stylesheet" href="~/assets/vendor/css/@(L.IsRtl ? "rtl/" : "")core.css" />
   <link rel="stylesheet" href="~/css/portal-app.css" />
-  <link rel="stylesheet" href="~/css/admin-app.css?v=1" />
+  <link rel="stylesheet" href="~/css/admin-app.css?v=6" />
+  <link rel="stylesheet" href="~/css/morobot-copyright.css?v=1" />
 </head>
 <body data-admin-catalog="1">
   <div class="admin-shell">
@@ -31,20 +33,22 @@
         <span>@L["admin.brand"]</span>
       </div>
       <nav class="admin-nav-links">
-        <a class="@NavClass("Home")" asp-area="Admin" asp-controller="Home" asp-action="Index">@L["admin.nav.dashboard"]</a>
-        <a class="@NavClass("Settings")" asp-area="Admin" asp-controller="Settings" asp-action="Index">@L["admin.nav.settings"]</a>
-        <a class="@NavClass("Plans")" asp-area="Admin" asp-controller="Plans" asp-action="Index">@L["admin.nav.plans"]</a>
-        <a class="@NavClass("Prices")" asp-area="Admin" asp-controller="Prices" asp-action="Index">@L["admin.nav.prices"]</a>
-        <a class="@NavClass("Processes")" asp-area="Admin" asp-controller="Processes" asp-action="Index">@L["admin.nav.processes"]</a>
-        <a class="@NavClass("Migrate")" asp-area="Admin" asp-controller="Migrate" asp-action="Index">@L["admin.nav.migrate"]</a>
-        <a class="@NavClass("Sources")" asp-area="Admin" asp-controller="Sources" asp-action="Index">@L["admin.nav.sources"]</a>
-        <a class="@NavClass("Users")" asp-area="Admin" asp-controller="Users" asp-action="Index">@L["admin.nav.users"]</a>
-        <a class="@NavClass("Logs")" asp-area="Admin" asp-controller="Logs" asp-action="Index">@L["admin.nav.events"]</a>
-        <a asp-area="Admin" asp-controller="Logs" asp-action="Devices">@L["admin.nav.devices"]</a>
+        <a class="@NavClass("Home")" asp-area="Admin" asp-controller="Home" asp-action="Index"><i class="ti ti-dashboard" aria-hidden="true"></i>@L["admin.nav.dashboard"]</a>
+        <a class="@NavClass("Settings")" asp-area="Admin" asp-controller="Settings" asp-action="Index"><i class="ti ti-settings" aria-hidden="true"></i>@L["admin.nav.settings"]</a>
+        <a class="@NavClass("License")" asp-area="Admin" asp-controller="License" asp-action="Index"><i class="ti ti-certificate" aria-hidden="true"></i>@L["admin.nav.license"]</a>
+        <a class="@NavClass("Branding")" asp-area="Admin" asp-controller="Branding" asp-action="Index"><i class="ti ti-palette" aria-hidden="true"></i>@L["admin.nav.branding"]</a>
+        <a class="@NavClass("Plans")" asp-area="Admin" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]</a>
+        <a class="@NavClass("Prices")" asp-area="Admin" asp-controller="Prices" asp-action="Index"><i class="ti ti-currency-dollar" aria-hidden="true"></i>@L["admin.nav.prices"]</a>
+        <a class="@NavClass("Processes")" asp-area="Admin" asp-controller="Processes" asp-action="Index"><i class="ti ti-git-branch" aria-hidden="true"></i>@L["admin.nav.processes"]</a>
+        <a class="@NavClass("Migrate")" asp-area="Admin" asp-controller="Migrate" asp-action="Index"><i class="ti ti-database-import" aria-hidden="true"></i>@L["admin.nav.migrate"]</a>
+        <a class="@NavClass("Sources")" asp-area="Admin" asp-controller="Sources" asp-action="Index"><i class="ti ti-database" aria-hidden="true"></i>@L["admin.nav.sources"]</a>
+        <a class="@NavClass("Users")" asp-area="Admin" asp-controller="Users" asp-action="Index"><i class="ti ti-users" aria-hidden="true"></i>@L["admin.nav.users"]</a>
+        <a class="@NavClass("Logs")" asp-area="Admin" asp-controller="Logs" asp-action="Index"><i class="ti ti-history" aria-hidden="true"></i>@L["admin.nav.events"]</a>
+        <a asp-area="Admin" asp-controller="Logs" asp-action="Devices"><i class="ti ti-device-desktop" aria-hidden="true"></i>@L["admin.nav.devices"]</a>
       </nav>
       <div class="admin-nav-foot">
-        <a asp-area="Panel" asp-controller="Home" asp-action="Index">@L["common.panel"]</a>
-        <a asp-area="Panel" asp-controller="Account" asp-action="Logout">@L["common.logout"]</a>
+        <a asp-area="Panel" asp-controller="Home" asp-action="Index"><i class="ti ti-layout-dashboard" aria-hidden="true"></i>@L["common.panel"]</a>
+        <a asp-area="Panel" asp-controller="Account" asp-action="Logout"><i class="ti ti-logout" aria-hidden="true"></i>@L["common.logout"]</a>
       </div>
     </aside>
     <main class="admin-main">
@@ -66,6 +70,8 @@
   </div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="~/js/da-catalog.js?v=admin-1"></script>
+  <script src="~/js/admin-ui.js?v=1"></script>
   @await RenderSectionAsync("Scripts", required: false)
+  @await Component.InvokeAsync("SiteChrome")
 </body>
 </html>

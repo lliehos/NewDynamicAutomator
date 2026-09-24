@@ -1,31 +1,80 @@
 @model IEnumerable<Morobot.Domain.Entities.AppUser>
+@using Morobot.Infrastructure.Services
+@using Morobot.Web.Areas.Admin.Models
 @{
   Layout = "_Layout";
-  ViewData["Title"] = "Users";
+  ViewData["Title"] = L["admin.users.title"];
+  var list = Model.ToList();
+  var isFa = L.IsRtl;
+  var lastSeen = ViewBag.LastSeenByUserId as Dictionary<int, DateTime> ?? new Dictionary<int, DateTime>();
+  var playingIds = ViewBag.PlayingUserIds as HashSet<int> ?? new HashSet<int>();
+  var now = DateTime.UtcNow;
+  var onlineCount = list.Count(u =>
+  {
+    lastSeen.TryGetValue(u.Id, out var seen);
+    var playing = playingIds.Contains(u.Id);
+    return EventLogService.IsOnline(seen, playing, now);
+  });
 }
-<p><a class="btn-admin" asp-action="Create">Add user</a></p>
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L.T("admin.users.summaryOnline", ("count", list.Count.ToString()), ("active", list.Count(u => u.IsActive).ToString()), ("online", onlineCount.ToString())),
+  ActionText = L["admin.users.create"],
+  ActionUrl = Url.Action("Create"),
+  ActionIcon = "ti-user-plus"
+}' />
+
+<div class="admin-table-wrap">
 <table class="admin-table">
   <thead>
     <tr>
       <th>Id</th>
-      <th>User</th>
-      <th>Role</th>
-      <th>Plan</th>
-      <th>Active</th>
+      <th>@L["admin.users.userName"]</th>
+      <th>@L["admin.users.presence"]</th>
+      <th>@L["admin.users.role"]</th>
+      <th>@L["admin.users.plan"]</th>
+      <th>@L["admin.users.active"]</th>
       <th></th>
     </tr>
   </thead>
   <tbody>
-  @foreach (var u in Model)
+  @foreach (var u in list)
   {
+    DateTime? seenUtc = lastSeen.TryGetValue(u.Id, out var seen) ? seen : null;
+    var playing = playingIds.Contains(u.Id);
+    var online = EventLogService.IsOnline(seenUtc, playing, now);
+    var presenceLabel = playing ? L["admin.users.playing"] : online ? L["admin.users.online"] : L["admin.users.offline"];
+    string? tip = null;
+    if (seenUtc is DateTime seenAt)
+    {
+      tip = L.T("admin.users.lastSeen", ("time", seenAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")));
+      if (playing) tip = L["admin.users.playingNow"] + " · " + tip;
+    }
+    else if (playing)
+    {
+      tip = L["admin.users.playingNow"];
+    }
     <tr>
       <td>@u.Id</td>
       <td>@u.UserName</td>
+      <td>
+        <partial name="_AdminPresence" model='new AdminPresenceModel {
+          Online = online,
+          Playing = playing,
+          LastSeenUtc = seenUtc,
+          Label = presenceLabel,
+          Tooltip = tip
+        }' />
+      </td>
       <td>@u.Role</td>
-      <td>@(u.Plan?.NameEn ?? "—")</td>
-      <td>@(u.IsActive ? "yes" : "no")</td>
-      <td><a class="btn-admin secondary" asp-action="Edit" asp-route-id="@u.Id">Edit</a></td>
+      <td>@((isFa ? u.Plan?.NameFa : u.Plan?.NameEn) ?? "—")</td>
+      <td><partial name="_AdminStatus" model="u.IsActive" /></td>
+      <td>
+        <a class="btn-admin secondary icon-only" asp-action="Edit" asp-route-id="@u.Id" title="@L["admin.common.edit"]">
+          <i class="ti ti-pencil" aria-hidden="true"></i>
+        </a>
+      </td>
     </tr>
   }
   </tbody>
 </table>
+</div>

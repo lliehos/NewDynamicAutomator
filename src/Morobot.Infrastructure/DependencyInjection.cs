@@ -1,4 +1,5 @@
 using Morobot.Infrastructure.Identity;
+using Morobot.Infrastructure.Options;
 using Morobot.Infrastructure.Persistence;
 using Morobot.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +16,11 @@ public static class DependencyInjection
                  ?? throw new InvalidOperationException("Connection string 'Default' is missing.");
 
         services.AddDbContext<AppDbContext>(o => o.UseSqlServer(cs));
+        services.Configure<MorobotOptions>(config.GetSection(MorobotOptions.SectionName));
+        services.AddHttpClient();
+        services.AddScoped<LicenseService>();
+        services.AddScoped<BrandingService>();
+        services.AddScoped<UpdateCheckService>();
         services.AddScoped<AuthService>();
         services.AddScoped<EntitlementService>();
         services.AddScoped<EventLogService>();

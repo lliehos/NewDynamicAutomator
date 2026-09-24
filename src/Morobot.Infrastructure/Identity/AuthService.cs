@@ -25,6 +25,7 @@ public class AuthService
     private readonly EntitlementService _entitlements;
     private readonly EventLogService _events;
     private readonly SystemSettingsService _settings;
+    private readonly LicenseService _license;
     private readonly PasswordHasher<AppUser> _hasher = new();
 
     public AuthService(
@@ -32,13 +33,15 @@ public class AuthService
         IConfiguration config,
         EntitlementService entitlements,
         EventLogService events,
-        SystemSettingsService settings)
+        SystemSettingsService settings,
+        LicenseService license)
     {
         _db = db;
         _config = config;
         _entitlements = entitlements;
         _events = events;
         _settings = settings;
+        _license = license;
     }
 
     public async Task<(LoginResponse? ok, string? errorKey)> RegisterAsync(
@@ -69,6 +72,15 @@ public class AuthService
 
         if (await _db.Users.AnyAsync(u => u.UserName == userName, ct))
             return (null, "register.errorExists");
+
+        try
+        {
+            await _license.EnsureCanAddActiveUserAsync(ct);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("license.error.", StringComparison.Ordinal))
+        {
+            return (null, ex.Message.Split(':')[0]);
+        }
 
         var user = new AppUser
         {

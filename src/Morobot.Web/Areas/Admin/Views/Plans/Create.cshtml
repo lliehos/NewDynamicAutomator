@@ -3,16 +3,18 @@
   Layout = "_Layout";
   ViewData["Title"] = L["admin.plans.create"];
 }
-<form method="post" class="card-admin" style="max-width:560px">
+<form method="post" class="admin-form-shell">
   @Html.AntiForgeryToken()
-  <div class="mb-2">
-    <label>@L["admin.plans.code"]</label>
-    <input class="form-control" name="Code" value="@Model.Code" required maxlength="40" />
+  <div class="admin-form-card">
+    <div class="mb-2">
+      <label>@L["admin.plans.code"]</label>
+      <input class="form-control" name="Code" value="@Model.Code" required maxlength="40" />
+    </div>
   </div>
   <partial name="_PlanFields" model="Model" />
-  <div asp-validation-summary="All" style="color:#dc2626;font-size:.9rem;margin:.75rem 0"></div>
-  <p style="margin-top:1rem">
-    <button type="submit" class="btn-admin">@L["admin.common.save"]</button>
-    <a class="btn-admin secondary" asp-action="Index">@L["admin.common.back"]</a>
-  </p>
+  <div asp-validation-summary="All" style="color:#dc2626;font-size:.9rem"></div>
+  <div class="admin-form-actions">
+    <button type="submit" class="btn-admin"><i class="ti ti-device-floppy" aria-hidden="true"></i>@L["admin.common.save"]</button>
+    <a class="btn-admin secondary" asp-action="Index"><i class="ti ti-arrow-right" aria-hidden="true"></i>@L["admin.common.back"]</a>
+  </div>
 </form>

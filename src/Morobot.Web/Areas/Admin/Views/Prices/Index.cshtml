@@ -1,22 +1,31 @@
 @model IEnumerable<Morobot.Domain.Entities.PlanPrice>
+@using Morobot.Web.Areas.Admin.Models
 @{
-  ViewData["Title"] = "Prices";
+  Layout = "_Layout";
+  ViewData["Title"] = L["admin.prices.title"];
+  var list = Model.ToList();
 }
-<p><a class="btn-admin" asp-action="Create">Add price</a></p>
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L.T("admin.prices.summary", ("count", list.Count.ToString()), ("active", list.Count(p => p.IsActive).ToString())),
+  ActionText = L["admin.prices.create"],
+  ActionUrl = Url.Action("Create"),
+  ActionIcon = "ti-plus"
+}' />
+
+<div class="admin-table-wrap">
 <table class="admin-table">
   <thead>
     <tr>
       <th>Id</th>
-      <th>Plan</th>
-      <th>Amount</th>
-      <th>Currency</th>
-      <th>Interval</th>
-      <th>Active</th>
-      <th></th>
+      <th>@L["admin.prices.plan"]</th>
+      <th>@L["admin.prices.amount"]</th>
+      <th>@L["admin.prices.currency"]</th>
+      <th>@L["admin.prices.interval"]</th>
+      <th>@L["admin.plans.active"]</th>
     </tr>
   </thead>
   <tbody>
-  @foreach (var p in Model)
+  @foreach (var p in list)
   {
     <tr>
       <td>@p.Id</td>
@@ -24,14 +33,21 @@
       <td>@p.Amount.ToString("N0")</td>
       <td>@p.Currency</td>
       <td>@p.Interval</td>
-      <td>@(p.IsActive ? "yes" : "no")</td>
       <td>
-        <form method="post" asp-action="Toggle" asp-route-id="@p.Id" style="display:inline">
+        <form method="post" asp-action="Toggle" asp-route-id="@p.Id" class="admin-toggle-form">
           @Html.AntiForgeryToken()
-          <button type="submit" class="btn-admin secondary">Toggle</button>
+          <partial name="_AdminSwitch" model='new AdminSwitchModel {
+            Name = "toggle",
+            Label = p.IsActive ? L["admin.ui.active"] : L["admin.ui.inactive"],
+            Checked = p.IsActive,
+            Compact = true,
+            AutoSubmit = true,
+            Id = $"price-active-{p.Id}"
+          }' />
         </form>
       </td>
     </tr>
   }
   </tbody>
 </table>
+</div>

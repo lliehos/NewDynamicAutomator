@@ -69,14 +69,18 @@
   /** Path for the active role only — never fall back to another extension's folder. */
   function pathForRole(data, role) {
     const r = normalizeRole(role);
+    const globalPath = String(data?.global?.path || data?.recorder?.path || data?.player?.path || data?.selector?.path || data?.path || "").trim();
+    if (r === "recorder" || r === "player" || r === "selector") {
+      if (globalPath) return globalPath;
+    }
     const pack = data?.[r];
     let p = String(pack?.path || pack?.installPath || "").trim();
     if (p) return p;
-    // Older portal builds may omit smart; derive from a sibling package path.
     if (r === "smart") {
-      const sibling = data?.recorder?.path || data?.player?.path || data?.selector?.path || data?.path || "";
+      const sibling = globalPath || "";
       if (sibling) {
         p = String(sibling)
+          .replace(/extension-global/i, "extension-smart-recorder")
           .replace(/extension-recorder/i, "extension-smart-recorder")
           .replace(/extension-player/i, "extension-smart-recorder")
           .replace(/extension-selector/i, "extension-smart-recorder");

@@ -13,6 +13,11 @@
     "heroImg": "/img/landing/hero-en.png",
     "featuresImg": "/img/landing/features-en.png"
   },
+  "site": {
+    "copyright": {
+      "unlicensed": "Morobot — Unlicensed edition"
+    }
+  },
   "common": {
     "panel": "Open Panel",
     "site": "Site",
@@ -44,10 +49,12 @@
     "navFeatures": "Features",
     "navHow": "How it works",
     "navStack": "Extensions",
+    "navSetup": "Setup guide",
     "heroAria": "Introduction",
     "kicker": "Web process automation platform",
     "lead": "Design repetitive browser workflows once, feed them with Excel data, and run them again with a single click.",
     "ctaLearn": "Learn more",
+    "ctaSetup": "Setup & deployment guide",
     "featuresTitle": "From record to run, one pipeline",
     "featuresSub": "No heavy coding — visual editor, data sources, and browser extensions.",
     "featuresImgAlt": "Recording, data, and playback in Morobot",
@@ -74,6 +81,14 @@
     "extSelectorBody": "Precise element picking for selector mapping.",
     "ctaBandTitle": "Ready to start with Morobot?",
     "ctaBandBody": "Open the panel, create a process, and try automation today."
+  },
+  "setupGuide": {
+    "title": "Setup & deployment guide",
+    "kicker": "Deployment documentation",
+    "description": "Install, database, Enterprise license, Windows/Linux hosting",
+    "download": "Download Markdown",
+    "updated": "Document last updated: {date}",
+    "missing": "The setup guide file was not found on the server. Ensure docs/setup-guide.md exists next to the application or rebuild the project."
   },
   "panel": {
     "navHome": "Home",
@@ -188,6 +203,20 @@
     "errorExists": "This username is already taken.",
     "errorInvalid": "Registration failed."
   },
+  "license": {
+    "error": {
+      "notEnterprise": "Enterprise licensing is not enabled on this install.",
+      "invalidFile": "Invalid license file.",
+      "invalidSignature": "Invalid license signature.",
+      "wrongAnchor": "This license was not issued for this installation.",
+      "expired": "License has expired.",
+      "sequenceRollback": "License revision is older than the current license.",
+      "clockRollback": "System clock rolled back — license was not imported.",
+      "missing": "No license has been imported.",
+      "invalid": "License is not valid.",
+      "seatLimit": "Active user cap reached."
+    }
+  },
   "password": {
     "errorRequired": "Password is required.",
     "errorTooShort": "Password is too short.",
@@ -227,11 +256,46 @@
     "common": {
       "edit": "Edit",
       "save": "Save",
-      "back": "Back"
+      "back": "Back",
+      "create": "Create"
+    },
+    "ui": {
+      "active": "Active",
+      "inactive": "Inactive"
+    },
+    "hints": {
+      "defaultRegisterPlan": "Plan assigned to new users on registration.",
+      "planNameFa": "Display name in Persian UI.",
+      "planNameEn": "Display name in English UI.",
+      "planSort": "List order — lower numbers appear first.",
+      "planActive": "Inactive plans are not assigned to new users.",
+      "maxTasks": "Max processes a user can create. Empty = unlimited.",
+      "maxSources": "Max library sources. Empty = unlimited.",
+      "maxSteps": "Max steps/actions per process. Empty = unlimited.",
+      "minPassword": "Minimum password length for this plan.",
+      "requireLetterDigit": "Password must include a letter and a digit.",
+      "selfUpgrade": "User may self-upgrade to this plan.",
+      "canPlay": "Allow process playback via extension.",
+      "canSelector": "Access selector tools in extension.",
+      "canRecord": "Allow process recording.",
+      "canSmart": "Smart features (when module is enabled).",
+      "canShare": "User may share processes with others.",
+      "canReceiveShare": "User may receive shared processes.",
+      "maxShares": "Max recipients per process. Empty = unlimited.",
+      "shareView": "Grant view permission when sharing.",
+      "shareEdit": "Grant edit permission when sharing.",
+      "shareDelete": "Grant delete permission when sharing.",
+      "shareExecute": "Grant execute permission when sharing.",
+      "shareDs": "Grant data-source change permission when sharing.",
+      "userActive": "Inactive users cannot sign in.",
+      "licenseSafeFields": "Only non-sensitive fields are shown. Signatures and internal keys are never displayed.",
+      "updatesManual": "Manual update check for online servers. Offline servers show the last cached result."
     },
     "nav": {
       "dashboard": "Dashboard",
       "settings": "System settings",
+      "license": "License",
+      "branding": "Branding",
       "plans": "Plans",
       "prices": "Prices",
       "processes": "Processes",
@@ -293,7 +357,28 @@
     },
     "dashboard": {
       "title": "Admin dashboard",
-      "intro": "System settings only: plans, password policies, prices, users, and logs. Process design and playback live in the user panel."
+      "intro": "System overview: users, processes, sources, plans, and recent events.",
+      "stats": "Overview",
+      "statUsers": "Users",
+      "statActiveUsers": "Active users",
+      "statOnlineUsers": "Online",
+      "statProcesses": "Processes",
+      "statSources": "Sources",
+      "statPlans": "Active plans",
+      "statPlaying": "Playing now",
+      "statEvents24h": "Events (24h)",
+      "planDistribution": "Users by plan",
+      "defaultPlan": "Default registration plan",
+      "noPlans": "No plans yet.",
+      "shortcuts": "Quick links",
+      "shortUsers": "Manage accounts",
+      "shortProcesses": "Server processes",
+      "shortSources": "Source library",
+      "shortPlans": "Limits & capabilities",
+      "shortEvents": "Logs & audit",
+      "shortSettings": "System parameters",
+      "recentEvents": "Recent events",
+      "noEvents": "No events yet."
     },
     "settings": {
       "title": "System settings",
@@ -302,8 +387,85 @@
       "save": "Save settings",
       "saved": "Settings saved."
     },
+    "license": {
+      "title": "Organization license",
+      "introEnterprise": "The license controls org-wide caps (e.g. active users). Importing a new license never deletes existing data.",
+      "introCloud": "This install runs in Cloud mode — no vendor license is required.",
+      "cloudMode": "Cloud mode: Enterprise licensing is disabled.",
+      "cloudModeDetail": "For on-prem sales, set Morobot:DeploymentMode to Enterprise in appsettings.",
+      "current": "License status",
+      "fieldRuntimeMode": "Runtime mode",
+      "fieldTrialRemaining": "Trial days left",
+      "fieldDatabaseServer": "Database server (license)",
+      "fieldRestart": "Restart",
+      "restartRequired": "Restart the server once after importing the license.",
+      "fieldAllowUpdates": "Online updates",
+      "runtime": {
+        "NotApplicable": "Cloud",
+        "Trial": "Trial (3 days)",
+        "Licensed": "Licensed",
+        "Restricted": "Restricted — login & view only"
+      },
+      "fieldStatus": "Status",
+      "fieldMessage": "Message",
+      "fieldOrganization": "Organization",
+      "fieldLicenseId": "License ID",
+      "fieldIssued": "Issued",
+      "fieldValidUntil": "Valid until",
+      "fieldMaxUsers": "Active user cap",
+      "fieldActiveUsers": "Active users",
+      "fieldSequence": "License revision",
+      "fieldAnchor": "Install ID",
+      "daysRemaining": "{0} days left",
+      "unlimited": "Unlimited",
+      "importTitle": "Import new license",
+      "importHint": "Upload a .morobot file or paste JSON. Users, processes, and sources are preserved.",
+      "importFile": "License file",
+      "importPaste": "Or paste text",
+      "importSubmit": "Import license",
+      "importOk": "License imported successfully.",
+      "importEmpty": "Provide a license file or pasted JSON.",
+      "requestTitle": "Activation request",
+      "requestHint": "Send this file to the vendor to receive a signed license.",
+      "requestOrgHint": "Organization name (optional)",
+      "requestOrgPlaceholder": "e.g. Acme Corp",
+      "requestSubmit": "Download activation-request.json",
+      "status": {
+        "NotRequired": "Not required (Cloud)",
+        "Missing": "No license imported",
+        "InvalidSignature": "Invalid signature",
+        "WrongAnchor": "Not for this installation",
+        "Expired": "Expired",
+        "SequenceRollback": "Older than current license",
+        "Valid": "Valid"
+      }
+    },
+    "branding": {
+      "title": "Organization branding",
+      "intro": "With a valid license you can customize app name, brand, logo, and favicon.",
+      "notLicensed": "Custom branding requires a valid license.",
+      "identity": "Identity",
+      "assets": "Brand assets",
+      "appName": "Application name",
+      "brandTitle": "Brand title",
+      "organization": "Organization name",
+      "logo": "Logo",
+      "favicon": "Favicon",
+      "save": "Save branding",
+      "saved": "Branding saved."
+    },
+    "updates": {
+      "title": "Software updates",
+      "current": "Current version",
+      "available": "Available version",
+      "server": "Check server",
+      "checkNow": "Check for updates",
+      "checked": "Update check completed.",
+      "notIncluded": "Online updates are not enabled in this license."
+    },
     "plans": {
       "title": "Plans",
+      "summary": "{count} plans — manage limits, capabilities, and sharing here.",
       "create": "New plan",
       "edit": "Edit plan",
       "code": "Code",
@@ -314,6 +476,7 @@
       "maxSources": "Max sources (empty = ∞)",
       "maxProcessSteps": "Max steps per process (empty = ∞)",
       "sort": "Sort order",
+      "limits": "Limits",
       "caps": "Capabilities",
       "password": "Password policy",
       "minPassword": "Min password length",
@@ -335,6 +498,53 @@
       "shareDelete": "Delete",
       "shareExecute": "Execute",
       "shareDs": "Change data source"
+    },
+    "users": {
+      "title": "Users",
+      "summary": "{count} users — {active} active.",
+      "summaryOnline": "{count} users — {active} active, {online} online.",
+      "create": "New user",
+      "edit": "Edit user",
+      "userName": "Username",
+      "password": "Password",
+      "firstName": "First name",
+      "lastName": "Last name",
+      "email": "Email",
+      "nationalId": "National ID",
+      "plan": "Plan",
+      "role": "Role",
+      "active": "Active",
+      "presence": "Presence",
+      "online": "Online",
+      "offline": "Offline",
+      "playing": "Playing",
+      "playingNow": "Running a process now",
+      "lastSeen": "Last activity: {time}",
+      "newPassword": "New password (Free → Pro/Gold upgrade)",
+      "passwordHint": "Pro/Gold: min 8 chars, letter + digit.",
+      "reservedHint": "Reserved names (admin, free, pro, guest, test, …) cannot be used."
+    },
+    "prices": {
+      "title": "Prices",
+      "summary": "{count} prices — {active} active. Toggle status with the switch.",
+      "create": "New price",
+      "plan": "Plan",
+      "amount": "Amount",
+      "currency": "Currency",
+      "interval": "Interval",
+      "notes": "Notes"
+    },
+    "migrate": {
+      "title": "Migrate from legacy database",
+      "intro": "Enter the legacy SQL Server connection string. Only processes owned by the user are migrated — data sources are not.",
+      "connectionString": "Connection string",
+      "connectionHint": "SQL Server connection string — spans full card width.",
+      "connect": "Connect and list users",
+      "selectTitle": "Select users to migrate",
+      "selectSummary": "{count} users in legacy database — toggle to select.",
+      "selectAll": "All",
+      "processCount": "Processes",
+      "runSelected": "Migrate selected"
     }
   },
   "record": {
@@ -675,6 +885,7 @@
       "progressSaving": "Saving to local storage...",
       "progressAttach": "Attaching to process...",
       "onlyXlsx": "Only .xlsx / .xlsm files are accepted. Select from file system.",
+      "limitCheckFailed": "Could not verify source limit — please try again.",
       "tooManySheets": "File has multiple sheets — only one sheet is allowed (first one is used).",
       "emptySheet": "Sheet is empty or has no rows or columns.",
       "networkError": "Network error uploading file to server",

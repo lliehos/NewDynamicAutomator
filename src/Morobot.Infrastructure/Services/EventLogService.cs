@@ -12,6 +12,7 @@ namespace Morobot.Infrastructure.Services;
 
 public class EventLogService
 {
+    public static readonly TimeSpan OnlineThreshold = TimeSpan.FromMinutes(15);
     private readonly AppDbContext _db;
 
     public EventLogService(AppDbContext db) => _db = db;
@@ -141,6 +142,42 @@ public class EventLogService
             .OrderByDescending(d => d.LastSeenUtc)
             .Take(take)
             .ToListAsync(ct);
+    }
+
+    public async Task<Dictionary<int, DateTime>> GetLastSeenByUserAsync(CancellationToken ct = default)
+    {
+        return await _db.DeviceSessions.AsNoTracking()
+            .GroupBy(d => d.UserId)
+            .Select(g => new { UserId = g.Key, LastSeenUtc = g.Max(x => x.LastSeenUtc) })
+            .ToDictionaryAsync(x => x.UserId, x => x.LastSeenUtc, ct);
+    }
+
+    public async Task TouchPresenceAsync(int userId, CancellationToken ct = default)
+    {
+        if (userId <= 0) return;
+        var now = DateTime.UtcNow;
+        var updated = await _db.DeviceSessions
+            .Where(d => d.UserId == userId)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.LastSeenUtc, now), ct);
+        if (updated == 0)
+        {
+            _db.DeviceSessions.Add(new DeviceSession
+            {
+                UserId = userId,
+                FingerprintHash = "presence",
+                FirstSeenUtc = now,
+                LastSeenUtc = now,
+                LoginCount = 0
+            });
+            await _db.SaveChangesAsync(ct);
+        }
+    }
+
+    public static bool IsOnline(DateTime? lastSeenUtc, bool isPlaying, DateTime utcNow)
+    {
+        if (isPlaying) return true;
+        if (lastSeenUtc is null) return false;
+        return utcNow - lastSeenUtc.Value <= OnlineThreshold;
     }
 
     public static string NormalizeFingerprint(DeviceFingerprintDto? device)

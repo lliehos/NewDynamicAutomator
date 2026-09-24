@@ -106,14 +106,10 @@ public class ExtensionController : Controller
             }
         }
         ms.Position = 0;
-        var name = role.Equals(ExtensionSyncService.RolePlayer, StringComparison.OrdinalIgnoreCase)
-            ? "dynamic-automator-player.zip"
-            : role.Equals(ExtensionSyncService.RoleSelector, StringComparison.OrdinalIgnoreCase)
-                ? "dynamic-automator-selector.zip"
-                : role.Equals(ExtensionSyncService.RoleSmart, StringComparison.OrdinalIgnoreCase)
-                    || role.Equals("smart-recorder", StringComparison.OrdinalIgnoreCase)
-                    ? "dynamic-automator-smart-recorder.zip"
-                : "dynamic-automator-recorder.zip";
+        var name = role.Equals(ExtensionSyncService.RoleSmart, StringComparison.OrdinalIgnoreCase)
+            || role.Equals("smart-recorder", StringComparison.OrdinalIgnoreCase)
+            ? "morobot-smart-recorder.zip"
+            : "morobot-global.zip";
         return File(ms, "application/zip", name);
     }
 
@@ -121,18 +117,20 @@ public class ExtensionController : Controller
     public IActionResult Install()
     {
         _sync.SyncNow("install-page");
-        ViewBag.RecorderPath = _sync.InstallPathFor(ExtensionSyncService.RoleRecorder);
-        ViewBag.PlayerPath = _sync.InstallPathFor(ExtensionSyncService.RolePlayer);
-        ViewBag.SelectorPath = _sync.InstallPathFor(ExtensionSyncService.RoleSelector);
+        ViewBag.GlobalPath = _sync.InstallPathFor(ExtensionSyncService.RoleGlobal);
+        ViewBag.GlobalVersion = _sync.GetStamp(ExtensionSyncService.RoleGlobal, syncFirst: false).Version;
+        ViewBag.RecorderPath = ViewBag.GlobalPath;
+        ViewBag.PlayerPath = ViewBag.GlobalPath;
+        ViewBag.SelectorPath = ViewBag.GlobalPath;
         ViewBag.SmartPath = _sync.InstallPathFor(ExtensionSyncService.RoleSmart);
-        ViewBag.RecorderVersion = _sync.GetStamp(ExtensionSyncService.RoleRecorder, syncFirst: false).Version;
-        ViewBag.PlayerVersion = _sync.GetStamp(ExtensionSyncService.RolePlayer, syncFirst: false).Version;
-        ViewBag.SelectorVersion = _sync.GetStamp(ExtensionSyncService.RoleSelector, syncFirst: false).Version;
+        ViewBag.RecorderVersion = ViewBag.GlobalVersion;
+        ViewBag.PlayerVersion = ViewBag.GlobalVersion;
+        ViewBag.SelectorVersion = ViewBag.GlobalVersion;
         ViewBag.SmartVersion = _sync.GetStamp(ExtensionSyncService.RoleSmart, syncFirst: false).Version;
+        ViewBag.AppInstanceKey = _sync.AppInstanceKey;
         ViewBag.IsDev = _env.IsDevelopment();
-        // Back-compat
-        ViewBag.ExtensionPath = ViewBag.RecorderPath;
-        ViewBag.Version = ViewBag.RecorderVersion;
+        ViewBag.ExtensionPath = ViewBag.GlobalPath;
+        ViewBag.Version = ViewBag.GlobalVersion;
         return View();
     }
 }

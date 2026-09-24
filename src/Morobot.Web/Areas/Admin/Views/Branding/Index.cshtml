@@ -1,0 +1,47 @@
+@model Morobot.Contracts.Licensing.TenantBrandingDto
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = L["admin.branding.title"];
+}
+<partial name="_AdminPageHead" model='new AdminPageHeadModel { Summary = L["admin.branding.intro"] }' />
+
+<form method="post" enctype="multipart/form-data" class="admin-settings-grid">
+  @Html.AntiForgeryToken()
+  <div class="admin-settings-card">
+    <h3><i class="ti ti-palette" aria-hidden="true"></i>@L["admin.branding.identity"]</h3>
+    <div class="mb-3">
+      <label class="admin-label" for="AppName">@L["admin.branding.appName"]</label>
+      <input class="form-control" id="AppName" name="AppName" value="@Model.AppName" />
+    </div>
+    <div class="mb-3">
+      <label class="admin-label" for="BrandTitle">@L["admin.branding.brandTitle"]</label>
+      <input class="form-control" id="BrandTitle" name="BrandTitle" value="@Model.BrandTitle" />
+    </div>
+    <div class="mb-3">
+      <label class="admin-label" for="OrganizationName">@L["admin.branding.organization"]</label>
+      <input class="form-control" id="OrganizationName" name="OrganizationName" value="@Model.OrganizationName" />
+    </div>
+  </div>
+  <div class="admin-settings-card">
+    <h3><i class="ti ti-photo" aria-hidden="true"></i>@L["admin.branding.assets"]</h3>
+    @if (!string.IsNullOrWhiteSpace(Model.LogoUrl))
+    {
+      <p><img src="@Model.LogoUrl" alt="" style="max-height:48px" /></p>
+    }
+    <div class="mb-3">
+      <label class="admin-label" for="logoFile">@L["admin.branding.logo"]</label>
+      <input class="form-control" type="file" id="logoFile" name="logoFile" accept="image/*" />
+    </div>
+    @if (!string.IsNullOrWhiteSpace(Model.FaviconUrl))
+    {
+      <p><img src="@Model.FaviconUrl" alt="" style="max-height:24px" /></p>
+    }
+    <div class="mb-3">
+      <label class="admin-label" for="faviconFile">@L["admin.branding.favicon"]</label>
+      <input class="form-control" type="file" id="faviconFile" name="faviconFile" accept="image/*" />
+    </div>
+  </div>
+  <div class="admin-settings-card" style="grid-column:1/-1">
+    <button type="submit" class="btn-admin">@L["admin.branding.save"]</button>
+  </div>
+</form>

@@ -42,4 +42,12 @@ public class SystemSettingsService
         }
         await _db.SaveChangesAsync(ct);
     }
+
+    public async Task SetAsync(string key, string value, CancellationToken ct = default)
+    {
+        var row = await _db.SystemSettings.FirstOrDefaultAsync(s => s.Key == key, ct);
+        if (row is null) return;
+        row.Value = (value ?? "").Trim();
+        await _db.SaveChangesAsync(ct);
+    }
 }

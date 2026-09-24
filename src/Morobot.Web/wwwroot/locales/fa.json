@@ -13,6 +13,11 @@
     "heroImg": "/img/landing/hero-fa.png",
     "featuresImg": "/img/landing/features-fa.png"
   },
+  "site": {
+    "copyright": {
+      "unlicensed": "Morobot — نسخه بدون لایسنس / Unlicensed"
+    }
+  },
   "common": {
     "panel": "ورود به پنل",
     "site": "سایت",
@@ -44,10 +49,12 @@
     "navFeatures": "قابلیت‌ها",
     "navHow": "چطور کار می‌کند",
     "navStack": "افزونه‌ها",
+    "navSetup": "راهنمای راه‌اندازی",
     "heroAria": "معرفی",
     "kicker": "سامانه اتوماسیون فرآیند وب",
     "lead": "فرآیندهای تکراری مرورگر را یک‌بار طراحی کنید، با دادهٔ اکسل تغذیه کنید، و هر بار با یک کلیک اجرا کنید.",
     "ctaLearn": "بیشتر بدانید",
+    "ctaSetup": "راهنمای نصب و راه‌اندازی",
     "featuresTitle": "از ضبط تا اجرا، یک خط کار",
     "featuresSub": "بدون کدنویسی پیچیده؛ با ویرایشگر بصری، منابع داده و افزونه‌های مرورگر.",
     "featuresImgAlt": "نمای ضبط، داده و اجرای فرآیند در مروبات",
@@ -74,6 +81,14 @@
     "extSelectorBody": "انتخاب دقیق المان برای نگاشت سلکتور.",
     "ctaBandTitle": "آمادهٔ شروع با مروبات؟",
     "ctaBandBody": "وارد پنل شوید، فرآیند بسازید و اتوماسیون را همین امروز تجربه کنید."
+  },
+  "setupGuide": {
+    "title": "راهنمای جامع راه‌اندازی",
+    "kicker": "مستندات استقرار",
+    "description": "راهنمای نصب، دیتابیس، لایسنس Enterprise و استقرار روی Windows/Linux",
+    "download": "دانلود Markdown",
+    "updated": "آخرین به‌روزرسانی سند: {date}",
+    "missing": "فایل راهنما روی سرور پیدا نشد. مطمئن شوید docs/setup-guide.md کنار برنامه وجود دارد یا پروژه را دوباره build کنید."
   },
   "panel": {
     "navHome": "صفحه اصلی",
@@ -188,6 +203,20 @@
     "errorExists": "این نام کاربری قبلاً ثبت شده است.",
     "errorInvalid": "ثبت‌نام انجام نشد."
   },
+  "license": {
+    "error": {
+      "notEnterprise": "لایسنس Enterprise در این نصب فعال نیست.",
+      "invalidFile": "فایل لایسنس نامعتبر است.",
+      "invalidSignature": "امضای لایسنس نامعتبر است.",
+      "wrongAnchor": "این لایسنس برای این نصب صادر نشده.",
+      "expired": "لایسنس منقضی شده است.",
+      "sequenceRollback": "نسخه لایسنس قدیمی‌تر از لایسنس فعلی است.",
+      "clockRollback": "ساعت سیستم به عقب برگشته — لایسنس import نشد.",
+      "missing": "لایسنس import نشده است.",
+      "invalid": "لایسنس معتبر نیست.",
+      "seatLimit": "سقف کاربر فعال پر شده است ({max})."
+    }
+  },
   "password": {
     "errorRequired": "رمز عبور لازم است.",
     "errorTooShort": "رمز عبور کوتاه است.",
@@ -227,11 +256,46 @@
     "common": {
       "edit": "ویرایش",
       "save": "ذخیره",
-      "back": "بازگشت"
+      "back": "بازگشت",
+      "create": "ایجاد"
+    },
+    "ui": {
+      "active": "فعال",
+      "inactive": "غیرفعال"
+    },
+    "hints": {
+      "defaultRegisterPlan": "پلنی که به کاربران جدید هنگام ثبت‌نام اختصاص می‌یابد.",
+      "planNameFa": "عنوان نمایشی پلن در رابط فارسی.",
+      "planNameEn": "عنوان نمایشی پلن در رابط انگلیسی.",
+      "planSort": "ترتیب نمایش در لیست‌ها — عدد کوچک‌تر بالاتر.",
+      "planActive": "پلن غیرفعال به کاربران جدید اختصاص داده نمی‌شود.",
+      "maxTasks": "حداکثر فرآیند قابل ساخت. خالی = نامحدود.",
+      "maxSources": "حداکثر منبع در کتابخانه. خالی = نامحدود.",
+      "maxSteps": "حداکثر مرحله/اقدام در هر فرآیند. خالی = نامحدود.",
+      "minPassword": "حداقل طول رمز برای این پلن.",
+      "requireLetterDigit": "رمز باید حداقل یک حرف و یک عدد داشته باشد.",
+      "selfUpgrade": "کاربر می‌تواند خودش به این پلن ارتقا دهد.",
+      "canPlay": "اجازهٔ اجرای فرآیند با افزونه.",
+      "canSelector": "دسترسی به ابزار سلکتور در افزونه.",
+      "canRecord": "اجازهٔ ضبط فرآیند.",
+      "canSmart": "قابلیت‌های هوشمند (در صورت فعال بودن ماژول).",
+      "canShare": "کاربر می‌تواند فرآیند را با دیگران به اشتراک بگذارد.",
+      "canReceiveShare": "کاربر می‌تواند فرآیند اشتراکی دریافت کند.",
+      "maxShares": "حداکثر گیرنده برای هر فرآیند. خالی = نامحدود.",
+      "shareView": "اجازهٔ مشاهده هنگام اشتراک.",
+      "shareEdit": "اجازهٔ ویرایش هنگام اشتراک.",
+      "shareDelete": "اجازهٔ حذف هنگام اشتراک.",
+      "shareExecute": "اجازهٔ اجرا هنگام اشتراک.",
+      "shareDs": "اجازهٔ تغییر منبع داده هنگام اشتراک.",
+      "userActive": "کاربر غیرفعال نمی‌تواند وارد سامانه شود.",
+      "licenseSafeFields": "فقط اطلاعات غیرحساس نمایش داده می‌شود. امضا و کلیدهای داخلی ذخیره/نمایش داده نمی‌شوند.",
+      "updatesManual": "بررسی دستی آپدیت برای سرورهای آنلاین. در سرور بدون اینترنت، آخرین نتیجهٔ کش‌شده نمایش داده می‌شود."
     },
     "nav": {
       "dashboard": "داشبورد",
       "settings": "تنظیمات سامانه",
+      "license": "لایسنس",
+      "branding": "برندینگ",
       "plans": "پلن‌ها",
       "prices": "قیمت‌ها",
       "processes": "فرآیندها",
@@ -293,7 +357,28 @@
     },
     "dashboard": {
       "title": "داشبورد ادمین",
-      "intro": "مدیریت کامل سامانه: پلن‌ها، کاربران، فرآیندها، منابع، قیمت‌ها و لاگ‌ها."
+      "intro": "نمای کلی سامانه: کاربران، فرآیندها، منابع، پلن‌ها و رویدادهای اخیر.",
+      "stats": "آمار کلی",
+      "statUsers": "کاربران",
+      "statActiveUsers": "کاربران فعال",
+      "statOnlineUsers": "آنلاین",
+      "statProcesses": "فرآیندها",
+      "statSources": "منابع",
+      "statPlans": "پلن‌های فعال",
+      "statPlaying": "در حال اجرا",
+      "statEvents24h": "رویداد ۲۴ساعت",
+      "planDistribution": "توزیع کاربران بر اساس پلن",
+      "defaultPlan": "پلن پیش‌فرض ثبت‌نام",
+      "noPlans": "پلنی ثبت نشده.",
+      "shortcuts": "دسترسی سریع",
+      "shortUsers": "مدیریت حساب‌ها",
+      "shortProcesses": "فرآیندهای سرور",
+      "shortSources": "کتابخانه منابع",
+      "shortPlans": "سقف‌ها و قابلیت‌ها",
+      "shortEvents": "لاگ و ممیزی",
+      "shortSettings": "پارامترهای سامانه",
+      "recentEvents": "رویدادهای اخیر",
+      "noEvents": "رویدادی ثبت نشده."
     },
     "settings": {
       "title": "تنظیمات سامانه",
@@ -302,8 +387,85 @@
       "save": "ذخیره تنظیمات",
       "saved": "تنظیمات ذخیره شد."
     },
+    "license": {
+      "title": "لایسنس سازمانی",
+      "introEnterprise": "لایسنس فقط سقف سازمان (مثل تعداد کاربر) را کنترل می‌کند. import لایسنس جدید داده‌های موجود را حذف نمی‌کند.",
+      "introCloud": "این نصب در حالت Cloud است — لایسنس vendor لازم نیست.",
+      "cloudMode": "حالت Cloud: لایسنس Enterprise غیرفعال است.",
+      "cloudModeDetail": "برای فروش on-prem، در appsettings مقدار Morobot:DeploymentMode را Enterprise بگذارید.",
+      "current": "وضعیت لایسنس",
+      "fieldRuntimeMode": "حالت اجرا",
+      "fieldTrialRemaining": "روزهای آزمایشی باقیمانده",
+      "fieldDatabaseServer": "سرور دیتابیس (لایسنس)",
+      "fieldRestart": "راه‌اندازی مجدد",
+      "restartRequired": "پس از import لایسنس، یک بار سرور را restart کنید.",
+      "fieldAllowUpdates": "آپدیت آنلاین",
+      "runtime": {
+        "NotApplicable": "Cloud",
+        "Trial": "آزمایشی (۳ روز)",
+        "Licensed": "لایسنس معتبر",
+        "Restricted": "محدود — فقط ورود و مشاهده"
+      },
+      "fieldStatus": "وضعیت",
+      "fieldMessage": "پیام",
+      "fieldOrganization": "سازمان",
+      "fieldLicenseId": "شناسه لایسنس",
+      "fieldIssued": "صدور",
+      "fieldValidUntil": "اعتبار تا",
+      "fieldMaxUsers": "سقف کاربر فعال",
+      "fieldActiveUsers": "کاربران فعال",
+      "fieldSequence": "نسخه لایسنس",
+      "fieldAnchor": "شناسه نصب",
+      "daysRemaining": "{0} روز مانده",
+      "unlimited": "نامحدود",
+      "importTitle": "دریافت لایسنس جدید",
+      "importHint": "فایل .morobot را بارگذاری کنید یا محتوای JSON را paste کنید. کاربران، فرآیندها و منابع دست‌نخورده می‌مانند.",
+      "importFile": "فایل لایسنس",
+      "importPaste": "یا paste متن",
+      "importSubmit": "Import لایسنس",
+      "importOk": "لایسنس با موفقیت import شد.",
+      "importEmpty": "فایل یا متن لایسنس را وارد کنید.",
+      "requestTitle": "درخواست فعال‌سازی",
+      "requestHint": "این فایل را برای vendor ارسال کنید تا لایسنس امضا شده بدهد.",
+      "requestOrgHint": "نام سازمان (اختیاری)",
+      "requestOrgPlaceholder": "مثلاً شرکت نمونه",
+      "requestSubmit": "دانلود activation-request.json",
+      "status": {
+        "NotRequired": "نیاز نیست (Cloud)",
+        "Missing": "لایسنس وارد نشده",
+        "InvalidSignature": "امضای نامعتبر",
+        "WrongAnchor": "مربوط به این نصب نیست",
+        "Expired": "منقضی شده",
+        "SequenceRollback": "نسخه قدیمی‌تر از لایسنس فعلی",
+        "Valid": "معتبر"
+      }
+    },
+    "branding": {
+      "title": "برندینگ سازمان",
+      "intro": "با لایسنس معتبر می‌توانید نام، برند، لوگو و فاوآیکون را سفارشی کنید.",
+      "notLicensed": "برندینگ سفارشی فقط با لایسنس معتبر فعال است.",
+      "identity": "هویت",
+      "assets": "فایل‌های برند",
+      "appName": "نام اپلیکیشن",
+      "brandTitle": "عنوان برند",
+      "organization": "نام سازمان",
+      "logo": "لوگو",
+      "favicon": "فاوآیکون",
+      "save": "ذخیره برندینگ",
+      "saved": "برندینگ ذخیره شد."
+    },
+    "updates": {
+      "title": "آپدیت نرم‌افزار",
+      "current": "نسخه فعلی",
+      "available": "نسخه موجود",
+      "server": "سرور بررسی",
+      "checkNow": "بررسی آپدیت",
+      "checked": "بررسی آپدیت انجام شد.",
+      "notIncluded": "آپدیت آنلاین در این لایسنس فعال نیست."
+    },
     "plans": {
       "title": "پلن‌ها",
+      "summary": "{count} پلن تعریف شده — سقف‌ها، قابلیت‌ها و اشتراک را اینجا مدیریت کنید.",
       "create": "پلن جدید",
       "edit": "ویرایش پلن",
       "code": "کد",
@@ -314,6 +476,7 @@
       "maxSources": "سقف منبع (خالی = ∞)",
       "maxProcessSteps": "سقف ردیف/مرحله در هر فرآیند (خالی = ∞)",
       "sort": "ترتیب",
+      "limits": "سقف‌ها",
       "caps": "قابلیت‌ها",
       "password": "پالیسی پسورد",
       "minPassword": "حداقل طول رمز",
@@ -335,6 +498,53 @@
       "shareDelete": "حذف",
       "shareExecute": "اجرا",
       "shareDs": "تغییر منبع داده"
+    },
+    "users": {
+      "title": "کاربران",
+      "summary": "{count} کاربر — {active} فعال.",
+      "summaryOnline": "{count} کاربر — {active} فعال، {online} آنلاین.",
+      "create": "کاربر جدید",
+      "edit": "ویرایش کاربر",
+      "userName": "نام کاربری",
+      "password": "رمز عبور",
+      "firstName": "نام",
+      "lastName": "نام خانوادگی",
+      "email": "ایمیل",
+      "nationalId": "کد ملی",
+      "plan": "پلن",
+      "role": "نقش",
+      "active": "فعال",
+      "presence": "حضور",
+      "online": "آنلاین",
+      "offline": "آفلاین",
+      "playing": "در حال اجرا",
+      "playingNow": "الان در حال اجرای فرآیند",
+      "lastSeen": "آخرین فعالیت: {time}",
+      "newPassword": "رمز جدید (برای ارتقای Free → Pro/Gold)",
+      "passwordHint": "Pro/Gold: حداقل ۸ کاراکتر، حرف + عدد.",
+      "reservedHint": "نام‌های رزرو (admin، free، pro، guest، test، …) مجاز نیست."
+    },
+    "prices": {
+      "title": "قیمت‌ها",
+      "summary": "{count} قیمت — {active} فعال. با سوییچ وضعیت را عوض کنید.",
+      "create": "قیمت جدید",
+      "plan": "پلن",
+      "amount": "مبلغ",
+      "currency": "ارز",
+      "interval": "دوره",
+      "notes": "یادداشت"
+    },
+    "migrate": {
+      "title": "انتقال از دیتابیس قدیمی",
+      "intro": "Connection string دیتابیس قدیمی را وارد کنید. فقط فرآیندهایی که کاربر مالک آن‌هاست منتقل می‌شوند — منابع داده منتقل نمی‌شوند.",
+      "connectionString": "Connection string",
+      "connectionHint": "رشته اتصال SQL Server — عرض کامل با والد هم‌تراز است.",
+      "connect": "اتصال و فهرست کاربران",
+      "selectTitle": "انتخاب کاربران برای انتقال",
+      "selectSummary": "{count} کاربر در دیتابیس قدیمی — با سوییچ انتخاب کنید.",
+      "selectAll": "همه",
+      "processCount": "فرآیندها",
+      "runSelected": "انتقال انتخاب‌شده‌ها"
     }
   },
   "record": {
@@ -675,6 +885,7 @@
       "progressSaving": "ذخیره در حافظهٔ محلی...",
       "progressAttach": "وصل کردن به فرآیند...",
       "onlyXlsx": "فقط فایل .xlsx / .xlsm قابل قبول است. از سیستم فایل انتخاب کنید.",
+      "limitCheckFailed": "بررسی سقف منبع ممکن نشد — دوباره تلاش کنید.",
       "tooManySheets": "فایل دارای صفحات متعدد است — فقط یک شیت مجاز است (اولی انتخاب می‌شود).",
       "emptySheet": "شیت خالی است یا سطر یا ستون ندارد.",
       "networkError": "خطا در اتصال به سرور برای آپلود فایل",

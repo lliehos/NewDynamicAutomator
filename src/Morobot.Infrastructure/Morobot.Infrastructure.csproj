@@ -3,9 +3,14 @@
   <ItemGroup>
     <ProjectReference Include="..\Morobot.Domain\Morobot.Domain.csproj" />
     <ProjectReference Include="..\Morobot.Contracts\Morobot.Contracts.csproj" />
+    <ProjectReference Include="..\Morobot.Licensing\Morobot.Licensing.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.0" />
     <PackageReference Include="ClosedXML" Version="0.104.2" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="9.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.0" />

@@ -1,6 +1,7 @@
 using Morobot.Domain;
 using Morobot.Domain.Entities;
 using Morobot.Domain.Enums;
+using Morobot.Infrastructure.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -119,6 +120,29 @@ public static class DbSeeder
             "Default registration plan",
             "کد پلن فعال برای کاربران جدید (مثلاً Free)",
             "Active plan code assigned to new registrations (e.g. Free)");
+
+        await Upsert(
+            SystemSettingKeys.UpdateServerUrl,
+            UpdateCheckService.DefaultUpdateUrl,
+            "Updates",
+            "آدرس بررسی آپدیت",
+            "Update check URL",
+            "پیش‌فرض: https://morobot.ir/checkupdate — می‌توانید مسیر سفارشی اضافه کنید.",
+            "Default: https://morobot.ir/checkupdate — you may append a custom path.");
+
+        await Upsert(SystemSettingKeys.UpdateLastCheckUtc, "", "Updates", "آخرین بررسی آپدیت", "Last update check", null, null);
+        await Upsert(SystemSettingKeys.UpdateAvailableVersion, "", "Updates", "نسخه موجود", "Available version", null, null);
+        await Upsert(SystemSettingKeys.UpdateAvailableNotes, "", "Updates", "یادداشت نسخه", "Release notes", null, null);
+        await Upsert(SystemSettingKeys.UpdateAvailableUrl, "", "Updates", "لینک دانلود", "Download URL", null, null);
+
+        await Upsert(SystemSettingKeys.BrandAppName, "Morobot", "Branding", "نام اپلیکیشن", "Application name", "فقط با لایسنس معتبر.", "Licensed installs only.");
+        await Upsert(SystemSettingKeys.BrandTitle, "Morobot", "Branding", "عنوان برند", "Brand title", null, null);
+        await Upsert(SystemSettingKeys.BrandOrganization, "", "Branding", "نام سازمان", "Organization name", null, null);
+        await Upsert(SystemSettingKeys.BrandLogoPath, "", "Branding", "مسیر لوگو", "Logo path", "/uploads/branding/logo.png", "/uploads/branding/logo.png");
+        await Upsert(SystemSettingKeys.BrandFaviconPath, "", "Branding", "مسیر فاوآیکون", "Favicon path", "/uploads/branding/favicon.png", "/uploads/branding/favicon.png");
+
+        await Upsert(SystemSettingKeys.LicensedDatabaseConnection, "", "Deployment", "Connection string (license)", "Connection string (license)", "توسط لایسنس امضاشده تنظیم می‌شود.", "Set by signed license.");
+        await Upsert(SystemSettingKeys.PendingConnectionRestart, "", "Deployment", "نیاز به راه‌اندازی مجدد", "Restart required", null, null);
 
         await db.SaveChangesAsync();
     }

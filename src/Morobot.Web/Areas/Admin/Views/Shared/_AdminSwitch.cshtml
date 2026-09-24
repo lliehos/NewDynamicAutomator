@@ -1,0 +1,27 @@
+@model Morobot.Web.Areas.Admin.Models.AdminSwitchModel
+@{
+  var id = Model.Id ?? Model.Name;
+  var val = Model.Value ?? "true";
+  var switchClass = "admin-switch" + (Model.Compact ? " is-compact" : "") + (Model.HideLabel ? " is-icon-only" : "");
+  var inputClass = string.IsNullOrWhiteSpace(Model.InputClass) ? null : Model.InputClass;
+}
+<label class="@switchClass" for="@id">
+  <input type="checkbox"
+         name="@Model.Name"
+         value="@val"
+         id="@id"
+         class="@inputClass"
+         @(Model.Checked ? "checked" : null)
+         @(Model.AutoSubmit ? "data-auto-submit=\"1\"" : null) />
+  <span class="admin-switch-ui" aria-hidden="true"></span>
+  @if (!Model.HideLabel)
+  {
+    <span class="admin-switch-text">
+      @Model.Label
+      @if (!string.IsNullOrWhiteSpace(Model.Hint))
+      {
+        <partial name="_AdminHint" model="Model.Hint" />
+      }
+    </span>
+  }
+</label>

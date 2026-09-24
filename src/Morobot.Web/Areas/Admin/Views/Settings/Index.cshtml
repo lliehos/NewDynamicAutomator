@@ -1,34 +1,63 @@
-@model IEnumerable<Morobot.Domain.Entities.SystemSetting>
+@model Morobot.Web.Areas.Admin.Models.AdminSettingsViewModel
+@using Morobot.Domain
 @{
   Layout = "_Layout";
   ViewData["Title"] = L["admin.settings.title"];
   var isFa = L.IsRtl;
 }
-<div class="card-admin">
-  <p class="mb-3">@L["admin.settings.intro"]</p>
-  <p class="mb-3">
-    <a class="btn-admin secondary" asp-controller="Plans" asp-action="Index">@L["admin.settings.gotoPlans"]</a>
-  </p>
-  <form method="post">
-    @Html.AntiForgeryToken()
-    @foreach (var group in Model.GroupBy(s => s.Group))
-    {
-      <h3 style="font-size:1.05rem;margin:1.25rem 0 .5rem">@group.Key</h3>
-      foreach (var s in group)
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L["admin.settings.intro"],
+  ActionText = L["admin.settings.gotoPlans"],
+  ActionUrl = Url.Action("Index", "Plans"),
+  ActionIcon = "ti-layers-intersect"
+}' />
+
+<form method="post" class="admin-settings-grid">
+  @Html.AntiForgeryToken()
+  @foreach (var group in Model.Settings.GroupBy(s => s.Group))
+  {
+    <div class="admin-settings-card">
+      <h3><i class="ti ti-adjustments-horizontal" aria-hidden="true"></i>@group.Key</h3>
+      @foreach (var s in group)
       {
+        var hint = isFa ? s.HintFa : s.HintEn;
+        var label = isFa ? s.LabelFa : s.LabelEn;
         <div class="mb-3">
-          <label for="setting_@s.Key">@(isFa ? s.LabelFa : s.LabelEn)</label>
-          <input class="form-control" id="setting_@s.Key" name="setting_@s.Key" value="@s.Value" />
-          @{
-            var hint = isFa ? s.HintFa : s.HintEn;
+          @if (s.Key == SystemSettingKeys.DefaultRegisterPlan)
+          {
+            <label class="admin-label" for="setting_@s.Key">
+              <span>@label</span>
+              <partial name="_AdminHint" model='L["admin.hints.defaultRegisterPlan"]' />
+            </label>
+            <select class="form-select" id="setting_@s.Key" name="setting_@s.Key">
+              @foreach (var plan in Model.Plans.Where(p => p.IsActive).OrderBy(p => p.SortOrder))
+              {
+                var planLabel = isFa ? plan.NameFa : plan.NameEn;
+                if (string.Equals(s.Value, plan.Code, StringComparison.OrdinalIgnoreCase))
+                {
+                  <option value="@plan.Code" selected>@planLabel (@plan.Code)</option>
+                }
+                else
+                {
+                  <option value="@plan.Code">@planLabel (@plan.Code)</option>
+                }
+              }
+            </select>
+          }
+          else
+          {
+            <label class="admin-label" for="setting_@s.Key"><span>@label</span></label>
+            <input class="form-control" id="setting_@s.Key" name="setting_@s.Key" value="@s.Value" />
           }
           @if (!string.IsNullOrWhiteSpace(hint))
           {
-            <div style="font-size:.82rem;color:#64748b;margin-top:.25rem">@hint</div>
+            <div class="admin-field-hint">@hint</div>
           }
         </div>
       }
-    }
-    <button type="submit" class="btn-admin">@L["admin.settings.save"]</button>
-  </form>
-</div>
+    </div>
+  }
+  <div class="admin-settings-card" style="grid-column:1/-1">
+    <button type="submit" class="btn-admin"><i class="ti ti-device-floppy" aria-hidden="true"></i>@L["admin.settings.save"]</button>
+  </div>
+</form>

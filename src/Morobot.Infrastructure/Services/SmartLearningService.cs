@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Morobot.Contracts.SmartLearning;
+using Morobot.Infrastructure.Options;
+using Microsoft.Extensions.Options;
 
 namespace Morobot.Infrastructure.Services;
 
@@ -18,11 +20,13 @@ public sealed class SmartLearningService
     private readonly string _root;
     private readonly object _gate = new();
 
-    public SmartLearningService()
+    public SmartLearningService(IOptions<MorobotOptions> options)
     {
+        var key = options.Value.EffectiveAppInstanceKey;
         _root = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "morobot.soras.ir",
+            key,
             "smart-learning");
         Directory.CreateDirectory(_root);
         MigrateLegacySmartRoot(_root);

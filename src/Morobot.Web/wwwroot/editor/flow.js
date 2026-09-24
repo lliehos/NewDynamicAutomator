@@ -234,6 +234,39 @@
     }
     return hit;
   }
+
+  /** Keep Player cache aligned with the last successful server save (never used to overwrite editor). */
+  async function syncLocalCacheAfterSave() {
+    if (!/^\d+$/.test(String(taskId))) return;
+    try {
+      const g = structuredClone ? structuredClone(graph) : JSON.parse(JSON.stringify(graph));
+      stripCanvasMeta(g);
+      const tasks = readLocalTasks().map((t) => ({ ...t }));
+      const id = String(taskId);
+      const idx = tasks.findIndex((t) => String(t.id) === id);
+      const item = {
+        id: stableTaskId(taskId),
+        title: graph.title || titleEl?.textContent || "",
+        designOrigin: graph.designOrigin || "Manual",
+        ownerUser: currentUser(),
+        createdBy: currentUser(),
+        stepCount: (g.nodes || []).filter((n) => isActionNode(n)).length,
+        groupCount: (g.nodes || []).filter((n) => n.kind === "group").length,
+        updatedAtUtc: loadedUpdatedAtUtc,
+        graph: g
+      };
+      if (idx >= 0) tasks[idx] = { ...tasks[idx], ...item };
+      else tasks.push(item);
+      if (window.DaSecureStore && typeof DaSecureStore.writeTasksAsync === "function") {
+        await DaSecureStore.writeTasksAsync(tasks);
+      } else {
+        writeLocalTasks(tasks);
+      }
+    } catch (e) {
+      console.warn("[flow] syncLocalCacheAfterSave", e);
+    }
+  }
+
   function findLocalTask(id) {
     return readLocalTasks().find((t) => String(t.id) === String(id));
   }
@@ -247,8 +280,16 @@
     graph.edges = graph.edges.filter((e) => e.from !== start.id || e.id === keep.id);
   }
 
+  function stripCanvasMeta(g) {
+    if (!g || typeof g !== "object") return;
+    delete g.updatedAtUtc;
+    delete g.baseUpdatedAtUtc;
+    delete g.editorSessionId;
+  }
+
   function applyLocalGraph(local) {
     graph = structuredClone ? structuredClone(local.graph) : JSON.parse(JSON.stringify(local.graph));
+    stripCanvasMeta(graph);
     graph.taskId = stableTaskId(taskId);
     graph.nodes ||= [];
     graph.edges ||= [];
@@ -275,7 +316,9 @@
     }
     graph.canModify = true;
     graph.designOrigin = local.designOrigin || graph.designOrigin || "Manual";
-    loadedUpdatedAtUtc = local.updatedAtUtc || local.graph?.updatedAtUtc || loadedUpdatedAtUtc || null;
+    // Never use graph.updatedAtUtc — embedded stamp is stale and causes false save conflicts.
+    const stamp = local.updatedAtUtc || local.UpdatedAtUtc || null;
+    if (stamp) loadedUpdatedAtUtc = stamp;
     migrateActionKinds(graph);
     enforceSingleStartOut();
     normalizeProcessRepeat();
@@ -328,6 +371,7 @@
 
   async function load() {
     if (!isLocalMode && /^\d+$/.test(String(taskId))) {
+      serverCanvasLoadPending = true;
       try {
         const res = await fetch(`/api/tasks/${taskId}/canvas`, { credentials: "same-origin" });
         if (res.ok) {
@@ -352,12 +396,15 @@
                 repeatSourceType: data.repeatSourceType
               }
             });
+            serverCanvasLoaded = true;
             ensureCanvasHub();
             return;
           }
         }
       } catch (e) {
         console.warn("server canvas load failed", e);
+      } finally {
+        serverCanvasLoadPending = false;
       }
       emptyShell();
       ensureCanvasHub();
@@ -377,8 +424,10 @@
     window.dispatchEvent(new CustomEvent("da-request-local-tasks"));
   }
 
-  // Portal-bridge may write chrome.storage → localStorage after first paint
+  // Portal-bridge may write chrome.storage → localStorage after first paint.
+  // Server-mode editor must NOT re-apply that cache over the live canvas (causes false conflicts + stale refresh).
   window.addEventListener("da-local-tasks", (ev) => {
+    if (serverCanvasLoaded || serverCanvasLoadPending) return;
     const detail = ev.detail;
     if (detail && detail.user && detail.user !== currentUser()) return;
     const tasks = (detail && detail.tasks) || (Array.isArray(detail) ? detail : null);
@@ -403,6 +452,10 @@
   let saving = false;
   /** Server canvas timestamp from last successful load/save (optimistic concurrency). */
   let loadedUpdatedAtUtc = null;
+  /** True after GET /canvas — localStorage cache is for Player only, not editor source of truth. */
+  let serverCanvasLoaded = false;
+  /** Block local cache from overwriting canvas while the server load is in flight. */
+  let serverCanvasLoadPending = /^\d+$/.test(String(taskId));
   /** Group id under drag that would become parent on drop. */
   let nestHoverGroupId = null;
   /** Distinguishes this editor tab so SignalR ignores our own saves. */
@@ -451,8 +504,16 @@
             ds.title = newTitle;
             renderDataSources();
           }
-          const remoteAt = payload.updatedAtUtc || payload.UpdatedAtUtc;
-          if (remoteAt) loadedUpdatedAtUtc = remoteAt;
+          // Server bumped Process.UpdatedAtUtc — refresh stamp without reloading diagram.
+          if (/^\d+$/.test(String(taskId))) {
+            fetch(`/api/tasks/${taskId}/canvas`, { credentials: "same-origin" })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((c) => {
+                const remoteAt = c?.updatedAtUtc || c?.UpdatedAtUtc;
+                if (remoteAt) loadedUpdatedAtUtc = remoteAt;
+              })
+              .catch(() => {});
+          }
           return;
         }
         const remoteAt = payload.updatedAtUtc || payload.UpdatedAtUtc || null;
@@ -602,6 +663,7 @@
             }
             const okBody = await retry.json().catch(() => ({}));
             if (okBody.updatedAtUtc) loadedUpdatedAtUtc = okBody.updatedAtUtc;
+            await syncLocalCacheAfterSave();
             window.dispatchEvent(new CustomEvent("da-stop-play", { detail: { reason: "canvas_changed" } }));
             setStatus(t("editor.status.playingForced") || "اجرا متوقف و ذخیره شد.", "warn");
             render();
@@ -629,6 +691,7 @@
         }
         const okBody = await res.json().catch(() => ({}));
         if (okBody.updatedAtUtc) loadedUpdatedAtUtc = okBody.updatedAtUtc;
+        await syncLocalCacheAfterSave();
         await new Promise((r) => setTimeout(r, 200));
         render();
         setStatus(t("editor.status.saved"), "success");
@@ -1268,6 +1331,39 @@
     if (bar) bar.style.width = "0%";
   }
 
+  let dsIngestLock = false;
+
+  /** Single gate before Excel upload — uses library count from server (not graph.dataSources.length). */
+  async function ensureCanAddDataSource() {
+    const entitlements = window.DaEntitlements ? DaEntitlements.get() : null;
+    if (!entitlements || entitlements.maxDataSources == null) return true;
+    let count = null;
+    try {
+      const res = await fetch("/api/datasources/count", { credentials: "same-origin" });
+      if (res.ok) {
+        const data = await res.json();
+        if (typeof data.count === "number") count = data.count;
+      }
+    } catch { /* ignore */ }
+    if (count == null) {
+      notifyDsError(t("editor.ds.limitCheckFailed") || "بررسی سقف منبع ممکن نشد — دوباره تلاش کنید.");
+      return false;
+    }
+    if (!DaEntitlements.canCreateSource(count)) {
+      notifyDsError(t("plan.limitSources", { max: entitlements.maxDataSources }));
+      return false;
+    }
+    return true;
+  }
+
+  function mapSourceLimitMessage(errBody, entitlements) {
+    if (errBody?.code === "limit" || /limit reached/i.test(String(errBody?.message || ""))) {
+      const max = entitlements?.maxDataSources ?? errBody?.max ?? "?";
+      return t("plan.limitSources", { max });
+    }
+    return errBody?.message || null;
+  }
+
   function setDsDropzoneBusy(busy) {
     const zone = document.getElementById("ds-dropzone");
     if (!zone) return;
@@ -1299,9 +1395,11 @@
           return;
         }
         const serverMsg = data?.message || data?.title || data?.error;
-        const detail = serverMsg
-          ? String(serverMsg)
-          : `خطا در خواندن اکسل (کد ${xhr.status})`;
+        const detail = (data?.code === "limit" && window.DaEntitlements)
+          ? t("plan.limitSources", { max: DaEntitlements.get()?.maxDataSources ?? "?" })
+          : serverMsg
+            ? String(serverMsg)
+            : `خطا در خواندن اکسل (کد ${xhr.status})`;
         reject(new Error(detail));
       };
       xhr.onerror = () => reject(new Error(t("editor.ds.networkError")));
@@ -1312,21 +1410,11 @@
   }
 
   async function ingestDataSourceFile(file) {
-    if (!canModify || !file) return;
+    if (!canModify || !file || dsIngestLock) return;
+    if (!(await ensureCanAddDataSource())) return;
+
+    dsIngestLock = true;
     const entitlements = window.DaEntitlements ? DaEntitlements.get() : null;
-    let libraryCount = (graph.dataSources || []).length;
-    try {
-      const cr = await fetch("/api/datasources/count", { credentials: "same-origin" });
-      if (cr.ok) {
-        const cj = await cr.json();
-        if (typeof cj.count === "number") libraryCount = cj.count;
-      }
-    } catch { /* offline / local */ }
-    if (entitlements && entitlements.maxDataSources != null && libraryCount >= entitlements.maxDataSources) {
-      const msg = t("plan.limitSources", { max: entitlements.maxDataSources });
-      notifyDsError(msg);
-      return;
-    }
     const statusEl = document.getElementById("ds-status");
     const name = file.name || "";
     if (!/\.(xlsx|xlsm)$/i.test(name)) {
@@ -1336,6 +1424,7 @@
         statusEl.classList.add("is-error");
       }
       notifyDsError(msg);
+      dsIngestLock = false;
       return;
     }
     setDsDropzoneBusy(true);
@@ -1403,7 +1492,7 @@
           };
         } else if (createRes.status === 400) {
           const err = await createRes.json().catch(() => ({}));
-          throw new Error(err.message || t("plan.limitSources", { max: entitlements?.maxDataSources ?? "?" }));
+          throw new Error(mapSourceLimitMessage(err, entitlements) || err.message || t("editor.ds.uploadSaveError"));
         }
       } catch (apiErr) {
         if (apiErr?.message) throw apiErr;
@@ -1450,18 +1539,29 @@
       notifyDsError(detail);
       renderDataSources();
     } finally {
+      dsIngestLock = false;
       setDsDropzoneBusy(false);
       setTimeout(hideDsProgress, rolledBack ? 200 : 500);
+      const fileInp = document.getElementById("ds-file");
+      if (fileInp) fileInp.value = "";
     }
   }
 
   function notifyDsError(message) {
-    try {
-      window.dispatchEvent(new CustomEvent("da-notify", {
-        detail: { message: String(message || t("editor.status.dsLoadError")), type: "error" }
-      }));
-    } catch { /* ignore */ }
-    try { setStatus(String(message || t("editor.status.dsLoadError")), "error"); } catch { /* ignore */ }
+    const msg = String(message || t("editor.status.dsLoadError"));
+    // One user-facing alert — avoid toast + duplicate toast from setStatus/da-notify both firing.
+    if (typeof window.daNotify === "function") {
+      window.daNotify(msg, "error");
+    } else if (window.DaNotify && typeof DaNotify.toast === "function") {
+      DaNotify.toast(msg, "error");
+    } else {
+      try { setStatus(msg, "error"); } catch { /* ignore */ }
+    }
+    const statusEl = document.getElementById("ds-status");
+    if (statusEl) {
+      statusEl.textContent = msg;
+      statusEl.classList.add("is-error");
+    }
   }
 
   async function uploadDataSource() {

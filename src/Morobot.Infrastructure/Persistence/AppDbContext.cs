@@ -19,6 +19,8 @@ public class AppDbContext : DbContext
     public DbSet<DeviceSession> DeviceSessions => Set<DeviceSession>();
     public DbSet<AppEventLog> EventLogs => Set<AppEventLog>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
+    public DbSet<DeploymentAnchor> DeploymentAnchors => Set<DeploymentAnchor>();
+    public DbSet<StoredLicense> StoredLicenses => Set<StoredLicense>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -82,6 +84,25 @@ public class AppDbContext : DbContext
             e.Property(x => x.LabelEn).HasMaxLength(120).IsRequired();
             e.Property(x => x.HintFa).HasMaxLength(500);
             e.Property(x => x.HintEn).HasMaxLength(500);
+        });
+
+        modelBuilder.Entity<DeploymentAnchor>(e =>
+        {
+            e.ToTable("DeploymentAnchors");
+            e.HasIndex(x => x.AnchorId).IsUnique();
+            e.Property(x => x.MonotonicCounter).HasDefaultValue(0L);
+        });
+
+        modelBuilder.Entity<StoredLicense>(e =>
+        {
+            e.ToTable("StoredLicenses");
+            e.Property(x => x.RawJson).HasColumnType("nvarchar(max)").IsRequired();
+            e.Property(x => x.LicenseId).HasMaxLength(64).IsRequired();
+            e.Property(x => x.OrganizationName).HasMaxLength(200);
+            e.Property(x => x.DatabaseServerHint).HasMaxLength(200);
+            e.Property(x => x.TrialDays).HasDefaultValue(3);
+            e.Property(x => x.AllowUpdates).HasDefaultValue(true);
+            e.HasIndex(x => x.ImportedAtUtc);
         });
 
         modelBuilder.Entity<PlanPrice>(e =>

@@ -1,20 +1,39 @@
 @using Morobot.Infrastructure.Services
+@using Morobot.Web.Areas.Admin.Models
 @{
-  ViewData["Title"] = "انتقال از دیتابیس قدیمی";
+  ViewData["Title"] = L["admin.migrate.title"];
 }
-<div class="card-admin">
-  <p>Connection string دیتابیس قدیمی را وارد کنید. فقط فرآیندهایی که کاربر <strong>مالک</strong> آن‌هاست (Creator) با گروه/مرحله/شرط منتقل می‌شوند — مبدأ «انتقال». منابع داده منتقل نمی‌شوند (کتابخانهٔ جدا).</p>
-  @if (ViewBag.Error != null)
-  {
-    <div style="color:#b91c1c;margin-bottom:1rem">@ViewBag.Error</div>
-  }
-  <form method="post" asp-area="Admin" asp-controller="Migrate" asp-action="Connect">
-    @Html.AntiForgeryToken()
-    <label>Connection string
-      <textarea class="form-control" name="connectionString" rows="3" required placeholder="Server=.;Database=dynamicAutomatorV2;Trusted_Connection=True;TrustServerCertificate=True">@ViewBag.ConnectionString</textarea>
-    </label>
-    <div style="margin-top:1rem">
-      <button type="submit" class="btn-admin">اتصال و فهرست کاربران</button>
-    </div>
-  </form>
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L["admin.migrate.intro"]
+}' />
+
+<div class="admin-form-shell">
+  <div class="admin-form-card">
+    @if (ViewBag.Error != null)
+    {
+      <div class="admin-alert is-error">@ViewBag.Error</div>
+    }
+    <form method="post" asp-area="Admin" asp-controller="Migrate" asp-action="Connect">
+      @Html.AntiForgeryToken()
+      <div class="admin-field-block">
+        <label class="admin-label" for="migrate-conn">
+          <span>@L["admin.migrate.connectionString"]</span>
+          <partial name="_AdminHint" model='L["admin.migrate.connectionHint"]' />
+        </label>
+        <textarea class="form-control admin-textarea"
+                  id="migrate-conn"
+                  name="connectionString"
+                  rows="4"
+                  required
+                  spellcheck="false"
+                  placeholder="Server=.;Database=dynamicAutomatorV2;Trusted_Connection=True;TrustServerCertificate=True">@ViewBag.ConnectionString</textarea>
+      </div>
+      <div class="admin-form-actions">
+        <button type="submit" class="btn-admin">
+          <i class="ti ti-plug-connected" aria-hidden="true"></i>
+          @L["admin.migrate.connect"]
+        </button>
+      </div>
+    </form>
+  </div>
 </div>

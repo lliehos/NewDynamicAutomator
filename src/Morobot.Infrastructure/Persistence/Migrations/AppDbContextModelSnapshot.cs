@@ -208,6 +208,36 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.ToTable("DataSources", (string)null);
                 });
 
+            modelBuilder.Entity("Morobot.Domain.Entities.DeploymentAnchor", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<Guid>("AnchorId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("LastTrustedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<long>("MonotonicCounter")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L);
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AnchorId")
+                        .IsUnique();
+
+                    b.ToTable("DeploymentAnchors", (string)null);
+                });
+
             modelBuilder.Entity("Morobot.Domain.Entities.DeviceSession", b =>
                 {
                     b.Property<long>("Id")
@@ -527,6 +557,60 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("ProcessShares", (string)null);
+                });
+
+            modelBuilder.Entity("Morobot.Domain.Entities.StoredLicense", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<bool>("AllowUpdates")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
+                    b.Property<string>("DatabaseServerHint")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("ImportedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("LicenseId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<int?>("MaxUsers")
+                        .HasColumnType("int");
+
+                    b.Property<string>("OrganizationName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("RawJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<long>("Sequence")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("TrialDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(3);
+
+                    b.Property<DateTime>("ValidUntilUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ImportedAtUtc");
+
+                    b.ToTable("StoredLicenses", (string)null);
                 });
 
             modelBuilder.Entity("Morobot.Domain.Entities.SystemSetting", b =>

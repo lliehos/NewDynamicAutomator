@@ -1,43 +1,54 @@
 @model IEnumerable<Morobot.Domain.Entities.Plan>
+@using Morobot.Web.Areas.Admin.Models
 @{
   Layout = "_Layout";
   ViewData["Title"] = L["admin.plans.title"];
+  var list = Model.ToList();
 }
-<p>
-  <a class="btn-admin" asp-action="Create">@L["admin.plans.create"]</a>
-</p>
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L.T("admin.plans.summary", ("count", list.Count.ToString())),
+  ActionText = L["admin.plans.create"],
+  ActionUrl = Url.Action("Create"),
+  ActionIcon = "ti-plus"
+}' />
+
+<div class="admin-table-wrap">
 <table class="admin-table">
   <thead>
     <tr>
       <th>@L["admin.plans.code"]</th>
       <th>@L["admin.plans.name"]</th>
-      <th>@L["admin.plans.maxTasks"]</th>
-      <th>@L["admin.plans.maxSources"]</th>
-      <th>@L["admin.plans.maxProcessSteps"]</th>
+      <th>@L["admin.plans.limits"]</th>
       <th>@L["admin.plans.caps"]</th>
       <th>@L["admin.plans.password"]</th>
+      <th>@L["admin.plans.active"]</th>
       <th></th>
     </tr>
   </thead>
   <tbody>
-  @foreach (var p in Model)
+  @foreach (var p in list)
   {
     <tr>
-      <td>@p.Code @(p.IsActive ? "" : $"({L["admin.plans.inactive"]})")</td>
+      <td><code>@p.Code</code></td>
       <td>@p.NameEn / @p.NameFa</td>
-      <td>@(p.MaxTasks?.ToString() ?? "∞")</td>
-      <td>@(p.MaxDataSources?.ToString() ?? "∞")</td>
-      <td>@(p.MaxProcessSteps?.ToString() ?? "∞")</td>
       <td>
-        @(p.CanPlay ? "Play " : "")@(p.CanSelector ? "Sel " : "")@(p.CanRecord ? "Rec " : "")@(p.CanSmart ? "Smart" : "")
+        <span class="admin-chip" title="@L["admin.plans.maxTasks"]"><i class="ti ti-git-branch" aria-hidden="true"></i>@(@p.MaxTasks?.ToString() ?? "∞")</span>
+        <span class="admin-chip" title="@L["admin.plans.maxSources"]"><i class="ti ti-database" aria-hidden="true"></i>@(@p.MaxDataSources?.ToString() ?? "∞")</span>
+        <span class="admin-chip" title="@L["admin.plans.maxProcessSteps"]"><i class="ti ti-list-numbers" aria-hidden="true"></i>@(@p.MaxProcessSteps?.ToString() ?? "∞")</span>
       </td>
+      <td><partial name="_AdminPlanCaps" model="p" /></td>
       <td>
         ≥@p.MinPasswordLength
-        @(p.RequireLetterAndDigit ? "+Aa1" : "")
-        @(p.AllowSelfUpgrade ? $" · {L["admin.plans.selfUpgrade"]}" : "")
+        @(p.RequireLetterAndDigit ? " · Aa1" : "")
       </td>
-      <td><a class="btn-admin secondary" asp-action="Edit" asp-route-id="@p.Id">@L["admin.common.edit"]</a></td>
+      <td><partial name="_AdminStatus" model="p.IsActive" /></td>
+      <td>
+        <a class="btn-admin secondary icon-only" asp-action="Edit" asp-route-id="@p.Id" title="@L["admin.common.edit"]">
+          <i class="ti ti-pencil" aria-hidden="true"></i>
+        </a>
+      </td>
     </tr>
   }
   </tbody>
 </table>
+</div>
