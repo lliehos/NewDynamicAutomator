@@ -612,7 +612,31 @@
       "selectSummary": "{count} کاربر در دیتابیس قدیمی — با سوییچ انتخاب کنید.",
       "selectAll": "همه",
       "processCount": "فرآیندها",
-      "runSelected": "انتقال انتخاب‌شده‌ها"
+      "runSelected": "انتقال انتخاب‌شده‌ها",
+      "needConnection": "Connection string لازم است.",
+      "connectFailed": "اتصال ناموفق بود.",
+      "needConnectionAndUser": "اتصال و حداقل یک کاربر لازم است.",
+      "resultTitle": "نتیجه انتقال",
+      "usersCreated": "کاربران جدید:",
+      "usersMatched": "تطبیق‌شده:",
+      "processesImported": "فرآیند واردشده:",
+      "processesSkipped": "ردشده:",
+      "errors": "خطا:",
+      "migrateAnother": "انتقال دیگر"
+    },
+    "devices": {
+      "title": "دستگاه‌ها",
+      "backToEvents": "← رویدادها",
+      "colLastSeen": "آخرین مشاهده",
+      "colAccount": "حساب",
+      "colClaimedName": "نام اظهارشده",
+      "colPlatform": "پلتفرم",
+      "colScreen": "صفحه‌نمایش",
+      "colTimeZone": "منطقه زمانی",
+      "colLogins": "ورودها",
+      "colIp": "IP",
+      "colFingerprint": "اثر انگشت",
+      "empty": "دستگاهی ثبت نشده."
     }
   },
   "record": {

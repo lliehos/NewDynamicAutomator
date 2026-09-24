@@ -1,6 +1,7 @@
 using Morobot.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Morobot.Web.Services;
 
 namespace Morobot.Web.Areas.Admin.Controllers;
 
@@ -9,13 +10,18 @@ namespace Morobot.Web.Areas.Admin.Controllers;
 public class MigrateController : Controller
 {
     private readonly LegacyImportService _import;
+    private readonly ILocaleService _locale;
 
-    public MigrateController(LegacyImportService import) => _import = import;
+    public MigrateController(LegacyImportService import, ILocaleService locale)
+    {
+        _import = import;
+        _locale = locale;
+    }
 
     [HttpGet]
     public IActionResult Index()
     {
-        ViewData["Title"] = "انتقال از دیتابیس قدیمی";
+        ViewData["Title"] = _locale["admin.migrate.title"];
         return View();
     }
 
@@ -23,18 +29,18 @@ public class MigrateController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Connect(string connectionString, CancellationToken ct)
     {
-        ViewData["Title"] = "انتقال از دیتابیس قدیمی";
+        ViewData["Title"] = _locale["admin.migrate.title"];
         connectionString = (connectionString ?? "").Trim();
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            ViewBag.Error = "Connection string لازم است.";
+            ViewBag.Error = _locale["admin.migrate.needConnection"];
             return View("Index");
         }
 
         var (users, error) = await _import.ListUsersAsync(connectionString, ct);
         if (users is null)
         {
-            ViewBag.Error = error ?? "اتصال ناموفق بود.";
+            ViewBag.Error = error ?? _locale["admin.migrate.connectFailed"];
             ViewBag.ConnectionString = connectionString;
             return View("Index");
         }
@@ -48,13 +54,13 @@ public class MigrateController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Run(string connectionString, int[]? userIds, CancellationToken ct)
     {
-        ViewData["Title"] = "نتیجه انتقال";
+        ViewData["Title"] = _locale["admin.migrate.resultTitle"];
         connectionString = (connectionString ?? "").Trim();
         userIds ??= Array.Empty<int>();
         if (string.IsNullOrWhiteSpace(connectionString) || userIds.Length == 0)
         {
             TempData["Ok"] = null;
-            ViewBag.Error = "اتصال و حداقل یک کاربر لازم است.";
+            ViewBag.Error = _locale["admin.migrate.needConnectionAndUser"];
             return View("Index");
         }
 

@@ -1,20 +1,19 @@
 @using Morobot.Infrastructure.Services
 @{
-  ViewData["Title"] = "نتیجه انتقال";
   var report = ViewBag.Report as LegacyImportReport;
 }
 <div class="card-admin">
   @if (report != null)
   {
     <p>
-      کاربران جدید: <strong>@report.UsersCreated</strong> —
-      تطبیق‌شده: <strong>@report.UsersMatched</strong> —
-      فرآیند واردشده: <strong>@report.ProcessesImported</strong> —
-      ردشده: <strong>@report.ProcessesSkipped</strong> —
-      خطا: <strong>@report.Errors</strong>
+      @L["admin.migrate.usersCreated"] <strong>@report.UsersCreated</strong> —
+      @L["admin.migrate.usersMatched"] <strong>@report.UsersMatched</strong> —
+      @L["admin.migrate.processesImported"] <strong>@report.ProcessesImported</strong> —
+      @L["admin.migrate.processesSkipped"] <strong>@report.ProcessesSkipped</strong> —
+      @L["admin.migrate.errors"] <strong>@report.Errors</strong>
     </p>
     <pre style="white-space:pre-wrap;background:#f8fafc;padding:1rem;border-radius:.5rem;max-height:28rem;overflow:auto">@string.Join("\n", report.Lines)</pre>
   }
-  <a class="btn-admin" asp-area="Admin" asp-controller="Migrate" asp-action="Index">انتقال دیگر</a>
-  <a class="btn-admin secondary" asp-area="Admin" asp-controller="Processes" asp-action="Index">فرآیندها</a>
+  <a class="btn-admin" asp-area="Admin" asp-controller="Migrate" asp-action="Index">@L["admin.migrate.migrateAnother"]</a>
+  <a class="btn-admin secondary" asp-area="Admin" asp-controller="Processes" asp-action="Index">@L["admin.nav.processes"]</a>
 </div>

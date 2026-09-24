@@ -613,7 +613,31 @@
       "selectSummary": "{count} users in legacy database — toggle to select.",
       "selectAll": "All",
       "processCount": "Processes",
-      "runSelected": "Migrate selected"
+      "runSelected": "Migrate selected",
+      "needConnection": "A connection string is required.",
+      "connectFailed": "Connection failed.",
+      "needConnectionAndUser": "A connection and at least one user are required.",
+      "resultTitle": "Migration result",
+      "usersCreated": "New users:",
+      "usersMatched": "Matched:",
+      "processesImported": "Processes imported:",
+      "processesSkipped": "Skipped:",
+      "errors": "Errors:",
+      "migrateAnother": "Migrate another"
+    },
+    "devices": {
+      "title": "Devices",
+      "backToEvents": "← Events",
+      "colLastSeen": "Last seen",
+      "colAccount": "Account",
+      "colClaimedName": "Claimed name",
+      "colPlatform": "Platform",
+      "colScreen": "Screen",
+      "colTimeZone": "TZ",
+      "colLogins": "Logins",
+      "colIp": "IP",
+      "colFingerprint": "Fingerprint",
+      "empty": "No devices recorded."
     }
   },
   "record": {
