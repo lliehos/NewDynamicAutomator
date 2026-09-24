@@ -1,10 +1,11 @@
 {
-  "updated": "2026-09-24",
+  "updated": "2026-09-25",
   "documents": {
-    "setupGuide": { "file": "setup-guide.md", "version": "1.6" },
-    "vendorOpsGuide": { "file": "vendor-ops-guide.md", "version": "1.0.1" },
+    "setupGuide": { "file": "setup-guide.md", "version": "1.7" },
+    "vendorOpsGuide": { "file": "vendor-ops-guide.md", "version": "1.1.0" },
+    "visualEditor": { "file": "visual-editor.md", "version": "1.1" },
     "marketingBrochure": { "file": "marketing/morobot-brochure.html", "version": "1.1.0" },
-    "vendorKit": { "folder": "tools/vendor-kit", "version": "1.0.0" }
+    "vendorKit": { "folder": "tools/vendor-kit", "version": "1.0.1" }
   },
   "notes": "با هر تغییر محتوا، نسخه همان سند را بالا ببرید و در صورت vendor-kit دوباره zip بسازید."
 }
