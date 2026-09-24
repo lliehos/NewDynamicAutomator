@@ -550,7 +550,12 @@
       "server": "Check server",
       "checkNow": "Check for updates",
       "checked": "Update check completed.",
-      "notIncluded": "Online updates are not enabled in this license."
+      "notIncluded": "Online updates are not enabled in this license.",
+      "availableTitle": "A new version is available",
+      "availableBody": "Version {version} has been released (current {current}).",
+      "notesLabel": "Release notes",
+      "openDownload": "Open download",
+      "later": "Later"
     },
     "plans": {
       "title": "Plans",

@@ -549,7 +549,12 @@
       "server": "سرور بررسی",
       "checkNow": "بررسی آپدیت",
       "checked": "بررسی آپدیت انجام شد.",
-      "notIncluded": "آپدیت آنلاین در این لایسنس فعال نیست."
+      "notIncluded": "آپدیت آنلاین در این لایسنس فعال نیست.",
+      "availableTitle": "نسخه جدید موجود است",
+      "availableBody": "نسخه {version} منتشر شده است (نسخه فعلی {current}).",
+      "notesLabel": "یادداشت نسخه",
+      "openDownload": "باز کردن لینک دانلود",
+      "later": "بعداً"
     },
     "plans": {
       "title": "پلن‌ها",

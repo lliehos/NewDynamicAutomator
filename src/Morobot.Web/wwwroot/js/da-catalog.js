@@ -3,7 +3,7 @@
  */
 (function () {
   let conn = null;
-  const listeners = { taskChanged: [], sourceChanged: [], playState: [] };
+  const listeners = { taskChanged: [], sourceChanged: [], playState: [], updateAvailable: [] };
 
   function on(event, fn) {
     if (!listeners[event]) listeners[event] = [];
@@ -36,6 +36,8 @@
       c.on("taskChanged", (p) => emit("taskChanged", p));
       c.on("sourceChanged", (p) => emit("sourceChanged", p));
       c.on("playState", (p) => emit("playState", p));
+      // Pushed by UpdateNotifyBackgroundService when a newer version appears.
+      c.on("updateAvailable", (p) => emit("updateAvailable", p));
       c.onreconnected(async () => {
         try { await c.invoke("JoinCatalog"); } catch { /* ignore */ }
         if (opts?.admin) {

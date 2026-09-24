@@ -1,0 +1,49 @@
+/*
+ * da-update-banner.css — the admin "update available" bar pushed over SignalR
+ * (see admin-update-notify.js). Sits above the admin shell content so it is
+ * visible on every admin page, and collapses cleanly on narrow screens.
+ */
+
+.da-update-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .75rem 1rem;
+  margin: 0 0 1rem;
+  padding: .75rem 1rem;
+  border-radius: .85rem;
+  background: var(--brand-bg-soft, #eef6f4);
+  border: 1px solid var(--brand-primary, #1b8777);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, .06);
+}
+
+.da-update-banner-text {
+  flex: 1 1 260px;
+  font-size: .88rem;
+  line-height: 1.7;
+  color: var(--brand-ink, #283937);
+}
+
+.da-update-banner-text strong {
+  color: var(--brand-primary, #1b8777);
+  font-weight: 700;
+}
+
+.da-update-banner-notes {
+  margin-top: .25rem;
+  font-size: .8rem;
+  color: #64748b;
+  white-space: pre-wrap;
+}
+
+.da-update-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .da-update-banner-actions { width: 100%; }
+  .da-update-banner-actions .btn-admin { flex: 1 1 auto; text-align: center; }
+}

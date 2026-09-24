@@ -25,6 +25,7 @@
   <link rel="stylesheet" href="~/css/da-switch.css?v=1" />
   <link rel="stylesheet" href="~/css/da-cropper.css?v=1" />
   <link rel="stylesheet" href="~/css/da-avatar.css?v=1" />
+  <link rel="stylesheet" href="~/css/da-update-banner.css?v=1" />
   <link rel="stylesheet" href="~/css/morobot-copyright.css?v=1" />
 </head>
 <body data-admin-catalog="1">
@@ -85,13 +86,14 @@
   </div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="~/assets/vendor/libs/apex-charts/apexcharts.js"></script>
-  <script src="~/js/da-catalog.js?v=admin-1"></script>
+  <script src="~/js/da-catalog.js?v=admin-2"></script>
   <script src="~/js/admin-ui.js?v=1"></script>
   <script src="~/js/admin-charts.js?v=1"></script>
-  <script>window.AdminI18n = { strings: { pager: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.label"])), page: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.page"])), first: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.first"])), prev: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.prev"])), next: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.next"])), last: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.last"])) } };</script>
+  <script>window.AdminI18n = { strings: { pager: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.label"])), page: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.page"])), first: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.first"])), prev: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.prev"])), next: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.next"])), last: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.last"])), update: { title: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.availableTitle"])), available: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.availableBody"])), notes: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.notesLabel"])), open: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.openDownload"])), later: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.later"])) } } };</script>
   <script src="~/js/admin-pager.js?v=1"></script>
   <script src="~/js/da-switch.js?v=1"></script>
   <script src="~/js/da-cropper.js?v=1"></script>
+  <script src="~/js/admin-update-notify.js?v=1"></script>
   @await RenderSectionAsync("Scripts", required: false)
   @await Component.InvokeAsync("SiteChrome")
 </body>
