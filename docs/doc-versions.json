@@ -1,0 +1,10 @@
+{
+  "updated": "2026-09-24",
+  "documents": {
+    "setupGuide": { "file": "setup-guide.md", "version": "1.5" },
+    "vendorOpsGuide": { "file": "vendor-ops-guide.md", "version": "1.0.0" },
+    "marketingBrochure": { "file": "marketing/morobot-brochure.html", "version": "1.0.0" },
+    "vendorKit": { "folder": "tools/vendor-kit", "version": "1.0.0" }
+  },
+  "notes": "با هر تغییر محتوا، نسخه همان سند را بالا ببرید و در صورت vendor-kit دوباره zip بسازید."
+}

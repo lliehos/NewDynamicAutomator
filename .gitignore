@@ -493,3 +493,14 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Vendor license signing keys (never commit private keys)
+tools/license-keys/*.pem
+!tools/license-keys/.gitkeep
+
+# Built vendor kit zips (regenerate with tools/vendor-kit/BUILD-VENDOR-KIT.ps1)
+dist/
+
+# Local DB / canvas backups (do not commit)
+_backup_*.bak
+_morobot*.bak

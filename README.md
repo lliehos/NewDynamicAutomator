@@ -3,6 +3,7 @@
 بازنویسی پنل بدون Selenium: پرتال ASP.NET + بوم گردش + افزونه‌های Chrome MV3.
 
 وضعیت و قراردادها: [docs/STATUS.md](docs/STATUS.md)  
+**راهنمای جامع راه‌اندازی (Enterprise / on-prem):** [docs/setup-guide.md](docs/setup-guide.md) — در وب: `/Home/SetupGuide`  
 رمزنگاری محلی و `.mrbt`: [docs/encryption-and-mrbt.md](docs/encryption-and-mrbt.md)
 
 ## اجرا (local-first)
@@ -26,7 +27,7 @@ wwwroot/locales                        fa.json / en.json
 wwwroot/js/da-crypto.js                AES-GCM + .mrbt
 wwwroot/js/da-secure-store.js          localStorage رمزشده
 wwwroot/editor/flow.js                 طراح دیاگرام
-extension-recorder|player|selector     بسته‌های MV3 جدا
+extension-global|extension-smart-recorder   افزونه Global + Smart
 docs/                                  معماری و فازها
 ```
 
