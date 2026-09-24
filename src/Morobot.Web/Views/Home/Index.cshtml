@@ -2,19 +2,17 @@
   var culture = L.Culture;
   var dir = L.Dir;
   var isEn = !L.IsRtl;
+  var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
 }
 <!doctype html>
 <html lang="@culture" dir="@dir" data-culture="@culture" data-i18n-title-key="landing.title" class="@(isEn ? "lp-ltr" : "lp-rtl")">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>@L["landing.title"]</title>
+  <title>@brandHead.BrandTitle</title>
   <meta name="description" data-i18n="landing.description" content="@L["landing.description"]" />
   <meta name="theme-color" content="#0d9488" />
-  <meta name="application-name" content="@L["brand.name"]" />
-  <link rel="icon" href="~/img/brand/morobot-mark.svg" type="image/svg+xml" />
-  <link rel="icon" type="image/png" sizes="32x32" href="~/img/brand/morobot-icon.png" />
-  <link rel="apple-touch-icon" href="~/img/brand/apple-touch-icon.png" />
+  <partial name="_BrandHead" model="brandHead" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -25,8 +23,9 @@
 
   <header class="lp-nav">
     <a class="lp-brand" href="/">
-      <img src="~/img/brand/morobot-mark.svg" width="36" height="36" alt="" />
-      <span class="lp-brand-name" data-i18n="brand.name">@L["brand.name"]</span>
+      @{ ViewData["BrandImgClass"] = ""; ViewData["BrandImgWidth"] = 36; ViewData["BrandImgHeight"] = 36; }
+      <partial name="_BrandMark" model="brandHead" />
+      <span class="lp-brand-name">@brandHead.AppName</span>
     </a>
     <nav class="lp-nav-links" data-i18n-aria="landing.navAria" aria-label="@L["landing.navAria"]">
       <a href="#features" data-i18n="landing.navFeatures">@L["landing.navFeatures"]</a>
@@ -156,7 +155,8 @@
 
     <section class="lp-cta-band">
       <div class="lp-cta-band-inner">
-        <img src="~/img/brand/morobot-mark.svg" width="48" height="48" alt="" />
+        @{ ViewData["BrandImgClass"] = ""; ViewData["BrandImgWidth"] = 48; ViewData["BrandImgHeight"] = 48; }
+        <partial name="_BrandMark" model="brandHead" />
         <h2 data-i18n="landing.ctaBandTitle">@L["landing.ctaBandTitle"]</h2>
         <p data-i18n="landing.ctaBandBody">@L["landing.ctaBandBody"]</p>
         <a class="lp-btn lp-btn-solid lp-btn-lg" asp-area="Panel" asp-controller="Account" asp-action="Login" data-i18n="common.panel">@L["common.panel"]</a>
@@ -166,8 +166,9 @@
 
   <footer class="lp-foot">
     <div class="lp-foot-brand">
-      <img src="~/img/brand/morobot-mark.svg" width="24" height="24" alt="" />
-      <span data-i18n="brand.name">@L["brand.name"]</span>
+      @{ ViewData["BrandImgClass"] = ""; ViewData["BrandImgWidth"] = 24; ViewData["BrandImgHeight"] = 24; }
+      <partial name="_BrandMark" model="brandHead" />
+      <span>@brandHead.AppName</span>
     </div>
     <p data-i18n="brand.copyright">@L["brand.copyright"]</p>
     <p><a asp-controller="Home" asp-action="SetupGuide" data-i18n="landing.navSetup">@L["landing.navSetup"]</a></p>

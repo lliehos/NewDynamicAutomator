@@ -37,6 +37,18 @@ public sealed class TenantBrandingDto
     public string? LogoUrl { get; set; }
     public string? FaviconUrl { get; set; }
     public bool IsLicensedBranding { get; set; }
+
+    public string ColorPrimary { get; set; } = BrandPaletteDefaults.Primary;
+    public string ColorPrimaryDark { get; set; } = BrandPaletteDefaults.PrimaryDark;
+    public string ColorPrimaryLight { get; set; } = BrandPaletteDefaults.PrimaryLight;
+    public string ColorAccent { get; set; } = BrandPaletteDefaults.Accent;
+    public string ColorSoft { get; set; } = BrandPaletteDefaults.Soft;
+    public string ColorSoft2 { get; set; } = BrandPaletteDefaults.Soft2;
+    public string ColorInk { get; set; } = BrandPaletteDefaults.Ink;
+    public string ColorBorderSubtle { get; set; } = BrandPaletteDefaults.BorderSubtle;
+
+    /// <summary>Panel referral QR widget (morobot.ir). Enterprise can disable when licensed.</summary>
+    public bool ShowReferralQrWidget { get; set; } = true;
 }
 
 public sealed class UpdateCheckResultDto

@@ -956,7 +956,9 @@ async function startPlay(taskId, tabId, runMode, options) {
     stepNodeId: opts.stepNodeId || null,
     conditionNodeId: opts.conditionNodeId || null,
     playScope: opts.playScope || null,
-    title: graph.title || null
+    title: graph.title || null,
+    tabId: tabId != null ? tabId : null,
+    openNewTab: opts.openNewTab === true
   };
   await chrome.storage.local.set({ lastPlayRequest });
 
@@ -1015,13 +1017,19 @@ async function startPlay(taskId, tabId, runMode, options) {
   if (iterations.warn) appendPlayLog("warn", iterations.warn);
   appendPlayLog("info", `پیمایش دیاگرام از «${entryId}» (~${steps.length} اقدام در مسیر موفق)`);
 
-  runPlayLoop(tabId, graph, steps, iterations, opts).catch((err) => {
+  runPlayLoop(tabId, graph, steps, iterations, opts).catch(async (err) => {
     playStatus.lastError = err.message || String(err);
     playStatus.playing = false;
     playStatus.paused = false;
     playPaused = false;
     appendPlayLog("error", playStatus.lastError);
-    chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
+    if (playAbortPoll) {
+      clearInterval(playAbortPoll);
+      playAbortPoll = null;
+    }
+    const failedTaskId = String(graph.taskId || taskId || "").trim();
+    if (failedTaskId) await unregisterPlayOnServer(failedTaskId);
+    await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
     broadcastPlayState();
   });
 
@@ -1162,6 +1170,12 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
     playStatus.currentNodeId = null;
     playPaused = false;
     wakePlayResumeWaiters();
+    if (playAbortPoll) {
+      clearInterval(playAbortPoll);
+      playAbortPoll = null;
+    }
+    const finishedTaskId = String(playStatus.taskId || graph?.taskId || "").trim();
+    if (finishedTaskId) await unregisterPlayOnServer(finishedTaskId);
     await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
     broadcastPlayState();
   }

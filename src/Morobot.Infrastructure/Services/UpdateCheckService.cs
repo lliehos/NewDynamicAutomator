@@ -75,7 +75,6 @@ public sealed class UpdateCheckService
         try
         {
             var client = _http.CreateClient(nameof(UpdateCheckService));
-            client.Timeout = TimeSpan.FromSeconds(20);
             var requestUrl = url.Contains('?', StringComparison.Ordinal)
                 ? $"{url}&current={Uri.EscapeDataString(status.CurrentVersion)}"
                 : $"{url}?current={Uri.EscapeDataString(status.CurrentVersion)}";
@@ -90,24 +89,36 @@ public sealed class UpdateCheckService
             await using var stream = await response.Content.ReadAsStreamAsync(ct);
             using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
             var root = doc.RootElement;
-            var latest = root.TryGetProperty("version", out var v) ? v.GetString() : null;
-            var notes = root.TryGetProperty("notes", out var n) ? n.GetString() : null;
-            var download = root.TryGetProperty("downloadUrl", out var d) ? d.GetString() : null;
+            var latest = ReadVersion(root);
+            var notes = ReadString(root, "notes", "releaseNotes", "changelog");
+            var download = ReadString(root, "downloadUrl", "download", "url");
 
             await _settings.SetAsync(SystemSettingKeys.UpdateLastCheckUtc, DateTime.UtcNow.ToString("O"), ct);
-            if (!string.IsNullOrWhiteSpace(latest))
+
+            var hasUpdate = ProductUpdateFeedService.IsNewer(latest, status.CurrentVersion);
+            if (hasUpdate && !string.IsNullOrWhiteSpace(latest))
+            {
                 await _settings.SetAsync(SystemSettingKeys.UpdateAvailableVersion, latest!, ct);
-            await _settings.SetAsync(SystemSettingKeys.UpdateAvailableNotes, notes ?? "", ct);
-            await _settings.SetAsync(SystemSettingKeys.UpdateAvailableUrl, download ?? "", ct);
+                await _settings.SetAsync(SystemSettingKeys.UpdateAvailableNotes, notes ?? "", ct);
+                await _settings.SetAsync(SystemSettingKeys.UpdateAvailableUrl, download ?? "", ct);
+                status.AvailableVersion = latest;
+                status.ReleaseNotes = notes;
+                status.DownloadUrl = download;
+                status.Message = "A newer version is available.";
+            }
+            else
+            {
+                await _settings.SetAsync(SystemSettingKeys.UpdateAvailableVersion, "", ct);
+                await _settings.SetAsync(SystemSettingKeys.UpdateAvailableNotes, "", ct);
+                await _settings.SetAsync(SystemSettingKeys.UpdateAvailableUrl, "", ct);
+                status.AvailableVersion = null;
+                status.ReleaseNotes = null;
+                status.DownloadUrl = null;
+                status.Message = "You are on the latest known version.";
+            }
 
             status.CheckedOnline = true;
             status.LastCheckUtc = DateTime.UtcNow;
-            status.AvailableVersion = latest;
-            status.ReleaseNotes = notes;
-            status.DownloadUrl = download;
-            status.Message = IsNewer(latest, status.CurrentVersion)
-                ? "A newer version is available."
-                : "You are on the latest known version.";
         }
         catch (Exception ex)
         {
@@ -119,13 +130,30 @@ public sealed class UpdateCheckService
         return status;
     }
 
-    private static bool IsNewer(string? remote, string current)
+    private static string? ReadVersion(JsonElement root)
     {
-        if (string.IsNullOrWhiteSpace(remote))
-            return false;
-        return Version.TryParse(remote, out var r)
-               && Version.TryParse(current, out var c)
-               && r > c;
+        foreach (var name in new[] { "version", "latestVersion", "latest", "Version" })
+        {
+            if (root.TryGetProperty(name, out var el))
+            {
+                var s = el.ValueKind == JsonValueKind.String ? el.GetString() : el.ToString();
+                if (!string.IsNullOrWhiteSpace(s)) return s.Trim();
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ReadString(JsonElement root, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!root.TryGetProperty(name, out var el)) continue;
+            var s = el.ValueKind == JsonValueKind.String ? el.GetString() : null;
+            if (!string.IsNullOrWhiteSpace(s)) return s.Trim();
+        }
+
+        return null;
     }
 
     private static string? NullIfEmpty(string value)

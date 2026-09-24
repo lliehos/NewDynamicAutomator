@@ -1,0 +1,30 @@
+@using Morobot.Web.Models
+@model BrandHeadModel
+@if (Model.ShowReferralQr)
+{
+<div id="morobot-referral-root" class="morobot-referral-root" data-url="@Model.ReferralProductUrl">
+  <button type="button" class="morobot-referral-fab" id="morobot-referral-open" aria-haspopup="dialog" aria-controls="morobot-referral-modal" title="@L["panel.referral.fabTitle"]">
+    <i class="ti ti-qrcode" aria-hidden="true"></i>
+  </button>
+  <div class="morobot-referral-modal" id="morobot-referral-modal" role="dialog" aria-modal="true" aria-labelledby="morobot-referral-title" hidden>
+    <div class="morobot-referral-backdrop" data-referral-close></div>
+    <div class="morobot-referral-card">
+      <button type="button" class="morobot-referral-close" data-referral-close aria-label="@L["common.close"]">&times;</button>
+      <h2 id="morobot-referral-title" class="morobot-referral-title">@L["panel.referral.title"]</h2>
+      <p class="morobot-referral-lead">@L["panel.referral.lead"]</p>
+      <div class="morobot-referral-qr-wrap">
+        <canvas id="morobot-referral-qr" width="200" height="200" aria-label="QR"></canvas>
+      </div>
+      <p class="morobot-referral-url"><a href="@Model.ReferralProductUrl" target="_blank" rel="noopener">morobot.ir</a></p>
+      <p class="morobot-referral-hint">@L["panel.referral.hint"]</p>
+      <div class="morobot-referral-share">
+        <a class="morobot-referral-share-btn" data-share="whatsapp" href="#" rel="noopener"><i class="ti ti-brand-whatsapp"></i><span>@L["panel.referral.whatsapp"]</span></a>
+        <a class="morobot-referral-share-btn" data-share="telegram" href="#" rel="noopener"><i class="ti ti-brand-telegram"></i><span>@L["panel.referral.telegram"]</span></a>
+        <a class="morobot-referral-share-btn" data-share="email" href="#"><i class="ti ti-mail"></i><span>@L["panel.referral.email"]</span></a>
+        <a class="morobot-referral-share-btn" data-share="sms" href="#"><i class="ti ti-message"></i><span>@L["panel.referral.sms"]</span></a>
+        <button type="button" class="morobot-referral-share-btn" data-share="copy" id="morobot-referral-copy"><i class="ti ti-link"></i><span>@L["panel.referral.copyLink"]</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+}

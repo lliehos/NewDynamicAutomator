@@ -15,17 +15,23 @@ public class BrandingController : Controller
     private readonly LicenseService _license;
     private readonly IWebHostEnvironment _env;
     private readonly ILocaleService _locale;
+    private readonly ExtensionSyncService _sync;
+    private readonly ExtensionBrandingOverlay _overlay;
 
     public BrandingController(
         BrandingService branding,
         LicenseService license,
         IWebHostEnvironment env,
-        ILocaleService locale)
+        ILocaleService locale,
+        ExtensionSyncService sync,
+        ExtensionBrandingOverlay overlay)
     {
         _branding = branding;
         _license = license;
         _env = env;
         _locale = locale;
+        _sync = sync;
+        _overlay = overlay;
     }
 
     [HttpGet]
@@ -68,7 +74,10 @@ public class BrandingController : Controller
 
         try
         {
+            model.ShowReferralQrWidget = Request.Form["ShowReferralQrWidget"].Contains("true");
             await _branding.SaveAsync(model, ct);
+            _sync.SyncNow("branding-save");
+            await _overlay.ApplyAllPackagesAsync(_sync, ct);
             TempData["Ok"] = _locale["admin.branding.saved"];
         }
         catch (InvalidOperationException)

@@ -1,0 +1,36 @@
+@using Morobot.Web.Models
+@model BrandHeadModel
+@{
+  var favType = Model.FaviconPath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "image/svg+xml" : "image/png";
+}
+<meta name="theme-color" content="@Model.ColorPrimary" />
+<partial name="_BrandTheme" model="Model" />
+<link rel="icon" href="@Url.Content(Model.FaviconPath.StartsWith("http") ? Model.FaviconPath : "~" + (Model.FaviconPath.StartsWith('/') ? Model.FaviconPath : "/" + Model.FaviconPath))" type="@favType" />
+@if (!Model.FaviconPath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) && Model.IconPngPath != Model.FaviconPath)
+{
+  <link rel="icon" type="image/png" sizes="32x32" href="@Url.Content("~" + Model.IconPngPath)" />
+}
+else if (Model.FaviconPath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+{
+  <link rel="icon" type="image/png" sizes="32x32" href="@Url.Content("~" + BrandHeadModel.DefaultIconPngPath)" />
+}
+<link rel="apple-touch-icon" href="@Url.Content(Model.MarkPath.StartsWith("http") ? Model.MarkPath : "~" + (Model.MarkPath.StartsWith('/') ? Model.MarkPath : "/" + Model.MarkPath))" />
+<meta name="application-name" content="@Model.AppName" />
+<script>
+  window.__MOROBOT_BRANDING = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(new {
+    appName = Model.AppName,
+    brandTitle = Model.BrandTitle,
+    organizationName = Model.OrganizationName,
+    logoUrl = Model.LogoAbsoluteUrl ?? Url.Content("~" + Model.MarkPath),
+    faviconUrl = Model.FaviconAbsoluteUrl ?? Url.Content("~" + Model.FaviconPath),
+    isLicensedBranding = Model.IsLicensedBranding,
+    colors = new {
+      primary = Model.ColorPrimary,
+      primaryDark = Model.ColorPrimaryDark,
+      primaryLight = Model.ColorPrimaryLight,
+      accent = Model.ColorAccent,
+      soft = Model.ColorSoft,
+      ink = Model.ColorInk
+    }
+  }));
+</script>

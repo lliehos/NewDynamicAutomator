@@ -1,3 +1,4 @@
+using Morobot.Contracts.Licensing;
 using Morobot.Domain;
 using Morobot.Domain.Entities;
 using Morobot.Domain.Enums;
@@ -140,6 +141,15 @@ public static class DbSeeder
         await Upsert(SystemSettingKeys.BrandOrganization, "", "Branding", "نام سازمان", "Organization name", null, null);
         await Upsert(SystemSettingKeys.BrandLogoPath, "", "Branding", "مسیر لوگو", "Logo path", "/uploads/branding/logo.png", "/uploads/branding/logo.png");
         await Upsert(SystemSettingKeys.BrandFaviconPath, "", "Branding", "مسیر فاوآیکون", "Favicon path", "/uploads/branding/favicon.png", "/uploads/branding/favicon.png");
+        await Upsert(SystemSettingKeys.BrandColorPrimary, BrandPaletteDefaults.Primary, "Branding", "رنگ اصلی", "Primary color", null, null);
+        await Upsert(SystemSettingKeys.BrandColorPrimaryDark, BrandPaletteDefaults.PrimaryDark, "Branding", "رنگ اصلی تیره", "Primary dark", null, null);
+        await Upsert(SystemSettingKeys.BrandColorPrimaryLight, BrandPaletteDefaults.PrimaryLight, "Branding", "رنگ اصلی روشن", "Primary light", null, null);
+        await Upsert(SystemSettingKeys.BrandColorAccent, BrandPaletteDefaults.Accent, "Branding", "رنگ تأکید", "Accent color", null, null);
+        await Upsert(SystemSettingKeys.BrandColorSoft, BrandPaletteDefaults.Soft, "Branding", "پس‌زمینه ملایم", "Soft background", null, null);
+        await Upsert(SystemSettingKeys.BrandColorSoft2, BrandPaletteDefaults.Soft2, "Branding", "پس‌زمینه ملایم ۲", "Soft background 2", null, null);
+        await Upsert(SystemSettingKeys.BrandColorInk, BrandPaletteDefaults.Ink, "Branding", "رنگ متن", "Ink color", null, null);
+        await Upsert(SystemSettingKeys.BrandColorBorderSubtle, BrandPaletteDefaults.BorderSubtle, "Branding", "حاشیه ملایم", "Subtle border", null, null);
+        await Upsert(SystemSettingKeys.BrandReferralQrVisible, "true", "Branding", "ویجت QR معرفی", "Referral QR widget", "پیش‌فرض: نمایش", "Default: visible");
 
         await Upsert(SystemSettingKeys.LicensedDatabaseConnection, "", "Deployment", "Connection string (license)", "Connection string (license)", "توسط لایسنس امضاشده تنظیم می‌شود.", "Set by signed license.");
         await Upsert(SystemSettingKeys.PendingConnectionRestart, "", "Deployment", "نیاز به راه‌اندازی مجدد", "Restart required", null, null);

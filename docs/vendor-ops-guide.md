@@ -215,6 +215,20 @@ Checklist قبل از ارسال:
 **شما هنگام release:**
 - migration جدید در `src/Morobot.Infrastructure/Persistence/Migrations/` commit کنید
 - در release note بنویسید «پس از آپدیت یک بار restart»
+- نسخهٔ منتشرشده را در `Morobot:UpdateFeed` (appsettings یا env روی morobot.ir) به‌روز کنید — endpoint عمومی `GET /checkupdate?current=…`
+
+```json
+"Morobot": {
+  "UpdateFeed": {
+    "LatestVersion": "3.0.1",
+    "ReleaseNotes": "…",
+    "DownloadUrl": "https://morobot.ir/download",
+    "PublishedUtc": "2026-09-24T00:00:00Z"
+  }
+}
+```
+
+نصب‌های مشتری با لایسنس «AllowUpdates» همان URL را (یا `UpdateServerUrl` در تنظیمات) poll می‌کنند.
 
 ---
 

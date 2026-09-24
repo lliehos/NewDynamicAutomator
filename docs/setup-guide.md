@@ -353,6 +353,22 @@ server {
 
 - امکان بررسی به‌روزرسانی بسته به تنظیمات لایسنس
 - آدرس پیش‌فرض بررسی: `https://morobot.ir/checkupdate`
+- **قرارداد API (GET):** `?current={نسخه_نصب}` → JSON:
+
+```json
+{
+  "version": "3.0.0",
+  "notes": "یادداشت انتشار",
+  "downloadUrl": "https://morobot.ir/download",
+  "updateAvailable": true,
+  "current": "2.9.0",
+  "publishedUtc": "2026-09-24T00:00:00Z"
+}
+```
+
+فیلدهای `version`، `notes` و `downloadUrl` برای سازگاری با نصب‌های قدیمی کافی است. روی سرور محصول (`morobot.ir`) یا در dev: `GET https://localhost:7201/checkupdate?current=2.0.0`
+
+- **API ادمین (نیاز به نقش Admin):** `GET /api/updates/status` — وضعیت کش‌شده؛ `POST /api/updates/check` — بررسی آنلاین و به‌روزرسانی کش
 - مدیر می‌تواند آدرس را در **Settings → Updates** تغییر دهد
 - **بررسی دستی:** Admin/License → «بررسی آپدیت»
 - **سرور بدون اینترنت:** آخرین نتیجه ذخیره‌شده نمایش داده می‌شود؛ سامانه هر ۶ ساعت یک‌بار تلاش می‌کند

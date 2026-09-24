@@ -1,4 +1,4 @@
-importScripts("player/engine.js", "bg-selector.js");
+importScripts("lib/branding.js", "player/engine.js", "bg-selector.js");
 
 /** Morobot Global extension — record, play, and selector in one package. */
 const DEFAULT_PORTAL = "https://localhost:7201";
@@ -131,6 +131,9 @@ async function handleMessage(message, sender) {
       return resumeRecord();
     case "syncTasksFromPortal":
       return syncTasksFromPortal(message);
+    case "applyTenantBranding":
+      await DaTenantBranding.persist(DaTenantBranding.normalize(message.payload || message.branding));
+      return { ok: true };
     case "setRecordOptions":
       return setRecordOptions(message.options);
     case "rerecord":
@@ -549,11 +552,13 @@ async function getState() {
   const phase = data.recording
     ? "recording"
     : (data.recordPhase || (count ? "review" : "idle"));
+  const play = typeof getPlayStatus === "function" ? getPlayStatus() : null;
+  const playing = !!(play?.playing || data.playing);
   return {
     ok: true,
     recording: !!data.recording,
     recordPhase: phase,
-    playing: false,
+    playing,
     count,
     steps,
     options: defaultRecordOptions(data.recordOptions),
@@ -563,7 +568,7 @@ async function getState() {
     recordTabId: data.recordTabId || null,
     targetTaskId: data.recordTargetTaskId ?? null,
     targetTitle: data.recordTargetTitle || null,
-    play: { playing: false }
+    play: play || { playing: !!data.playing }
   };
 }
 
@@ -1079,6 +1084,32 @@ async function saveUserTasks(tasks) {
   await chrome.storage.local.remove("localTasks");
 }
 
+async function persistPlayDataSourcesMessage(message) {
+  const taskId = message?.taskId != null && message.taskId !== ""
+    ? String(message.taskId).trim()
+    : null;
+  const dataSources = message?.dataSources;
+  if (!taskId || !Array.isArray(dataSources)) return { ok: false, error: "داده ناقص" };
+  const tasks = await loadUserTasks();
+  const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
+  if (idx < 0 || !tasks[idx]?.graph) return { ok: false, error: "فرآیند پیدا نشد" };
+  tasks[idx].graph.dataSources = dataSources;
+  await saveUserTasks(tasks);
+  await pushTasksToPortalTabs(tasks);
+  return { ok: true };
+}
+
+async function broadcastDsCellEventMessage(message) {
+  const ev = message?.event;
+  if (!ev) return { ok: false };
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    chrome.tabs.sendMessage(tab.id, { type: "dsCellEvent", event: ev }).catch(() => {});
+  }
+  return { ok: true };
+}
+
 async function getLocalTaskGraph(taskId) {
   const tasks = await loadUserTasks();
   const task = tasks.find((t) => String(t.id) === String(taskId));
@@ -1247,6 +1278,195 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
   if (!recording || !recordTabId || details.tabId !== recordTabId) return;
   await appendNavStep(details.url, details.tabId);
 });
+
+/** Play dev-stamp (global bundle; server aliases player → global). */
+const PLAYER_DEV_STAMP_FALLBACK_URLS = [
+  "https://localhost:7201/extension/dev-stamp/global",
+  "https://localhost:7201/extension/dev-stamp/player",
+  "http://localhost:5201/extension/dev-stamp/global",
+  "http://localhost:5201/extension/dev-stamp/player",
+  "http://localhost:5000/extension/dev-stamp/global",
+  "http://localhost:5000/extension/dev-stamp/player"
+];
+
+/**
+ * Play: sync install folder; if code changed, respond first then reload & resume.
+ * Never call chrome.runtime.reload() before sendResponse — that closes the channel.
+ */
+async function startPlayWithAutoReload(message, sender) {
+  const rawTab = message.tabId != null && message.tabId !== "" ? Number(message.tabId) : NaN;
+  const hasExplicitTab = Number.isFinite(rawTab);
+  const isConditionCheck = !!message.conditionNodeId;
+  const pendingPlay = {
+    taskId: message.taskId,
+    tabId: hasExplicitTab
+      ? rawTab
+      : (isConditionCheck ? null : (sender.tab?.id ?? null)),
+    runMode: message.runMode || null,
+    groupNodeId: message.groupNodeId || null,
+    stepNodeId: message.stepNodeId || null,
+    conditionNodeId: message.conditionNodeId || null,
+    playScope: message.playScope
+      || (message.conditionNodeId ? "condition"
+        : message.stepNodeId ? "step"
+          : message.groupNodeId ? "group"
+            : "task"),
+    openNewTab: hasExplicitTab || isConditionCheck ? false : (message.openNewTab === true)
+  };
+
+  const playOpts = {
+    groupNodeId: pendingPlay.groupNodeId,
+    stepNodeId: pendingPlay.stepNodeId,
+    conditionNodeId: pendingPlay.conditionNodeId,
+    playScope: pendingPlay.playScope,
+    openNewTab: pendingPlay.openNewTab,
+    activateTab: isConditionCheck ? false : undefined
+  };
+
+  const { resumePlayAfterReload } = await chrome.storage.local.get("resumePlayAfterReload");
+  if (resumePlayAfterReload) {
+    await chrome.storage.local.remove("resumePlayAfterReload");
+    return startPlay(pendingPlay.taskId, pendingPlay.tabId, pendingPlay.runMode, playOpts);
+  }
+
+  const stampInfo = await fetchPlayerStamp({ forceSync: true });
+  const { playerDevStamp } = await chrome.storage.local.get("playerDevStamp");
+  const prev = playerDevStamp || null;
+
+  if (stampInfo?.stamp) {
+    await chrome.storage.local.set({
+      playerDevStamp: stampInfo.stamp,
+      portalBase: stampInfo.origin || undefined,
+      installPath: stampInfo.path || null
+    });
+  }
+
+  const needsReload = !!(prev && stampInfo?.stamp && prev !== stampInfo.stamp);
+  if (!needsReload || hasExplicitTab || isConditionCheck) {
+    if (hasExplicitTab || isConditionCheck) {
+      console.info("[Morobot Global] startPlay in tab", pendingPlay.tabId, {
+        step: pendingPlay.stepNodeId,
+        group: pendingPlay.groupNodeId,
+        condition: pendingPlay.conditionNodeId
+      });
+    }
+    return startPlay(pendingPlay.taskId, pendingPlay.tabId, pendingPlay.runMode, playOpts);
+  }
+
+  await chrome.storage.local.set({
+    pendingPlayRequest: pendingPlay,
+    pendingPlayAt: Date.now(),
+    resumePlayAfterReload: true,
+    pendingDevReload: false,
+    pendingDevStamp: null
+  });
+
+  setTimeout(() => {
+    console.info("[Morobot Global] play → auto reload after response", pendingPlay.taskId);
+    try { chrome.runtime.reload(); } catch { /* ignore */ }
+  }, 120);
+
+  return {
+    ok: true,
+    reloading: true,
+    message: "افزونهٔ اجرا در حال به‌روزرسانی است — اجرا خودکار شروع می‌شود."
+  };
+}
+
+async function reloadPlayerNow(pendingPlay) {
+  if (pendingPlay) {
+    await chrome.storage.local.set({
+      pendingPlayRequest: pendingPlay,
+      pendingPlayAt: Date.now()
+    });
+  }
+  setTimeout(() => {
+    try { chrome.runtime.reload(); } catch { /* ignore */ }
+  }, 120);
+  return { ok: true, reloading: true };
+}
+
+async function fetchPlayerStamp({ forceSync }) {
+  const portal = await portalBase().catch(() => DEFAULT_PORTAL);
+  if (forceSync) {
+    try {
+      await fetch(`${portal}/extension/sync`, { method: "POST", cache: "no-store" });
+    } catch {
+      /* sync optional if portal down */
+    }
+  }
+  const urls = [
+    `${portal}/extension/dev-stamp/global`,
+    `${portal}/extension/dev-stamp/player`,
+    `${portal}/extension/dev-stamp`,
+    ...PLAYER_DEV_STAMP_FALLBACK_URLS
+  ];
+  const seen = new Set();
+  for (const url of urls) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (!data?.stamp) continue;
+      let origin = portal;
+      try { origin = new URL(url).origin; } catch { /* keep */ }
+      return {
+        stamp: data.stamp,
+        version: data.version || "",
+        path: data.path || null,
+        origin
+      };
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
+async function resumePendingPlayAfterReload() {
+  const { pendingPlayRequest, pendingPlayAt } = await chrome.storage.local.get([
+    "pendingPlayRequest", "pendingPlayAt"
+  ]);
+  if (!pendingPlayRequest?.taskId) return;
+  if (pendingPlayAt && Date.now() - Number(pendingPlayAt) > 120000) {
+    await chrome.storage.local.remove(["pendingPlayRequest", "pendingPlayAt", "resumePlayAfterReload"]);
+    return;
+  }
+  await chrome.storage.local.remove(["pendingPlayRequest", "pendingPlayAt"]);
+  await chrome.storage.local.set({ resumePlayAfterReload: true });
+  console.info("[Morobot Global] resuming play after auto-reload", pendingPlayRequest.taskId);
+  setTimeout(() => {
+    startPlay(
+      pendingPlayRequest.taskId,
+      pendingPlayRequest.tabId,
+      pendingPlayRequest.runMode,
+      {
+        groupNodeId: pendingPlayRequest.groupNodeId || null,
+        stepNodeId: pendingPlayRequest.stepNodeId || null,
+        conditionNodeId: pendingPlayRequest.conditionNodeId || null,
+        playScope: pendingPlayRequest.playScope || null,
+        openNewTab: pendingPlayRequest.openNewTab === true
+      }
+    ).then((res) => {
+      chrome.storage.local.remove("resumePlayAfterReload");
+      if (res && res.ok === false) {
+        const msg = res.error || "اجرا پس از به‌روزرسانی افزونه ناموفق بود.";
+        playStatus.lastError = msg;
+        playStatus.playing = false;
+        notifyPortalTabs({ type: "playStateChanged", ...getPlayStatus() });
+      }
+    }).catch((err) => {
+      chrome.storage.local.remove("resumePlayAfterReload");
+      const msg = err?.message || String(err) || "اجرا پس از به‌روزرسانی افزونه ناموفق بود.";
+      playStatus.lastError = msg;
+      playStatus.playing = false;
+      notifyPortalTabs({ type: "playStateChanged", ...getPlayStatus() });
+      console.warn("[Morobot Global] resume play failed", err);
+    });
+  }, 700);
+}
 
 /** Re-mount play HUD after refresh/navigation (storage-aware; retries for blank tabs). */
 async function reinjectPlayHudForTab(tabId, reason) {
@@ -1439,8 +1659,22 @@ async function detectDevStampChange({ queueOnly }) {
   }
 }
 
+DaTenantBranding.bootstrap().catch(() => {});
+
+async function pullBrandingFromPortal() {
+  try {
+    const portal = await portalBase();
+    const res = await fetch(`${portal}/extension/branding`, { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json();
+    await DaTenantBranding.persist(DaTenantBranding.normalize(data));
+  } catch { /* offline */ }
+}
+pullBrandingFromPortal().catch(() => {});
+
 pollDevReload();
 setInterval(pollDevReload, DEV_POLL_MS);
+resumePendingPlayAfterReload();
 
 // Context-menu selector copy lives in extension-selector (dedicated package).
 

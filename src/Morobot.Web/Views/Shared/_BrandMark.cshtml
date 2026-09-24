@@ -1,0 +1,6 @@
+@using Morobot.Web.Models
+@model BrandHeadModel
+@{
+  var src = Model.MarkPath.StartsWith("http") ? Model.MarkPath : Url.Content("~" + (Model.MarkPath.StartsWith('/') ? Model.MarkPath : "/" + Model.MarkPath));
+}
+<img class="@ViewData["BrandImgClass"]" src="@src" width="@(ViewData["BrandImgWidth"] ?? 32)" height="@(ViewData["BrandImgHeight"] ?? 32)" alt="@Model.AppName" />

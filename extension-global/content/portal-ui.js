@@ -288,20 +288,17 @@
         .catch((e) => ({ ok: false, error: e.message, tabs: [] }));
     }
     const tabs = Array.isArray(res?.tabs) ? res.tabs : [];
-    // Prefer real http(s) pages that are not the Morobot portal itself.
-    const httpTargets = tabs.filter((t) =>
-      t && t.id
-      && !t.isPortal
-      && !t.isBlank
-      && /^https?:\/\//i.test(String(t.url || ""))
-    );
-    // Fallback: any non-blank tab (still skip pure newtab/about:blank).
-    const anyUsable = tabs.filter((t) =>
-      t && t.id
-      && !t.isBlank
-      && /^https?:\/\//i.test(String(t.url || ""))
-    );
-    const list = httpTargets.length ? httpTargets : anyUsable;
+    // Execution targets: http(s) pages and blank/about:blank tabs (not the Morobot portal).
+    const list = tabs.filter((t) => {
+      if (!t || !t.id || t.isPortal) return false;
+      if (t.isBlank) return true;
+      return /^https?:\/\//i.test(String(t.url || ""));
+    });
+    list.sort((a, b) => {
+      if (a.isBlank !== b.isBlank) return a.isBlank ? 1 : -1;
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      return 0;
+    });
     return {
       ok: !!res?.ok || list.length > 0,
       tabs: list.map((t) => ({
@@ -311,7 +308,9 @@
         active: !!t.active,
         isBlank: !!t.isBlank,
         isPortal: !!t.isPortal,
-        label: tabLabel(t) + (t.isPortal ? " (پورتال)" : "")
+        label: (t.isBlank ? (t.title || "تب جدید / خالی") : tabLabel(t))
+          + (t.isPortal ? " (پورتال)" : "")
+          + (t.isBlank ? " · about:blank" : "")
       })),
       error: res?.error
     };

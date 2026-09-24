@@ -13,6 +13,8 @@
   var displayName = User.FindFirst("display_name")?.Value;
   if (string.IsNullOrWhiteSpace(displayName))
     displayName = User.Identity?.Name;
+  var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+  var pageTitle = ViewData["Title"] as string;
 }
 <!doctype html>
 <html
@@ -27,12 +29,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
-  <title>@(ViewData["Title"] ?? L["brand.name"])</title>
-  <link rel="icon" href="~/img/brand/morobot-mark.svg" type="image/svg+xml" />
-  <link rel="icon" type="image/png" sizes="32x32" href="~/img/brand/morobot-icon.png" />
-  <link rel="apple-touch-icon" href="~/img/brand/apple-touch-icon.png" />
-  <meta name="theme-color" content="#0d9488" />
-  <meta name="application-name" content="@L["brand.name"]" />
+  <title>@(string.IsNullOrWhiteSpace(pageTitle) ? brandHead.BrandTitle : $"{pageTitle} — {brandHead.AppName}")</title>
+  <partial name="_BrandHead" model="brandHead" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
@@ -46,6 +44,7 @@
   <link rel="stylesheet" href="~/css/da-notify.css?v=live-1" />
   <link rel="stylesheet" href="~/css/extension-gate.css?v=smart-path-1" />
   <link rel="stylesheet" href="~/css/morobot-copyright.css?v=1" />
+  <link rel="stylesheet" href="~/css/referral-qr.css?v=1" />
   <style>
     body, .menu, .layout-navbar, .card, input, button { font-family: Vazirmatn, "Public Sans", sans-serif !important; }
   </style>
@@ -81,8 +80,9 @@
       <aside id="layout-menu" class="layout-menu menu-vertical menu bg-menu-theme">
         <div class="app-brand demo">
           <a asp-area="Panel" asp-controller="Home" asp-action="Index" class="app-brand-link morobot-brand-link">
-            <img class="morobot-brand-mark" src="~/img/brand/morobot-mark.svg" width="32" height="32" alt="" />
-            <span class="app-brand-text demo menu-text fw-bold ms-2" data-i18n="brand.name">@L["brand.name"]</span>
+            @{ ViewData["BrandImgClass"] = "morobot-brand-mark"; ViewData["BrandImgWidth"] = 32; ViewData["BrandImgHeight"] = 32; }
+            <partial name="_BrandMark" model="brandHead" />
+            <span class="app-brand-text demo menu-text fw-bold ms-2">@brandHead.AppName</span>
           </a>
         </div>
         <div class="menu-inner-shadow"></div>
@@ -135,8 +135,9 @@
           </div>
           <div class="navbar-nav-right d-flex align-items-center w-100" id="navbar-collapse">
             <div class="d-xl-none fw-semibold text-heading me-auto d-flex align-items-center gap-2">
-              <img src="~/img/brand/morobot-mark.svg" width="22" height="22" alt="" />
-              <span>@L["brand.name"]</span>
+              @{ ViewData["BrandImgClass"] = ""; ViewData["BrandImgWidth"] = 22; ViewData["BrandImgHeight"] = 22; }
+              <partial name="_BrandMark" model="brandHead" />
+              <span>@brandHead.AppName</span>
             </div>
             <ul class="navbar-nav flex-row align-items-center ms-auto">
               <li class="nav-item me-2">
@@ -190,6 +191,12 @@
   <script src="~/js/entitlements.js?v=share-1"></script>
   <script src="~/js/extension-gate.js?v=play-tab-menu-1"></script>
   @await RenderSectionAsync("Scripts", required: false)
+  @if (brandHead.ShowReferralQr)
+  {
+    <partial name="_ReferralQrWidget" model="brandHead" />
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js" crossorigin="anonymous"></script>
+    <script src="~/js/referral-qr.js?v=1"></script>
+  }
   @await Component.InvokeAsync("SiteChrome")
 </body>
 </html>

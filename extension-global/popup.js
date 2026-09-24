@@ -95,6 +95,13 @@ async function pushOptions() {
 
 async function refresh() {
   applyDomI18n();
+  try {
+    const { tenantBranding: b } = await chrome.storage.local.get("tenantBranding");
+    if (b?.logoUrl) {
+      const img = document.querySelector("#app-title img");
+      if (img) img.src = b.logoUrl;
+    }
+  } catch { /* ignore */ }
   const session = await chrome.runtime.sendMessage({ type: "session" }).catch(() => ({
     userName: "test", version: "?"
   }));

@@ -28,8 +28,16 @@
   } catch { /* ignore */ }
 
   mark();
+  function pushTenantBranding() {
+    try {
+      const b = window.__MOROBOT_BRANDING;
+      if (!b || !b.appName) return;
+      chrome.runtime.sendMessage({ type: "applyTenantBranding", payload: b }).catch(() => {});
+    } catch { /* ignore */ }
+  }
+  pushTenantBranding();
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mark);
+    document.addEventListener("DOMContentLoaded", () => { mark(); pushTenantBranding(); });
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

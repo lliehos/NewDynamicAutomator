@@ -14,6 +14,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMemoryCache();
 builder.Services.AddScoped<ILocaleService, LocaleService>();
+builder.Services.AddScoped<TenantBrandingViewService>();
+builder.Services.AddScoped<ExtensionBrandingOverlay>();
 builder.Services.AddSingleton<SetupGuideService>();
 builder.Services.AddControllersWithViews(o =>
     {
@@ -21,6 +23,7 @@ builder.Services.AddControllersWithViews(o =>
         o.Filters.Add<Morobot.Web.Filters.LicenseGateFilter>();
         o.Filters.Add<Morobot.Web.Filters.RequireProfileCompleteFilter>();
         o.Filters.Add<Morobot.Web.Filters.UserPresenceFilter>();
+        o.Filters.Add<Morobot.Web.Filters.TenantBrandingViewDataFilter>();
     })
     .AddJsonOptions(o =>
     {
@@ -102,7 +105,18 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        var path = ctx.Context.Request.Path.Value ?? "";
+        if (path.StartsWith("/uploads/branding", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("/img/brand", StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Context.Response.Headers.AccessControlAllowOrigin = "*";
+        }
+    }
+});
 app.UseRouting();
 app.UseMiddleware<CultureMiddleware>();
 app.UseAuthentication();
@@ -133,6 +147,11 @@ using (var scope = app.Services.CreateScope())
 
     var license = scope.ServiceProvider.GetRequiredService<Morobot.Infrastructure.Services.LicenseService>();
     await license.EnsureAnchorAsync();
+
+    var sync = scope.ServiceProvider.GetRequiredService<ExtensionSyncService>();
+    var overlay = scope.ServiceProvider.GetRequiredService<ExtensionBrandingOverlay>();
+    sync.SyncNow("startup");
+    await overlay.ApplyAllPackagesAsync(sync);
 }
 
 app.Run();

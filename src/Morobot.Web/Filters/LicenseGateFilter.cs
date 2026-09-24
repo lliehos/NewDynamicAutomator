@@ -71,6 +71,9 @@ public sealed class LicenseGateFilter : IAsyncActionFilter
         if (path.StartsWith("/api/auth", StringComparison.OrdinalIgnoreCase))
             return true;
 
+        if (path.StartsWith("/checkupdate", StringComparison.OrdinalIgnoreCase))
+            return true;
+
         if (string.IsNullOrEmpty(area)
             && string.Equals(controller, "Home", StringComparison.OrdinalIgnoreCase)
             && (string.Equals(action, "Index", StringComparison.OrdinalIgnoreCase)

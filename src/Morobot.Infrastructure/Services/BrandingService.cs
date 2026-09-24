@@ -26,7 +26,8 @@ public sealed class BrandingService
             {
                 AppName = DefaultAppName,
                 BrandTitle = DefaultAppName,
-                IsLicensedBranding = false
+                IsLicensedBranding = false,
+                ShowReferralQrWidget = true
             };
         }
 
@@ -36,7 +37,7 @@ public sealed class BrandingService
         var logo = await _settings.GetAsync(SystemSettingKeys.BrandLogoPath, "", ct);
         var favicon = await _settings.GetAsync(SystemSettingKeys.BrandFaviconPath, "", ct);
 
-        return new TenantBrandingDto
+        var dto = new TenantBrandingDto
         {
             AppName = string.IsNullOrWhiteSpace(appName) ? DefaultAppName : appName,
             BrandTitle = string.IsNullOrWhiteSpace(title) ? appName : title,
@@ -45,6 +46,8 @@ public sealed class BrandingService
             FaviconUrl = string.IsNullOrWhiteSpace(favicon) ? null : favicon,
             IsLicensedBranding = true
         };
+        await ApplyPaletteFromSettingsAsync(dto, ct);
+        return dto;
     }
 
     public async Task SaveAsync(TenantBrandingDto model, CancellationToken ct = default)
@@ -60,5 +63,59 @@ public sealed class BrandingService
             await _settings.SetAsync(SystemSettingKeys.BrandLogoPath, model.LogoUrl, ct);
         if (!string.IsNullOrWhiteSpace(model.FaviconUrl))
             await _settings.SetAsync(SystemSettingKeys.BrandFaviconPath, model.FaviconUrl, ct);
+        await SavePaletteAsync(model, ct);
+    }
+
+    private async Task ApplyPaletteFromSettingsAsync(TenantBrandingDto dto, CancellationToken ct)
+    {
+        dto.ColorPrimary = BrandPaletteDefaults.NormalizeHex(
+            await _settings.GetAsync(SystemSettingKeys.BrandColorPrimary, BrandPaletteDefaults.Primary, ct),
+            BrandPaletteDefaults.Primary);
+        dto.ColorPrimaryDark = BrandPaletteDefaults.NormalizeHex(
+            await _settings.GetAsync(SystemSettingKeys.BrandColorPrimaryDark, BrandPaletteDefaults.PrimaryDark, ct),
+            BrandPaletteDefaults.PrimaryDark);
+        dto.ColorPrimaryLight = BrandPaletteDefaults.NormalizeHex(
+            await _settings.GetAsync(SystemSettingKeys.BrandColorPrimaryLight, BrandPaletteDefaults.PrimaryLight, ct),
+            BrandPaletteDefaults.PrimaryLight);
+        dto.ColorAccent = BrandPaletteDefaults.NormalizeHex(
+            await _settings.GetAsync(SystemSettingKeys.BrandColorAccent, BrandPaletteDefaults.Accent, ct),
+            BrandPaletteDefaults.Accent);
+        dto.ColorSoft = BrandPaletteDefaults.NormalizeHex(
+            await _settings.GetAsync(SystemSettingKeys.BrandColorSoft, BrandPaletteDefaults.Soft, ct),
+            BrandPaletteDefaults.Soft);
+        dto.ColorSoft2 = BrandPaletteDefaults.NormalizeHex(
+            await _settings.GetAsync(SystemSettingKeys.BrandColorSoft2, BrandPaletteDefaults.Soft2, ct),
+            BrandPaletteDefaults.Soft2);
+        dto.ColorInk = BrandPaletteDefaults.NormalizeHex(
+            await _settings.GetAsync(SystemSettingKeys.BrandColorInk, BrandPaletteDefaults.Ink, ct),
+            BrandPaletteDefaults.Ink);
+        dto.ColorBorderSubtle = BrandPaletteDefaults.NormalizeHex(
+            await _settings.GetAsync(SystemSettingKeys.BrandColorBorderSubtle, BrandPaletteDefaults.BorderSubtle, ct),
+            BrandPaletteDefaults.BorderSubtle);
+        var qrRaw = await _settings.GetAsync(SystemSettingKeys.BrandReferralQrVisible, "true", ct);
+        dto.ShowReferralQrWidget = !string.Equals(qrRaw, "false", StringComparison.OrdinalIgnoreCase)
+                                   && qrRaw != "0";
+    }
+
+    private async Task SavePaletteAsync(TenantBrandingDto model, CancellationToken ct)
+    {
+        await _settings.SetAsync(SystemSettingKeys.BrandColorPrimary,
+            BrandPaletteDefaults.NormalizeHex(model.ColorPrimary, BrandPaletteDefaults.Primary), ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandColorPrimaryDark,
+            BrandPaletteDefaults.NormalizeHex(model.ColorPrimaryDark, BrandPaletteDefaults.PrimaryDark), ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandColorPrimaryLight,
+            BrandPaletteDefaults.NormalizeHex(model.ColorPrimaryLight, BrandPaletteDefaults.PrimaryLight), ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandColorAccent,
+            BrandPaletteDefaults.NormalizeHex(model.ColorAccent, BrandPaletteDefaults.Accent), ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandColorSoft,
+            BrandPaletteDefaults.NormalizeHex(model.ColorSoft, BrandPaletteDefaults.Soft), ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandColorSoft2,
+            BrandPaletteDefaults.NormalizeHex(model.ColorSoft2, BrandPaletteDefaults.Soft2), ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandColorInk,
+            BrandPaletteDefaults.NormalizeHex(model.ColorInk, BrandPaletteDefaults.Ink), ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandColorBorderSubtle,
+            BrandPaletteDefaults.NormalizeHex(model.ColorBorderSubtle, BrandPaletteDefaults.BorderSubtle), ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandReferralQrVisible,
+            model.ShowReferralQrWidget ? "true" : "false", ct);
     }
 }

@@ -11,11 +11,13 @@ public class ExtensionController : Controller
 {
     private readonly IWebHostEnvironment _env;
     private readonly ExtensionSyncService _sync;
+    private readonly TenantBrandingViewService _branding;
 
-    public ExtensionController(IWebHostEnvironment env, ExtensionSyncService sync)
+    public ExtensionController(IWebHostEnvironment env, ExtensionSyncService sync, TenantBrandingViewService branding)
     {
         _env = env;
         _sync = sync;
+        _branding = branding;
     }
 
     [AllowAnonymous]
@@ -71,10 +73,20 @@ public class ExtensionController : Controller
     }
 
     [AllowAnonymous]
-    [HttpGet("/extension/install-path")]
-    public IActionResult InstallPathInfo()
+    [HttpGet("/extension/branding")]
+    public async Task<IActionResult> BrandingJson(CancellationToken ct)
     {
-        return Json(_sync.InstallPathsPayload());
+        var head = await _branding.GetHeadAsync(ct);
+        var origin = _branding.ResolveSiteOrigin();
+        return Json(head.ToExtensionJson(origin));
+    }
+
+    [AllowAnonymous]
+    [HttpGet("/extension/install-path")]
+    public async Task<IActionResult> InstallPathInfo(CancellationToken ct)
+    {
+        var head = await _branding.GetHeadAsync(ct);
+        return Json(_sync.InstallPathsPayload(head.ToExtensionJson(_branding.ResolveSiteOrigin())));
     }
 
     [AllowAnonymous]

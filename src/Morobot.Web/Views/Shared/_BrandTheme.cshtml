@@ -1,0 +1,23 @@
+@using Morobot.Web.Models
+@model BrandHeadModel
+<style id="morobot-brand-theme">
+:root,
+[data-style="light"],
+html.flow-ltr,
+html.flow-rtl {
+  --morobot-primary: @Model.ColorPrimary;
+  --morobot-primary-dark: @Model.ColorPrimaryDark;
+  --morobot-primary-hover: @Model.ColorPrimaryDark;
+  --morobot-primary-light: @Model.ColorPrimaryLight;
+  --morobot-accent: @Model.ColorAccent;
+  --morobot-soft: @Model.ColorSoft;
+  --morobot-soft-2: @Model.ColorSoft2;
+  --morobot-ink: @Model.ColorInk;
+  --morobot-border-subtle: @Model.ColorBorderSubtle;
+  --bs-primary: @Model.ColorPrimary;
+  --bs-primary-rgb: @Model.PrimaryRgb;
+  --bs-primary-bg-subtle: @Model.ColorSoft;
+  --bs-primary-border-subtle: @Model.ColorBorderSubtle;
+  --bs-primary-text-emphasis: @Model.ColorPrimaryDark;
+}
+</style>

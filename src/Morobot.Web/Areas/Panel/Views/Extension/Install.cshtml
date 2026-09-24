@@ -1,27 +1,30 @@
 @{
-    ViewData["Title"] = "نصب افزونه‌های مروبات";
+    ViewData["Title"] = "نصب افزونه‌ها";
     var globalPath = ViewBag.GlobalPath as string ?? ViewBag.RecorderPath as string ?? ViewBag.ExtensionPath as string ?? "";
     var appKey = ViewBag.AppInstanceKey as string ?? "default";
     var smartPath = ViewBag.SmartPath as string ?? "";
     var globalVer = ViewBag.GlobalVersion as string ?? ViewBag.RecorderVersion as string ?? ViewBag.Version as string ?? "";
     var smartVer = ViewBag.SmartVersion as string ?? "";
+    var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+    var globalExtName = brandHead.IsLicensedBranding ? $"{brandHead.AppName} Global" : "Morobot Global";
+    var smartExtName = brandHead.IsLicensedBranding ? $"{brandHead.AppName} Smart Recorder" : "Morobot Smart Recorder";
 }
 <div class="card mb-4">
   <div class="card-body">
-    <h4 class="mb-3">افزونه‌های مروبات</h4>
+    <h4 class="mb-3">افزونه‌های @brandHead.AppName</h4>
     <div class="alert alert-warning mb-3 small">
       <strong>کلید استقرار (AppInstanceKey):</strong> <code>@appKey</code><br />
       مسیر افزونه‌ها: <code>%LOCALAPPDATA%\morobot.soras.ir\@appKey\</code> — برای هر دامنه/Cloud/Enterprise جدا تنظیم کنید.
     </div>
     <div class="alert alert-info mb-3">
-      <strong>Morobot Global</strong> شامل ضبط، اجرا و سلکتور است — فقط <strong>یک بار</strong> Load unpacked کنید.
-      <strong>Smart Recorder</strong> جداگانه و اختیاری است.
+      <strong>@globalExtName</strong> شامل ضبط، اجرا و سلکتور است — فقط <strong>یک بار</strong> Load unpacked کنید.
+      <strong>@smartExtName</strong> جداگانه و اختیاری است.
     </div>
 
     <div class="row g-3">
       <div class="col-md-6">
         <div class="border rounded p-3 h-100" style="border-top: 3px solid #0d9488 !important;">
-          <h5 class="mb-2">① Morobot Global</h5>
+          <h5 class="mb-2">① @globalExtName</h5>
           <p class="small text-muted">ضبط فرآیند، اجرا (Play) و کپی سلکتور — یک افزونه با آیکون برند.</p>
           <div class="fw-semibold mb-1">مسیر</div>
           <code id="da-ext-path-global" class="user-select-all d-block small mb-2">@globalPath</code>
@@ -34,7 +37,7 @@
       </div>
       <div class="col-md-6">
         <div class="border rounded p-3 h-100" style="border-top: 3px solid #7367f0 !important;">
-          <h5 class="mb-2">② Smart Recorder</h5>
+          <h5 class="mb-2">② @smartExtName</h5>
           <p class="small text-muted">هوشمندسازی فرآیند — جدا از Global.</p>
           <div class="fw-semibold mb-1">مسیر</div>
           <code id="da-ext-path-smart" class="user-select-all d-block small mb-2">@smartPath</code>
@@ -50,7 +53,7 @@
     <ol class="mb-4 mt-4">
       <li class="mb-2"><code>chrome://extensions</code> یا <code>edge://extensions</code></li>
       <li class="mb-2"><strong>Developer mode</strong> را روشن کنید.</li>
-      <li class="mb-2"><strong>Load unpacked</strong> → مسیر Global (و در صورت نیاز Smart Recorder).</li>
+      <li class="mb-2"><strong>Load unpacked</strong> → مسیر @globalExtName (و در صورت نیاز @smartExtName).</li>
       <li class="mb-2">افزونه‌های قدیمی Recorder/Player/Selector را حذف کنید.</li>
       <li class="mb-2">پرتال را رفرش کنید.</li>
     </ol>

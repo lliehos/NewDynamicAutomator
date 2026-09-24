@@ -24,16 +24,22 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     private readonly IWebHostEnvironment _env;
     private readonly IConfiguration _config;
     private readonly ILogger<ExtensionSyncService> _log;
+    private readonly IServiceScopeFactory _scopes;
     private readonly List<FileSystemWatcher> _watchers = new();
     private readonly object _gate = new();
     private Timer? _debounce;
     private readonly Dictionary<string, PackageState> _packages = new(StringComparer.OrdinalIgnoreCase);
 
-    public ExtensionSyncService(IWebHostEnvironment env, IConfiguration config, ILogger<ExtensionSyncService> log)
+    public ExtensionSyncService(
+        IWebHostEnvironment env,
+        IConfiguration config,
+        ILogger<ExtensionSyncService> log,
+        IServiceScopeFactory scopes)
     {
         _env = env;
         _config = config;
         _log = log;
+        _scopes = scopes;
 
         var appKey = ExtensionInstallPathHelper.ResolveAppInstanceKey(_config);
         var baseInstall = ExtensionInstallPathHelper.InstanceRoot(_config);
@@ -210,7 +216,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         return new StampInfo(pkg.LastStamp, BootId, ReadManifestVersion(pkg.InstallPath), pkg.InstallPath, pkg.SourcePath, pkg.Role);
     }
 
-    public object InstallPathsPayload()
+    public object InstallPathsPayload(object? branding = null)
     {
         SyncNow("install-path");
         var global = Snapshot(RoleGlobal);
@@ -230,7 +236,8 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
             error = global.Error ?? smart.Error,
             appInstanceKey = AppInstanceKey,
             instanceRoot = ExtensionInstallPathHelper.InstanceRoot(_config),
-            hint = "دو افزونه: Morobot Global (ضبط + اجرا + سلکتور) و Smart Recorder. هر استقرار Morobot کلید AppInstanceKey جدا دارد — روی یک PC چند دامنه/نسخه بدون تداخل."
+            hint = "دو افزونه: Morobot Global (ضبط + اجرا + سلکتور) و Smart Recorder. هر استقرار Morobot کلید AppInstanceKey جدا دارد — روی یک PC چند دامنه/نسخه بدون تداخل.",
+            branding
         };
     }
 
@@ -238,14 +245,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     {
         var pkg = ResolveRole(role);
         var ok = Directory.Exists(pkg.InstallPath) && File.Exists(Path.Combine(pkg.InstallPath, "manifest.json"));
-        var (name, title, description) = pkg.Role switch
-        {
-            RoleSmart => ("Morobot Smart Recorder", "افزونهٔ هوشمندسازی", "کانتکس تعاملات برای یادگیری بعدی."),
-            RolePlayer => ("Morobot Global", "افزونهٔ Morobot", "ضبط، اجرا و سلکتور — یک افزونه."),
-            RoleSelector => ("Morobot Global", "افزونهٔ Morobot", "ضبط، اجرا و سلکتور — یک افزونه."),
-            RoleGlobal => ("Morobot Global", "افزونهٔ Morobot", "ضبط، اجرا و سلکتور — یک افزونه."),
-            _ => ("Morobot Global", "افزونهٔ Morobot", "ضبط، اجرا و سلکتور — یک افزونه.")
-        };
+        var (name, title, description) = ReadExtensionBrandingMeta(pkg.InstallPath, pkg.Role);
         return new PackageSnapshot(
             ok,
             pkg.Role,
@@ -258,6 +258,39 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
             description,
             ok ? null : "پوشهٔ نصب آماده نیست."
         );
+    }
+
+    private static (string Name, string Title, string Description) ReadExtensionBrandingMeta(string installPath, string role)
+    {
+        var defaults = role switch
+        {
+            RoleSmart => ("Morobot Smart Recorder", "افزونهٔ هوشمندسازی", "کانتکس تعاملات برای یادگیری بعدی."),
+            _ => ("Morobot Global", "افزونهٔ Morobot", "ضبط، اجرا و سلکتور — یک افزونه.")
+        };
+
+        try
+        {
+            var path = Path.Combine(installPath, "morobot-branding.json");
+            if (!File.Exists(path)) return defaults;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var root = doc.RootElement;
+            var app = root.TryGetProperty("appName", out var a) ? a.GetString() : null;
+            var extName = root.TryGetProperty("extensionName", out var e) ? e.GetString() : null;
+            var brandTitle = root.TryGetProperty("brandTitle", out var t) ? t.GetString() : null;
+            if (string.IsNullOrWhiteSpace(app)) return defaults;
+            var name = string.IsNullOrWhiteSpace(extName)
+                ? (role == RoleSmart ? $"{app} Smart Recorder" : $"{app} Global")
+                : extName;
+            var title = string.IsNullOrWhiteSpace(brandTitle) ? defaults.Item2 : brandTitle;
+            var desc = role == RoleSmart
+                ? $"{title} — Smart Recorder"
+                : $"{title} — ضبط، اجرا و سلکتور";
+            return (name, title, desc);
+        }
+        catch
+        {
+            return defaults;
+        }
     }
 
     private PackageState ResolveRole(string? role)
@@ -287,6 +320,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         if (installReady && contentStamp == pkg.SyncedContentStamp)
         {
             pkg.LastStamp = $"{BootId}:{contentStamp}";
+            TryApplyBrandingOverlay();
             return new SyncResult(true, pkg.InstallPath, pkg.SourcePath, pkg.LastStamp, null);
         }
 
@@ -296,7 +330,22 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         pkg.LastStamp = $"{BootId}:{contentStamp}";
         _log.LogInformation("{Role} extension synced ({Reason}) → {Install} stamp={Stamp}",
             pkg.Role, reason, pkg.InstallPath, pkg.LastStamp);
+        TryApplyBrandingOverlay();
         return new SyncResult(true, pkg.InstallPath, pkg.SourcePath, pkg.LastStamp, null);
+    }
+
+    private void TryApplyBrandingOverlay()
+    {
+        try
+        {
+            using var scope = _scopes.CreateScope();
+            var overlay = scope.ServiceProvider.GetRequiredService<ExtensionBrandingOverlay>();
+            overlay.ApplyAllPackagesAsync(this).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Extension branding overlay skipped");
+        }
     }
 
     private void OnSourceChanged(string role, FileSystemEventArgs e)
@@ -378,6 +427,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         foreach (var file in Directory.EnumerateFiles(dest, "*", SearchOption.AllDirectories))
         {
             var rel = Path.GetRelativePath(dest, file);
+            if (rel.Equals("morobot-branding.json", StringComparison.OrdinalIgnoreCase)) continue;
             var src = Path.Combine(source, rel);
             if (!File.Exists(src))
             {

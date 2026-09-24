@@ -18,9 +18,15 @@ public static class DependencyInjection
         services.AddDbContext<AppDbContext>(o => o.UseSqlServer(cs));
         services.Configure<MorobotOptions>(config.GetSection(MorobotOptions.SectionName));
         services.AddHttpClient();
+        services.AddHttpClient(nameof(UpdateCheckService), client =>
+        {
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("Morobot-UpdateCheck/1.0");
+            client.Timeout = TimeSpan.FromSeconds(20);
+        });
         services.AddScoped<LicenseService>();
         services.AddScoped<DeploymentBindingService>();
         services.AddScoped<BrandingService>();
+        services.AddScoped<ProductUpdateFeedService>();
         services.AddScoped<UpdateCheckService>();
         services.AddScoped<AuthService>();
         services.AddScoped<EntitlementService>();

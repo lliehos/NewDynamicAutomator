@@ -1,4 +1,5 @@
 /** Morobot Smart Recorder — blank tab + soft API stub (Microsoft LM later). */
+importScripts("lib/branding.js");
 
 const DEFAULT_PORTAL = "https://localhost:7201";
 const FLUSH_MS = 1200;
@@ -127,6 +128,9 @@ async function handleMessage(message, sender) {
       return saveSmartResult();
     case "smartContext":
       return onSmartContext(message.payload, sender);
+    case "applyTenantBranding":
+      await DaTenantBranding.persist(DaTenantBranding.normalize(message.payload || message.branding));
+      return { ok: true };
     case "startRecordSession":
     case "startPlay":
       return { ok: false, error: "این افزونه فقط Smart Recorder است.", needExtension: "smart" };
@@ -380,3 +384,5 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
     await stopSmartThinking();
   }
 });
+
+DaTenantBranding.bootstrap().catch(() => {});

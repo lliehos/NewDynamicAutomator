@@ -124,7 +124,18 @@
   };
 
   let culture = "fa";
+  let brandAppName = null;
   const listeners = new Set();
+
+  function setBrand(appName, brandTitle) {
+    const n = String(appName || "").trim();
+    brandAppName = n || null;
+    if (brandAppName) {
+      listeners.forEach((fn) => {
+        try { fn(culture); } catch { /* ignore */ }
+      });
+    }
+  }
 
   function normalize(c) {
     c = String(c || "").toLowerCase();
@@ -132,6 +143,10 @@
   }
 
   function t(key, vars) {
+    if (brandAppName) {
+      if (key === "rec.title") return culture === "en" ? `Record — ${brandAppName}` : `ضبط — ${brandAppName}`;
+      if (key === "play.title") return culture === "en" ? `Play — ${brandAppName}` : `اجرا — ${brandAppName}`;
+    }
     const pack = STRINGS[culture] || STRINGS.fa;
     let text = pack[key] ?? STRINGS.fa[key] ?? key;
     if (vars && typeof vars === "object") {
@@ -172,8 +187,10 @@
 
   async function init() {
     try {
-      const data = await chrome.storage.local.get("uiCulture");
+      const data = await chrome.storage.local.get(["uiCulture", "tenantBranding"]);
       culture = normalize(data.uiCulture);
+      const b = data.tenantBranding;
+      if (b?.appName) setBrand(b.appName, b.brandTitle);
     } catch {
       culture = "fa";
     }
@@ -186,5 +203,5 @@
     return culture;
   }
 
-  global.DaExtI18n = { t, init, getCulture, setCulture, dir, applyRoot, onChange, normalize };
+  global.DaExtI18n = { t, init, getCulture, setCulture, setBrand, dir, applyRoot, onChange, normalize };
 })(typeof globalThis !== "undefined" ? globalThis : window);

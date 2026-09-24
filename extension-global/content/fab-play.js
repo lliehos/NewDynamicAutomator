@@ -266,6 +266,14 @@
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type !== "playStateChanged") return;
     lastPlaySnapshot = message;
+    if (!message.playing) {
+      try {
+        stopBtn.hidden = true;
+        stopBtn.disabled = true;
+        setPlayPauseMode("play");
+        playPauseBtn.disabled = false;
+      } catch { /* ignore */ }
+    }
     if (message.playing) {
       userCollapsed = false;
       // Apply controls immediately — don't wait for async getState (can flake / wake SW late).
@@ -344,7 +352,9 @@
             groupNodeId: lastPlayRequest?.groupNodeId || null,
             stepNodeId: lastPlayRequest?.stepNodeId || null,
             conditionNodeId: lastPlayRequest?.conditionNodeId || null,
-            playScope: lastPlayRequest?.playScope || null
+            playScope: lastPlayRequest?.playScope || null,
+            tabId: lastPlayRequest?.tabId ?? null,
+            openNewTab: lastPlayRequest?.openNewTab === true
           }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
           if (!res?.ok && !res?.reloading) {
             status.textContent = res?.error || t("play.startError");
@@ -384,8 +394,8 @@
     clearBtn.disabled = true;
     try {
       const res = await chrome.runtime.sendMessage({ type: "clearPlayLogs" }).catch(() => null);
-      const keepPlaying = !!(res?.playing || lastPlaySnapshot?.playing);
-      const keepPaused = !!(res?.paused || lastPlaySnapshot?.paused);
+      const keepPlaying = !!res?.playing;
+      const keepPaused = !!res?.paused;
       // Always clear UI logs; never force playing=false on a failed response.
       lastPlaySnapshot = {
         ...(lastPlaySnapshot || {}),
@@ -516,13 +526,14 @@
       : { ...(state.play || {}), ...snap };
 
     // Prefer live engine/storage; fall back to last snapshot so a flaky getState cannot disable Stop mid-run.
-    const playing = !!(
-      state.playing
-      || state.play?.playing
-      || storagePlaying
-      || playHint?.playing
-      || snap.playing
-    );
+    // Storage + live engine win; stale snapshot must not keep HUD in "running" after finish.
+    const playing = storagePlaying
+      ? true
+      : !!(
+        state.playing
+        || state.play?.playing
+        || playHint?.playing === true
+      );
     const paused = !!(state.play?.paused || play.paused || storagePaused || playHint?.paused);
     const ver = session?.version || chrome.runtime.getManifest().version;
     const user = session?.userName || "test";
@@ -533,8 +544,10 @@
     if (playing) document.documentElement.dataset.daMorobotMode = "play";
     else if (pageMode === "play") delete document.documentElement.dataset.daMorobotMode;
 
-    // Only auto-open while actually playing. Stale lastPlayRequest must not steal the record HUD.
-    const showHud = playing && (document.documentElement.dataset.daMorobotMode !== "record");
+    // Keep HUD after finish so user can re-run (Play). Hide only when no session context.
+    const hasIdleSession = !playing && (canRestart || hasHistory(play));
+    const showHud = (playing || hasIdleSession)
+      && (document.documentElement.dataset.daMorobotMode !== "record");
 
     if (!showHud) {
       panel.hidden = true;
@@ -542,6 +555,7 @@
       root.hidden = true;
       stopBtn.hidden = true;
       stopBtn.disabled = true;
+      playPauseBtn.hidden = false;
       return;
     }
 
@@ -575,13 +589,17 @@
     }
     renderPlayResults(play);
 
-    // One toggle: Pause while running; Play/Resume when paused or stopped.
+    // Running: Pause + Stop. Finished/idle: Play only (Stop hidden).
+    playPauseBtn.hidden = false;
     if (playing && !paused) {
       setPlayPauseMode("pause");
       playPauseBtn.disabled = false;
+    } else if (playing && paused) {
+      setPlayPauseMode("play", { paused: true });
+      playPauseBtn.disabled = false;
     } else {
-      setPlayPauseMode("play", { paused: !!(playing && paused) });
-      playPauseBtn.disabled = playing ? false : !canRestart;
+      setPlayPauseMode("play");
+      playPauseBtn.disabled = !canRestart;
     }
     stopBtn.hidden = !playing;
     stopBtn.disabled = !playing;

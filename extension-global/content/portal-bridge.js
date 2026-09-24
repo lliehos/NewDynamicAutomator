@@ -239,7 +239,19 @@
     }
   });
 
+  function pushTenantBranding() {
+    try {
+      const b = window.__MOROBOT_BRANDING;
+      if (!b || !b.appName) return;
+      chrome.runtime.sendMessage({ type: "applyTenantBranding", payload: b }).catch(() => {});
+    } catch { /* ignore */ }
+  }
+
   mark();
+  pushTenantBranding();
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", pushTenantBranding);
+  }
   pullFromExtension();
   pushPageTasksToExtension();
 })();

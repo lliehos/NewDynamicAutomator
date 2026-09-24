@@ -7,6 +7,19 @@
     return key;
   }
 
+  function morobotCssVar(name, fallback) {
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return v || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function morobotPrimaryColor() {
+    return morobotCssVar("--morobot-primary", "#0d9488");
+  }
+
   function actionLabels() {
     return {
       NoAction: t("editor.actions.NoAction"),
@@ -3820,9 +3833,9 @@
     const size = 18;
     const x = Math.max(4, w - size - 5);
     const y = kind === "condition" ? Math.max(4, h * 0.18) : 5;
-    const color = kind === "group" ? "#0d9488"
+    const color = kind === "group" ? morobotPrimaryColor()
       : kind === "condition" ? "#6f6b7d"
-      : "#0d9488";
+      : morobotPrimaryColor();
     const btn = el("g", {
       class: "node-rename-btn",
       transform: `translate(${x},${y})`,
@@ -4198,18 +4211,31 @@
       sub.hidden = false;
       sub.innerHTML = `<li class="disabled">در حال بارگذاری تب‌ها…</li>`;
       const tabs = await requestOpenBrowserTabs();
-      if (!tabs.length) {
-        sub.innerHTML = `<li class="disabled">تب http(s) پیدا نشد — صفحهٔ هدف را باز کنید و Player را Reload کنید</li>`;
+      const newTabRow = (mode === "task" || mode === "group")
+        ? `<li data-tab-id="__new__" class="ctx-new-tab" title="about:blank">➕ تب جدید خالی (ایجاد خودکار)</li>`
+        : "";
+      if (!newTabRow && !tabs.length) {
+        sub.innerHTML = `<li class="disabled">تب مرورگر پیدا نشد — افزونه را Reload کنید</li>`;
         return;
       }
-      sub.innerHTML = tabs.map((t) =>
+      const tabRows = tabs.map((t) =>
         `<li data-tab-id="${esc(String(t.id))}" title="${esc(t.url || "")}">${esc(t.label || t.title || String(t.id))}</li>`
       ).join("");
+      sub.innerHTML = newTabRow + (tabRows || `<li class="disabled">تب دیگری باز نیست</li>`);
       sub.querySelectorAll("li[data-tab-id]").forEach((tabLi) => {
         tabLi.addEventListener("click", (ev) => {
           ev.stopPropagation();
           ctxMenu.hidden = true;
-          const tabId = Number(tabLi.getAttribute("data-tab-id"));
+          const raw = tabLi.getAttribute("data-tab-id");
+          if (raw === "__new__") {
+            if (mode === "group") requestPlayInTab({ groupNodeId: n.id, openNewTab: true });
+            else if (mode === "task") {
+              if (n.groupNodeId) requestPlayInTab({ groupNodeId: n.groupNodeId, openNewTab: true });
+              else requestPlayInTab({ openNewTab: true });
+            }
+            return;
+          }
+          const tabId = Number(raw);
           if (!Number.isFinite(tabId)) return;
           if (mode === "action") requestPlayInTab({ stepNodeId: n.id, tabId });
           else if (mode === "group") requestPlayInTab({ groupNodeId: n.id, tabId });
@@ -4406,7 +4432,7 @@
         setStatus("برای این شرط یک تب صفحه انتخاب کنید.", "warn");
         return;
       }
-    } else if (!hasTab && !scope?.conditionNodeId) {
+    } else if (!hasTab && !scope?.conditionNodeId && scope?.openNewTab !== true) {
       setStatus("شناسهٔ تب نامعتبر است.", "warn");
       return;
     }
@@ -4436,7 +4462,7 @@
               ? "group"
               : "task",
         tabId: hasTab ? rawTab : null,
-        openNewTab: false,
+        openNewTab: scope?.openNewTab === true,
         task: cached,
         graph: cached.graph
       };
@@ -4447,13 +4473,14 @@
         } catch {
           window.dispatchEvent(new CustomEvent("da-play", { detail }));
         }
+        const newTab = scope?.openNewTab === true;
         const msg = scope?.conditionNodeId
           ? (hasTab ? `بررسی شرط در تب #${rawTab}…` : "بررسی شرط…")
           : scope?.groupNodeId
-            ? `اجرای گروه در تب #${rawTab}…`
+            ? (newTab ? "اجرای گروه در تب جدید…" : `اجرای گروه در تب #${rawTab}…`)
             : scope?.stepNodeId
-              ? `اجرای اقدام در تب #${rawTab}…`
-              : `اجرای فرآیند در تب #${rawTab}…`;
+              ? (newTab ? "اجرای اقدام در تب جدید…" : `اجرای اقدام در تب #${rawTab}…`)
+              : (newTab ? "اجرای فرآیند در تب جدید خالی…" : `اجرای فرآیند در تب #${rawTab}…`);
         setStatus(msg, "info");
         // Show pause/stop on diagram for any play (including condition checks).
         playSessionActive = true;

@@ -18,6 +18,8 @@ public sealed class MorobotOptions
 
     public string? LicensePublicKeyPem { get; set; }
 
+    public UpdateFeedOptions UpdateFeed { get; set; } = new();
+
     public string EffectiveAppInstanceKey => SanitizeAppInstanceKey(AppInstanceKey);
 
     public static string SanitizeAppInstanceKey(string? raw)

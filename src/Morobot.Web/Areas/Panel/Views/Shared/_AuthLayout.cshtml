@@ -2,17 +2,16 @@
   var culture = L.Culture;
   var dir = L.Dir;
   var cssPrefix = L.IsRtl ? "rtl/" : "";
+  var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+  var pageTitle = ViewData["Title"] as string;
 }
 <!doctype html>
 <html lang="@culture" class="light-style layout-wide customizer-hide" dir="@dir" data-culture="@culture" data-assets-path="~/assets/" data-style="light">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>@(string.IsNullOrWhiteSpace(ViewData["Title"] as string) ? L["brand.name"] : $"{ViewData["Title"]} — {L["brand.name"]}")</title>
-  <link rel="icon" href="~/img/brand/morobot-mark.svg" type="image/svg+xml" />
-  <link rel="icon" type="image/png" sizes="32x32" href="~/img/brand/morobot-icon.png" />
-  <link rel="apple-touch-icon" href="~/img/brand/apple-touch-icon.png" />
-  <meta name="theme-color" content="#0d9488" />
+  <title>@(string.IsNullOrWhiteSpace(pageTitle) ? brandHead.BrandTitle : $"{pageTitle} — {brandHead.AppName}")</title>
+  <partial name="_BrandHead" model="brandHead" />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
   <link rel="stylesheet" href="~/assets/vendor/css/@(cssPrefix)core.css" />

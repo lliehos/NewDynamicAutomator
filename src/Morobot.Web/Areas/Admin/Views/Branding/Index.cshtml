@@ -79,6 +79,42 @@
     </div>
   </div>
 
+  <div class="admin-settings-card">
+    <h3><i class="ti ti-color-swatch" aria-hidden="true"></i>@L["admin.branding.colors"]</h3>
+    <p class="admin-field-hint mb-3">@L["admin.branding.colorsIntro"]</p>
+    <div class="admin-color-grid">
+      @foreach (var f in new[] {
+        new { Id = "ColorPrimary", Key = "admin.branding.colorPrimary", Val = Model.ColorPrimary },
+        new { Id = "ColorPrimaryDark", Key = "admin.branding.colorPrimaryDark", Val = Model.ColorPrimaryDark },
+        new { Id = "ColorPrimaryLight", Key = "admin.branding.colorPrimaryLight", Val = Model.ColorPrimaryLight },
+        new { Id = "ColorAccent", Key = "admin.branding.colorAccent", Val = Model.ColorAccent },
+        new { Id = "ColorSoft", Key = "admin.branding.colorSoft", Val = Model.ColorSoft },
+        new { Id = "ColorSoft2", Key = "admin.branding.colorSoft2", Val = Model.ColorSoft2 },
+        new { Id = "ColorInk", Key = "admin.branding.colorInk", Val = Model.ColorInk },
+        new { Id = "ColorBorderSubtle", Key = "admin.branding.colorBorderSubtle", Val = Model.ColorBorderSubtle }
+      })
+      {
+        <div class="admin-color-field">
+          <label class="admin-label" for="@f.Id">@L[f.Key]</label>
+          <div class="admin-color-row">
+            <input type="color" class="form-control form-control-color" id="@f.Id" name="@f.Id" value="@f.Val" data-hex-pair="@f.Id" />
+            <input type="text" class="form-control admin-color-hex" id="@(f.Id)-hex" value="@f.Val" maxlength="7" data-hex-pair="@f.Id" aria-label="@L[f.Key]" />
+          </div>
+        </div>
+      }
+    </div>
+  </div>
+
+  <div class="admin-settings-card">
+    <h3><i class="ti ti-qrcode" aria-hidden="true"></i>@L["admin.branding.referralQr"]</h3>
+    <p class="admin-field-hint">@L["admin.branding.referralQrHint"]</p>
+    <label class="admin-switch-line">
+      <input type="hidden" name="ShowReferralQrWidget" value="false" />
+      <input type="checkbox" name="ShowReferralQrWidget" value="true" @(Model.ShowReferralQrWidget ? "checked" : null) />
+      <span>@L["admin.branding.referralQrShow"]</span>
+    </label>
+  </div>
+
   <div class="admin-settings-card admin-branding-actions">
     <button type="submit" class="btn-admin"><i class="ti ti-device-floppy" aria-hidden="true"></i>@L["admin.branding.save"]</button>
   </div>
@@ -101,6 +137,46 @@
       img.src = url;
       img.hidden = false;
       if (ph) ph.hidden = true;
+    });
+  });
+})();
+</script>
+<script>
+(function () {
+  function normHex(v) {
+    v = String(v || "").trim();
+    if (!v) return "";
+    if (!v.startsWith("#")) v = "#" + v;
+    return v.length === 4 || v.length === 7 ? v : "";
+  }
+  document.querySelectorAll("[data-hex-pair]").forEach(function (el) {
+    el.addEventListener("input", function () {
+      var id = el.getAttribute("data-hex-pair");
+      if (!id) return;
+      var other = el.type === "color"
+        ? document.getElementById(id + "-hex")
+        : document.getElementById(id);
+      if (!other) return;
+      var v = normHex(el.value);
+      if (!v) return;
+      other.value = v;
+    });
+  });
+  document.querySelectorAll(".admin-color-hex").forEach(function (txt) {
+    txt.addEventListener("change", function () {
+      var id = txt.getAttribute("data-hex-pair");
+      var color = id ? document.getElementById(id) : null;
+      var v = normHex(txt.value);
+      if (color && v) color.value = v;
+    });
+  });
+  var form = document.querySelector(".admin-branding-form");
+  form?.addEventListener("submit", function () {
+    document.querySelectorAll(".admin-color-hex").forEach(function (txt) {
+      var id = txt.getAttribute("data-hex-pair");
+      var color = id ? document.getElementById(id) : null;
+      var v = normHex(txt.value);
+      if (color && v) color.value = v;
     });
   });
 })();

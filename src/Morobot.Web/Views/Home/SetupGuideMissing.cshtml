@@ -3,14 +3,16 @@
   var dir = L.Dir;
   var isEn = !L.IsRtl;
   Layout = null;
+  var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+  var pageTitle = ViewData["Title"] as string;
 }
 <!doctype html>
 <html lang="@culture" dir="@dir" class="@(isEn ? "lp-ltr" : "lp-rtl")">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>@ViewData["Title"] — @L["brand.name"]</title>
-  <link rel="icon" href="~/img/brand/morobot-mark.svg" type="image/svg+xml" />
+  <title>@(string.IsNullOrWhiteSpace(pageTitle) ? brandHead.BrandTitle : $"{pageTitle} — {brandHead.AppName}")</title>
+  <partial name="_BrandHead" model="brandHead" />
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700&family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="~/css/landing.css?v=2" />
   <link rel="stylesheet" href="~/css/setup-guide.css?v=1" />
@@ -18,8 +20,9 @@
 <body class="lp sg-page">
   <header class="lp-nav sg-nav">
     <a class="lp-brand" href="/">
-      <img src="~/img/brand/morobot-mark.svg" width="32" height="32" alt="" />
-      <span class="lp-brand-name">@L["brand.name"]</span>
+      @{ ViewData["BrandImgClass"] = ""; ViewData["BrandImgWidth"] = 32; ViewData["BrandImgHeight"] = 32; }
+      <partial name="_BrandMark" model="brandHead" />
+      <span class="lp-brand-name">@brandHead.AppName</span>
     </a>
     <div class="lp-nav-actions">
       <a class="lp-btn lp-btn-solid" asp-area="Panel" asp-controller="Account" asp-action="Login">@L["common.panel"]</a>
