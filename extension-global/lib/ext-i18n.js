@@ -4,7 +4,7 @@
 (function (global) {
   const STRINGS = {
     fa: {
-      "rec.title": "ضبط — مروبات",
+      "rec.title": "ضبط",
       "rec.panel": "پنل ضبط",
       "rec.resize": "تغییر اندازه",
       "rec.stop": "توقف",
@@ -35,7 +35,7 @@
       "rec.reviewHint": "موارد را انتخاب کنید، سپس ذخیره کنید. بعد می‌توانید ضبط را ادامه دهید.",
       "rec.process": "فرآیند #{id}",
       "rec.fallbackTitle": "ضبط",
-      "play.title": "اجرا — مروبات",
+      "play.title": "اجرا",
       "play.panel": "پنل اجرا",
       "play.resize": "تغییر اندازه",
       "play.play": "اجرا",
@@ -64,10 +64,18 @@
       "play.fallbackTitle": "اجرا",
       "play.process": "فرآیند #{id}",
       "play.popupHint": "اجرا بعد از پاز = ادامه · توقف سپس اجرا = از اول. اولین اجرا را از پورتال بزنید.",
-      "play.checking": "در حال بررسی..."
+      "play.checking": "در حال بررسی...",
+      "ctx.parent": "کپی سلکتور",
+      "ctx.elementUnique": "سلکتور این المان (یکتا)",
+      "ctx.frameUnique": "سلکتور فریم این المان (یکتا)",
+      "ctx.objectUnique": "سلکتور آبجکت این المان (یکتا)",
+      "ctx.elementRelative": "سلکتور این المان (نسبی)",
+      "ctx.frameRelative": "سلکتور فریم این المان (نسبی)",
+      "ctx.objectRelative": "سلکتور آبجکت این المان (نسبی)",
+      "ctx.framePathEmpty": "فریم تودرتویی یافت نشد"
     },
     en: {
-      "rec.title": "Record — Morobot",
+      "rec.title": "Record",
       "rec.panel": "Record panel",
       "rec.resize": "Resize",
       "rec.stop": "Stop",
@@ -98,7 +106,7 @@
       "rec.reviewHint": "Select items, then save. You can record again afterward.",
       "rec.process": "Process #{id}",
       "rec.fallbackTitle": "Record",
-      "play.title": "Play — Morobot",
+      "play.title": "Play",
       "play.panel": "Play panel",
       "play.resize": "Resize",
       "play.play": "Play",
@@ -127,10 +135,17 @@
       "play.fallbackTitle": "Play",
       "play.process": "Process #{id}",
       "play.popupHint": "Play after pause = resume · Stop then Play = from start. First run from the portal.",
-      "play.checking": "Checking..."
+      "play.checking": "Checking...",
+      "ctx.parent": "Copy selector",
+      "ctx.elementUnique": "This element's selector (unique)",
+      "ctx.frameUnique": "This element's frame selector (unique)",
+      "ctx.objectUnique": "This element's object selector (unique)",
+      "ctx.elementRelative": "This element's selector (relative)",
+      "ctx.frameRelative": "This element's frame selector (relative)",
+      "ctx.objectRelative": "This element's object selector (relative)",
+      "ctx.framePathEmpty": "No nested frame found"
     }
   };
-
   let culture = "fa";
   let brandAppName = null;
   const listeners = new Set();

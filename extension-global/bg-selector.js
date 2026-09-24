@@ -13,7 +13,7 @@ async function getCopiedSelectorPreview() {
 
 async function getCopiedSelector() {
   const data = await chrome.storage.local.get(["copiedSelector", "copiedSelectorText"]);
-  if (!data.copiedSelector) return { ok: false, error: "????? ??????? ?? ????? ????." };
+  if (!data.copiedSelector) return { ok: false, error: "سلکتوری در حافظه نیست." };
   const payload = normalizeAppSelector(data.copiedSelector);
   return {
     ok: true,
@@ -24,11 +24,11 @@ async function getCopiedSelector() {
 
 async function setCopiedSelector(payload, text) {
   if (!payload || typeof payload !== "object") {
-    return { ok: false, error: "payload ??????? ???." };
+    return { ok: false, error: "payload نامعتبر است." };
   }
   const normalized = normalizeAppSelector(payload);
   if (!String(normalized.elementValue || "").trim()) {
-    return { ok: false, error: "?????? ???? ???." };
+    return { ok: false, error: "سلکتور خالی است." };
   }
   const encoded = text || encodeDaSelector(normalized);
   await chrome.storage.local.set({
@@ -137,34 +137,82 @@ const CTX_R_OBJ = "da-copy-object-relative";
 
 const MENU_IDS = new Set([CTX_U_EL, CTX_U_FR, CTX_U_OBJ, CTX_R_EL, CTX_R_FR, CTX_R_OBJ]);
 
-function ensureContextMenus() {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: CTX_PARENT,
-      title: "?????? ? ??????",
-      contexts: ["all"]
-    });
-    const items = [
-      [CTX_U_EL, "??? ?????? ????? (?????)"],
-      [CTX_U_FR, "??? ???? ????? (?????)"],
-      [CTX_U_OBJ, "??? ????? ?????? (?????)"],
-      [CTX_R_EL, "??? ?????? ????? (????)"],
-      [CTX_R_FR, "??? ???? ????? (????)"],
-      [CTX_R_OBJ, "??? ????? ?????? (????)"]
-    ];
-    for (const [id, title] of items) {
-      chrome.contextMenus.create({
-        id,
-        parentId: CTX_PARENT,
-        title,
-        contexts: ["all"]
-      });
-    }
-  });
+/** Menu label i18n keys, in display order. */
+const CTX_ITEMS = [
+  [CTX_U_EL, "ctx.elementUnique"],
+  [CTX_U_FR, "ctx.frameUnique"],
+  [CTX_U_OBJ, "ctx.objectUnique"],
+  [CTX_R_EL, "ctx.elementRelative"],
+  [CTX_R_FR, "ctx.frameRelative"],
+  [CTX_R_OBJ, "ctx.objectRelative"]
+];
+
+/** Culture comes from the portal via chrome.storage.uiCulture (see content/portal-bridge.js). */
+async function ctxCulture() {
+  try {
+    const { uiCulture } = await chrome.storage.local.get("uiCulture");
+    return uiCulture === "en" ? "en" : "fa";
+  } catch {
+    return "fa";
+  }
 }
 
-chrome.runtime.onInstalled.addListener(ensureContextMenus);
-chrome.runtime.onStartup.addListener(ensureContextMenus);
+/** Minimal fa/en catalogue for the context menu — keeps bg-selector free of the HUD bundle. */
+const CTX_LABELS = {
+  fa: {
+    "ctx.parent": "کپی سلکتور",
+    "ctx.elementUnique": "سلکتور این المان (یکتا)",
+    "ctx.frameUnique": "سلکتور فریم این المان (یکتا)",
+    "ctx.objectUnique": "سلکتور آبجکت این المان (یکتا)",
+    "ctx.elementRelative": "سلکتور این المان (نسبی)",
+    "ctx.frameRelative": "سلکتور فریم این المان (نسبی)",
+    "ctx.objectRelative": "سلکتور آبجکت این المان (نسبی)",
+    "ctx.framePathEmpty": "فریم تودرتویی یافت نشد"
+  },
+  en: {
+    "ctx.parent": "Copy selector",
+    "ctx.elementUnique": "This element's selector (unique)",
+    "ctx.frameUnique": "This element's frame selector (unique)",
+    "ctx.objectUnique": "This element's object selector (unique)",
+    "ctx.elementRelative": "This element's selector (relative)",
+    "ctx.frameRelative": "This element's frame selector (relative)",
+    "ctx.objectRelative": "This element's object selector (relative)",
+    "ctx.framePathEmpty": "No nested frame found"
+  }
+};
+
+function ctxT(culture, key) {
+  const pack = CTX_LABELS[culture] || CTX_LABELS.fa;
+  return pack[key] ?? CTX_LABELS.fa[key] ?? key;
+}
+
+async function ensureContextMenus() {
+  const culture = await ctxCulture();
+  // removeAll must finish before create, otherwise Chrome throws duplicate-id errors.
+  await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
+  chrome.contextMenus.create({
+    id: CTX_PARENT,
+    title: ctxT(culture, "ctx.parent"),
+    contexts: ["all"]
+  });
+  for (const [id, key] of CTX_ITEMS) {
+    chrome.contextMenus.create({
+      id,
+      parentId: CTX_PARENT,
+      title: ctxT(culture, key),
+      contexts: ["all"]
+    });
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => { ensureContextMenus(); });
+chrome.runtime.onStartup.addListener(() => { ensureContextMenus(); });
+// Rebuild whenever the portal switches language, so labels follow the user immediately.
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.uiCulture) ensureContextMenus();
+  });
+} catch { /* ignore */ }
 ensureContextMenus();
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -202,7 +250,7 @@ async function captureLeaf(tab, frameId, unique) {
     captured = null;
   }
   if (!captured?.ok || !captured.selector) {
-    return { ok: false, error: captured?.error || "?????? ????? ??? ? ???? ?? ???? ????." };
+    return { ok: false, error: captured?.error || "سلکتور دریافت نشد؛ صفحه را رفرش کنید." };
   }
   return { ok: true, captured };
 }
@@ -232,7 +280,7 @@ async function copyFrameElement(info, tab, unique = true) {
     return {
       ok: true,
       selector: msg,
-      preview: "??? ???? ? ????? ????",
+      preview: ctxT(await ctxCulture(), "ctx.framePathEmpty"),
       clipped,
       mode: unique ? "frame-unique" : "frame-relative",
       frameHops: 0
@@ -291,7 +339,7 @@ async function copySelectorObject(info, tab, unique = true) {
 
 async function handleDevtoolsCopy(message) {
   const tabId = message.tabId;
-  if (!tabId) return { ok: false, error: "tabId ???? ???." };
+  if (!tabId) return { ok: false, error: "tabId نامعتبر است." };
   const unique = message.unique !== false;
   const kind = message.kind || "element";
   const info = { frameId: message.frameId ?? 0 };
