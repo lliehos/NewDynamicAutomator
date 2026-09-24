@@ -1,0 +1,144 @@
+/*
+ * da-switch.css — global "simple checkbox → switch" upgrade.
+ *
+ * The requirement is that every plain checkbox in the web app reads as a switch.
+ * Rather than hand-editing every view/JS template (and risking regressions when a
+ * new checkbox is added later), `da-switch.js` tags each plain checkbox with
+ * `.da-sw` at runtime and this stylesheet restyles the native input as a track
+ * with a sliding thumb. Because we only touch `appearance`/`background`/pseudo
+ * elements, the control keeps native semantics: label clicks, form posts,
+ * `:checked`, `indeterminate`, disabled state and keyboard toggling all keep
+ * working, and no markup needs to change.
+ *
+ * Opt-outs (for checkboxes that are genuinely multi-select grids or table row
+ * selectors, where a switch would be wrong):
+ *   data-da-switch="off"  on the input, or on any ancestor element.
+ */
+
+:root {
+  --da-sw-w: 40px;
+  --da-sw-h: 22px;
+  --da-sw-pad: 3px;
+  --da-sw-off-bg: #d4d4dd;
+  --da-sw-on-bg: var(--bs-primary, #7367f0);
+  --da-sw-thumb: #fff;
+  --da-sw-focus: rgba(115, 103, 240, .35);
+}
+
+/* Base: only inputs the upgrade script tagged, so nothing else is affected.
+   Selectors are deliberately defensive (`input[type="checkbox"].da-sw` plus
+   `!important` on the raw track colours) because the designer theme CSS sets
+   checkbox background/border with high-specificity rules that would otherwise
+   win and leave the off state looking permanently "on". */
+input[type="checkbox"].da-sw,
+input.da-sw[type="checkbox"].form-check-input,
+.form-check input[type="checkbox"].da-sw {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  box-sizing: border-box !important;
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+  flex: 0 0 auto;
+  width: var(--da-sw-w);
+  height: var(--da-sw-h);
+  min-width: var(--da-sw-w);
+  min-height: var(--da-sw-h);
+  margin: 0 .35rem 0 0;
+  padding: 0 !important;
+  border: 0 !important;
+  outline: 0;
+  border-radius: 999px !important;
+  background-color: var(--da-sw-off-bg) !important;
+  background-image: none !important;
+  box-shadow: none;
+  cursor: pointer;
+  transition: background-color .18s ease, box-shadow .18s ease;
+}
+
+/* Thumb */
+input[type="checkbox"].da-sw::after {
+  content: "";
+  position: absolute;
+  top: var(--da-sw-pad);
+  left: var(--da-sw-pad);
+  width: calc(var(--da-sw-h) - var(--da-sw-pad) * 2);
+  height: calc(var(--da-sw-h) - var(--da-sw-pad) * 2);
+  border-radius: 50%;
+  background: var(--da-sw-thumb) !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .28);
+  transition: transform .18s ease;
+}
+
+input[type="checkbox"].da-sw:checked {
+  background-color: var(--da-sw-on-bg) !important;
+}
+
+input[type="checkbox"].da-sw:checked::after {
+  transform: translateX(calc(var(--da-sw-w) - var(--da-sw-h)));
+}
+
+/* Keep the bootstrappy check glyph out of the way — the thumb is the indicator. */
+input[type="checkbox"].da-sw:checked::before,
+input[type="checkbox"].da-sw::before {
+  content: none !important;
+  background-image: none !important;
+  display: none !important;
+}
+
+input[type="checkbox"].da-sw:indeterminate {
+  background-color: var(--da-sw-off-bg) !important;
+}
+
+input[type="checkbox"].da-sw:indeterminate::after {
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(var(--da-sw-h) - var(--da-sw-pad) * 2);
+  border-radius: 999px;
+}
+
+input[type="checkbox"].da-sw:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--da-sw-focus);
+}
+
+input[type="checkbox"].da-sw:hover:not(:disabled) {
+  filter: brightness(.97);
+}
+
+input[type="checkbox"].da-sw:disabled,
+input[type="checkbox"].da-sw[disabled] {
+  opacity: .5 !important;
+  cursor: not-allowed !important;
+}
+
+/* RTL: flip the travel direction so the thumb follows the reading direction. */
+[dir="rtl"] input[type="checkbox"].da-sw::after,
+html[lang="fa"] input[type="checkbox"].da-sw::after,
+html[lang="fa"] body input[type="checkbox"].da-sw::after {
+  left: auto;
+  right: var(--da-sw-pad);
+}
+
+[dir="rtl"] input[type="checkbox"].da-sw:checked::after,
+html[lang="fa"] input[type="checkbox"].da-sw:checked::after,
+html[lang="fa"] body input[type="checkbox"].da-sw:checked::after {
+  transform: translateX(calc((var(--da-sw-w) - var(--da-sw-h)) * -1));
+}
+
+[dir="rtl"] input[type="checkbox"].da-sw,
+html[lang="fa"] input[type="checkbox"].da-sw {
+  margin: 0 0 0 .35rem;
+}
+
+/* Compact variant for dense tables / toolbars. */
+input[type="checkbox"].da-sw.da-sw-sm {
+  --da-sw-w: 32px;
+  --da-sw-h: 18px;
+  --da-sw-pad: 2.5px;
+}
+
+/* Labels that used to hold a plain checkbox should lay out nicely beside it. */
+label > input[type="checkbox"].da-sw {
+  vertical-align: middle;
+}
