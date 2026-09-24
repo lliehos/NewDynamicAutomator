@@ -155,9 +155,12 @@ public class DataSourceService
                 d.Id,
                 d.Title,
                 OwnerUserName = d.Owner != null ? d.Owner.UserName : "—",
+                LastEditorUserName = d.LastEditor != null ? d.LastEditor.UserName : null,
                 d.ColumnCount,
                 d.RowCount,
                 d.FileName,
+                d.CreatedAtUtc,
+                d.UpdatedAtUtc,
                 LinkedProcessCount = d.ProcessLinks.Count,
                 Titles = d.ProcessLinks.Select(l => l.Process != null ? l.Process.Title : "?").ToList()
             })
@@ -168,9 +171,12 @@ public class DataSourceService
             Id = d.Id,
             Title = d.Title,
             OwnerUserName = d.OwnerUserName,
+            LastEditorUserName = d.LastEditorUserName,
             ColumnCount = d.ColumnCount,
             RowCount = d.RowCount,
             FileName = d.FileName,
+            CreatedAtUtc = d.CreatedAtUtc,
+            UpdatedAtUtc = d.UpdatedAtUtc,
             LinkedProcessCount = d.LinkedProcessCount,
             LinkedProcessTitles = string.Join("، ", d.Titles)
         }).ToList();
@@ -1314,9 +1320,12 @@ public class AdminLibrarySourceRow
     public int Id { get; set; }
     public string Title { get; set; } = "";
     public string OwnerUserName { get; set; } = "";
+    public string? LastEditorUserName { get; set; }
     public int ColumnCount { get; set; }
     public int RowCount { get; set; }
     public string? FileName { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
     public int LinkedProcessCount { get; set; }
     public string LinkedProcessTitles { get; set; } = "";
 }

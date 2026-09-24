@@ -15,6 +15,15 @@
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
   }
 
+  /** Render a server UTC timestamp in the viewer's local time, or "—" when absent. */
+  function fmtDate(v) {
+    if (v == null || v === "") return "—";
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return "—";
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
   function setLive(on, text) {
     const dot = document.getElementById("admin-live-dot");
     const st = document.getElementById("admin-live-status");
@@ -66,6 +75,9 @@
     const title = src.title ?? src.Title ?? "";
     const linked = src.linkedProcessTitles ?? src.LinkedProcessTitles ?? src.taskTitle ?? src.TaskTitle ?? "—";
     const owner = src.ownerUserName ?? src.OwnerUserName ?? src.owner ?? src.Owner ?? "—";
+    const editor = src.lastEditorUserName ?? src.LastEditorUserName ?? src.lastEditor ?? src.LastEditor ?? owner;
+    const created = fmtDate(src.createdAtUtc ?? src.CreatedAtUtc);
+    const updated = fmtDate(src.updatedAtUtc ?? src.UpdatedAtUtc);
     const cols = src.columnCount ?? src.ColumnCount ?? 0;
     const rows = src.rowCount ?? src.RowCount ?? 0;
 
@@ -77,6 +89,9 @@
         <td data-flash="title">${escapeHtml(title)}</td>
         <td data-flash="linked">${escapeHtml(linked)}</td>
         <td>${escapeHtml(owner)}</td>
+        <td>${escapeHtml(editor)}</td>
+        <td class="text-nowrap">${escapeHtml(created)}</td>
+        <td class="text-nowrap">${escapeHtml(updated)}</td>
         <td data-flash="cols">${escapeHtml(cols)}</td>
         <td data-flash="rows">${escapeHtml(rows)}</td>
         <td class="admin-change-cell" data-flash="change"><span class="admin-change-badge is-idle">—</span></td>

@@ -163,6 +163,9 @@ public class TaskService
                 ? "— (کتابخانه)"
                 : d.LinkedProcessTitles,
             Owner = d.OwnerUserName,
+            LastEditor = d.LastEditorUserName ?? d.OwnerUserName,
+            CreatedAtUtc = d.CreatedAtUtc,
+            UpdatedAtUtc = d.UpdatedAtUtc,
             ColumnCount = d.ColumnCount,
             RowCount = d.RowCount
         }).ToList();
@@ -586,6 +589,9 @@ public class AdminCanvasSourceRow
     public int TaskId { get; set; }
     public string TaskTitle { get; set; } = "";
     public string Owner { get; set; } = "";
+    public string LastEditor { get; set; } = "";
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
     public int ColumnCount { get; set; }
     public int RowCount { get; set; }
 }
