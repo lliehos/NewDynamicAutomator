@@ -36,6 +36,44 @@
           <h5 class="mb-0" data-i18n="settings.profile">@L["settings.profile"]</h5>
         </div>
         <div class="card-body">
+          @{
+            var avatarPath = (ViewBag.AvatarPath as string) ?? "";
+          }
+          <form method="post" asp-area="Panel" asp-controller="Settings" asp-action="SaveAvatar"
+                enctype="multipart/form-data" class="mb-4">
+            @Html.AntiForgeryToken()
+            <label class="form-label" data-i18n="settings.avatar">@L["settings.avatar"]</label>
+            <div class="da-avatar-editor">
+              @{
+                ViewData["Path"] = avatarPath;
+                ViewData["Name"] = userName;
+                ViewData["Size"] = 72;
+              }
+              <partial name="_Avatar" />
+              <div class="da-avatar-editor-actions">
+                <input type="file" id="da-avatar-file" name="avatar" accept="image/png,image/jpeg,image/webp"
+                       class="d-none" data-crop-title="@L["settings.avatar"]" />
+                <label class="btn btn-sm btn-primary" for="da-avatar-file">
+                  <i class="ti ti-upload me-1"></i><span data-i18n="settings.avatarChoose">@L["settings.avatarChoose"]</span>
+                </label>
+                <button type="submit" class="btn btn-sm btn-label-primary" id="da-avatar-save" hidden>
+                  <i class="ti ti-device-floppy me-1"></i><span data-i18n="settings.avatarSave">@L["settings.avatarSave"]</span>
+                </button>
+                <p class="da-avatar-hint" data-i18n="settings.avatarHint">@L["settings.avatarHint"]</p>
+              </div>
+            </div>
+          </form>
+          @if (!string.IsNullOrWhiteSpace(avatarPath))
+          {
+            <form method="post" asp-area="Panel" asp-controller="Settings" asp-action="RemoveAvatar"
+                  class="mb-4">
+              @Html.AntiForgeryToken()
+              <button type="submit" class="btn btn-sm btn-outline-danger">
+                <i class="ti ti-trash me-1"></i><span data-i18n="settings.avatarRemove">@L["settings.avatarRemove"]</span>
+              </button>
+            </form>
+          }
+          <hr class="my-4" />
           <form method="post" asp-area="Panel" asp-controller="Settings" asp-action="SaveProfile" autocomplete="on">
             @Html.AntiForgeryToken()
             <div class="mb-3">
@@ -91,3 +129,60 @@
     </div>
   </div>
 </div>
+
+@section Scripts {
+<script>
+(function () {
+  var input = document.getElementById('da-avatar-file');
+  if (!input) return;
+  var saveBtn = document.getElementById('da-avatar-save');
+
+  function reveal() {
+    if (saveBtn) saveBtn.hidden = false;
+  }
+
+  input.addEventListener('change', function () {
+    var file = input.files && input.files[0];
+    if (!file) return;
+    // SVG would be rasterised by the cropper; avatars are always raster anyway,
+    // so route every accepted type through it with a square, 512px output.
+    if (!window.DaCropper) { reveal(); return; }
+    DaCropper.open({
+      file: file,
+      aspect: 1,
+      maxWidth: 512,
+      maxHeight: 512,
+      title: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["settings.avatar"].ToString())),
+      strings: {
+        zoom: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["crop.zoom"].ToString())),
+        rotate: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["crop.rotate"].ToString())),
+        reset: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["crop.reset"].ToString())),
+        cancel: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["common.cancel"].ToString())),
+        apply: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["crop.apply"].ToString())),
+        free: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["crop.free"].ToString()))
+      },
+      onApply: function (blob, meta) {
+        if (meta && meta.passthrough) { reveal(); return; }
+        try {
+          var dt = new DataTransfer();
+          dt.items.add(new File([blob], meta.name, { type: meta.type || 'image/png' }));
+          input.files = dt.files;
+        } catch (e) { /* keep the original file */ }
+        // Show the crop immediately so the user sees what will be saved.
+        var img = document.querySelector('.da-avatar-editor .da-avatar');
+        if (img) {
+          var url = URL.createObjectURL(blob);
+          img.className = 'da-avatar';
+          img.innerHTML = '';
+          var el = document.createElement('img');
+          el.src = url;
+          el.alt = '';
+          img.appendChild(el);
+        }
+        reveal();
+      }
+    });
+  });
+})();
+</script>
+}

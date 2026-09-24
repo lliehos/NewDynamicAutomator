@@ -1,0 +1,48 @@
+@*
+  _Avatar.cshtml — renders a user avatar image, falling back to initials.
+
+  Model (dynamic / optional):
+    Path  — relative avatar path; empty/null → initials
+    Name  — display name used to derive initials
+    Size  — pixel size for the visual circle (default 32)
+    Class — extra css classes on the wrapper
+
+  Kept as a partial so the top bar, the settings page and (later) any people
+  list all render avatars identically. Initials are derived from the first
+  letter of up to two name parts, and the background hue is derived from the
+  name so the same user always gets the same colour.
+*@
+@{
+  var path = (ViewData["Path"] as string) ?? "";
+  var name = (ViewData["Name"] as string) ?? "";
+  var size = (ViewData["Size"] as int?) ?? 32;
+  var cls = (ViewData["Class"] as string) ?? "";
+  var parts = (name ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+  var initials = parts.Length == 0
+    ? "?"
+    : parts.Length == 1
+      ? parts[0].Substring(0, 1)
+      : string.Concat(parts[0].Substring(0, 1), parts[1].Substring(0, 1));
+  // Stable hue from the name so a user's fallback colour never changes.
+  var hue = 0;
+  foreach (var ch in (name ?? "?"))
+  {
+    hue = (hue * 31 + ch) % 360;
+  }
+  if (hue < 0) hue += 360;
+  // A cache-busting value only when a file exists, so a replaced avatar refreshes.
+  var stamp = string.IsNullOrWhiteSpace(path) ? "" : path;
+}
+@if (!string.IsNullOrWhiteSpace(path))
+{
+  <span class="da-avatar @cls" style="--da-avatar-size:@(size)px">
+    <img src="@stamp" alt="@name" loading="lazy" />
+  </span>
+}
+else
+{
+  <span class="da-avatar is-initials @cls"
+        style="--da-avatar-size:@(size)px;--da-avatar-hue:@hue"
+        title="@name"
+        aria-hidden="true">@initials</span>
+}

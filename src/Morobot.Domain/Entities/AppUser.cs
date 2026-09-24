@@ -13,6 +13,11 @@ public class AppUser
     public string? Mobile { get; set; }
     /// <summary>National ID / کد ملی (optional; used for share search).</summary>
     public string? NationalId { get; set; }
+    /// <summary>
+    /// Relative web path of the user's profile image (e.g. /uploads/avatars/u12.png).
+    /// Null → the UI falls back to the user's initials, so an avatar is never required.
+    /// </summary>
+    public string? AvatarPath { get; set; }
     /// <summary>UI culture: fa | en. Default Persian.</summary>
     public string PreferredLanguage { get; set; } = "fa";
     public string? AppVersion { get; set; }

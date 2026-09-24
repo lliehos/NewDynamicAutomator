@@ -47,6 +47,7 @@
   <link rel="stylesheet" href="~/css/referral-qr.css?v=1" />
   <link rel="stylesheet" href="~/css/da-switch.css?v=1" />
   <link rel="stylesheet" href="~/css/da-cropper.css?v=1" />
+  <link rel="stylesheet" href="~/css/da-avatar.css?v=1" />
   <style>
     body, .menu, .layout-navbar, .card, input, button { font-family: Vazirmatn, "Public Sans", sans-serif !important; }
   </style>
@@ -150,7 +151,15 @@
                 <a class="nav-link text-muted" href="/" data-i18n="common.site" title="@L["common.site"]">@L["common.site"]</a>
               </li>
               <li class="nav-item me-3 d-none d-sm-block">
-                <a class="nav-link" asp-area="Panel" asp-controller="Settings" asp-action="Index">@displayName</a>
+                @{
+                  ViewData["Path"] = User.FindFirst("avatar_path")?.Value ?? "";
+                  ViewData["Name"] = displayName;
+                  ViewData["Size"] = 32;
+                }
+                <a class="nav-link da-navbar-user" asp-area="Panel" asp-controller="Settings" asp-action="Index">
+                  <partial name="_Avatar" />
+                  <span>@displayName</span>
+                </a>
               </li>
               <li class="nav-item">
                 <a class="nav-link" asp-area="Panel" asp-controller="Account" asp-action="Logout" data-i18n="common.logout">@L["common.logout"]</a>

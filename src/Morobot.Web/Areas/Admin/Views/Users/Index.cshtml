@@ -59,7 +59,20 @@
     }
     <tr>
       <td>@u.Id</td>
-      <td>@u.UserName</td>
+      <td>
+        <span class="admin-user-cell">
+          @{
+            var avatarName = string.IsNullOrWhiteSpace($"{u.FirstName} {u.LastName}".Trim())
+              ? u.UserName
+              : $"{u.FirstName} {u.LastName}".Trim();
+            ViewData["Path"] = u.AvatarPath ?? "";
+            ViewData["Name"] = avatarName;
+            ViewData["Size"] = 26;
+          }
+          <partial name="_Avatar" />
+          <span>@u.UserName</span>
+        </span>
+      </td>
       <td>
         <partial name="_AdminPresence" model='new AdminPresenceModel {
           Online = online,

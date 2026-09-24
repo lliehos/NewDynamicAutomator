@@ -355,6 +355,9 @@ public class AuthService
             new(EntitlementService.ClaimMaxSources, entitlements.MaxDataSources?.ToString() ?? "*"),
             new(EntitlementService.ClaimMaxProcessSteps, entitlements.MaxProcessSteps?.ToString() ?? "*"),
             new("display_name", FormatDisplayName(user)),
+            // Carried in the token so the layout can render the avatar without an
+            // extra per-request user query. Refreshed whenever the token is reissued.
+            new("avatar_path", user.AvatarPath ?? ""),
             new("profile_complete", IsProfileComplete(user) ? "1" : "0")
         };
         if (!string.IsNullOrWhiteSpace(user.FirstName))
@@ -378,6 +381,23 @@ public class AuthService
 
     public async Task<AppUser?> GetUserAsync(int userId, CancellationToken ct = default)
         => await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+    /// <summary>
+    /// Set (or clear, with <c>null</c>) the user's avatar path, returning a freshly
+    /// minted token because `avatar_path` lives in the cookie claims. Kept separate
+    /// from UpdateProfileAsync because the profile form requires all four fields and
+    /// the avatar must be changeable on its own.
+    /// </summary>
+    public async Task<string?> SetAvatarPathAsync(int userId, string? avatarPath, CancellationToken ct = default)
+    {
+        var user = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == userId, ct);
+        if (user is null) return null;
+        user.AvatarPath = string.IsNullOrWhiteSpace(avatarPath) ? null : Trunc(avatarPath.Trim(), 260);
+        await _db.SaveChangesAsync(ct);
+
+        var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
+        return CreateToken(user, entitlements);
+    }
 
     public static bool IsProfileComplete(AppUser user) =>
         !string.IsNullOrWhiteSpace(user.FirstName)
