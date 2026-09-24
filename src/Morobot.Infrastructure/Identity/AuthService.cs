@@ -26,6 +26,7 @@ public class AuthService
     private readonly EventLogService _events;
     private readonly SystemSettingsService _settings;
     private readonly LicenseService _license;
+    private readonly DeploymentBindingService _deploymentBinding;
     private readonly PasswordHasher<AppUser> _hasher = new();
 
     public AuthService(
@@ -34,7 +35,8 @@ public class AuthService
         EntitlementService entitlements,
         EventLogService events,
         SystemSettingsService settings,
-        LicenseService license)
+        LicenseService license,
+        DeploymentBindingService deploymentBinding)
     {
         _db = db;
         _config = config;
@@ -42,6 +44,7 @@ public class AuthService
         _events = events;
         _settings = settings;
         _license = license;
+        _deploymentBinding = deploymentBinding;
     }
 
     public async Task<(LoginResponse? ok, string? errorKey)> RegisterAsync(
@@ -95,6 +98,7 @@ public class AuthService
             CreatedAtUtc = DateTime.UtcNow
         };
         user.PasswordHash = _hasher.HashPassword(user, password);
+        await _deploymentBinding.StampUserAsync(user, ct);
         _db.Users.Add(user);
         await _db.SaveChangesAsync(ct);
         user.Plan = registerPlan;
@@ -205,6 +209,9 @@ public class AuthService
         if (result == PasswordVerificationResult.Failed)
             return (null, "login.errorInvalid");
 
+        if (!await _deploymentBinding.IsUserUsableAsync(user, ct))
+            return (null, "login.errorDeploymentBinding");
+
         // One Local/guest identity per machine (blocks multi-browser guest hopping).
         if (user.Plan is not null && PasswordPolicy.IsLocal(user.Plan.Code))
         {
@@ -282,12 +289,15 @@ public class AuthService
                 CreatedAtUtc = DateTime.UtcNow
             };
             user.PasswordHash = _hasher.HashPassword(user, Guid.NewGuid().ToString("N"));
+            await _deploymentBinding.StampUserAsync(user, ct);
             _db.Users.Add(user);
             await _db.SaveChangesAsync(ct);
             user.Plan = localPlan;
         }
         else
         {
+            if (!await _deploymentBinding.IsUserUsableAsync(user, ct))
+                return new LoginResponse { Token = string.Empty, UserId = 0, UserName = string.Empty };
             user.FirstName = claimed;
             user.PlanId = localPlan.Id;
             user.IsActive = true;

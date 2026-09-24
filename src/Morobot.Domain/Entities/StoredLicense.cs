@@ -13,5 +13,6 @@ public class StoredLicense
     public bool AllowUpdates { get; set; } = true;
     public int TrialDays { get; set; } = 3;
     public string? DatabaseServerHint { get; set; }
+    public string? AllowedHost { get; set; }
     public DateTime ImportedAtUtc { get; set; }
 }

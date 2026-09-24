@@ -1,6 +1,4 @@
 using Morobot.Infrastructure.Services;
-using Morobot.Infrastructure.Options;
-using Microsoft.Extensions.Options;
 
 namespace Morobot.Web.Services;
 
@@ -23,13 +21,6 @@ public sealed class UpdateNotifyBackgroundService : BackgroundService
             try
             {
                 using var scope = _scopes.CreateScope();
-                var options = scope.ServiceProvider.GetRequiredService<IOptions<MorobotOptions>>().Value;
-                if (!options.IsEnterprise)
-                {
-                    await Task.Delay(TimeSpan.FromHours(12), stoppingToken);
-                    continue;
-                }
-
                 var license = scope.ServiceProvider.GetRequiredService<LicenseService>();
                 var runtime = await license.GetRuntimeStateAsync(stoppingToken);
                 if (!runtime.AllowsUpdates)

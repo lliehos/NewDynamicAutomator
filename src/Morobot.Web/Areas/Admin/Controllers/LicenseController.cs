@@ -38,12 +38,6 @@ public class LicenseController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ExportRequest(string? organizationHint, CancellationToken ct)
     {
-        if (!_license.IsLicensingEnabled)
-        {
-            TempData["Ok"] = _locale["admin.license.cloudMode"];
-            return RedirectToAction(nameof(Index));
-        }
-
         var json = await _license.ExportActivationRequestJsonAsync(organizationHint, ct);
         var fileName = $"morobot-activation-{DateTime.UtcNow:yyyyMMddHHmmss}.json";
         return File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", fileName);
@@ -53,12 +47,6 @@ public class LicenseController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Import(IFormFile? licenseFile, string? licenseText, CancellationToken ct)
     {
-        if (!_license.IsLicensingEnabled)
-        {
-            TempData["Ok"] = _locale["admin.license.cloudMode"];
-            return RedirectToAction(nameof(Index));
-        }
-
         string? raw = null;
         if (licenseFile is { Length: > 0 })
         {
@@ -72,14 +60,15 @@ public class LicenseController : Controller
 
         if (string.IsNullOrWhiteSpace(raw))
         {
-            TempData["Ok"] = _locale["admin.license.importEmpty"];
+            TempData["Warn"] = _locale["admin.license.importEmpty"];
             return RedirectToAction(nameof(Index));
         }
 
         var (ok, errorKey) = await _license.ImportAsync(raw, ct);
-        TempData["Ok"] = ok
-            ? _locale["admin.license.importOk"]
-            : _locale[errorKey ?? "license.error.invalid"];
+        if (ok)
+            TempData["Ok"] = _locale["admin.license.importOk"];
+        else
+            TempData["Danger"] = _locale[errorKey ?? "license.error.invalid"];
         return RedirectToAction(nameof(Index));
     }
 
@@ -87,12 +76,6 @@ public class LicenseController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> CheckUpdate(CancellationToken ct)
     {
-        if (!_license.IsLicensingEnabled)
-        {
-            TempData["Ok"] = _locale["admin.license.cloudMode"];
-            return RedirectToAction(nameof(Index));
-        }
-
         var result = await _updates.CheckOnlineAsync(ct);
         TempData["Ok"] = result.Message ?? _locale["admin.updates.checked"];
         return RedirectToAction(nameof(Index));

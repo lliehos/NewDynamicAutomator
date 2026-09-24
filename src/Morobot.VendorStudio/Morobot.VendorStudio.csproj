@@ -7,7 +7,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Morobot.VendorStudio</RootNamespace>
+    <ApplicationIcon>Assets\morobot-icon.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\morobot-icon.png" />
+    <Resource Include="Assets\morobot-icon.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Morobot.Licensing\Morobot.Licensing.csproj" />

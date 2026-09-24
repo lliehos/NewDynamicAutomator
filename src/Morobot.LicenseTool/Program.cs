@@ -31,7 +31,7 @@ Morobot license tool (vendor-only — never deploy private keys to customers)
 
 Commands:
   genkeypair [--out-dir <path>]
-  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--update-url URL] [-o license.morobot]
+  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--update-url URL] [-o license.morobot]
   package --project <path-to-Morobot.Web.csproj> --output <folder>
   verify --license <file.morobot> [--public-key <pem>]
   info --request <activation.json>
@@ -100,6 +100,18 @@ static int Sign(string[] args)
     var allowUpdatesRaw = GetArg(args, "--allow-updates");
     var allowUpdates = !string.Equals(allowUpdatesRaw, "false", StringComparison.OrdinalIgnoreCase);
     var updateUrl = GetArg(args, "--update-url");
+    var allowedHostRaw = GetArg(args, "--allowed-host");
+    string? allowedHost = null;
+    if (!string.IsNullOrWhiteSpace(allowedHostRaw))
+    {
+        if (!LicenseHostBinding.TryNormalize(allowedHostRaw, out var normalizedHost))
+        {
+            Console.Error.WriteLine("Invalid --allowed-host (use domain, IP, or https://host).");
+            return 1;
+        }
+
+        allowedHost = normalizedHost;
+    }
 
     var payload = new LicensePayload
     {
@@ -113,7 +125,8 @@ static int Sign(string[] args)
         DatabaseConnectionString = dbConnection,
         TrialDays = trialDays,
         AllowUpdates = allowUpdates,
-        UpdateServerUrl = updateUrl
+        UpdateServerUrl = updateUrl,
+        AllowedHost = allowedHost
     };
 
     var doc = LicenseCrypto.Sign(payload, privatePem);

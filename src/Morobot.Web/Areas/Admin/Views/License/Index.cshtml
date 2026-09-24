@@ -9,29 +9,42 @@
   {
     nameof(LicenseValidationStatus.Valid) => "is-ok",
     nameof(LicenseValidationStatus.NotRequired) => "is-muted",
+    "HostMismatch" => "is-warn",
     _ => "is-warn"
   };
   string StatusLabel(string status) => L[$"admin.license.status.{status}"];
   string FormatLimit(int? value) => value is null ? L["admin.license.unlimited"] : value.Value.ToString();
 }
 <partial name="_AdminPageHead" model='new AdminPageHeadModel {
-  Summary = Model.LicensingEnabled ? L["admin.license.introEnterprise"] : L["admin.license.introCloud"]
+  Summary = L["admin.license.intro"]
 }' />
 
-@if (!Model.LicensingEnabled)
-{
-  <div class="card-admin is-muted">
-    <p>@L["admin.license.cloudModeDetail"]</p>
-  </div>
-}
-else
-{
-  <div class="admin-license-grid">
+<div class="admin-license-grid">
     <div class="card-admin @StatusClass(d.Status)">
       <h3><i class="ti ti-certificate" aria-hidden="true"></i>@L["admin.license.current"]</h3>
       <dl class="admin-kv">
         <dt>@L["admin.license.fieldRuntimeMode"]</dt>
         <dd>@L[$"admin.license.runtime.{d.RuntimeMode}"]</dd>
+        <dt>@L["admin.license.fieldValidUntil"]</dt>
+        <dd class="num">
+          @if (d.ValidityEndsAtUtc is not null)
+          {
+            @d.ValidityEndsAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            @if (d.DaysRemaining is int daysLeft)
+            {
+              <span> (@string.Format(L["admin.license.daysRemaining"], daysLeft))</span>
+            }
+          }
+          else
+          {
+            <span class="admin-muted">—</span>
+          }
+        </dd>
+        @if (d.ValidityStartsAtUtc is not null)
+        {
+          <dt>@L["admin.license.fieldValidityFrom"]</dt>
+          <dd class="num">@d.ValidityStartsAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</dd>
+        }
         <dt>@L["admin.license.fieldStatus"]</dt>
         <dd>@StatusLabel(d.Status)</dd>
         @if (!string.IsNullOrWhiteSpace(d.StatusMessage))
@@ -52,12 +65,7 @@ else
         @if (d.IssuedAtUtc is not null)
         {
           <dt>@L["admin.license.fieldIssued"]</dt>
-          <dd>@d.IssuedAtUtc.Value.ToString("u")</dd>
-        }
-        @if (d.ValidUntilUtc is not null)
-        {
-          <dt>@L["admin.license.fieldValidUntil"]</dt>
-          <dd>@d.ValidUntilUtc.Value.ToString("u") @(d.DaysRemaining is int days ? $"({string.Format(L["admin.license.daysRemaining"], days)})" : "")</dd>
+          <dd class="num">@d.IssuedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</dd>
         }
         <dt>@L["admin.license.fieldMaxUsers"]</dt>
         <dd>@FormatLimit(d.MaxUsers)</dd>
@@ -83,6 +91,22 @@ else
           <dt>@L["admin.license.fieldAnchor"]</dt>
           <dd><code>@d.DeploymentAnchorShort</code></dd>
         }
+        @if (!string.IsNullOrWhiteSpace(d.ServerFingerprintShort))
+        {
+          <dt>@L["admin.license.fieldServerFingerprint"]</dt>
+          <dd><code>@d.ServerFingerprintShort</code></dd>
+        }
+        <dt>@L["admin.license.fieldAllowedHost"]</dt>
+        <dd>
+          @if (string.IsNullOrWhiteSpace(d.AllowedHost))
+          {
+            <span class="admin-muted">@L["admin.license.fieldAllowedHostEmpty"]</span>
+          }
+          else
+          {
+            <code>@d.AllowedHost</code>
+          }
+        </dd>
         <dt>@L["admin.license.fieldAllowUpdates"]</dt>
         <dd>@(d.AllowUpdates ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
       </dl>
@@ -141,9 +165,8 @@ else
         }
         else
         {
-          <p class="admin-field-hint">@L["admin.updates.notIncluded"]</p>
+          <div class="admin-alert is-warn">@L["admin.updates.notIncluded"]</div>
         }
       </div>
     }
   </div>
-}

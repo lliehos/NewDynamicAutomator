@@ -17,15 +17,21 @@
     .card { border: 1px solid #ccfbf1; border-radius: 12px; padding: 14px; background: #fff; }
     .card strong { color: #0d9488; }
     .history { background: #f8fafc; padding: 16px; border-radius: 12px; border-inline-start: 4px solid #0d9488; }
+    .timeline { margin: 12px 0 0; padding: 0; list-style: none; }
+    .timeline li { position: relative; padding: 10px 0 10px 0; border-bottom: 1px dashed #cbd5e1; }
+    .timeline li:last-child { border-bottom: none; }
+    .timeline .era { font-weight: 700; color: #0f766e; display: block; margin-bottom: 4px; }
     .cta { text-align: center; margin-top: 40px; padding: 24px; background: #0f766e; color: #fff; border-radius: 12px; }
-    .cta a { color: #ccfbf1; }
-    .screens { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
-    .screens .ph { background: #e2e8f0; border-radius: 8px; height: 100px; display: flex; align-items: center; justify-content: center; color: #64748b; font-size: 0.85rem; }
-    @media print { body { padding: 0; } .no-print { display: none; } }
+    .screens { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+    .shot { margin: 0; break-inside: avoid; }
+    .shot img { width: 100%; height: auto; border-radius: 10px; border: 1px solid #e2e8f0; display: block; }
+    .shot figcaption { font-size: 0.82rem; color: #64748b; text-align: center; margin-top: 6px; }
+    .shot-wide { grid-column: 1 / -1; max-width: 85%; margin: 0 auto; }
+    @media print { body { padding: 0; } .no-print { display: none; } .screens { gap: 10px; } }
   </style>
 </head>
 <body>
-  <p class="no-print" style="background:#fef3c7;padding:8px;border-radius:8px;">برای PDF: Ctrl+P → Save as PDF · نسخه سند 1.0.0</p>
+  <p class="no-print" style="background:#fef3c7;padding:8px;border-radius:8px;">برای PDF: Ctrl+P → Save as PDF · نسخه سند 1.1.0</p>
 
   <section class="cover">
     <h1>مروبات (Morobot)</h1>
@@ -34,8 +40,30 @@
   </section>
 
   <section class="history">
-    <h2 style="margin-top:0;border:none;">از اتوماسیون کلاسیک تا Morobot</h2>
-    <p>سوراس سال‌ها در اتوماسیون فرآیندهای سازمانی (Windows، وب، Excel، یکپارچه‌سازی) فعال بوده است. Morobot نسل جدید است: **مرورگر محور**، **طراح بصری فرآیند**، **اجرای واقعی روی سایت‌های زنده** با افزونه Chrome، و **استقرار Cloud یا Enterprise** با لایسنس امن.</p>
+    <h2 style="margin-top:0;border:none;">تاریخچه نسل‌های نرم‌افزار اتوماسیون (محصولات مشابه)</h2>
+    <p style="margin-top:0;">Morobot در یک خط توسعهٔ شناخته‌شده در صنعت RPA و اتوماسیون وب قرار می‌گیرد — از ابزارهای دسکتاپ و Selenium تا پورتال ابری و افزونهٔ مرورگر. خلاصهٔ مسیر محصولات مشابه (قبل از و همراه با Morobot):</p>
+    <ul class="timeline">
+      <li>
+        <span class="era">RPA کلاسیک (دسکتاپ + مرورگر از راه دور)</span>
+        الگوی رایج بازار: ربات روی Windows، کنترل UI یا WebDriver، دیتابیس رابطه‌ای برای مراحل — مشابه UiPath / Automation Anywhere در مقیاس SMB.
+      </li>
+      <li>
+        <span class="era">Dynamic Automator V2 (ویندوز)</span>
+        اپ دسکتاپ + Selenium؛ ذخیرهٔ درختی Group/Step/Condition در SQL؛ ضبط تعاملی روی مرورگر — پایهٔ مهاجرت داده به Morobot V3.
+      </li>
+      <li>
+        <span class="era">Morobot V3 (پورتال وب)</span>
+        ASP.NET Core + SQL Server؛ گراف فرآیند در Canvas (JSON)؛ بدون Selenium روی سرور؛ پلن، اشتراک، منابع Excel مستقل.
+      </li>
+      <li>
+        <span class="era">افزونه Chrome MV3</span>
+        از سه افزونهٔ جدا (Recorder / Player / Selector) به <strong>Morobot Global</strong> + Smart Recorder اختیاری؛ اجرا روی تب واقعی کاربر.
+      </li>
+      <li>
+        <span class="era">Enterprise امروز</span>
+        استقرار on-prem یا Cloud؛ لایسنس امضاشده؛ برندینگ سازمان؛ migration خودکار DB پس از آپدیت.
+      </li>
+    </ul>
   </section>
 
   <h2>مشکل مشتری</h2>
@@ -71,13 +99,33 @@
   </ul>
 
   <h2>نماهای سامانه</h2>
+  <p style="font-size:0.9rem;color:#475569;">تصاویر زیر از محیط واقعی Morobot (localhost demo) گرفته شده‌اند — برای PDF با Ctrl+P ذخیره کنید.</p>
   <div class="screens">
-    <div class="ph">داشبورد پنل</div>
-    <div class="ph">ویرایشگر فرآیند</div>
-    <div class="ph">اجرای Play روی سایت</div>
-    <div class="ph">پنل Admin</div>
+    <figure class="shot">
+      <img src="screenshots/morobot-landing.png" alt="صفحه معرفی Morobot" />
+      <figcaption>صفحه معرفی و لندینگ</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="screenshots/morobot-panel-home.png" alt="داشبورد پنل کاربر" />
+      <figcaption>داشبورد پنل کاربر</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="screenshots/morobot-features-fa.png" alt="طراح بصری فرآیند" />
+      <figcaption>طراح بصری فرآیند (گراف و Excel)</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="screenshots/morobot-processes.png" alt="فهرست فرآیندها" />
+      <figcaption>فهرست و مدیریت فرآیندها</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="screenshots/morobot-extension-install.png" alt="نصب افزونه Morobot Global" />
+      <figcaption>نصب Morobot Global و Smart Recorder</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="screenshots/morobot-setup-guide.png" alt="راهنمای استقرار Enterprise" />
+      <figcaption>راهنمای استقرار سازمانی (Setup Guide)</figcaption>
+    </figure>
   </div>
-  <p style="font-size:0.85rem;color:#64748b;">اسکرین‌شات واقعی را از محیط demo خود جایگزین کنید (پوشش marketing در repo).</p>
 
   <h2>مدل استقرار</h2>
   <table style="width:100%;border-collapse:collapse;font-size:0.95rem;">
@@ -91,6 +139,6 @@
     <p><strong>morobot.ir</strong> · پشتیبانی سوراس</p>
   </div>
 
-  <p style="text-align:center;font-size:0.8rem;color:#94a3b8;margin-top:32px;">© گروه نرم‌افزاری سوراس — Morobot · سند بازاریابی v1.0.0</p>
+  <p style="text-align:center;font-size:0.8rem;color:#94a3b8;margin-top:32px;">© گروه نرم‌افزاری سوراس — Morobot · سند بازاریابی v1.1.0</p>
 </body>
 </html>

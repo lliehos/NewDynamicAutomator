@@ -31,6 +31,7 @@ builder.Services.AddSignalR();
 builder.Services.AddSingleton<Morobot.Web.Services.PlaySessionTracker>();
 builder.Services.AddScoped<Morobot.Web.Services.CatalogLiveService>();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddScoped<Morobot.Infrastructure.Services.ILicenseRequestHostAccessor, HttpLicenseRequestHostAccessor>();
 
 var jwtKey = builder.Configuration["Jwt:Key"] ?? "CHANGE-ME-TO-A-LONG-SECRET-KEY-32+";
 var issuer = builder.Configuration["Jwt:Issuer"] ?? "Morobot";
@@ -131,8 +132,7 @@ using (var scope = app.Services.CreateScope())
     await Morobot.Infrastructure.Services.DatabaseBootstrapService.MigrateAndSeedAsync(db, log);
 
     var license = scope.ServiceProvider.GetRequiredService<Morobot.Infrastructure.Services.LicenseService>();
-    if (license.IsLicensingEnabled)
-        await license.EnsureAnchorAsync();
+    await license.EnsureAnchorAsync();
 }
 
 app.Run();

@@ -20,6 +20,7 @@ public class AppDbContext : DbContext
     public DbSet<AppEventLog> EventLogs => Set<AppEventLog>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<DeploymentAnchor> DeploymentAnchors => Set<DeploymentAnchor>();
+    public DbSet<DeploymentTrialRecord> DeploymentTrialRecords => Set<DeploymentTrialRecord>();
     public DbSet<StoredLicense> StoredLicenses => Set<StoredLicense>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -91,6 +92,17 @@ public class AppDbContext : DbContext
             e.ToTable("DeploymentAnchors");
             e.HasIndex(x => x.AnchorId).IsUnique();
             e.Property(x => x.MonotonicCounter).HasDefaultValue(0L);
+            e.Property(x => x.ServerFingerprintHash).HasMaxLength(128).IsRequired();
+        });
+
+        modelBuilder.Entity<DeploymentTrialRecord>(e =>
+        {
+            e.ToTable("DeploymentTrialRecords");
+            e.HasIndex(x => x.ServerFingerprintHash).IsUnique();
+            e.Property(x => x.ServerFingerprintHash).HasMaxLength(128).IsRequired();
+            e.Property(x => x.TrialDays).HasDefaultValue(3);
+            e.Property(x => x.InstanceId).IsRequired();
+            e.HasIndex(x => x.InstanceId).IsUnique();
         });
 
         modelBuilder.Entity<StoredLicense>(e =>
@@ -100,6 +112,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.LicenseId).HasMaxLength(64).IsRequired();
             e.Property(x => x.OrganizationName).HasMaxLength(200);
             e.Property(x => x.DatabaseServerHint).HasMaxLength(200);
+            e.Property(x => x.AllowedHost).HasMaxLength(253);
             e.Property(x => x.TrialDays).HasDefaultValue(3);
             e.Property(x => x.AllowUpdates).HasDefaultValue(true);
             e.HasIndex(x => x.ImportedAtUtc);
@@ -130,6 +143,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.Mobile).HasMaxLength(30);
             e.Property(x => x.NationalId).HasMaxLength(20);
             e.HasIndex(x => x.NationalId);
+            e.HasIndex(x => x.DeploymentInstanceId);
             e.Property(x => x.PreferredLanguage).HasMaxLength(10).HasDefaultValue("fa");
             e.Property(x => x.Role).HasConversion<int>();
             e.HasOne(x => x.Plan)
@@ -142,6 +156,7 @@ public class AppDbContext : DbContext
         {
             e.ToTable("Processes");
             e.Property(x => x.Title).HasMaxLength(100).IsRequired();
+            e.HasIndex(x => x.DeploymentInstanceId);
             e.Property(x => x.GraphJson);
             e.HasOne(x => x.Creator)
                 .WithMany(x => x.CreatedProcesses)

@@ -16,12 +16,18 @@ public class TaskService
     private readonly AppDbContext _db;
     private readonly EntitlementService _entitlements;
     private readonly DataSourceService _dataSources;
+    private readonly DeploymentBindingService _deploymentBinding;
 
-    public TaskService(AppDbContext db, EntitlementService entitlements, DataSourceService dataSources)
+    public TaskService(
+        AppDbContext db,
+        EntitlementService entitlements,
+        DataSourceService dataSources,
+        DeploymentBindingService deploymentBinding)
     {
         _db = db;
         _entitlements = entitlements;
         _dataSources = dataSources;
+        _deploymentBinding = deploymentBinding;
     }
 
     public async Task<List<TaskListItemDto>> ListForUserAsync(int userId, CancellationToken ct = default)
@@ -31,9 +37,13 @@ public class TaskService
         var canSharePlan = entitlementsUser?.Plan?.CanShare == true
                            && !(entitlementsUser.Plan != null && PasswordPolicy.IsLocal(entitlementsUser.Plan.Code));
 
+        var licensed = await _deploymentBinding.IsLicensedBypassAsync(ct);
+        var currentInstanceId = licensed ? Guid.Empty : await _deploymentBinding.GetCurrentInstanceIdAsync(ct);
+
         var rows = await _db.ProcessShares
             .AsNoTracking()
             .Where(a => a.UserId == userId)
+            .Where(a => licensed || a.Process.DeploymentInstanceId == currentInstanceId)
             .Select(a => new
             {
                 a.Process.Id,
@@ -160,6 +170,7 @@ public class TaskService
                 ? origin
                 : TaskDesignOrigin.Manual
         };
+        await _deploymentBinding.StampProcessAsync(process, ct);
         if (userId > 0)
         {
             process.Shares.Add(new ProcessShare
@@ -226,6 +237,8 @@ public class TaskService
 
     public async Task<bool> CanViewAsync(int userId, int taskId, CancellationToken ct = default)
     {
+        if (!await _deploymentBinding.IsProcessAccessibleAsync(taskId, ct))
+            return false;
         return await _db.ProcessShares.AnyAsync(a => a.UserId == userId && a.ProcessId == taskId, ct);
     }
 

@@ -100,6 +100,9 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<Guid?>("DeploymentInstanceId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Email")
                         .HasMaxLength(120)
                         .HasColumnType("nvarchar(120)");
@@ -150,6 +153,8 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(50)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("DeploymentInstanceId");
 
                     b.HasIndex("NationalId");
 
@@ -230,12 +235,58 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                         .HasColumnType("bigint")
                         .HasDefaultValue(0L);
 
+                    b.Property<string>("ServerFingerprintHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("AnchorId")
                         .IsUnique();
 
                     b.ToTable("DeploymentAnchors", (string)null);
+                });
+
+            modelBuilder.Entity("Morobot.Domain.Entities.DeploymentTrialRecord", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("InstanceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("LinkedAnchorId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ServerFingerprintHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<int>("TrialDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(3);
+
+                    b.Property<DateTime>("TrialStartedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstanceId")
+                        .IsUnique();
+
+                    b.HasIndex("ServerFingerprintHash")
+                        .IsUnique();
+
+                    b.ToTable("DeploymentTrialRecords", (string)null);
                 });
 
             modelBuilder.Entity("Morobot.Domain.Entities.DeviceSession", b =>
@@ -466,6 +517,9 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.Property<int>("DelayBeforeMs")
                         .HasColumnType("int");
 
+                    b.Property<Guid?>("DeploymentInstanceId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<int>("DesignOrigin")
                         .HasColumnType("int");
 
@@ -489,6 +543,8 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CreatorUserId");
+
+                    b.HasIndex("DeploymentInstanceId");
 
                     b.ToTable("Processes", (string)null);
                 });
@@ -571,6 +627,10 @@ namespace Morobot.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bit")
                         .HasDefaultValue(true);
+
+                    b.Property<string>("AllowedHost")
+                        .HasMaxLength(253)
+                        .HasColumnType("nvarchar(253)");
 
                     b.Property<string>("DatabaseServerHint")
                         .HasMaxLength(200)

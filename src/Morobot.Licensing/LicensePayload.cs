@@ -23,4 +23,6 @@ public sealed class LicensePayload
     public bool AllowUpdates { get; set; } = true;
     /// <summary>Optional override for update check URL.</summary>
     public string? UpdateServerUrl { get; set; }
+    /// <summary>When set, HTTP Host (or this IP) must match. Empty = no host lock.</summary>
+    public string? AllowedHost { get; set; }
 }

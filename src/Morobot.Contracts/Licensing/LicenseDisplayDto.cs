@@ -14,13 +14,19 @@ public sealed class LicenseDisplayDto
     public int ActiveUserCount { get; set; }
     public long? Sequence { get; set; }
     public string? DeploymentAnchorShort { get; set; }
+    public string? ServerFingerprintShort { get; set; }
     public int? DaysRemaining { get; set; }
     public int? TrialDaysRemaining { get; set; }
+    /// <summary>End of current trial or licensed period (UTC).</summary>
+    public DateTime? ValidityEndsAtUtc { get; set; }
+    /// <summary>Start of trial (anchor) or license issue time (UTC).</summary>
+    public DateTime? ValidityStartsAtUtc { get; set; }
     public bool AllowUpdates { get; set; }
     public bool ShowCopyright { get; set; }
     public string? DatabaseServerHint { get; set; }
     public string? UpdateServerUrl { get; set; }
     public string? PendingConnectionRestart { get; set; }
+    public string? AllowedHost { get; set; }
 }
 
 public sealed class TenantBrandingDto

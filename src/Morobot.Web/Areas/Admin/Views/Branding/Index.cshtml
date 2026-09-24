@@ -5,13 +5,13 @@
 }
 <partial name="_AdminPageHead" model='new AdminPageHeadModel { Summary = L["admin.branding.intro"] }' />
 
-<form method="post" enctype="multipart/form-data" class="admin-settings-grid">
+<form method="post" enctype="multipart/form-data" class="admin-settings-grid admin-branding-form">
   @Html.AntiForgeryToken()
   <div class="admin-settings-card">
     <h3><i class="ti ti-palette" aria-hidden="true"></i>@L["admin.branding.identity"]</h3>
     <div class="mb-3">
       <label class="admin-label" for="AppName">@L["admin.branding.appName"]</label>
-      <input class="form-control" id="AppName" name="AppName" value="@Model.AppName" />
+      <input class="form-control" id="AppName" name="AppName" value="@Model.AppName" autocomplete="organization" />
     </div>
     <div class="mb-3">
       <label class="admin-label" for="BrandTitle">@L["admin.branding.brandTitle"]</label>
@@ -22,26 +22,87 @@
       <input class="form-control" id="OrganizationName" name="OrganizationName" value="@Model.OrganizationName" />
     </div>
   </div>
+
   <div class="admin-settings-card">
     <h3><i class="ti ti-photo" aria-hidden="true"></i>@L["admin.branding.assets"]</h3>
-    @if (!string.IsNullOrWhiteSpace(Model.LogoUrl))
-    {
-      <p><img src="@Model.LogoUrl" alt="" style="max-height:48px" /></p>
-    }
-    <div class="mb-3">
+
+    <div class="admin-file-field mb-4">
       <label class="admin-label" for="logoFile">@L["admin.branding.logo"]</label>
-      <input class="form-control" type="file" id="logoFile" name="logoFile" accept="image/*" />
+      <p class="admin-field-hint">@L["admin.branding.logoHint"]</p>
+      <div class="admin-file-picker" data-admin-file-picker>
+        <div class="admin-file-picker-preview" id="logoPreviewWrap">
+          @if (!string.IsNullOrWhiteSpace(Model.LogoUrl))
+          {
+            <img src="@Model.LogoUrl" alt="" id="logoPreviewImg" class="admin-file-picker-img admin-file-picker-img--logo" />
+          }
+          else
+          {
+            <div class="admin-file-picker-placeholder" id="logoPreviewPlaceholder">
+              <i class="ti ti-photo" aria-hidden="true"></i>
+              <span>@L["admin.branding.preview"]</span>
+            </div>
+            <img src="" alt="" id="logoPreviewImg" class="admin-file-picker-img admin-file-picker-img--logo" hidden />
+          }
+        </div>
+        <div class="admin-file-picker-actions">
+          <input type="file" class="admin-file-input" id="logoFile" name="logoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml" data-preview-target="logoPreviewImg" data-placeholder-id="logoPreviewPlaceholder" />
+          <label class="btn-admin btn-admin-outline" for="logoFile"><i class="ti ti-upload" aria-hidden="true"></i>@L["admin.branding.chooseFile"]</label>
+          <span class="admin-file-name" data-file-name-for="logoFile">@L["admin.branding.noFileChosen"]</span>
+        </div>
+      </div>
     </div>
-    @if (!string.IsNullOrWhiteSpace(Model.FaviconUrl))
-    {
-      <p><img src="@Model.FaviconUrl" alt="" style="max-height:24px" /></p>
-    }
-    <div class="mb-3">
+
+    <div class="admin-file-field">
       <label class="admin-label" for="faviconFile">@L["admin.branding.favicon"]</label>
-      <input class="form-control" type="file" id="faviconFile" name="faviconFile" accept="image/*" />
+      <p class="admin-field-hint">@L["admin.branding.faviconHint"]</p>
+      <div class="admin-file-picker" data-admin-file-picker>
+        <div class="admin-file-picker-preview admin-file-picker-preview--favicon" id="faviconPreviewWrap">
+          @if (!string.IsNullOrWhiteSpace(Model.FaviconUrl))
+          {
+            <img src="@Model.FaviconUrl" alt="" id="faviconPreviewImg" class="admin-file-picker-img admin-file-picker-img--favicon" />
+          }
+          else
+          {
+            <div class="admin-file-picker-placeholder" id="faviconPreviewPlaceholder">
+              <i class="ti ti-app-window" aria-hidden="true"></i>
+              <span>@L["admin.branding.preview"]</span>
+            </div>
+            <img src="" alt="" id="faviconPreviewImg" class="admin-file-picker-img admin-file-picker-img--favicon" hidden />
+          }
+        </div>
+        <div class="admin-file-picker-actions">
+          <input type="file" class="admin-file-input" id="faviconFile" name="faviconFile" accept="image/png,image/jpeg,image/webp,image/x-icon,image/vnd.microsoft.icon" data-preview-target="faviconPreviewImg" data-placeholder-id="faviconPreviewPlaceholder" />
+          <label class="btn-admin btn-admin-outline" for="faviconFile"><i class="ti ti-upload" aria-hidden="true"></i>@L["admin.branding.chooseFile"]</label>
+          <span class="admin-file-name" data-file-name-for="faviconFile">@L["admin.branding.noFileChosen"]</span>
+        </div>
+      </div>
     </div>
   </div>
-  <div class="admin-settings-card" style="grid-column:1/-1">
-    <button type="submit" class="btn-admin">@L["admin.branding.save"]</button>
+
+  <div class="admin-settings-card admin-branding-actions">
+    <button type="submit" class="btn-admin"><i class="ti ti-device-floppy" aria-hidden="true"></i>@L["admin.branding.save"]</button>
   </div>
 </form>
+
+@section Scripts {
+<script>
+(function () {
+  document.querySelectorAll('.admin-file-input').forEach(function (input) {
+    input.addEventListener('change', function () {
+      var nameEl = document.querySelector('[data-file-name-for="' + input.id + '"]');
+      var file = input.files && input.files[0];
+      if (nameEl) nameEl.textContent = file ? file.name : @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.branding.noFileChosen"].ToString()));
+      var imgId = input.getAttribute('data-preview-target');
+      var phId = input.getAttribute('data-placeholder-id');
+      var img = imgId ? document.getElementById(imgId) : null;
+      var ph = phId ? document.getElementById(phId) : null;
+      if (!file || !img) return;
+      var url = URL.createObjectURL(file);
+      img.src = url;
+      img.hidden = false;
+      if (ph) ph.hidden = true;
+    });
+  });
+})();
+</script>
+}

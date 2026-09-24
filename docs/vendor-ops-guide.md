@@ -1,6 +1,6 @@
 # راهنمای عملیات داخلی Morobot (Vendor / پشتیبانی / مالک)
 
-> **نسخه:** 1.0.0 · **تاریخ:** 2026-09-24  
+> **نسخه:** 1.0.1 · **تاریخ:** 2026-09-24  
 > مخاطب: کارمند جدید پشتیبانی، DevOps، یا مالک محصول — بدون نیاز به توضیح شفاهی.
 
 ---
@@ -10,7 +10,7 @@
 1. [نقش‌ها و اصل محرمانگی](#1-نقشها-و-اصل-محرمانگی)
 2. [ساختار repository](#2-ساختار-repository)
 3. [کلیدهای لایسنس](#3-کلیدهای-لایسنس)
-4. [جریان لایسنس Enterprise (گام‌به‌گام)](#4-جریان-لایسنس-enterprise)
+4. [جریان لایسنس (همه نصب‌ها)](#4-جریان-لایسنس-همه-نصبها)
 5. [Morobot LicenseTool (CLI)](#5-morobot-licensetool-cli)
 6. [Morobot Vendor Studio (WPF)](#6-morobot-vendor-studio-wpf)
 7. [ساخت بسته مشتری (publish + zip)](#7-ساخت-بسته-مشتری)
@@ -75,10 +75,10 @@ dotnet run --project src\Morobot.LicenseTool -- genkeypair --out-dir tools\licen
 
 ---
 
-## 4. جریان لایسنس Enterprise
+## 4. جریان لایسنس (همه نصب‌ها)
 
 ```
-[مشتری] نصب Morobot Enterprise (بدون لایسنس → trial)
+[مشتری] نصب Morobot (بدون لایسنس → trial)
     ↓
 [مشتری Admin] /Admin/License → Export activation-request.json
     ↓
@@ -90,6 +90,8 @@ dotnet run --project src\Morobot.LicenseTool -- genkeypair --out-dir tools\licen
 ```
 
 **نکته:** import لایسنس **کاربران و فرآیندها را حذف نمی‌کند**.
+
+**دوره آزمایشی:** به اثر انگشت سرور (`DeploymentTrialRecords`) گره خورده است؛ پاک کردن فقط `DeploymentAnchors` برای reset کافی نیست. هر entitlement یک `InstanceId` دارد — کاربر/فرآیند با InstanceId قدیمی بدون لایسنس کار نمی‌کند. **Import لایسنس معتبر** همه ردیف‌ها را به Instance فعلی وصل می‌کند (داده پاک نمی‌شود). لایسنس همچنان به `DeploymentAnchorId` در activation-request وابسته است.
 
 **Upgrade سقف کاربر:** لایسنس جدید با `Sequence` بالاتر.
 
@@ -109,6 +111,7 @@ dotnet run --project src\Morobot.LicenseTool -- sign `
   --org "نام سازمان" `
   --max-users 100 `
   --sequence 1 `
+  --allowed-host "automation.customer.ir" `
   --trial-days 3 `
   --allow-updates true `
   --db-connection "Server=...;Database=MorobotV3;..." `
@@ -147,8 +150,8 @@ dotnet run --project src\Morobot.VendorStudio
 - **بدون** سورس git
 
 Checklist قبل از ارسال:
-- [ ] `Morobot:DeploymentMode` = `Enterprise`
 - [ ] `Morobot:AppInstanceKey` یکتا برای این مشتری/دامنه
+- [ ] لایسنس روی همه نصب‌ها فعال است (تغییر DeploymentMode دور نمی‌زند)
 - [ ] `ConnectionStrings:Default` یا connection در لایسنس
 - [ ] راهنمای `setup-guide.md` داخل `docs/`
 
@@ -170,7 +173,7 @@ Checklist قبل از ارسال:
 
 | کلید | معنی |
 |------|------|
-| `DeploymentMode` | `Cloud` یا `Enterprise` |
+| `DeploymentMode` | برچسب اختیاری (`Cloud` / `Enterprise`) — **لایسنس را کنترل نمی‌کند** |
 | `AppInstanceKey` | شناسه یکتا این استقرار (برای جداسازی افزونه روی PC) |
 | `ConnectionStrings:Default` | SQL Server — **موتور فقط SQL Server** در نسخه فعلی |
 
@@ -241,7 +244,7 @@ Checklist قبل از ارسال:
 2. Ctrl+P → **Save as PDF**
 3. به مشتری احتمالی بدهید
 
-محتوا: معرفی برند، تاریخچه اتوماسیون، امکانات، مزایا — **بدون** جزئیات vendor.
+محتوا: معرفی برند، **تاریخچه نسل‌های نرم‌افزار اتوماسیون مشابه** (نه جزئیات vendor)، امکانات، مزایا — اسکرین‌شات‌ها در `docs/marketing/screenshots/`.
 
 ---
 

@@ -18,6 +18,8 @@ public class AppUser
     public string? AppVersion { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    /// <summary>When set, must match current deployment instance unless a valid license is active.</summary>
+    public Guid? DeploymentInstanceId { get; set; }
 
     public UserRole Role { get; set; } = UserRole.User;
     public int? PlanId { get; set; }

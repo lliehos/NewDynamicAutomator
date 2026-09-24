@@ -14,7 +14,8 @@ public enum LicenseRestrictionReason
     TrialExpired = 1,
     LicenseMissing = 2,
     LicenseExpired = 3,
-    LicenseInvalid = 4
+    LicenseInvalid = 4,
+    HostMismatch = 5
 }
 
 public sealed class LicenseRuntimeState

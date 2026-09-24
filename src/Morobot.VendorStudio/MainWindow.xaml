@@ -1,73 +1,276 @@
 <Window x:Class="Morobot.VendorStudio.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Morobot Vendor Studio" Height="720" Width="980" MinHeight="600" MinWidth="840">
-  <Grid Margin="16">
+        Style="{StaticResource VsWindow}"
+        Title="استودیو فروشنده مروبات"
+        Height="780" Width="1020" MinHeight="640" MinWidth="880"
+        FlowDirection="RightToLeft"
+        WindowStartupLocation="CenterScreen"
+        Icon="pack://application:,,,/Assets/morobot-icon.png">
+  <Grid Margin="20">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
-    <TextBlock Text="Morobot Vendor Studio" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,12"/>
+
+    <StackPanel Grid.Row="0" Margin="0,0,0,16">
+      <StackPanel Orientation="Horizontal">
+        <Image Source="pack://application:,,,/Assets/morobot-icon.png" Width="32" Height="32" Margin="0,0,10,0"
+               RenderOptions.BitmapScalingMode="HighQuality"/>
+        <TextBlock Style="{StaticResource VsTitle}" Text="استودیو فروشنده (Vendor Studio)" VerticalAlignment="Center"/>
+      </StackPanel>
+      <TextBlock Foreground="{StaticResource VsMutedBrush}" Margin="30,4,0,0" TextWrapping="Wrap"
+                 Text="امضای لایسنس Enterprise و ساخت بسته publish + zip برای مشتری — کلید خصوصی هرگز روی سرور مشتری نرود."/>
+    </StackPanel>
+
     <TabControl Grid.Row="1">
-      <TabItem Header="License">
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <StackPanel Margin="8">
-            <TextBlock Text="Sign customer license (.morobot)" FontWeight="SemiBold" Margin="0,0,0,8"/>
-            <UniformGrid Columns="2" Margin="0,0,0,8">
-              <TextBlock Text="Activation request" VerticalAlignment="Center"/>
+      <TabItem Header="لایسنس">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="4">
+          <StackPanel Margin="8,12,8,16" MaxWidth="920">
+
+            <TextBlock Style="{StaticResource VsSectionTitle}" Text="امضای لایسنس مشتری (.morobot)"/>
+
+            <!-- Activation request -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE8A5;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="فایل درخواست فعال‌سازی"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="JSON که مشتری از Admin/License → درخواست فعال‌سازی دانلود کرده. شامل DeploymentAnchorId سرور همان مشتری است."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="از پنل مشتری: مدیریت → لایسنس → دریافت activation-request. بدون این فایل لایسنس به سرور دیگر وصل نمی‌شود."/>
               <DockPanel LastChildFill="True">
-                <Button Content="Browse" Width="80" Margin="4,0,0,0" DockPanel.Dock="Right" Click="BrowseRequest_Click"/>
-                <TextBox x:Name="RequestPath"/>
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowseRequest_Click"/>
+                <TextBox x:Name="RequestPath" Style="{StaticResource VsTextBox}"
+                         ToolTip="مسیر فایل .json یا .morobot درخواست فعال‌سازی"/>
               </DockPanel>
-              <TextBlock Text="Private key (.pem)" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <!-- Private key -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE192;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="کلید خصوصی امضا (.pem)"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="فقط روی PC vendor — معمولاً tools/license-keys/morobot-private.pem در repo (commit نشود)."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="کلید خصوصی RSA برای امضای لایسنس. هرگز در بسته مشتری یا git عمومی قرار نگیرد."/>
               <DockPanel LastChildFill="True">
-                <Button Content="Browse" Width="80" Margin="4,0,0,0" DockPanel.Dock="Right" Click="BrowsePrivateKey_Click"/>
-                <TextBox x:Name="PrivateKeyPath"/>
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowsePrivateKey_Click"/>
+                <TextBox x:Name="PrivateKeyPath" Style="{StaticResource VsTextBox}"/>
               </DockPanel>
-              <TextBlock Text="Valid until" VerticalAlignment="Center"/>
-              <DatePicker x:Name="ValidUntil"/>
-              <TextBlock Text="Organization" VerticalAlignment="Center"/>
-              <TextBox x:Name="Organization"/>
-              <TextBlock Text="Max users" VerticalAlignment="Center"/>
-              <TextBox x:Name="MaxUsers"/>
-              <TextBlock Text="Sequence" VerticalAlignment="Center"/>
-              <TextBox x:Name="Sequence" Text="1"/>
-              <TextBlock Text="Trial days" VerticalAlignment="Center"/>
-              <TextBox x:Name="TrialDays" Text="3"/>
-              <TextBlock Text="DB connection string" VerticalAlignment="Center"/>
-              <TextBox x:Name="DbConnection" AcceptsReturn="True" Height="48" TextWrapping="Wrap"/>
-              <TextBlock Text="Update server URL" VerticalAlignment="Center"/>
-              <TextBox x:Name="UpdateUrl" Text="https://morobot.ir/checkupdate"/>
-            </UniformGrid>
-            <CheckBox x:Name="AllowUpdates" Content="Allow online updates" IsChecked="True" Margin="0,0,0,8"/>
-            <DockPanel Margin="0,0,0,8">
-              <Button Content="Sign license" Width="120" Click="SignLicense_Click"/>
-              <Button Content="Save .morobot" Width="120" Margin="8,0,0,0" Click="SaveLicense_Click"/>
-            </DockPanel>
-            <TextBox x:Name="LicenseOutput" AcceptsReturn="True" TextWrapping="Wrap" Height="220" VerticalScrollBarVisibility="Auto"/>
+            </StackPanel>
+
+            <!-- Valid until -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE787;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="اعتبار تا تاریخ"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="آخرین روز معتبر بودن لایسنس (شامل همان روز)."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="پس از این تاریخ، بدون لایسنس جدید سامانه وارد حالت محدود می‌شود."/>
+              <DatePicker x:Name="ValidUntil" Margin="28,0,0,0"/>
+            </StackPanel>
+
+            <!-- Organization -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE731;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="نام سازمان"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="در پنل Admin/License و گزارش‌ها نمایش داده می‌شود."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="مثلاً «شرکت نمونه» — برای شناسایی قرارداد در پشتیبانی."/>
+              <TextBox x:Name="Organization" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"/>
+            </StackPanel>
+
+            <!-- Allowed host -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE774;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="دامنه یا IP مجاز"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="خالی = بدون قفل آدرس. مثال: morobot.customer.ir یا 192.168.1.10"/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="اگر پر شود، فقط از همان Host یا IP (در header درخواست) سامانه در حالت لایسنس کامل کار می‌کند."/>
+              <TextBox x:Name="AllowedHost" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"
+                       ToolTip="دامنه (با یا بدون https) یا آدرس IPv4/IPv6"/>
+            </StackPanel>
+
+            <!-- Max users -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE716;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="سقف کاربر"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="خالی = بدون سقف سخت در لایسنس (طبق منطق سامانه)."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="حداکثر کاربر فعال مجاز؛ عدد صحیح. برای ارتقا، لایسنس با Sequence بالاتر صادر کنید."/>
+              <TextBox x:Name="MaxUsers" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"/>
+            </StackPanel>
+
+            <!-- Sequence -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE8FD;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="شماره نسخه لایسنس (Sequence)"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="هر لایسنس جدید باید از قبلی بزرگ‌تر باشد تا جایگزین شود. پیش‌فرض: 1"/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="برای تمدید یا افزایش سقف، Sequence را افزایش دهید."/>
+              <TextBox x:Name="Sequence" Style="{StaticResource VsTextBox}" Margin="28,0,0,0" Text="1"/>
+            </StackPanel>
+
+            <!-- Trial days -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE823;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="روزهای آزمایشی (بدون لایسنس)"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="مدت trial Enterprise قبل از الزام لایسنس؛ پیش‌فرض 3"/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="از اولین اجرای Enterprise؛ معمولاً ۳ روز."/>
+              <TextBox x:Name="TrialDays" Style="{StaticResource VsTextBox}" Margin="28,0,0,0" Text="3"/>
+            </StackPanel>
+
+            <!-- DB connection -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE968;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="رشته اتصال SQL Server"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="اگر خالی باشد مشتری فقط از appsettings استفاده می‌کند. در لایسنس ذخیره و پس از import اعمال می‌شود."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="Connection string کامل؛ فقط روی سرور مشتری مصرف می‌شود. در UI فقط نام سرور نمایش داده می‌شود."/>
+              <TextBox x:Name="DbConnection" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"
+                       AcceptsReturn="True" Height="52" TextWrapping="Wrap"/>
+            </StackPanel>
+
+            <!-- Update URL -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE774;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="آدرس بررسی به‌روزرسانی"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="Endpoint که Admin/License برای check update صدا می‌زند."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="پیش‌فرض: https://morobot.ir/checkupdate — برای مشتری air-gap می‌توان غیرفعال کرد."/>
+              <TextBox x:Name="UpdateUrl" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"
+                       Text="https://morobot.ir/checkupdate"/>
+            </StackPanel>
+
+            <CheckBox x:Name="AllowUpdates" Margin="28,0,0,8" IsChecked="True"
+                      ToolTip="اگر خاموش باشد سامانه به‌روزرسانی آنلاین را از لایسنس نمی‌گیرد.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازه بررسی به‌روزرسانی آنلاین"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (اختیاری — پیش‌فرض: فعال)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <StackPanel Orientation="Horizontal" Margin="28,8,0,12">
+              <Button Content="امضای لایسنس" Width="130" Style="{StaticResource VsButton}" Click="SignLicense_Click"/>
+              <Button Content="ذخیره .morobot" Width="130" Margin="10,0,0,0"
+                      Style="{StaticResource VsButtonSecondary}" Click="SaveLicense_Click"/>
+            </StackPanel>
+
+            <TextBlock Style="{StaticResource VsHint}" Margin="28,0,0,4"
+                       Text="خروجی JSON امضاشده — پس از امضا می‌توانید کپی یا با «ذخیره» فایل بدهید به مشتری."/>
+            <TextBox x:Name="LicenseOutput" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"
+                     AcceptsReturn="True" TextWrapping="Wrap" Height="200" VerticalScrollBarVisibility="Auto"
+                     FontFamily="Consolas, Courier New"/>
           </StackPanel>
         </ScrollViewer>
       </TabItem>
-      <TabItem Header="Package">
-        <StackPanel Margin="8">
-          <TextBlock Text="Build customer server package (dotnet publish + zip)" FontWeight="SemiBold" Margin="0,0,0,8"/>
-          <UniformGrid Columns="2" Margin="0,0,0,8">
-            <TextBlock Text="Morobot.Web.csproj" VerticalAlignment="Center"/>
-            <DockPanel LastChildFill="True">
-              <Button Content="Browse" Width="80" Margin="4,0,0,0" DockPanel.Dock="Right" Click="BrowseProject_Click"/>
-              <TextBox x:Name="ProjectPath"/>
-            </DockPanel>
-            <TextBlock Text="Output folder" VerticalAlignment="Center"/>
-            <DockPanel LastChildFill="True">
-              <Button Content="Browse" Width="80" Margin="4,0,0,0" DockPanel.Dock="Right" Click="BrowseOutput_Click"/>
-              <TextBox x:Name="OutputPath"/>
-            </DockPanel>
-          </UniformGrid>
-          <Button Content="Build package" Width="140" HorizontalAlignment="Left" Click="BuildPackage_Click"/>
-        </StackPanel>
+
+      <TabItem Header="بسته نصب">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="4">
+          <StackPanel Margin="8,12,8,16" MaxWidth="920">
+            <TextBlock Style="{StaticResource VsSectionTitle}" Text="ساخت بسته سرور مشتری (dotnet publish + zip)"/>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE943;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="پروژه Morobot.Web.csproj"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="فایل csproj وب‌اپ — publish Release در پوشه خروجی."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="معمولاً src/Morobot.Web/Morobot.Web.csproj — پلتفرم هدف (win-x64 / linux-x64) را در صورت نیاز دستی در CLI تنظیم کنید."/>
+              <DockPanel LastChildFill="True">
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowseProject_Click"/>
+                <TextBox x:Name="ProjectPath" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"/>
+              </DockPanel>
+            </StackPanel>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE838;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="پوشه خروجی publish"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="پوشه خالی یا موجود؛ zip هم‌نام در کنار پوشه ساخته می‌شود."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="مثلاً dist/morobot-server — appsettings به Enterprise تغییر می‌کند و setup-guide.md کپی می‌شود."/>
+              <DockPanel LastChildFill="True">
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowseOutput_Click"/>
+                <TextBox x:Name="OutputPath" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"/>
+              </DockPanel>
+            </StackPanel>
+
+            <Button Content="ساخت بسته (zip)" Width="150" HorizontalAlignment="Right"
+                    Style="{StaticResource VsButton}" Margin="0,8,0,0" Click="BuildPackage_Click"/>
+          </StackPanel>
+        </ScrollViewer>
       </TabItem>
     </TabControl>
-    <TextBlock x:Name="StatusText" Grid.Row="2" Margin="0,12,0,0" Foreground="#555"/>
+
+    <Border Grid.Row="2" Margin="0,14,0,0" Padding="10,8" Background="{StaticResource VsPrimarySoftBrush}"
+            BorderBrush="{StaticResource VsBorderBrush}" BorderThickness="1" CornerRadius="8">
+      <StackPanel Orientation="Horizontal">
+        <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE946;" Margin="0,0,8,0"/>
+        <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="{StaticResource VsInkBrush}" Text="آماده"/>
+      </StackPanel>
+    </Border>
   </Grid>
 </Window>

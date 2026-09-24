@@ -4,8 +4,11 @@ public sealed class MorobotOptions
 {
     public const string SectionName = "Morobot";
 
-    /// <summary>Cloud | Enterprise</summary>
+    /// <summary>Legacy/hosting label (Cloud | Enterprise). Does not disable licensing.</summary>
     public string DeploymentMode { get; set; } = nameof(Domain.Enums.DeploymentMode.Cloud);
+
+    /// <summary>Licensing is always enforced (trial → licensed → restricted).</summary>
+    public bool IsLicensingEnabled => true;
 
     /// <summary>
     /// Unique id for this Morobot deployment (e.g. cloud-prod-a, acme-onprem).

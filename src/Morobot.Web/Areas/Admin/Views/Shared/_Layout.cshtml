@@ -18,11 +18,9 @@
   <link rel="apple-touch-icon" href="~/img/brand/apple-touch-icon.png" />
   <meta name="theme-color" content="#0f766e" />
   <meta name="application-name" content="@L["admin.brand"]" />
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
-  <link rel="stylesheet" href="~/assets/vendor/css/@(L.IsRtl ? "rtl/" : "")core.css" />
-  <link rel="stylesheet" href="~/css/portal-app.css" />
-  <link rel="stylesheet" href="~/css/admin-app.css?v=6" />
+  <link rel="stylesheet" href="~/css/admin-app.css?v=9" />
   <link rel="stylesheet" href="~/css/morobot-copyright.css?v=1" />
 </head>
 <body data-admin-catalog="1">
@@ -61,6 +59,15 @@
           <button type="submit" class="btn-admin secondary">@langLabel</button>
         </form>
       </div>
+      @await Component.InvokeAsync("AdminLicenseStrip")
+      @if (TempData["Danger"] != null)
+      {
+        <div class="admin-alert is-error" role="alert"><i class="ti ti-alert-circle" aria-hidden="true"></i> @TempData["Danger"]</div>
+      }
+      @if (TempData["Warn"] != null)
+      {
+        <div class="admin-alert is-warn" role="alert"><i class="ti ti-alert-triangle" aria-hidden="true"></i> @TempData["Warn"]</div>
+      }
       @if (TempData["Ok"] != null)
       {
         <div class="card-admin is-ok">@TempData["Ok"]</div>

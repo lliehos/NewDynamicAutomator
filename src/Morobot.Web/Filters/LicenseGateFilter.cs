@@ -14,12 +14,6 @@ public sealed class LicenseGateFilter : IAsyncActionFilter
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
-        if (!_license.IsLicensingEnabled)
-        {
-            await next();
-            return;
-        }
-
         var runtime = await _license.GetRuntimeStateAsync(context.HttpContext.RequestAborted);
         if (runtime.FullFeatures)
         {

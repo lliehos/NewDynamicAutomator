@@ -21,63 +21,179 @@ public sealed class LicenseService
     private readonly MorobotOptions _options;
     private readonly SystemSettingsService _settings;
     private readonly IMemoryCache _cache;
+    private readonly ILicenseRequestHostAccessor _hostAccessor;
     private readonly string _publicKeyPem;
 
     public LicenseService(
         AppDbContext db,
         IOptions<MorobotOptions> options,
         SystemSettingsService settings,
-        IMemoryCache cache)
+        IMemoryCache cache,
+        ILicenseRequestHostAccessor? hostAccessor = null)
     {
         _db = db;
         _options = options.Value;
         _settings = settings;
         _cache = cache;
+        _hostAccessor = hostAccessor ?? new NullLicenseRequestHostAccessor();
         _publicKeyPem = string.IsNullOrWhiteSpace(_options.LicensePublicKeyPem)
             ? LicensePublicKeys.Active
             : _options.LicensePublicKeyPem;
     }
 
-    public bool IsLicensingEnabled => _options.IsEnterprise;
+    public bool IsLicensingEnabled => _options.IsLicensingEnabled;
 
     public async Task<DeploymentAnchor> EnsureAnchorAsync(CancellationToken ct = default)
     {
+        var (anchor, _) = await EnsureDeploymentAsync(ct);
+        return anchor;
+    }
+
+    public async Task<Guid> GetCurrentDeploymentInstanceIdAsync(CancellationToken ct = default)
+    {
+        var (_, trial) = await EnsureDeploymentAsync(ct);
+        return trial.InstanceId;
+    }
+
+    /// <summary>After a valid license import, attach all tenant rows to the current deployment instance.</summary>
+    public async Task RebindAllTenantDataToCurrentDeploymentAsync(CancellationToken ct = default)
+    {
+        var instanceId = await GetCurrentDeploymentInstanceIdAsync(ct);
+        await _db.Users.ExecuteUpdateAsync(
+            u => u.SetProperty(x => x.DeploymentInstanceId, instanceId),
+            ct);
+        await _db.Set<Domain.Entities.Process>().ExecuteUpdateAsync(
+            p => p.SetProperty(x => x.DeploymentInstanceId, instanceId),
+            ct);
+    }
+
+    private async Task BackfillUnboundTenantDataAsync(Guid instanceId, CancellationToken ct)
+    {
+        await _db.Users.Where(u => u.DeploymentInstanceId == null)
+            .ExecuteUpdateAsync(u => u.SetProperty(x => x.DeploymentInstanceId, instanceId), ct);
+        await _db.Set<Domain.Entities.Process>().Where(p => p.DeploymentInstanceId == null)
+            .ExecuteUpdateAsync(p => p.SetProperty(x => x.DeploymentInstanceId, instanceId), ct);
+    }
+
+    private static void EnsureTrialInstanceId(DeploymentTrialRecord trial, ref bool dirty)
+    {
+        if (trial.InstanceId == Guid.Empty)
+        {
+            trial.InstanceId = Guid.NewGuid();
+            dirty = true;
+        }
+    }
+
+    private async Task<(DeploymentAnchor Anchor, DeploymentTrialRecord Trial)> EnsureDeploymentAsync(CancellationToken ct)
+    {
+        var fp = ServerHostFingerprint.ComputeHash();
+        var trial = await _db.DeploymentTrialRecords
+            .FirstOrDefaultAsync(t => t.ServerFingerprintHash == fp, ct);
         var anchor = await _db.DeploymentAnchors.OrderBy(a => a.Id).FirstOrDefaultAsync(ct);
+        var dirty = false;
+
         if (anchor is not null)
-            return anchor;
+        {
+            if (string.IsNullOrEmpty(anchor.ServerFingerprintHash))
+            {
+                anchor.ServerFingerprintHash = fp;
+                dirty = true;
+            }
+
+            if (trial is null)
+            {
+                trial = new DeploymentTrialRecord
+                {
+                    ServerFingerprintHash = fp,
+                    TrialStartedUtc = anchor.CreatedAtUtc,
+                    TrialDays = 3,
+                    CreatedAtUtc = DateTime.UtcNow,
+                    LinkedAnchorId = anchor.AnchorId,
+                    InstanceId = Guid.NewGuid()
+                };
+                _db.DeploymentTrialRecords.Add(trial);
+                dirty = true;
+            }
+            else
+            {
+                EnsureTrialInstanceId(trial, ref dirty);
+            }
+
+            if (trial.LinkedAnchorId != anchor.AnchorId)
+            {
+                trial.LinkedAnchorId = anchor.AnchorId;
+                dirty = true;
+            }
+
+            if (dirty)
+            {
+                await _db.SaveChangesAsync(ct);
+                _cache.Remove(CacheKeyValidation);
+                _cache.Remove(CacheKeyRuntime);
+            }
+
+            await BackfillUnboundTenantDataAsync(trial.InstanceId, ct);
+            return (anchor, trial);
+        }
+
+        var utcNow = DateTime.UtcNow;
+        if (trial is null)
+        {
+            trial = new DeploymentTrialRecord
+            {
+                ServerFingerprintHash = fp,
+                TrialStartedUtc = utcNow,
+                TrialDays = 3,
+                CreatedAtUtc = utcNow,
+                InstanceId = Guid.NewGuid()
+            };
+            _db.DeploymentTrialRecords.Add(trial);
+        }
+        else
+        {
+            EnsureTrialInstanceId(trial, ref dirty);
+            if (dirty)
+                await _db.SaveChangesAsync(ct);
+        }
 
         anchor = new DeploymentAnchor
         {
             AnchorId = Guid.NewGuid(),
-            CreatedAtUtc = DateTime.UtcNow,
+            CreatedAtUtc = trial.TrialStartedUtc,
+            ServerFingerprintHash = fp,
             MonotonicCounter = 0,
-            LastTrustedUtc = DateTime.UtcNow
+            LastTrustedUtc = utcNow
         };
+        trial.LinkedAnchorId = anchor.AnchorId;
         _db.DeploymentAnchors.Add(anchor);
         await _db.SaveChangesAsync(ct);
         _cache.Remove(CacheKeyValidation);
         _cache.Remove(CacheKeyRuntime);
-        return anchor;
+        await BackfillUnboundTenantDataAsync(trial.InstanceId, ct);
+        return (anchor, trial);
     }
 
     public async Task<LicenseRuntimeState> GetRuntimeStateAsync(CancellationToken ct = default)
     {
-        if (!IsLicensingEnabled)
-            return LicenseRuntimeState.Cloud();
-
-        if (_cache.TryGetValue(CacheKeyRuntime, out LicenseRuntimeState? cached) && cached is not null)
+        var cacheKey = BuildRuntimeCacheKey();
+        if (_cache.TryGetValue(cacheKey, out LicenseRuntimeState? cached) && cached is not null)
             return cached;
 
         var state = await BuildRuntimeStateAsync(ct);
-        _cache.Set(CacheKeyRuntime, state, CacheTtl);
+        _cache.Set(cacheKey, state, CacheTtl);
         return state;
+    }
+
+    private string BuildRuntimeCacheKey()
+    {
+        var (host, _) = _hostAccessor.GetCurrent();
+        if (string.IsNullOrWhiteSpace(host))
+            return CacheKeyRuntime;
+        return CacheKeyRuntime + ":" + host.Trim().ToLowerInvariant();
     }
 
     public async Task<LicenseValidationResult> ValidateCurrentAsync(CancellationToken ct = default)
     {
-        if (!IsLicensingEnabled)
-            return LicenseValidationResult.NotRequired();
-
         if (_cache.TryGetValue(CacheKeyValidation, out LicenseValidationResult? cached) && cached is not null)
             return cached;
 
@@ -88,18 +204,7 @@ public sealed class LicenseService
 
     public async Task<LicenseDisplayDto> GetDisplayAsync(CancellationToken ct = default)
     {
-        if (!IsLicensingEnabled)
-        {
-            return new LicenseDisplayDto
-            {
-                LicensingEnabled = false,
-                Status = nameof(LicenseValidationStatus.NotRequired),
-                RuntimeMode = nameof(LicenseRuntimeMode.NotApplicable),
-                ActiveUserCount = await CountActiveUsersAsync(ct)
-            };
-        }
-
-        var anchor = await EnsureAnchorAsync(ct);
+        var (anchor, trial) = await EnsureDeploymentAsync(ct);
         var runtime = await GetRuntimeStateAsync(ct);
         var validation = await ValidateCurrentAsync(ct);
         var activeUsers = await CountActiveUsersAsync(ct);
@@ -114,6 +219,10 @@ public sealed class LicenseService
             StatusMessage = validation.Message,
             ActiveUserCount = activeUsers,
             DeploymentAnchorShort = ShortId(anchor.AnchorId.ToString("D")),
+            ServerFingerprintShort = ServerHostFingerprint.ShortHash(
+                string.IsNullOrEmpty(anchor.ServerFingerprintHash)
+                    ? ServerHostFingerprint.ComputeHash()
+                    : anchor.ServerFingerprintHash),
             TrialDaysRemaining = runtime.TrialDaysRemaining,
             AllowUpdates = runtime.AllowsUpdates,
             ShowCopyright = runtime.ShowCopyright,
@@ -131,21 +240,77 @@ public sealed class LicenseService
             dto.MaxUsers = payload.MaxUsers;
             dto.Sequence = payload.Sequence;
             dto.DatabaseServerHint = ExtractServerHint(payload.DatabaseConnectionString);
+            dto.AllowedHost = payload.AllowedHost;
             if (payload.ValidUntilUtc > DateTime.UtcNow)
                 dto.DaysRemaining = (int)Math.Ceiling((payload.ValidUntilUtc - DateTime.UtcNow).TotalDays);
+        }
+
+        var stored = await GetStoredLicenseAsync(ct);
+        ApplyValidityWindow(dto, trial, runtime, stored, payload);
+
+        dto.AllowedHost ??= stored?.AllowedHost;
+
+        if (runtime.Reason == LicenseRestrictionReason.HostMismatch)
+        {
+            dto.RuntimeMode = LicenseRuntimeMode.Restricted.ToString();
+            dto.Status = "HostMismatch";
+            dto.StatusMessage = null;
         }
 
         return dto;
     }
 
+    private static void ApplyValidityWindow(
+        LicenseDisplayDto dto,
+        DeploymentTrialRecord trial,
+        LicenseRuntimeState runtime,
+        StoredLicense? stored,
+        LicensePayload? payload)
+    {
+        var trialDays = stored?.TrialDays ?? trial.TrialDays;
+        if (trialDays <= 0)
+            trialDays = 3;
+        var trialStart = trial.TrialStartedUtc;
+        var trialEndUtc = trialStart.Date.AddDays(trialDays);
+
+        switch (runtime.Mode)
+        {
+            case LicenseRuntimeMode.Trial:
+                dto.ValidityStartsAtUtc = trialStart;
+                dto.ValidityEndsAtUtc = trialEndUtc;
+                dto.DaysRemaining ??= runtime.TrialDaysRemaining;
+                break;
+            case LicenseRuntimeMode.Licensed when payload is not null:
+                dto.ValidityStartsAtUtc = payload.IssuedAtUtc;
+                dto.ValidityEndsAtUtc = payload.ValidUntilUtc;
+                if (payload.ValidUntilUtc > DateTime.UtcNow && dto.DaysRemaining is null)
+                    dto.DaysRemaining = (int)Math.Ceiling((payload.ValidUntilUtc - DateTime.UtcNow).TotalDays);
+                break;
+            case LicenseRuntimeMode.Restricted:
+                if (payload?.ValidUntilUtc is not null)
+                {
+                    dto.ValidityStartsAtUtc = payload.IssuedAtUtc;
+                    dto.ValidityEndsAtUtc = payload.ValidUntilUtc;
+                }
+                else
+                {
+                    dto.ValidityStartsAtUtc = trialStart;
+                    dto.ValidityEndsAtUtc = trialEndUtc;
+                }
+                break;
+        }
+    }
+
     public async Task<string> ExportActivationRequestJsonAsync(string? organizationHint = null, CancellationToken ct = default)
     {
         var anchor = await EnsureAnchorAsync(ct);
+        var fp = ServerHostFingerprint.ComputeHash();
         var request = new ActivationRequest
         {
             DeploymentAnchorId = anchor.AnchorId.ToString("D"),
             OrganizationHint = organizationHint,
             MachineName = Environment.MachineName,
+            ServerFingerprintHash = fp,
             AppVersion = typeof(LicenseService).Assembly.GetName().Version?.ToString(),
             RequestedAtUtc = DateTime.UtcNow
         };
@@ -154,9 +319,6 @@ public sealed class LicenseService
 
     public async Task<(bool ok, string? errorKey)> ImportAsync(string rawJson, CancellationToken ct = default)
     {
-        if (!IsLicensingEnabled)
-            return (false, "license.error.notEnterprise");
-
         var doc = LicenseJson.TryParseDocument(rawJson);
         if (doc is null)
             return (false, "license.error.invalidFile");
@@ -176,6 +338,10 @@ public sealed class LicenseService
             return (false, MapErrorKey(validation.Status));
 
         var payload = validation.Payload;
+        if (!string.IsNullOrWhiteSpace(payload.AllowedHost)
+            && !LicenseHostBinding.TryNormalize(payload.AllowedHost, out _))
+            return (false, "license.error.invalidHost");
+
         var utcNow = DateTime.UtcNow;
         if (utcNow < anchor.LastTrustedUtc.AddMinutes(-5))
             return (false, "license.error.clockRollback");
@@ -194,6 +360,11 @@ public sealed class LicenseService
             AllowUpdates = payload.AllowUpdates,
             TrialDays = payload.TrialDays > 0 ? payload.TrialDays : 3,
             DatabaseServerHint = ExtractServerHint(payload.DatabaseConnectionString),
+            AllowedHost = string.IsNullOrWhiteSpace(payload.AllowedHost)
+                ? null
+                : LicenseHostBinding.TryNormalize(payload.AllowedHost, out var normalizedHost)
+                    ? normalizedHost
+                    : payload.AllowedHost.Trim(),
             ImportedAtUtc = utcNow
         });
 
@@ -216,6 +387,7 @@ public sealed class LicenseService
         }
 
         await _db.SaveChangesAsync(ct);
+        await RebindAllTenantDataToCurrentDeploymentAsync(ct);
         _cache.Remove(CacheKeyValidation);
         _cache.Remove(CacheKeyRuntime);
         return (true, null);
@@ -223,9 +395,6 @@ public sealed class LicenseService
 
     public async Task EnsureCanAddActiveUserAsync(CancellationToken ct = default)
     {
-        if (!IsLicensingEnabled)
-            return;
-
         var runtime = await GetRuntimeStateAsync(ct);
         if (runtime.Mode == LicenseRuntimeMode.Restricted)
             throw new InvalidOperationException("license.error.invalid");
@@ -243,9 +412,6 @@ public sealed class LicenseService
 
     public async Task EnsureCanActivateUserAsync(int additionalActiveCount = 1, CancellationToken ct = default)
     {
-        if (!IsLicensingEnabled)
-            return;
-
         var runtime = await GetRuntimeStateAsync(ct);
         if (runtime.Mode == LicenseRuntimeMode.Restricted)
             throw new InvalidOperationException("license.error.invalid");
@@ -266,17 +432,32 @@ public sealed class LicenseService
 
     private async Task<LicenseRuntimeState> BuildRuntimeStateAsync(CancellationToken ct)
     {
-        var anchor = await EnsureAnchorAsync(ct);
+        var (_, trial) = await EnsureDeploymentAsync(ct);
         var stored = await GetStoredLicenseAsync(ct);
         var validation = await ValidateCurrentCoreAsync(ct);
 
-        if (validation.Status == LicenseValidationStatus.Valid && validation.Payload is not null)
-            return LicenseRuntimeState.Licensed(validation.Payload);
+        if (validation.Status == LicenseValidationStatus.Valid && validation.Payload is { } licensedPayload)
+        {
+            if (!string.IsNullOrWhiteSpace(licensedPayload.AllowedHost))
+            {
+                var (host, ip) = _hostAccessor.GetCurrent();
+                if (host is not null || ip is not null)
+                {
+                    if (!LicenseHostBinding.IsRequestAllowed(licensedPayload.AllowedHost, host, ip))
+                        return LicenseRuntimeState.Restricted(LicenseRestrictionReason.HostMismatch, licensedPayload);
+                }
+            }
 
-        var trialDays = stored?.TrialDays ?? 3;
+            return LicenseRuntimeState.Licensed(licensedPayload);
+        }
+
+        var trialDays = stored?.TrialDays ?? trial.TrialDays;
+        if (trialDays <= 0)
+            trialDays = 3;
+
         if (stored is null)
         {
-            var remaining = trialDays - (int)Math.Floor((DateTime.UtcNow - anchor.CreatedAtUtc).TotalDays);
+            var remaining = trialDays - (int)Math.Floor((DateTime.UtcNow - trial.TrialStartedUtc).TotalDays);
             if (remaining > 0)
                 return LicenseRuntimeState.Trial(remaining);
             return LicenseRuntimeState.Restricted(LicenseRestrictionReason.TrialExpired);

@@ -174,6 +174,8 @@
     "suggest": "",
     "errorRequired": "نام کاربری و رمز لازم است.",
     "errorInvalid": "نام کاربری یا رمز نادرست است.",
+    "errorDeploymentBinding": "این حساب به دوره نصب قبلی تعلق دارد. لایسنس معتبر از vendor بگیرید یا با مدیر تماس بگیرید.",
+    "errorDeploymentBinding": "این حساب به دوره نصب قبلی تعلق دارد. لایسنس معتبر از vendor بگیرید یا با مدیر تماس بگیرید.",
     "errorGuestDeviceTaken": "روی این سیستم قبلاً یک حساب مهمان/محلی فعال شده است. با چند مرورگر نمی‌توانید چند هویت مهمان بسازید.",
     "errorReserved": "این نام کاربری رزرو شده است و قابل استفاده نیست.",
     "userName": "نام کاربری",
@@ -214,6 +216,8 @@
       "clockRollback": "ساعت سیستم به عقب برگشته — لایسنس import نشد.",
       "missing": "لایسنس import نشده است.",
       "invalid": "لایسنس معتبر نیست.",
+      "invalidHost": "دامنه یا IP مقصد در لایسنس نامعتبر است.",
+      "hostMismatch": "این لایسنس فقط برای دامنه/IP مشخص‌شده است؛ آدرس فعلی درخواست مطابقت ندارد.",
       "seatLimit": "سقف کاربر فعال پر شده است ({max})."
     }
   },
@@ -388,7 +392,8 @@
       "saved": "تنظیمات ذخیره شد."
     },
     "license": {
-      "title": "لایسنس سازمانی",
+      "title": "لایسنس",
+      "intro": "هر نصب (Cloud، on-prem، dev) با دوره آزمایشی شروع می‌شود؛ پس از آن لایسنس امضاشده لازم است. تغییر DeploymentMode در appsettings لایسنس را خاموش نمی‌کند.",
       "introEnterprise": "لایسنس فقط سقف سازمان (مثل تعداد کاربر) را کنترل می‌کند. import لایسنس جدید داده‌های موجود را حذف نمی‌کند.",
       "introCloud": "این نصب در حالت Cloud است — لایسنس vendor لازم نیست.",
       "cloudMode": "حالت Cloud: لایسنس Enterprise غیرفعال است.",
@@ -411,11 +416,18 @@
       "fieldOrganization": "سازمان",
       "fieldLicenseId": "شناسه لایسنس",
       "fieldIssued": "صدور",
-      "fieldValidUntil": "اعتبار تا",
+      "fieldValidUntil": "پایان اعتبار فعلی",
+      "fieldValidityFrom": "شروع دوره",
+      "validityBannerTitle": "اعتبار لایسنس",
+      "validityBannerAction": "مدیریت لایسنس",
+      "fieldLicenseValidUntil": "پایان لایسنس (سند)",
       "fieldMaxUsers": "سقف کاربر فعال",
       "fieldActiveUsers": "کاربران فعال",
       "fieldSequence": "نسخه لایسنس",
       "fieldAnchor": "شناسه نصب",
+      "fieldServerFingerprint": "اثر انگشت سرور",
+      "fieldAllowedHost": "دامنه / IP مجاز",
+      "fieldAllowedHostEmpty": "بدون محدودیت آدرس",
       "daysRemaining": "{0} روز مانده",
       "unlimited": "نامحدود",
       "importTitle": "دریافت لایسنس جدید",
@@ -437,7 +449,8 @@
         "WrongAnchor": "مربوط به این نصب نیست",
         "Expired": "منقضی شده",
         "SequenceRollback": "نسخه قدیمی‌تر از لایسنس فعلی",
-        "Valid": "معتبر"
+        "Valid": "معتبر",
+        "HostMismatch": "دامنه/IP درخواست با لایسنس همخوان نیست"
       }
     },
     "branding": {
@@ -451,6 +464,11 @@
       "organization": "نام سازمان",
       "logo": "لوگو",
       "favicon": "فاوآیکون",
+      "logoHint": "PNG یا SVG با پس‌زمینه شفاف؛ پیشنهاد ارتفاع ۴۸px.",
+      "faviconHint": "آیکون تب مرورگر؛ مربع ۳۲×۳۲ یا ۶۴×۶۴.",
+      "chooseFile": "انتخاب فایل",
+      "noFileChosen": "فایلی انتخاب نشده",
+      "preview": "پیش‌نمایش",
       "save": "ذخیره برندینگ",
       "saved": "برندینگ ذخیره شد."
     },

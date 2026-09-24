@@ -34,7 +34,7 @@ public class BrandingController : Controller
         var runtime = await _license.GetRuntimeStateAsync(ct);
         if (!runtime.AllowsBranding)
         {
-            TempData["Ok"] = _locale["admin.branding.notLicensed"];
+            TempData["Danger"] = _locale["admin.branding.notLicensed"];
             return RedirectToAction("Index", "License");
         }
 
@@ -49,9 +49,15 @@ public class BrandingController : Controller
         var runtime = await _license.GetRuntimeStateAsync(ct);
         if (!runtime.AllowsBranding)
         {
-            TempData["Ok"] = _locale["admin.branding.notLicensed"];
+            TempData["Danger"] = _locale["admin.branding.notLicensed"];
             return RedirectToAction("Index", "License");
         }
+
+        var existing = await _branding.GetAsync(ct);
+        if (string.IsNullOrWhiteSpace(model.LogoUrl))
+            model.LogoUrl = existing.LogoUrl;
+        if (string.IsNullOrWhiteSpace(model.FaviconUrl))
+            model.FaviconUrl = existing.FaviconUrl;
 
         Directory.CreateDirectory(Path.Combine(_env.WebRootPath, "uploads", "branding"));
 
@@ -67,7 +73,7 @@ public class BrandingController : Controller
         }
         catch (InvalidOperationException)
         {
-            TempData["Ok"] = _locale["admin.branding.notLicensed"];
+            TempData["Danger"] = _locale["admin.branding.notLicensed"];
         }
 
         return RedirectToAction(nameof(Index));

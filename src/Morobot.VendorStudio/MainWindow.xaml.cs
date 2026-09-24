@@ -14,6 +14,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = VsStrings.WindowTitle;
         ValidUntil.SelectedDate = DateTime.Today.AddYears(1);
         var root = FindRepoRoot();
         if (root is not null)
@@ -25,17 +26,17 @@ public partial class MainWindow : Window
     }
 
     private void BrowseRequest_Click(object sender, RoutedEventArgs e)
-        => RequestPath.Text = PickFile("JSON files|*.json;*.morobot|All files|*.*") ?? RequestPath.Text;
+        => RequestPath.Text = PickFile("JSON|*.json;*.morobot|همه|*.*", "انتخاب درخواست فعال‌سازی") ?? RequestPath.Text;
 
     private void BrowsePrivateKey_Click(object sender, RoutedEventArgs e)
-        => PrivateKeyPath.Text = PickFile("PEM files|*.pem|All files|*.*") ?? PrivateKeyPath.Text;
+        => PrivateKeyPath.Text = PickFile("PEM|*.pem|همه|*.*", "انتخاب کلید خصوصی") ?? PrivateKeyPath.Text;
 
     private void BrowseProject_Click(object sender, RoutedEventArgs e)
-        => ProjectPath.Text = PickFile("Project files|*.csproj|All files|*.*") ?? ProjectPath.Text;
+        => ProjectPath.Text = PickFile("پروژه|*.csproj|همه|*.*", "انتخاب Morobot.Web.csproj") ?? ProjectPath.Text;
 
     private void BrowseOutput_Click(object sender, RoutedEventArgs e)
     {
-        var dlg = new OpenFolderDialog();
+        var dlg = new OpenFolderDialog { Title = "انتخاب پوشه خروجی publish" };
         if (dlg.ShowDialog() == true)
             OutputPath.Text = dlg.FolderName;
     }
@@ -44,12 +45,25 @@ public partial class MainWindow : Window
     {
         try
         {
-            var request = LicenseJson.TryParseActivationRequest(File.ReadAllText(RequestPath.Text));
+            if (string.IsNullOrWhiteSpace(RequestPath.Text) || !File.Exists(RequestPath.Text.Trim()))
+                throw new InvalidOperationException(VsStrings.ErrRequestPath);
+            if (string.IsNullOrWhiteSpace(PrivateKeyPath.Text) || !File.Exists(PrivateKeyPath.Text.Trim()))
+                throw new InvalidOperationException(VsStrings.ErrPrivateKey);
+
+            var request = LicenseJson.TryParseActivationRequest(File.ReadAllText(RequestPath.Text.Trim()));
             if (request is null || string.IsNullOrWhiteSpace(request.DeploymentAnchorId))
-                throw new InvalidOperationException("Invalid activation request file.");
+                throw new InvalidOperationException(VsStrings.ErrInvalidRequest);
 
             if (!ValidUntil.SelectedDate.HasValue)
-                throw new InvalidOperationException("Valid until date is required.");
+                throw new InvalidOperationException(VsStrings.ErrValidUntil);
+
+            string? allowedHost = null;
+            if (!string.IsNullOrWhiteSpace(AllowedHost.Text))
+            {
+                if (!LicenseHostBinding.TryNormalize(AllowedHost.Text.Trim(), out var normalizedHost))
+                    throw new InvalidOperationException("دامنه یا IP مجاز نامعتبر است.");
+                allowedHost = normalizedHost;
+            }
 
             var payload = new LicensePayload
             {
@@ -63,18 +77,19 @@ public partial class MainWindow : Window
                 DatabaseConnectionString = string.IsNullOrWhiteSpace(DbConnection.Text) ? null : DbConnection.Text.Trim(),
                 TrialDays = int.TryParse(TrialDays.Text, out var trial) ? trial : 3,
                 AllowUpdates = AllowUpdates.IsChecked == true,
-                UpdateServerUrl = string.IsNullOrWhiteSpace(UpdateUrl.Text) ? null : UpdateUrl.Text.Trim()
+                UpdateServerUrl = string.IsNullOrWhiteSpace(UpdateUrl.Text) ? null : UpdateUrl.Text.Trim(),
+                AllowedHost = allowedHost
             };
 
-            var privatePem = File.ReadAllText(PrivateKeyPath.Text);
+            var privatePem = File.ReadAllText(PrivateKeyPath.Text.Trim());
             _lastDocument = LicenseCrypto.Sign(payload, privatePem);
             LicenseOutput.Text = LicenseJson.SerializeDocument(_lastDocument);
-            StatusText.Text = $"License signed: {payload.LicenseId}";
+            StatusText.Text = string.Format(VsStrings.StatusSigned, payload.LicenseId);
         }
         catch (Exception ex)
         {
             StatusText.Text = ex.Message;
-            MessageBox.Show(this, ex.Message, "Sign failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(this, ex.Message, VsStrings.MsgSignFailed, MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -86,44 +101,45 @@ public partial class MainWindow : Window
             if (_lastDocument is null) return;
         }
 
-        var dlg = new SaveFileDialog { Filter = "Morobot license|*.morobot|JSON|*.json", FileName = "license.morobot" };
+        var dlg = new SaveFileDialog
+        {
+            Filter = "لایسنس مروبات|*.morobot|JSON|*.json",
+            FileName = "license.morobot",
+            Title = "ذخیره فایل لایسنس"
+        };
         if (dlg.ShowDialog() != true) return;
         File.WriteAllText(dlg.FileName, LicenseOutput.Text);
-        StatusText.Text = $"Saved {dlg.FileName}";
+        StatusText.Text = string.Format(VsStrings.StatusSaved, dlg.FileName);
     }
 
     private async void BuildPackage_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            StatusText.Text = "Publishing…";
+            if (string.IsNullOrWhiteSpace(ProjectPath.Text) || !File.Exists(ProjectPath.Text.Trim()))
+                throw new InvalidOperationException(VsStrings.ErrProjectPath);
+            if (string.IsNullOrWhiteSpace(OutputPath.Text))
+                throw new InvalidOperationException(VsStrings.ErrOutputPath);
+
+            StatusText.Text = VsStrings.StatusPublishing;
             var output = OutputPath.Text.Trim();
             Directory.CreateDirectory(output);
             var exit = await RunProcessAsync("dotnet",
-                $"publish \"{ProjectPath.Text}\" -c Release -o \"{output}\"");
-            if (exit != 0) throw new InvalidOperationException($"dotnet publish failed ({exit}).");
-
-            var appsettings = Path.Combine(output, "appsettings.json");
-            if (File.Exists(appsettings))
-            {
-                var json = File.ReadAllText(appsettings).Replace(
-                    "\"DeploymentMode\": \"Cloud\"",
-                    "\"DeploymentMode\": \"Enterprise\"",
-                    StringComparison.Ordinal);
-                File.WriteAllText(appsettings, json);
-            }
+                $"publish \"{ProjectPath.Text.Trim()}\" -c Release -o \"{output}\"");
+            if (exit != 0)
+                throw new InvalidOperationException(string.Format(VsStrings.ErrPublish, exit));
 
             CopySetupGuide(output);
 
             var zipPath = output.TrimEnd('\\', '/') + ".zip";
             if (File.Exists(zipPath)) File.Delete(zipPath);
             ZipFile.CreateFromDirectory(output, zipPath);
-            StatusText.Text = $"Package ready: {zipPath}";
+            StatusText.Text = string.Format(VsStrings.StatusPackageReady, zipPath);
         }
         catch (Exception ex)
         {
             StatusText.Text = ex.Message;
-            MessageBox.Show(this, ex.Message, "Package failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(this, ex.Message, VsStrings.MsgPackageFailed, MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -149,9 +165,9 @@ public partial class MainWindow : Window
         return proc.ExitCode;
     }
 
-    private static string? PickFile(string filter)
+    private static string? PickFile(string filter, string title)
     {
-        var dlg = new OpenFileDialog { Filter = filter };
+        var dlg = new OpenFileDialog { Filter = filter, Title = title };
         return dlg.ShowDialog() == true ? dlg.FileName : null;
     }
 
@@ -177,6 +193,6 @@ public partial class MainWindow : Window
         Directory.CreateDirectory(destDir);
         File.Copy(source, Path.Combine(destDir, "setup-guide.md"), overwrite: true);
         File.WriteAllText(Path.Combine(outputDir, "START-HERE.txt"),
-            "Morobot Server Package\r\n======================\r\nFull setup guide: docs/setup-guide.md\r\nWeb UI: /Home/SetupGuide\r\n");
+            "بسته سرور Morobot\r\n==================\r\nراهنما: docs/setup-guide.md\r\nوب: /Home/SetupGuide\r\n");
     }
 }

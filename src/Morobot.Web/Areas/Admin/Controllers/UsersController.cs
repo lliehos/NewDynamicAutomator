@@ -20,14 +20,21 @@ public class UsersController : Controller
     private readonly EventLogService _events;
     private readonly PlaySessionTracker _plays;
     private readonly LicenseService _license;
+    private readonly DeploymentBindingService _deploymentBinding;
     private readonly PasswordHasher<AppUser> _hasher = new();
 
-    public UsersController(AppDbContext db, EventLogService events, PlaySessionTracker plays, LicenseService license)
+    public UsersController(
+        AppDbContext db,
+        EventLogService events,
+        PlaySessionTracker plays,
+        LicenseService license,
+        DeploymentBindingService deploymentBinding)
     {
         _db = db;
         _events = events;
         _plays = plays;
         _license = license;
+        _deploymentBinding = deploymentBinding;
     }
 
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -141,6 +148,7 @@ public class UsersController : Controller
             CreatedAtUtc = DateTime.UtcNow
         };
         user.PasswordHash = _hasher.HashPassword(user, password);
+        await _deploymentBinding.StampUserAsync(user, ct);
         _db.Users.Add(user);
         await _db.SaveChangesAsync(ct);
         TempData["Ok"] = "User created.";

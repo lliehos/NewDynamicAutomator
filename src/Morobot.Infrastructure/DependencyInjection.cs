@@ -19,6 +19,7 @@ public static class DependencyInjection
         services.Configure<MorobotOptions>(config.GetSection(MorobotOptions.SectionName));
         services.AddHttpClient();
         services.AddScoped<LicenseService>();
+        services.AddScoped<DeploymentBindingService>();
         services.AddScoped<BrandingService>();
         services.AddScoped<UpdateCheckService>();
         services.AddScoped<AuthService>();
