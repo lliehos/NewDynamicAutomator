@@ -53,6 +53,25 @@
   <div>
     <section class="admin-dash-section">
       <div class="admin-dash-section-head">
+        <h2><i class="ti ti-trending-up" aria-hidden="true"></i>@L["admin.dashboard.activityTrend"]</h2>
+        <span class="admin-field-hint">@L["admin.dashboard.last14Days"]</span>
+      </div>
+      <div class="admin-chart" id="admin-chart-activity"></div>
+      <script type="application/json" id="admin-chart-activity-data">
+        @Html.Raw(System.Text.Json.JsonSerializer.Serialize(new {
+          labels = Model.DailyActivity.Select(d => d.Label),
+          events = Model.DailyActivity.Select(d => d.Events),
+          processes = Model.DailyActivity.Select(d => d.Processes),
+          plays = Model.DailyActivity.Select(d => d.Plays),
+          seriesEvents = L["admin.dashboard.recentEvents"],
+          seriesProcesses = L["admin.dashboard.statProcesses"],
+          seriesPlays = L["admin.dashboard.statPlaying"]
+        }))
+      </script>
+    </section>
+
+    <section class="admin-dash-section">
+      <div class="admin-dash-section-head">
         <h2><i class="ti ti-chart-bar" aria-hidden="true"></i>@L["admin.dashboard.planDistribution"]</h2>
         <a class="btn-admin secondary" asp-controller="Settings" asp-action="Index" title="@L["admin.hints.defaultRegisterPlan"]">
           <i class="ti ti-settings" aria-hidden="true"></i>
@@ -91,6 +110,52 @@
       </div>
     </section>
   </div>
+
+  <div>
+    <section class="admin-dash-section">
+      <h2><i class="ti ti-chart-donut" aria-hidden="true"></i>@L["admin.dashboard.eventLevels"]</h2>
+      <div class="admin-chart admin-chart-sm" id="admin-chart-levels"></div>
+      <script type="application/json" id="admin-chart-levels-data">
+        @Html.Raw(System.Text.Json.JsonSerializer.Serialize(new {
+          labels = Model.EventLevels.Select(l => l.Level),
+          counts = Model.EventLevels.Select(l => l.Count)
+        }))
+      </script>
+    </section>
+
+    <section class="admin-dash-section">
+      <h2><i class="ti ti-user-star" aria-hidden="true"></i>@L["admin.dashboard.topOwners"]</h2>
+      @if (Model.TopProcessOwners.Count == 0)
+      {
+        <p class="admin-field-hint">@L["admin.dashboard.noData"]</p>
+      }
+      else
+      {
+        <div class="admin-top-owners">
+          @foreach (var u in Model.TopProcessOwners)
+          {
+            <div class="admin-top-owner">
+              <span class="admin-top-owner-name" title="@u.UserName">@u.UserName</span>
+              <span class="admin-top-owner-nums">
+                <span title="@L["admin.dashboard.statProcesses"]"><i class="ti ti-git-branch" aria-hidden="true"></i>@u.ProcessCount</span>
+                <span title="@L["admin.dashboard.statSources"]"><i class="ti ti-database" aria-hidden="true"></i>@u.SourceCount</span>
+              </span>
+            </div>
+          }
+        </div>
+      }
+    </section>
+
+    <section class="admin-dash-section">
+      <h2><i class="ti ti-calendar-stats" aria-hidden="true"></i>@L["admin.dashboard.last7Days"]</h2>
+      <div class="admin-kpi-list">
+        <div class="admin-kpi"><b>@Model.Plays7d</b><span>@L["admin.dashboard.statPlays7d"]</span></div>
+        <div class="admin-kpi"><b>@Model.Processes7d</b><span>@L["admin.dashboard.statNewProcesses7d"]</span></div>
+        <div class="admin-kpi @(Model.ProblemEvents7d > 0 ? "is-warn" : null)"><b>@Model.ProblemEvents7d</b><span>@L["admin.dashboard.statProblems7d"]</span></div>
+      </div>
+    </section>
+  </div>
+</div>
 
   <section class="admin-dash-section">
     <div class="admin-dash-section-head">

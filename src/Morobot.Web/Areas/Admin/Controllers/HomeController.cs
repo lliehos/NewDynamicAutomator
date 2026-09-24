@@ -87,6 +87,68 @@ public class HomeController : Controller
             })
             .ToListAsync(ct);
 
+        // ---- Analytics for the dashboard charts ------------------------------------
+        // One window (14 days) drives the trend chart, the level split and the deltas.
+        const int windowDays = 14;
+        var windowStart = DateTime.UtcNow.Date.AddDays(-(windowDays - 1));
+
+        var eventsInWindow = await _db.EventLogs.AsNoTracking()
+            .Where(e => e.CreatedAtUtc >= windowStart)
+            .Select(e => new { e.CreatedAtUtc, e.Level })
+            .ToListAsync(ct);
+
+        var processesInWindow = await _db.Processes.AsNoTracking()
+            .Where(p => p.CreatedAtUtc >= windowStart)
+            .Select(p => p.CreatedAtUtc)
+            .ToListAsync(ct);
+
+        // Play sessions are held in memory only, so bucket the tracker's own timestamps.
+        var playsInWindow = _plays.ListPlaying()
+            .Where(p => p.StartedAtUtc >= windowStart)
+            .Select(p => p.StartedAtUtc)
+            .ToList();
+
+        var daily = new List<AdminDailyPoint>(windowDays);
+        for (var d = 0; d < windowDays; d++)
+        {
+            var day = windowStart.AddDays(d);
+            var next = day.AddDays(1);
+            daily.Add(new AdminDailyPoint
+            {
+                Label = day.ToString("MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+                Events = eventsInWindow.Count(e => e.CreatedAtUtc >= day && e.CreatedAtUtc < next),
+                Processes = processesInWindow.Count(t => t >= day && t < next),
+                Plays = playsInWindow.Count(t => t >= day && t < next)
+            });
+        }
+
+        var eventLevels = eventsInWindow
+            .GroupBy(e => string.IsNullOrWhiteSpace(e.Level) ? "Info" : e.Level)
+            .Select(g => new AdminLevelStat { Level = g.Key, Count = g.Count() })
+            .OrderByDescending(x => x.Count)
+            .ToList();
+
+        var topOwners = await _db.Users.AsNoTracking()
+            .Select(u => new AdminTopUser
+            {
+                UserName = u.UserName ?? "—",
+                ProcessCount = u.CreatedProcesses.Count,
+                SourceCount = _db.DataSources.Count(d => d.OwnerUserId == u.Id)
+            })
+            .OrderByDescending(x => x.ProcessCount)
+            .ThenByDescending(x => x.SourceCount)
+            .Take(6)
+            .ToListAsync(ct);
+
+        var last7 = DateTime.UtcNow.Date.AddDays(-6);
+        var plays7d = _plays.ListPlaying().Count(p => p.StartedAtUtc >= last7);
+        var processes7d = processesInWindow.Count(t => t >= last7);
+        var problemEvents7d = eventsInWindow.Count(e =>
+            e.CreatedAtUtc >= last7 &&
+            (string.Equals(e.Level, "Error", StringComparison.OrdinalIgnoreCase)
+             || string.Equals(e.Level, "Warn", StringComparison.OrdinalIgnoreCase)
+             || string.Equals(e.Level, "Warning", StringComparison.OrdinalIgnoreCase)));
+
         var vm = new AdminDashboardViewModel
         {
             UserCount = userCount,
@@ -100,7 +162,13 @@ public class HomeController : Controller
             DefaultPlanCode = defaultPlan.Code,
             DefaultPlanName = defaultPlanName,
             PlanStats = planStats,
-            RecentEvents = recentEvents
+            RecentEvents = recentEvents,
+            DailyActivity = daily,
+            EventLevels = eventLevels,
+            TopProcessOwners = topOwners,
+            Plays7d = plays7d,
+            Processes7d = processes7d,
+            ProblemEvents7d = problemEvents7d
         };
 
         return View(vm);

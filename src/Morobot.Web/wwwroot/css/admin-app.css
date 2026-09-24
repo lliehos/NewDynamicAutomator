@@ -932,3 +932,63 @@ label { font-size: .9rem; }
   height: 1.1rem;
   accent-color: var(--morobot-primary, #0d9488);
 }
+
+/* ---- Dashboard charts & analytics widgets ---- */
+.admin-chart {
+  width: 100%;
+  min-height: 200px;
+}
+.admin-chart-sm { min-height: 180px; }
+.admin-top-owners {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+}
+.admin-top-owner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem;
+  padding: .45rem .6rem;
+  border-radius: .5rem;
+  background: #f8fafc;
+  border: 1px solid rgba(226, 232, 240, .9);
+}
+.admin-top-owner-name {
+  font-size: .84rem;
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.admin-top-owner-nums {
+  display: flex;
+  gap: .55rem;
+  flex: 0 0 auto;
+  font-size: .78rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+.admin-top-owner-nums .ti { font-size: .9rem; vertical-align: -1px; }
+.admin-kpi-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: .55rem;
+}
+.admin-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: .1rem;
+  padding: .6rem .7rem;
+  border-radius: .6rem;
+  background: #fff;
+  border: 1px solid rgba(226, 232, 240, .9);
+}
+.admin-kpi b {
+  font-size: 1.25rem;
+  color: #0f766e;
+  font-variant-numeric: tabular-nums;
+}
+.admin-kpi span { font-size: .74rem; color: #64748b; }
+.admin-kpi.is-warn b { color: #dc2626; }

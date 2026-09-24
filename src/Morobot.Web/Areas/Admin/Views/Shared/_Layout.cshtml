@@ -75,8 +75,10 @@
     </main>
   </div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="~/assets/vendor/libs/apex-charts/apexcharts.js"></script>
   <script src="~/js/da-catalog.js?v=admin-1"></script>
   <script src="~/js/admin-ui.js?v=1"></script>
+  <script src="~/js/admin-charts.js?v=1"></script>
   @await RenderSectionAsync("Scripts", required: false)
   @await Component.InvokeAsync("SiteChrome")
 </body>
