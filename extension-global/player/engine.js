@@ -137,24 +137,24 @@ function validateSelectorBlock(n, opts = {}) {
   const attrName = opts.attrName || "attributeName";
   const attrDyn = opts.attrDynFlag || "attributeValueIsDynamic";
   const attrCol = opts.attrDynCol || "attributeDynamicColumn";
-  const label = opts.label || "سلکتور";
+  const label = selLabel(opts);
 
   const sel = String(n[valueKey] || "").trim();
-  if (!sel) return { ok: false, reason: `${label} خالی است` };
+  if (!sel) return { ok: false, reason: tv("sel.empty", { label }) };
   if (n[dynFlag] === true) {
     if (!selectorHasDynPlaceholder(sel)) {
-      return { ok: false, reason: `${label} پویا باید «{مقدار پویا}» یا {{ستون}} داشته باشد` };
+      return { ok: false, reason: tv("sel.dynNeedsPlaceholder", { label, placeholder: DYN_SEL_PLACEHOLDER }) };
     }
     if (sel.includes(DYN_SEL_PLACEHOLDER) && !String(n[dynCol] || "").trim()) {
-      return { ok: false, reason: `ستون ${label} پویا مشخص نیست` };
+      return { ok: false, reason: tv("sel.dynColMissing", { label }) };
     }
   }
   if (n[hasAttr] === true) {
     if (!String(n[attrName] || "").trim()) {
-      return { ok: false, reason: `نام اتریبیوت ${label} خالی است` };
+      return { ok: false, reason: tv("sel.attrNameEmpty", { label }) };
     }
     if (n[attrDyn] === true && !String(n[attrCol] || "").trim()) {
-      return { ok: false, reason: `ستون اتریبیوت پویای ${label} مشخص نیست` };
+      return { ok: false, reason: tv("sel.attrDynColMissing", { label }) };
     }
   }
   return { ok: true };
@@ -164,9 +164,11 @@ function validateDataSourcePick(n, opts = {}) {
   const dsKey = opts.dsKey || "dataSourceId";
   const colKey = opts.colKey || "dynamicSourceColumnName";
   const dsId = n[dsKey] || n.sourceId || n.dataSourceId;
-  if (dsId == null || dsId === "") return { ok: false, reason: opts.dsReason || "منبع داده انتخاب نشده" };
+  if (dsId == null || dsId === "") {
+    return { ok: false, reason: opts.dsReason || tv("ds.pickMissing") };
+  }
   if (!String(n[colKey] || "").trim()) {
-    return { ok: false, reason: opts.colReason || "ستون منبع داده انتخاب نشده" };
+    return { ok: false, reason: opts.colReason || tv("ds.colMissing") };
   }
   return { ok: true };
 }
@@ -178,7 +180,7 @@ function validateActionNodeForPlay(n) {
   if (!at || at === "NoAction") return { ok: true, reasons };
 
   if (stepShowsTargetSelector(n)) {
-    const v = validateSelectorBlock(n, { label: "سلکتور هدف" });
+    const v = validateSelectorBlock(n, { labelKey: "label.targetSelector" });
     if (!v.ok) reasons.push(v.reason);
   }
 
@@ -186,38 +188,38 @@ function validateActionNodeForPlay(n) {
     migrateCaptureNode(n);
     const src = normalizeStepValueSource(n);
     if (src === "Constant") {
-      if (!String(n.constantValue || "").trim()) reasons.push("مقدار ثابت ذخیره خالی است");
+      if (!String(n.constantValue || "").trim()) reasons.push(tv("act.constantSaveEmpty"));
     } else if (src === "Elements") {
-      const v = validateSelectorBlock(n, { label: "سلکتور المان صفحه" });
+      const v = validateSelectorBlock(n, { labelKey: "label.pageElementSelector" });
       if (!v.ok) reasons.push(v.reason);
     } else if (src === "DataSource") {
       const v = validateDataSourcePick(n);
       if (!v.ok) reasons.push(v.reason);
     } else if (src === "Memory") {
       if (!String(n.sourceMemoryVariableName || "").trim()) {
-        reasons.push("متغیر منبع حافظه مشخص نیست");
+        reasons.push(tv("act.memSourceMissing"));
       }
     } else if (src === "System") {
       if (!String(n.systemValueType || "").trim()) {
-        reasons.push("نوع مقدار پیش‌فرض سیستم مشخص نیست");
+        reasons.push(tv("act.sysTypeMissing"));
       }
     }
     const dest = normalizeSaveTarget(n);
     if (dest === "Memory") {
       if (!String(n.memoryVariableName || "").trim()) {
-        reasons.push("نام متغیر مقصد حافظه مشخص نیست");
+        reasons.push(tv("act.memDestMissing"));
       }
     } else {
       const saveDs = n.saveDataSourceId != null ? n.saveDataSourceId : n.dataSourceId;
       const saveCol = n.saveColumnName || (src === "DataSource" ? "" : n.dynamicSourceColumnName);
       if (src === "DataSource") {
-        if (saveDs == null || saveDs === "") reasons.push("منبع مقصد ذخیره انتخاب نشده");
-        if (!String(n.saveColumnName || "").trim()) reasons.push("ستون مقصد ذخیره انتخاب نشده");
+        if (saveDs == null || saveDs === "") reasons.push(tv("act.saveDsMissing"));
+        if (!String(n.saveColumnName || "").trim()) reasons.push(tv("act.saveColMissing"));
       } else {
         const v = validateDataSourcePick({
           dataSourceId: saveDs,
           dynamicSourceColumnName: saveCol || n.dynamicSourceColumnName
-        }, { dsReason: "منبع مقصد ذخیره انتخاب نشده", colReason: "ستون مقصد ذخیره انتخاب نشده" });
+        }, { dsReason: tv("act.saveDsMissing"), colReason: tv("act.saveColMissing") });
         if (!v.ok) reasons.push(v.reason);
       }
     }
@@ -227,13 +229,13 @@ function validateActionNodeForPlay(n) {
       if (at === "WaitTime") {
         const ms = Number(n.constantValue);
         if (!Number.isFinite(ms) || ms < 0 || String(n.constantValue ?? "").trim() === "") {
-          reasons.push("زمان انتظار مشخص نیست");
+          reasons.push(tv("act.waitMissing"));
         }
       } else if (stepIsUrlAction(at)) {
         const url = String(n.navigateUrl || n.constantValue || "").trim();
-        if (!url) reasons.push("آدرس ثابت خالی است");
+        if (!url) reasons.push(tv("act.urlEmpty"));
       } else if (!String(n.constantValue || "").trim()) {
-        reasons.push("مقدار ثابت خالی است");
+        reasons.push(tv("act.constantEmpty"));
       }
     } else if (src === "Elements") {
       const v = validateSelectorBlock(n, {
@@ -244,7 +246,7 @@ function validateActionNodeForPlay(n) {
         attrName: "equalAttributeName",
         attrDynFlag: "equalAttributeValueIsDynamic",
         attrCol: "equalAttributeDynamicColumn",
-        label: stepIsUrlAction(at) ? "سلکتور آدرس" : "سلکتور منبع مقدار"
+        labelKey: stepIsUrlAction(at) ? "label.urlSelector" : "label.valueSourceSelector"
       });
       if (!v.ok) reasons.push(v.reason);
     } else if (src === "DataSource") {
@@ -252,11 +254,11 @@ function validateActionNodeForPlay(n) {
       if (!v.ok) reasons.push(v.reason);
     } else if (src === "Memory") {
       if (!String(n.memoryVariableName || "").trim()) {
-        reasons.push("متغیر حافظه مشخص نیست");
+        reasons.push(tv("act.memVarMissing"));
       }
     } else if (src === "System") {
       if (!String(n.systemValueType || "").trim()) {
-        reasons.push("نوع مقدار پیش‌فرض سیستم مشخص نیست");
+        reasons.push(tv("act.sysTypeMissing"));
       }
     }
   }
@@ -268,21 +270,21 @@ function validateConditionNodeForPlay(n) {
   const reasons = [];
   const ct = n.conditionType || "None";
   if (!ct || ct === "None") {
-    reasons.push("نوع شرط انتخاب نشده");
+    reasons.push(tv("cond.typeMissing"));
     return { ok: false, reasons };
   }
   const eq = n.equalityType || "equal";
   const src = n.contentSourceType || "Constant";
 
   if (["FindElement", "NotFindElement", "FindElements", "ElementValue"].includes(ct)) {
-    const v = validateSelectorBlock(n, { label: "سلکتور شرط" });
+    const v = validateSelectorBlock(n, { labelKey: "label.conditionSelector" });
     if (!v.ok) reasons.push(v.reason);
   }
   if (ct === "SourceValue") {
     if (!n.sourceId && !n.dataSourceId) {
-      reasons.push("منبع مورد بررسی انتخاب نشده");
+      reasons.push(tv("cond.srcDsMissing"));
     } else if (!String(n.dynamicSourceColumnName || "").trim()) {
-      reasons.push("ستون مورد بررسی انتخاب نشده");
+      reasons.push(tv("cond.srcColMissing"));
     }
   }
 
@@ -293,24 +295,24 @@ function validateConditionNodeForPlay(n) {
         : String(n.constantEqualValue ?? n.constantValue ?? n.navigation ?? "").trim();
       if (ct === "FindElements" || ct === "DriverTabs") {
         if (val === "" || !Number.isFinite(Number(val))) {
-          reasons.push("مقدار عددی مقایسه مشخص نیست");
+          reasons.push(tv("cond.numMissing"));
         }
       } else if (!val) {
-        reasons.push("مقدار مقایسه خالی است");
+        reasons.push(tv("cond.valueEmpty"));
       }
     } else if (src === "UserSystemDate") {
       const val = String(n.constantEqualValue ?? n.userSystemDateValue ?? "").trim();
       if (!val) {
-        reasons.push("تاریخ سیستم کاربر مشخص نیست");
+        reasons.push(tv("cond.userDateMissing"));
       } else if (!isValidUserSystemDateForPlay(val)) {
-        reasons.push("فرمت تاریخ سیستم کاربر نامعتبر است (مجاز: YYYY-MM-DD)");
+        reasons.push(tv("cond.userDateBadFormat"));
       }
     } else if (src === "UserSystemTime") {
       const val = String(n.constantEqualValue ?? n.userSystemTimeValue ?? "").trim();
       if (!val) {
-        reasons.push("زمان سیستم کاربر مشخص نیست");
+        reasons.push(tv("cond.userTimeMissing"));
       } else if (!isValidUserSystemTimeForPlay(val)) {
-        reasons.push("فرمت زمان سیستم کاربر نامعتبر است (مجاز: HH:mm یا HH:mm:ss)");
+        reasons.push(tv("cond.userTimeBadFormat"));
       }
     } else if (src === "Elements") {
       const v = validateSelectorBlock(n, {
@@ -321,7 +323,7 @@ function validateConditionNodeForPlay(n) {
         attrName: "equalAttributeName",
         attrDynFlag: "equalAttributeValueIsDynamic",
         attrCol: "equalAttributeDynamicColumn",
-        label: "سلکتور مقدار مقایسه"
+        labelKey: "label.compareSelector"
       });
       if (!v.ok) reasons.push(v.reason);
     } else if (src === "DataSource" && ct !== "SourceValue") {
@@ -329,11 +331,11 @@ function validateConditionNodeForPlay(n) {
       if (!v.ok) reasons.push(v.reason);
     } else if (src === "Memory") {
       if (!String(n.memoryVariableName || n.sourceMemoryVariableName || "").trim()) {
-        reasons.push("متغیر حافظه مقایسه مشخص نیست");
+        reasons.push(tv("cond.memCompareMissing"));
       }
     } else if (src === "System") {
       if (!String(n.systemValueType || "").trim()) {
-        reasons.push("نوع مقدار پیش‌فرض مقایسه مشخص نیست");
+        reasons.push(tv("cond.sysCompareMissing"));
       }
     }
   }
@@ -346,19 +348,19 @@ function validateStartNodeForPlay(n, graph) {
   const rst = n.repeatSourceType || (n.groupNodeId ? "None" : (graph.repeatSourceType || "None"));
   if (rst === "Loops") {
     const lc = Number(n.loopCount ?? n.constantValue);
-    if (!Number.isFinite(lc) || lc < 1) reasons.push("تعداد تکرار حلقه نامعتبر است");
+    if (!Number.isFinite(lc) || lc < 1) reasons.push(tv("start.loopBad"));
   } else if (rst === "DataSource") {
     const id = n.dataSourceId ?? graph.dataSourceId;
     const sources = graph.dataSources || [];
     const exists = id != null && sources.some((d) => Number(d.id) === Number(id));
     if (!exists) {
-      reasons.push("منبع پیش‌فرض برای تکرار مشخص نشده");
+      reasons.push(tv("start.dsMissing"));
     }
   } else if (rst === "Elements") {
     if (!n.groupNodeId) {
-      reasons.push("تکرار با المان صفحه فقط داخل گروه مجاز است");
+      reasons.push(tv("start.elementsOnlyInGroup"));
     } else {
-      const v = validateSelectorBlock(n, { label: "سلکتور تکرار" });
+      const v = validateSelectorBlock(n, { labelKey: "label.repeatSelector" });
       if (!v.ok) reasons.push(v.reason);
     }
   }
@@ -384,6 +386,156 @@ function setPlayCulture(next) {
 }
 function playUiCulture() {
   return playCulture;
+}
+
+/**
+ * Validation/run message catalogue. Call sites pass keys, never literals, so a language
+ * switch reaches every reason string. Keys missing from a pack fall back to fa, then to
+ * the key itself, so a typo degrades visibly instead of silently blanking out.
+ */
+const ENGINE_MSG = {
+  fa: {
+    "sel.empty": "{label} خالی است",
+    "sel.dynNeedsPlaceholder": "{label} پویا باید «{مقدار پویا}» یا {{ستون}} داشته باشد",
+    "sel.dynColMissing": "ستون {label} پویا مشخص نیست",
+    "sel.attrNameEmpty": "نام اتریبیوت {label} خالی است",
+    "sel.attrDynColMissing": "ستون اتریبیوت پویای {label} مشخص نیست",
+    "ds.pickMissing": "منبع داده انتخاب نشده",
+    "ds.colMissing": "ستون منبع داده انتخاب نشده",
+
+    "act.constantSaveEmpty": "مقدار ثابت ذخیره خالی است",
+    "act.memSourceMissing": "متغیر منبع حافظه مشخص نیست",
+    "act.sysTypeMissing": "نوع مقدار پیشفرض سیستم مشخص نیست",
+    "act.memDestMissing": "نام متغیر مقصد حافظه مشخص نیست",
+    "act.saveDsMissing": "منبع مقصد ذخیره انتخاب نشده",
+    "act.saveColMissing": "ستون مقصد ذخیره انتخاب نشده",
+    "act.waitMissing": "زمان انتظار مشخص نیست",
+    "act.urlEmpty": "آدرس ثابت خالی است",
+    "act.constantEmpty": "مقدار ثابت خالی است",
+    "act.memVarMissing": "متغیر حافظه مشخص نیست",
+
+    "cond.typeMissing": "نوع شرط انتخاب نشده",
+    "cond.srcDsMissing": "منبع مورد بررسی انتخاب نشده",
+    "cond.srcColMissing": "ستون مورد بررسی انتخاب نشده",
+    "cond.numMissing": "مقدار عددی مقایسه مشخص نیست",
+    "cond.valueEmpty": "مقدار مقایسه خالی است",
+    "cond.userDateMissing": "تاریخ سیستم کاربر مشخص نیست",
+    "cond.userDateBadFormat": "فرمت تاریخ سیستم کاربر نامعتبر است (مجاز: YYYY-MM-DD)",
+    "cond.userTimeMissing": "زمان سیستم کاربر مشخص نیست",
+    "cond.userTimeBadFormat": "فرمت زمان سیستم کاربر نامعتبر است (مجاز: HH:mm یا HH:mm:ss)",
+    "cond.memCompareMissing": "متغیر حافظه مقایسه مشخص نیست",
+    "cond.sysCompareMissing": "نوع مقدار پیشفرض مقایسه مشخص نیست",
+
+    "start.loopBad": "تعداد تکرار حلقه نامعتبر است",
+    "start.dsMissing": "منبع پیشفرض برای تکرار مشخص نشده",
+    "start.elementsOnlyInGroup": "تکرار با المان صفحه فقط داخل گروه مجاز است",
+
+    "run.tabNotFound": "تب فعلی پیدا نشد.",
+    "run.lastTab": "فقط یک تب باز است؛ قابل بستن نیست.",
+    "run.memNameEmpty": "نام متغیر خالی است.",
+    "run.saveTargetMissing": "منبع/ستون مقصد ذخیره مشخص نیست.",
+    "run.noResult": "بدون نتیجه",
+    "run.badSelector": "سلکتور نامعتبر: {sel}",
+    "run.selectorEmpty": "سلکتور خالی است.",
+    "run.unsupportedAction": "اکشن پشتیبانینشده: {action}",
+    "run.cellBusy": "سلول منبع هنوز آزاد نشده — چند ثانیه بعد دوباره تلاش کنید.",
+    "run.cellSaveFailed": "ذخیرهٔ سلول روی سرور انجام نشد.",
+
+    "label.selector": "سلکتور",
+    "label.targetSelector": "سلکتور هدف",
+    "label.conditionSelector": "سلکتور شرط",
+    "label.compareSelector": "سلکتور مقدار مقایسه",
+    "label.urlSelector": "سلکتور آدرس",
+    "label.valueSourceSelector": "سلکتور منبع مقدار",
+    "label.repeatSelector": "سلکتور تکرار",
+    "label.pageElementSelector": "سلکتور المان صفحه"
+  },
+  en: {
+    "sel.empty": "{label} is empty",
+    "sel.dynNeedsPlaceholder": "Dynamic {label} must contain the dynamic token or a {{column}} reference",
+    "sel.dynColMissing": "Dynamic {label} column is not set",
+    "sel.attrNameEmpty": "{label} attribute name is empty",
+    "sel.attrDynColMissing": "Dynamic {label} attribute column is not set",
+    "ds.pickMissing": "No data source selected",
+    "ds.colMissing": "No data source column selected",
+
+    "act.constantSaveEmpty": "Constant value to save is empty",
+    "act.memSourceMissing": "Source memory variable is not set",
+    "act.sysTypeMissing": "System default value type is not set",
+    "act.memDestMissing": "Destination memory variable name is not set",
+    "act.saveDsMissing": "No destination data source selected",
+    "act.saveColMissing": "No destination column selected",
+    "act.waitMissing": "Wait duration is not set",
+    "act.urlEmpty": "Constant URL is empty",
+    "act.constantEmpty": "Constant value is empty",
+    "act.memVarMissing": "Memory variable is not set",
+
+    "cond.typeMissing": "Condition type is not selected",
+    "cond.srcDsMissing": "No data source selected to check",
+    "cond.srcColMissing": "No column selected to check",
+    "cond.numMissing": "Numeric comparison value is not set",
+    "cond.valueEmpty": "Comparison value is empty",
+    "cond.userDateMissing": "User system date is not set",
+    "cond.userDateBadFormat": "User system date format is invalid (expected YYYY-MM-DD)",
+    "cond.userTimeMissing": "User system time is not set",
+    "cond.userTimeBadFormat": "User system time format is invalid (expected HH:mm or HH:mm:ss)",
+    "cond.memCompareMissing": "Comparison memory variable is not set",
+    "cond.sysCompareMissing": "Comparison system value type is not set",
+
+    "start.loopBad": "Loop repeat count is invalid",
+    "start.dsMissing": "No default data source selected for the repeat",
+    "start.elementsOnlyInGroup": "Repeating by page elements is only allowed inside a group",
+
+    "run.tabNotFound": "Current tab not found.",
+    "run.lastTab": "Only one tab is open; it cannot be closed.",
+    "run.memNameEmpty": "Variable name is empty.",
+    "run.saveTargetMissing": "Destination source/column is not specified.",
+    "run.noResult": "No result",
+    "run.badSelector": "Invalid selector: {sel}",
+    "run.selectorEmpty": "Selector is empty.",
+    "run.unsupportedAction": "Unsupported action: {action}",
+    "run.cellBusy": "Source cell is still locked — try again in a few seconds.",
+    "run.cellSaveFailed": "Could not save the cell on the server.",
+
+    "label.selector": "selector",
+    "label.targetSelector": "target selector",
+    "label.conditionSelector": "condition selector",
+    "label.compareSelector": "comparison value selector",
+    "label.urlSelector": "URL selector",
+    "label.valueSourceSelector": "value source selector",
+    "label.repeatSelector": "repeat selector",
+    "label.pageElementSelector": "page element selector"
+  }
+};
+
+/** Translate an engine message key for the active UI culture. */
+function tv(key, vars) {
+  const pack = ENGINE_MSG[playCulture] || ENGINE_MSG.fa;
+  let text = pack[key] ?? ENGINE_MSG.fa[key] ?? key;
+  if (vars && typeof vars === "object") {
+    for (const k of Object.keys(vars)) {
+      text = text.split("{" + k + "}").join(vars[k] == null ? "" : String(vars[k]));
+    }
+  }
+  return text;
+}
+
+/** Selector label keys — resolved at call time so they follow the culture. */
+const SEL_LABEL_KEYS = {
+  target: "label.targetSelector",
+  condition: "label.conditionSelector",
+  compare: "label.compareSelector",
+  url: "label.urlSelector",
+  valueSource: "label.valueSourceSelector",
+  repeat: "label.repeatSelector",
+  pageElement: "label.pageElementSelector"
+};
+
+/** Resolves validateSelectorBlock's label option (accepts a key, a raw string, or nothing). */
+function selLabel(opts) {
+  if (opts && opts.labelKey) return tv(opts.labelKey);
+  if (opts && typeof opts.label === "string" && opts.label.trim()) return opts.label;
+  return tv("label.selector");
 }
 
 /** Human label for a node kind, used in validation reports. */
@@ -1978,13 +2130,13 @@ async function closeWindowTab(currentTabId, which) {
   try {
     tab = await chrome.tabs.get(currentTabId);
   } catch {
-    return { ok: false, error: "تب فعلی پیدا نشد.", reason: "tab_missing" };
+    return { ok: false, error: tv("run.tabNotFound"), reason: "tab_missing" };
   }
   const winId = tab.windowId;
   const tabs = await chrome.tabs.query({ windowId: winId });
   const ordered = tabs.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
   if (ordered.length <= 1) {
-    return { ok: false, error: "فقط یک تب باز است؛ قابل بستن نیست.", reason: "last_tab" };
+    return { ok: false, error: tv("run.lastTab"), reason: "last_tab" };
   }
   const target = which === "first" ? ordered[0] : ordered[ordered.length - 1];
   const next = ordered.find((t) => t.id !== target.id) || ordered[0];
@@ -2485,7 +2637,7 @@ async function getPlayMemoryVars() {
 
 async function setPlayMemoryVar(name, value) {
   const key = String(name || "").trim();
-  if (!key) return { ok: false, error: "نام متغیر خالی است.", reason: "missing_memory_name" };
+  if (!key) return { ok: false, error: tv("run.memNameEmpty"), reason: "missing_memory_name" };
   const { playMemory } = await chrome.storage.local.get("playMemory");
   const mem = playMemory && playMemory.schema === PLAY_MEMORY_SCHEMA
     ? playMemory
@@ -2671,7 +2823,7 @@ async function storeCapturedContent(step, graph, text, rowIndex) {
     const ds = (dsId != null && sources.find((d) => Number(d.id) === Number(dsId)))
       || findDataSourceForValue(step, graph);
     if (!ds || !col) {
-      return { ok: false, error: "منبع/ستون مقصد ذخیره مشخص نیست.", reason: "missing_save_target" };
+      return { ok: false, error: tv("run.saveTargetMissing"), reason: "missing_save_target" };
     }
     const idx = Number(rowIndex) || 0;
     const id = Number(ds.id);
@@ -2682,8 +2834,8 @@ async function storeCapturedContent(step, graph, text, rowIndex) {
         return {
           ok: false,
           error: saved.error === "cell_write_timeout"
-            ? "سلول منبع هنوز آزاد نشده — چند ثانیه بعد دوباره تلاش کنید."
-            : "ذخیرهٔ سلول روی سرور انجام نشد.",
+            ? tv("run.cellBusy")
+            : tv("run.cellSaveFailed"),
           reason: saved.error || "cell_patch_failed"
         };
       }
@@ -3189,7 +3341,7 @@ async function executeInFrame(tabId, frameId, payload) {
       func: playExecuteInjected,
       args: [payload]
     });
-    return result || { ok: false, error: "بدون نتیجه", reason: "inject_empty" };
+    return result || { ok: false, error: tv("run.noResult"), reason: "inject_empty" };
   } catch (err) {
     return { ok: false, error: err.message, reason: "inject_failed" };
   }
@@ -3278,7 +3430,7 @@ async function playExecuteInjected(payload) {
       try {
         nodes = Array.from(document.querySelectorAll(sel));
       } catch {
-        return { ok: false, error: `سلکتور نامعتبر: ${sel}`, reason: "bad_selector" };
+        return { ok: false, error: tv("run.badSelector", { sel }), reason: "bad_selector" };
       }
       for (const el of nodes) {
         if (elementMatchesState(el, need || {})) return { ok: true, el };
@@ -3297,7 +3449,7 @@ async function playExecuteInjected(payload) {
   if (actionType === "WaitTime") return { ok: true, waitMs: Number(value) || 0 };
   if (actionType === "NoAction" || actionType === "Breakpoint") return { ok: true, skipped: true };
 
-  if (!selector) return { ok: false, error: "سلکتور خالی است.", reason: "missing_selector" };
+  if (!selector) return { ok: false, error: tv("run.selectorEmpty"), reason: "missing_selector" };
 
   const found = await waitForElement(selector, waitTimeoutMs, stateReq);
   if (!found.ok) return found;
@@ -3348,7 +3500,7 @@ async function playExecuteInjected(payload) {
     return { ok: true };
   }
 
-  return { ok: false, error: `اکشن پشتیبانی‌نشده: ${actionType}`, reason: "unsupported_action" };
+  return { ok: false, error: tv("run.unsupportedAction", { action: actionType }), reason: "unsupported_action" };
 }
 
 function matchChildIframe(hop) {
