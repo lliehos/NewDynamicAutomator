@@ -39,7 +39,14 @@
       CloseLastTab: t("editor.actions.CloseLastTab"),
       WaitTime: t("editor.actions.WaitTime"),
       WaitForLoading: t("editor.actions.WaitForLoading"),
-      Refresh: t("editor.actions.Refresh")
+      Refresh: t("editor.actions.Refresh"),
+      ClearContent: t("editor.actions.ClearContent"),
+      FocusElement: t("editor.actions.FocusElement"),
+      ScrollIntoView: t("editor.actions.ScrollIntoView"),
+      SelectOption: t("editor.actions.SelectOption"),
+      PressKey: t("editor.actions.PressKey"),
+      WaitForElement: t("editor.actions.WaitForElement"),
+      SetMemory: t("editor.actions.SetMemory")
     };
   }
 
@@ -94,7 +101,8 @@
   const ACTIONS = [
     "NoAction","Click","DoubleClick","RightClick","Hover","Enter",
     "InputContent","InsertContent","LoadContent","SaveContent","TakeContent",
-    "GoToUrl","NewPage","CloseFirstTab","CloseLastTab","WaitTime","WaitForLoading","Refresh"
+    "GoToUrl","NewPage","CloseFirstTab","CloseLastTab","WaitTime","WaitForLoading","Refresh",
+    "ClearContent","FocusElement","ScrollIntoView","SelectOption","PressKey","WaitForElement","SetMemory"
   ];
 
   function isActionNode(n) {
@@ -4503,7 +4511,7 @@
   function conditionNeedsBrowser(n) {
     if (!n || n.kind !== "condition") return false;
     const ct = n.conditionType || "None";
-    if (["FindElement", "NotFindElement", "FindElements", "ElementValue", "Url", "DriverTabs"].includes(ct)) {
+    if (["FindElement", "NotFindElement", "FindElements", "ElementValue", "ElementVisible", "ElementHidden", "Url", "DriverTabs"].includes(ct)) {
       return true;
     }
     if ((n.contentSourceType || "Constant") === "Elements") return true;
@@ -5443,7 +5451,7 @@
     const at = (n && n.actionType) || "";
     if (stepIsUrlAction(at)) return false;
     if (at === "WaitTime" || at === "CloseFirstTab" || at === "CloseLastTab"
-      || at === "Refresh" || at === "NoAction" || !at) {
+      || at === "Refresh" || at === "NoAction" || at === "SetMemory" || !at) {
       return false;
     }
     if (stepIsCapture(at)) {
@@ -5453,7 +5461,9 @@
     return [
       "Click", "DoubleClick", "RightClick", "Hover", "Enter",
       "InputContent", "InsertContent", "LoadContent",
-      "WaitForLoading"
+      "WaitForLoading",
+      "ClearContent", "FocusElement", "ScrollIntoView", "SelectOption",
+      "PressKey", "WaitForElement"
     ].includes(at);
   }
 
@@ -5470,7 +5480,8 @@
   function stepReceivesValue(actionType) {
     return [
       "InputContent", "InsertContent", "LoadContent",
-      "WaitTime", "GoToUrl", "Navigate", "NewPage"
+      "WaitTime", "GoToUrl", "Navigate", "NewPage",
+      "SelectOption", "SetMemory", "PressKey"
     ].includes(actionType || "");
   }
 
@@ -5871,7 +5882,7 @@
     const eq = n.equalityType || "equal";
     const src = n.contentSourceType || "Constant";
 
-    if (["FindElement", "NotFindElement", "FindElements", "ElementValue"].includes(ct)) {
+    if (["FindElement", "NotFindElement", "FindElements", "ElementValue", "ElementVisible", "ElementHidden"].includes(ct)) {
       const v = validateSelectorBlock(n, { label: "سلکتور شرط" });
       if (!v.ok) reasons.push(v.reason);
     }
@@ -6184,6 +6195,49 @@
         <select data-k="systemValueType">${systemValueOptionsHtml(n.systemValueType)}</select>
       </div>
       <p class="palette-hint">مقدار در لحظهٔ اجرا توسط سیستم تولید می‌شود.</p>`;
+    }
+
+    // SelectOption: how the target option is matched inside the <select>.
+    if (n.actionType === "SelectOption") {
+      const by = n.selectBy || "Value";
+      html += `<div class="insp-field"><label>${t("editor.actions.selectBy")}</label>
+        <select data-k="selectBy">
+          <option value="Value" ${by === "Value" ? "selected" : ""}>${t("editor.actions.selectByValue")}</option>
+          <option value="Text" ${by === "Text" ? "selected" : ""}>${t("editor.actions.selectByText")}</option>
+          <option value="Index" ${by === "Index" ? "selected" : ""}>${t("editor.actions.selectByIndex")}</option>
+        </select>
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.selectByHint")}</p>
+      </div>`;
+    }
+
+    // PressKey: which key is sent to the focused element.
+    if (n.actionType === "PressKey") {
+      const key = n.keyName || "Enter";
+      html += `<div class="insp-field"><label>${t("editor.actions.keyName")}</label>
+        <select data-k="keyName">
+          ${["Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Backspace", "Delete", "Space"]
+            .map((k) => `<option value="${k}" ${key === k ? "selected" : ""}>${k}</option>`).join("")}
+        </select>
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.keyNameHint")}</p>
+      </div>`;
+    }
+
+    // WaitForElement: how long to keep polling before the step is considered failed.
+    if (n.actionType === "WaitForElement") {
+      const maxMs = Number(n.waitMaxMs) > 0 ? Number(n.waitMaxMs) : 15000;
+      html += `<div class="insp-field"><label>${t("editor.actions.waitMaxMs")}</label>
+        <input type="number" min="0" step="100" data-k="waitMaxMs" value="${esc(maxMs)}" />
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.waitForElementHint")}</p>
+      </div>`;
+    }
+
+    // SetMemory: the variable name the resolved value is written to.
+    if (n.actionType === "SetMemory") {
+      html += `<div class="insp-field"><label>${t("editor.actions.memoryName")}</label>
+        <input data-k="memoryVariableName" list="mem-var-list" value="${esc(n.memoryVariableName || "")}" placeholder="${esc(t("editor.actions.memoryNamePlaceholder"))}" />
+        <datalist id="mem-var-list">${memNames.map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.setMemoryHint")}</p>
+      </div>`;
     }
 
     // ناوبری: سوئیچ انتظار برای تکمیل بارگذاری + سقف انتظار (فقط وقتی روشن است).
@@ -6853,7 +6907,7 @@
       return t ? esc(t.title || t.kind) : "— هنوز وصل نشده";
     };
 
-    const needsSubjectSelector = ["ElementValue", "FindElement", "NotFindElement", "FindElements"].includes(ct);
+    const needsSubjectSelector = ["ElementValue", "FindElement", "NotFindElement", "FindElements", "ElementVisible", "ElementHidden"].includes(ct);
     const needsSubjectDs = ct === "SourceValue";
     const needsOperand = conditionNeedsCompareOperand(ct, eq);
     const allowCompareDs = needsOperand && ct !== "SourceValue";
@@ -6897,6 +6951,8 @@
           <option value="SourceValue" ${ct === "SourceValue" ? "selected" : ""}>مقدار منبع داده</option>
           <option value="FindElement" ${ct === "FindElement" ? "selected" : ""}>وجود المان</option>
           <option value="NotFindElement" ${ct === "NotFindElement" ? "selected" : ""}>نبود المان</option>
+          <option value="ElementVisible" ${ct === "ElementVisible" ? "selected" : ""}>${t("editor.cond.elementVisible")}</option>
+          <option value="ElementHidden" ${ct === "ElementHidden" ? "selected" : ""}>${t("editor.cond.elementHidden")}</option>
           <option value="FindElements" ${ct === "FindElements" ? "selected" : ""}>تعداد المان‌های صفحه</option>
           <option value="DriverTabs" ${ct === "DriverTabs" ? "selected" : ""}>تعداد تب‌های مرورگر</option>
           <option value="SystemDate" ${ct === "SystemDate" ? "selected" : ""}>تاریخ سیستم</option>

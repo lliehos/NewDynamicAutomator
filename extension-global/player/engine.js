@@ -31,8 +31,19 @@ function stepIsUrlAction(actionType) {
 function stepReceivesValue(actionType) {
   return [
     "InputContent", "InsertContent", "LoadContent",
-    "WaitTime", "GoToUrl", "Navigate", "NewPage"
+    "WaitTime", "GoToUrl", "Navigate", "NewPage",
+    "SelectOption", "SetMemory", "PressKey"
   ].includes(actionType || "");
+}
+
+/** Actions that operate on a page element and therefore need a selector. */
+function stepNeedsSelector(actionType) {
+  const at = actionType || "";
+  if (at === "WaitTime" || at === "NoAction" || at === "Breakpoint") return false;
+  if (stepIsUrlAction(at)) return false;
+  // SetMemory only writes to the variable table and never touches the page.
+  if (at === "SetMemory") return false;
+  return true;
 }
 
 function stepAllowsMemoryValue(actionType) {
@@ -276,7 +287,7 @@ function validateConditionNodeForPlay(n) {
   const eq = n.equalityType || "equal";
   const src = n.contentSourceType || "Constant";
 
-  if (["FindElement", "NotFindElement", "FindElements", "ElementValue"].includes(ct)) {
+  if (["FindElement", "NotFindElement", "FindElements", "ElementValue", "ElementVisible", "ElementHidden"].includes(ct)) {
     const v = validateSelectorBlock(n, { labelKey: "label.conditionSelector" });
     if (!v.ok) reasons.push(v.reason);
   }
@@ -438,6 +449,9 @@ const ENGINE_MSG = {
     "run.badSelector": "سلکتور نامعتبر: {sel}",
     "run.selectorEmpty": "سلکتور خالی است.",
     "run.unsupportedAction": "اکشن پشتیبانینشده: {action}",
+    "run.notSelect": "المان انتخابی یک لیست کشویی (select) نیست.",
+    "run.optionNotFound": "گزینه‌ای با مقدار «{v}» در لیست پیدا نشد.",
+    "run.waitElementTimeout": "المان تا پایان مهلت ظاهر نشد: {sel}",
     "run.cellBusy": "سلول منبع هنوز آزاد نشده — چند ثانیه بعد دوباره تلاش کنید.",
     "run.cellSaveFailed": "ذخیرهٔ سلول روی سرور انجام نشد.",
 
@@ -494,6 +508,9 @@ const ENGINE_MSG = {
     "run.badSelector": "Invalid selector: {sel}",
     "run.selectorEmpty": "Selector is empty.",
     "run.unsupportedAction": "Unsupported action: {action}",
+    "run.notSelect": "The target element is not a dropdown (select).",
+    "run.optionNotFound": "No option with the value \"{v}\" was found in the list.",
+    "run.waitElementTimeout": "The element did not appear before the deadline: {sel}",
     "run.cellBusy": "Source cell is still locked — try again in a few seconds.",
     "run.cellSaveFailed": "Could not save the cell on the server.",
 
@@ -1047,7 +1064,7 @@ async function resolveExecutionTabId(preferredTabId, opts = {}) {
 function conditionNeedsPageElement(node) {
   if (!node || node.kind !== "condition") return false;
   const ct = node.conditionType || "None";
-  if (["FindElement", "NotFindElement", "FindElements", "ElementValue"].includes(ct)) return true;
+  if (["FindElement", "NotFindElement", "FindElements", "ElementValue", "ElementVisible", "ElementHidden"].includes(ct)) return true;
   if ((node.contentSourceType || "Constant") === "Elements") return true;
   return false;
 }
@@ -1646,6 +1663,13 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
   };
   appendPlayResult(result);
 
+  // SetMemory stores into the run's variable table rather than touching the page, so the
+  // write happens here where the table lives.
+  if (outcome?.memorySet) {
+    await setPlayMemoryVar(outcome.memorySet.name, outcome.memorySet.value);
+    appendPlayLog("ok", `مقدار «${outcome.memorySet.name}» ذخیره شد`);
+  }
+
   if (failed) {
     if (ignored) {
       appendPlayLog("warn", `چشم‌پوشی از خطای مرحله «${label}»: ${errDetail}`);
@@ -1703,21 +1727,29 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
       return compareConditionValues(count, expected, node.equalityType || "equal");
     }
 
-    if (ct === "FindElement" || ct === "NotFindElement") {
+    if (ct === "FindElement" || ct === "NotFindElement" || ct === "ElementVisible" || ct === "ElementHidden") {
       const selector = (await resolveDynamicSelectorAsync(node, graph, rowIndex))
         || node.selectorValue || "";
-      if (!selector) return ct === "NotFindElement";
+      const negate = ct === "NotFindElement" || ct === "ElementHidden";
+      if (!selector) return negate;
       const waitMs = node.selectorWaitEnabled === true
         ? Math.max(0, Number(node.selectorWaitMs) || 1000)
         : 0;
+      // Visibility is the only difference from a plain existence check: "found" must
+      // also be rendered and on-screen, which is what makes this useful for a page that
+      // keeps a hidden copy of a node it swaps in later.
+      const wantVisible = ct === "ElementVisible" || ct === "ElementHidden";
+      const req = wantVisible
+        ? { ...selectorStateReqs(node), requireVisible: true }
+        : selectorStateReqs(node);
       const found = await elementExistsInTab(
         tabId,
         selector,
         parseFramePath(node.framePathJson),
         waitMs,
-        selectorStateReqs(node)
+        req
       );
-      return ct === "FindElement" ? !!found : !found;
+      return negate ? !found : !!found;
     }
 
     if (ct === "FindElements") {
@@ -2213,6 +2245,52 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     return { ok: true, waitMs: ms };
   }
 
+  // Writes a value the flow computed into the run's variable table. There is no page
+  // interaction at all, so this returns before the selector/frame plumbing below —
+  // requiring a selector here would make the step impossible to author.
+  if (actionType === "SetMemory") {
+    const name = String(step.memoryVariableName || "").trim();
+    const value = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
+    const saved = await setPlayMemoryVar(name, value);
+    if (!saved?.ok) {
+      return onUnexpected(runMode, {
+        taskId,
+        stepId: step.entityId,
+        reason: saved?.reason || "missing_memory_name",
+        expectedSelector: null,
+        actualUrl: null
+      });
+    }
+    return { ok: true, memorySet: { name, value: value == null ? "" : String(value) } };
+  }
+
+  // A deliberate wait for an element to exist: no state requirements, and the wait
+  // budget comes from `waitMaxMs` rather than the per-step selector timeout.
+  if (actionType === "WaitForElement") {
+    const frameIdForWait = await resolveFramePath(tabId, framePath).catch(() => undefined);
+    const waitPayload = {
+      actionType,
+      selectorValue: resolvedSelector,
+      waitMaxMs: Math.max(0, Number(step.waitMaxMs) || 0),
+      highlightColor: resolveHighlightColor(graph)
+    };
+    let waited = await chrome.tabs
+      .sendMessage(tabId, { type: "playExecute", payload: waitPayload }, { frameId: frameIdForWait })
+      .catch(() => null);
+    if (!waited) waited = await executeInFrame(tabId, frameIdForWait, waitPayload);
+    if (!waited || !waited.ok) {
+      return onUnexpected(runMode, {
+        taskId,
+        stepId: step.entityId,
+        reason: waited?.reason || "wait_timeout",
+        expectedSelector: resolvedSelector,
+        actualUrl: waited?.url || null,
+        framePathJson: step.framePathJson || JSON.stringify(framePath)
+      }, waited?.error);
+    }
+    return { ok: true };
+  }
+
   const cst = step.contentSourceType || "";
   const needsAsyncValue = stepUsesDataSourceValue(step)
     || cst === "Memory" || cst === "Elements" || cst === "System"
@@ -2249,6 +2327,9 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     selectorValue: resolvedSelector,
     constantValue: valueForAction,
     navigateUrl: step.navigateUrl,
+    // SelectOption matches by value, label or position; PressKey needs the key name.
+    selectBy: step.selectBy || "Value",
+    keyName: step.keyName || "",
     highlightColor: resolveHighlightColor(graph),
     waitTimeoutMs,
     requireVisible: !!stateReq.requireVisible,
@@ -3498,6 +3579,23 @@ async function playExecuteInjected(payload) {
 
   if (!selector) return { ok: false, error: tv("run.selectorEmpty"), reason: "missing_selector" };
 
+  // A deliberate wait for an element to exist. It must run before the shared existence
+  // check below, which uses the per-step selector timeout and would report the element
+  // as missing without honouring the step's own wait budget.
+  if (actionType === "WaitForElement") {
+    const maxMs = Math.max(0, Number(payload.waitMaxMs) || Number(waitTimeoutMs) || 0);
+    const deadline = Date.now() + maxMs;
+    for (;;) {
+      let nodes = [];
+      try { nodes = Array.from(document.querySelectorAll(selector)); } catch { nodes = []; }
+      if (nodes.length) return { ok: true };
+      if (Date.now() >= deadline) {
+        return { ok: false, error: tv("run.waitElementTimeout", { sel: selector }), reason: "wait_timeout" };
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
   const found = await waitForElement(selector, waitTimeoutMs, stateReq);
   if (!found.ok) return found;
   const el = found.el;
@@ -3546,6 +3644,85 @@ async function playExecuteInjected(payload) {
     el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
     return { ok: true };
   }
+
+  // A field usually has to be emptied before new text goes in: typing appends to whatever
+  // is already there, so an "InputContent" over a pre-filled box concatenates silently.
+  if (actionType === "ClearContent") {
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, "value");
+      if (desc && desc.set) desc.set.call(el, "");
+      else el.value = "";
+    } else if (el.isContentEditable) {
+      el.textContent = "";
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true };
+  }
+
+  if (actionType === "FocusElement") {
+    try { el.focus({ preventScroll: false }); } catch { /* a detached node cannot take focus */ }
+    return { ok: true };
+  }
+
+  // Scrolling matters because a click on an off-screen element can land on the wrong
+  // target: the page still scrolls on click, but the coordinates were measured first.
+  if (actionType === "ScrollIntoView") {
+    try { el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" }); }
+    catch { try { el.scrollIntoView(); } catch { /* ignore */ } }
+    return { ok: true };
+  }
+
+  if (actionType === "SelectOption") {
+    if (!(el instanceof HTMLSelectElement)) {
+      return { ok: false, error: tv("run.notSelect"), reason: "not_select" };
+    }
+    const mode = payload.selectBy || "Value";
+    const wanted = String(value == null ? "" : value);
+    let index = -1;
+    if (mode === "Index") {
+      index = Number(wanted);
+      if (!Number.isInteger(index) || index < 0 || index >= el.options.length) index = -1;
+    } else if (mode === "Text") {
+      index = Array.from(el.options).findIndex((o) => (o.textContent || "").trim() === wanted.trim());
+    } else {
+      index = Array.from(el.options).findIndex((o) => o.value === wanted);
+      // Value is exact by design; a label written into the value field is a common
+      // authoring slip, so fall back to text rather than failing outright.
+      if (index < 0) index = Array.from(el.options).findIndex((o) => (o.textContent || "").trim() === wanted.trim());
+    }
+    if (index < 0) {
+      return { ok: false, error: tv("run.optionNotFound", { v: wanted }), reason: "option_not_found" };
+    }
+    el.selectedIndex = index;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true };
+  }
+
+  if (actionType === "PressKey") {
+    const key = String(payload.keyName || value || "Enter");
+    const target = el || document.activeElement || document.body;
+    const init = { key, bubbles: true, cancelable: true };
+    try {
+      target.dispatchEvent(new KeyboardEvent("keydown", init));
+      target.dispatchEvent(new KeyboardEvent("keypress", init));
+      target.dispatchEvent(new KeyboardEvent("keyup", init));
+    } catch { /* ignore */ }
+    // Enter inside a form is the one key a page cannot observe from JS, so it is
+    // submitted explicitly; every other key is left to the page's own handlers.
+    if (key === "Enter") {
+      const form = target.form || (target.closest && target.closest("form"));
+      if (form && typeof form.requestSubmit === "function") {
+        try { form.requestSubmit(); } catch { /* ignore */ }
+      }
+    }
+    return { ok: true };
+  }
+
+  // A breakpoint is a marker an operator steps past, not a page interaction.
+  if (actionType === "Breakpoint") return { ok: true, skipped: true };
 
   return { ok: false, error: tv("run.unsupportedAction", { action: actionType }), reason: "unsupported_action" };
 }

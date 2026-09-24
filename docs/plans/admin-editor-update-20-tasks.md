@@ -26,7 +26,7 @@
 | 4 | چارت و آمار در داشبورد ادمین | done | 8535887 |
 | 5 | صفحه‌بندی در لیست‌های پنل ادمین | done | fcb9ee6 |
 | 6 | تبدیل همهٔ checkbox ها به switch در وب‌اپ | done | c372179 |
-| 7 | آپدیت آفلاین (آپلود بسته، جانشینی، restart) + تب ساخت بسته | done | (این کامیت) |
+| 7 | آپدیت آفلاین (آپلود بسته، جانشینی، restart) + تب ساخت بسته | done | 714ec79 |
 | 8 | Migrate پشت لایسنس (پیش‌فرض غیرفعال) + تنظیم در Vendor Studio | done | 68e83a3 |
 | 9 | اعمال migration دیتابیس بعد از آپدیت | done | 6ace26e |
 | 10 | چک دوره‌ای آپدیت آنلاین + اخطار و اعمال | done | 7686bed |
@@ -39,7 +39,7 @@
 | 17 | حذف/توضیح دو فیلد «حداکثر انتظار (ms)» در باکس ویژگی‌های فرآیند | done | 03116a9 |
 | 18 | دو نوع شرط جدید: تاریخ سیستم / زمان سیستم | done | 7c89505 |
 | 19 | اکشن GoToUrl: سوئیچ انتظار + حداکثر انتظار (ms) | done | 37e94e0 |
-| 20 | افزودن شرط/اکشن‌های لازم دیگر با پارامترها | not-started | |
+| 20 | افزودن شرط/اکشن‌های لازم دیگر با پارامترها | done | (این کامیت) |
 
 ## یادداشت‌های فنی (برای هر آیتم)
 
@@ -83,6 +83,28 @@
   دوباره اجرا می‌کند. لاگ در `update.log` کنار اسکریپت.
 - تنظیمات: `Morobot:OfflineUpdate` (`UploadDirectory`, `StagingDirectory`,
   `MaxUploadMegabytes`, `RestartCommand`). `uploads/` و `updates/` در `.gitignore`.
+
+### #20 شرط/اکشن‌های تکمیلی
+- **اکشن‌های جدید** (engine + editor، با پارامترها):
+  - `ClearContent` — خالی‌کردن فیلد پیش از تایپ (جلوگیری از الحاق به مقدار قبلی).
+  - `FocusElement` — فوکوس روی المان.
+  - `ScrollIntoView` — اسکرول تا المان (کلیک روی المان خارج از دید را درست می‌کند).
+  - `SelectOption` — انتخاب گزینهٔ لیست کشویی با `selectBy` ∈ {Value, Text, Index}؛
+    اگر value پیدا نشد، همان مقدار به‌عنوان متن نمایشی امتحان می‌شود.
+  - `PressKey` — فشردن کلید با `keyName`؛ `Enter` داخل فرم آن را submit می‌کند.
+  - `WaitForElement` — انتظار ظهور المان با `waitMaxMs` (بدون نیاز به مقدار مقایسه).
+  - `SetMemory` — نوشتن مقدار در متغیر حافظه با `memoryVariableName` (بدون سلکتور؛
+    در `runStep` پیش از مسیر سلکتور/فریم return می‌کند).
+- **شرط‌های جدید:** `ElementVisible` / `ElementHidden` — وجود به‌همراه مرئی‌بودن
+  (`requireVisible`) یا نبود/پنهان‌بودن.
+- هر دو فایل `flow.js` و `engine.js` هم‌زمان به‌روز شدند: `conditionNeedsCompare`،
+  فهرست‌های نیازمند سلکتور، `stepReceivesValue`، `stepShowsTargetSelector`،
+  `conditionNeedsBrowser` و جدول پیام‌های `run.*` در engine.
+- کلیدهای locale دوزبانه: `editor.actions.{ClearContent,FocusElement,ScrollIntoView,
+  SelectOption,PressKey,WaitForElement,SetMemory,selectBy*,keyName*,waitForElementHint,
+  memoryName,setMemoryHint}` و `editor.cond.{elementVisible,elementHidden}`.
+- سواچ `?v=` فایل `flow.js` در `Areas/Panel/Views/Tasks/Editor.cshtml` به‌روز شد
+  (`new-actions-conditions-1`).
 
 
 ### #8 Migrate پشت لایسنس
