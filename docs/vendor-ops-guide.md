@@ -53,6 +53,7 @@ docs/
   setup-guide.md            ← راهنمای مشتری (استقرار + آپدیت آفلاین)
   vendor-ops-guide.md       ← همین سند
   visual-editor.md          ← فهرست انواع اقدام و شرط ویرایشگر
+  play-engine-logic.md      ← رفتار واقعی موتور اجرا + فهرست ایرادهای باز
   marketing/morobot-brochure.html  ← چاپ PDF برای فروش
 tools/
   vendor-kit/               ← اسکریپت zip kit داخلی
