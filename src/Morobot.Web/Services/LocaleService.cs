@@ -25,10 +25,8 @@ public sealed class LocaleService : ILocaleService
     private readonly IWebHostEnvironment _env;
 
     /// <summary>
-    /// Locale keys that carry the product name. They are resolved against the tenant's
-    /// Admin → Branding value instead of the hard-coded text in the locale files, so a
-    /// rebranded deployment never shows the stock name. The locale entry is used as the
-    /// fallback when branding is not configured.
+    /// Keys whose whole value IS the product name. Resolved to the branding name outright,
+    /// because the locale text is only a fallback for unbranded deployments.
     /// </summary>
     private static readonly HashSet<string> BrandNameKeys = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -43,15 +41,6 @@ public sealed class LocaleService : ILocaleService
         "admin.brand",
         "editor.appName"
     };
-
-    /// <summary>Keys whose value is a full sentence containing the brand; {brand} is substituted.</summary>
-    private static readonly HashSet<string> BrandTokenKeys = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "brand.copyright",
-        "metadata.title",
-        "metadata.description"
-    };
-
     public LocaleService(IHttpContextAccessor http, IWebHostEnvironment env)
     {
         _http = http;
@@ -101,13 +90,14 @@ public sealed class LocaleService : ILocaleService
         if (text.Contains("{year}", StringComparison.Ordinal))
             text = text.Replace("{year}", DateTime.Now.Year.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
-        // Brand-aware keys always reflect Admin → Branding rather than the stock locale text.
+        // Brand-aware resolution: never surface the stock name from the locale file.
+        //  - {brand} inside any value is always expanded, so sentences compose correctly.
+        //  - BrandNameKeys hold only the product name, so they are replaced outright.
         var brand = BrandedAppName();
         if (!string.IsNullOrEmpty(brand))
         {
-            if (BrandNameKeys.Contains(key))
-                text = brand;
-            else if (BrandTokenKeys.Contains(key))
+            if (BrandNameKeys.Contains(key)) text = brand;
+            else if (text.Contains("{brand}", StringComparison.Ordinal))
                 text = text.Replace("{brand}", brand, StringComparison.Ordinal);
         }
 

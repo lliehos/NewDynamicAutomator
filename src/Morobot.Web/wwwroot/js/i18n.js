@@ -73,6 +73,7 @@
     }
     if (text.indexOf("{year}") >= 0) text = text.replace(/\{year\}/g, String(new Date().getFullYear()));
     // Never surface the stock name from the locale file — prefer the tenant's branding.
+    // {brand} is always expanded; brand-name keys are replaced outright.
     const brand = brandName();
     if (brand) {
       if (BRAND_NAME_KEYS.has(key)) text = brand;
@@ -80,7 +81,6 @@
     }
     return text;
   }
-
   function applyDom(root) {
     const scope = root || document;
     scope.querySelectorAll("[data-i18n]").forEach((el) => {

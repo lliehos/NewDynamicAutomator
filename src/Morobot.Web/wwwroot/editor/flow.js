@@ -5280,7 +5280,6 @@
             || k === "selectorRequireVisible" || k === "equalSelectorRequireVisible"
             || k === "selectorRequireEnabled" || k === "equalSelectorRequireEnabled"
             || k === "selectorRequireClickable" || k === "equalSelectorRequireClickable"
-            || k === "dsReadUseCache"
           );
           if (isSwitch) {
             clearTimeout(window.__daInspSwitchT);
@@ -5296,11 +5295,6 @@
         }
         if (k === "selectorWaitMs" || k === "equalSelectorWaitMs") {
           n[k] = Math.max(0, Number(inp.value) || 0);
-          syncNodeValidity(n);
-          return;
-        }
-        if (k === "dsReadCacheTtlSec") {
-          n[k] = Math.max(1, Number(inp.value) || 60);
           syncNodeValidity(n);
           return;
         }
@@ -6001,9 +5995,6 @@
     } else if (src === "Elements" && isCapture) {
       html += `<p class="palette-hint">سلکتور المان در بخش پایین («المان صفحه») تنظیم می‌شود.</p>`;
     } else if (src === "DataSource") {
-      const dsCacheOn = n.dsReadUseCache === true;
-      const dsCacheTtl = Math.max(1, Number(n.dsReadCacheTtlSec) || 60);
-      if (n.dsReadUseCache !== true) n.dsReadUseCache = false;
       html += `
         <div class="insp-field"><label>منبع داده</label>
           <select data-k="dataSourceId"><option value="">— انتخاب منبع —</option>${dsOpts}</select>
@@ -6012,20 +6003,6 @@
           <select data-k="dynamicSourceColumnName"><option value="">— انتخاب ستون —</option>${colOpts}</select>
         </div>
         ${emptyDs}
-        <div class="insp-field">
-          <label class="da-switch">
-            <input type="checkbox" data-k="dsReadUseCache" ${dsCacheOn ? "checked" : ""}/>
-            <span class="da-switch-ui" aria-hidden="true"></span>
-            <span class="da-switch-text">استفاده از کش برای خواندن</span>
-          </label>
-          <p class="palette-hint" style="margin:4px 0 0">برای داده‌ای که روی سرور عوض نمی‌شود یا تغییرش مهم نیست؛ پیش‌فرض خاموش است.</p>
-        </div>
-        ${dsCacheOn ? `
-        <div class="insp-field">
-          <label>اعتبار کش (ثانیه)</label>
-          <input type="number" min="1" step="1" data-k="dsReadCacheTtlSec" value="${esc(String(dsCacheTtl))}" />
-          <p class="palette-hint" style="margin:4px 0 0">پیش‌فرض ۶۰ ثانیه (۱ دقیقه).</p>
-        </div>` : ""}
         <p class="palette-hint">در اجرا مقدار سلول ردیف جاری خوانده می‌شود.</p>`;
     } else if (src === "Memory") {
       const memKey = isCapture ? "sourceMemoryVariableName" : "memoryVariableName";

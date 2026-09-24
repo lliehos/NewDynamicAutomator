@@ -602,7 +602,6 @@ async function stopPlay(reason) {
   playStatus.playing = false;
   playStatus.paused = false;
   wakePlayResumeWaiters();
-  clearPlayDsReadCache();
   clearPlayCellReadInflight();
   if (playAbortPoll) {
     clearInterval(playAbortPoll);
@@ -882,7 +881,6 @@ async function startPlay(taskId, tabId, runMode, options) {
     return { ok: false, error: "در فرایند المان نامعتبر وجود دارد" };
   }
 
-  clearPlayDsReadCache();
   clearPlayCellReadInflight();
 
   const entryId = resolvePlayEntryId(graph, opts);
@@ -2413,23 +2411,11 @@ async function setPlayMemoryVar(name, value) {
 }
 
 const playCellWriteChains = new Map();
-/** TTL read cache when step.dsReadUseCache — key: dsId|row|col → { value, expiresAt } */
-const playDsReadCache = new Map();
 /** In-flight GET /cells dedupe (same key → one network call). */
 const playCellReadInflight = new Map();
 
-function clearPlayDsReadCache() {
-  playDsReadCache.clear();
-}
-
 function clearPlayCellReadInflight() {
   playCellReadInflight.clear();
-}
-
-function dsReadCacheTtlMs(step) {
-  const sec = Number(step?.dsReadCacheTtlSec);
-  const n = Number.isFinite(sec) && sec > 0 ? sec : 60;
-  return n * 1000;
 }
 
 function playCellKey(dsId, rowIndex, columnKey) {
@@ -2516,7 +2502,6 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
         const rev = res.body.cellRevision ?? res.body.CellRevision;
         const dRev = res.body.dataRevision ?? res.body.DataRevision;
         applyCellToLocalCache(ds, row, col, text, rev, dRev);
-        playDsReadCache.delete(playCellKey(id, row, col));
         return { ok: true, body: res.body };
       }
       if (res?.error === "auth") return { ok: false, error: "auth" };
@@ -2574,12 +2559,6 @@ async function fetchServerCellForPlay(id, row, col, ds, graph, step) {
     const rev = fresh.body.cellRevision ?? fresh.body.CellRevision;
     const dRev = fresh.body.dataRevision ?? fresh.body.DataRevision;
     applyCellToLocalCache(ds, row, col, val, rev, dRev);
-    if (step?.dsReadUseCache === true) {
-      playDsReadCache.set(cacheKey, {
-        value: val,
-        expiresAt: Date.now() + dsReadCacheTtlMs(step)
-      });
-    }
     if (graph) {
       emitDataSourceCellEvent(graph, ds, col, row, "read", val, step?.title);
     }
@@ -2674,16 +2653,6 @@ async function readDataSourceCellForPlay(ds, columnKey, rowIndex, step, graph) {
 
   if (id <= 0) {
     return cellValue(ds, col, row, { emitRead: true, graph, stepTitle: step?.title });
-  }
-
-  const cacheKey = playCellKey(id, row, col);
-  if (step?.dsReadUseCache === true) {
-    const cached = playDsReadCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      if (graph) emitDataSourceCellEvent(graph, ds, col, row, "read", cached.value, step?.title);
-      return cached.value;
-    }
-    return fetchServerCellForPlay(id, row, col, ds, graph, step);
   }
 
   const mirrored = cellValue(ds, col, row, { emitRead: false });
