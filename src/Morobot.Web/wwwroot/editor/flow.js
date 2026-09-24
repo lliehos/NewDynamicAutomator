@@ -898,6 +898,9 @@
               })
             : window.confirm(t("editor.ds.remapSelectorsConfirm"));
           if (ask) remapSelectorsToSource(newId);
+        } else {
+          // A new default was just assigned; nodes that lost their source become valid again.
+          await offerDependentNodeRepair(newId);
         }
         await save();
         renderInspector();
@@ -1642,6 +1645,82 @@
     await ingestDataSourceFile(file);
   }
 
+  /**
+   * Nodes whose data-source value is unresolved (e.g. after the source was deleted):
+   * the DS id was cleared but the column name was kept, so the node is now invalid.
+   */
+  function nodesMissingDataSource() {
+    const out = [];
+    (graph.nodes || []).forEach((n) => {
+      if (n.kind === "group") return;
+      const v = validateNodeLeaf(n);
+      if (!v.ok && (v.reasons || []).some((r) => /منبع|data source/i.test(String(r)))) {
+        out.push(n);
+      }
+    });
+    return out;
+  }
+
+  /**
+   * Re-point nodes that lost their source at the newly chosen default.
+   * Column names are left untouched — only the missing DS id is restored, and only
+   * when the column actually exists on the new source.
+   */
+  function repairNodesMissingDataSource(sourceId) {
+    const ds = findDataSourceById(sourceId);
+    if (!ds) return 0;
+    const keySet = new Set(
+      (ds.columnKeys || (ds.columns || []).map((c) => c.key || c.Key) || [])
+        .map((k) => String(k || "").trim())
+        .filter(Boolean)
+    );
+    let updated = 0;
+    nodesMissingDataSource().forEach((n) => {
+      const pairs = [
+        ["selectorDynamicColumn", "selectorDataSourceId"],
+        ["equalSelectorDynamicColumn", "equalSelectorDataSourceId"],
+        ["attributeDynamicColumn", "attributeDataSourceId"],
+        ["equalAttributeDynamicColumn", "equalAttributeDataSourceId"],
+        ["dynamicSourceColumnName", "dataSourceId"],
+        ["saveColumnName", "saveDataSourceId"]
+      ];
+      pairs.forEach(([colProp, dsProp]) => {
+        const col = String(n[colProp] || "").trim();
+        if (!col) return;
+        // Only adopt the column when it exists on the new source, otherwise leave it
+        // for the user to re-pick rather than silently pointing at a wrong column.
+        if (keySet.size && !keySet.has(col)) return;
+        if (dsProp === "dataSourceId" && n.kind === "start") return;
+        if (Number(n[dsProp]) === Number(sourceId)) return;
+        n[dsProp] = Number(sourceId);
+        updated += 1;
+      });
+      // A node with no column at all still needs a source to become valid again.
+      if (n.kind !== "start" && n.dataSourceId == null && !n.dynamicSourceColumnName) {
+        n.dataSourceId = Number(sourceId);
+        updated += 1;
+      }
+    });
+    return updated;
+  }
+
+  /** Asks to auto-repair dependent nodes when a default source is (re)assigned. */
+  async function offerDependentNodeRepair(sourceId) {
+    const broken = nodesMissingDataSource();
+    if (!broken.length) return 0;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(t("editor.ds.repairDependentsConfirm", { n: broken.length }), {
+          title: t("editor.ds.repairDependentsTitle"),
+          okText: t("common.yes"),
+          cancelText: t("common.no")
+        })
+      : window.confirm(t("editor.ds.repairDependentsConfirm", { n: broken.length }));
+    if (!ask) return 0;
+    const n = repairNodesMissingDataSource(sourceId);
+    setStatus(t("editor.ds.repairDependentsDone", { n }), "success");
+    return n;
+  }
+
   async function deleteDataSource(sourceId) {
     if (!canModify || !sourceId) return;
     // Detach from this process only — library row stays. Keep selector column names.
@@ -1675,6 +1754,10 @@
           })
         : window.confirm(t("editor.ds.remapSelectorsConfirm"));
       if (ask) remapSelectorsToSource(newMaster);
+    } else if (newMaster) {
+      // Source removed while another one became the default: the dependent nodes lost
+      // their DS id and are now invalid, so offer to re-point them at the new default.
+      await offerDependentNodeRepair(newMaster);
     }
 
     const statusEl = document.getElementById("ds-status");
