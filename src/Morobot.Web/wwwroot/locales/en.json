@@ -98,7 +98,7 @@
     "navSettings": "Settings",
     "dashBrand": "{brand}",
     "dashTitle": "Home",
-    "dashSub": "Overview of your browser-side activity.",
+    "dashSub": "Overview of your processes, sources, and actions.",
     "statProcesses": "Processes",
     "statSources": "Data sources",
     "statSteps": "Actions",
@@ -115,7 +115,7 @@
     "recentProcesses": "Recent processes",
     "recentSources": "Recent sources",
     "processesTitle": "Processes",
-    "processesSub": "Processes are stored in the browser (no server yet).",
+    "processesSub": "Processes are stored on the server and stay in sync across your devices.",
     "createProcess": "Create new process",
     "processTitle": "Process title",
     "processTitlePh": "e.g. Order entry",
@@ -641,10 +641,10 @@
     "saveProfile": "Save profile",
     "errorRequired": "First name, last name, email, and mobile are required.",
     "errorNotFound": "User not found.",
-    "noteLocal": "Until full server sync, the profile stays in this browser for the current user; language is stored in a cookie."
+    "noteLocal": "Your profile is stored on the server; the selected language is kept in a cookie."
   },
   "tasks": {
-    "localUser": "Local user: {user} — data stays in this browser for this user only.",
+    "localUser": "User: {user} — processes are stored on the server and stay in sync across your devices.",
     "empty": "No processes yet. Design one manually or record a process.",
     "added": "Process “{title}” was added.",
     "newProcess": "New process",
@@ -708,7 +708,7 @@
     }
   },
   "dashboard": {
-    "statusWithData": "{tasks} processes · {sources} sources · data stays in your browser only.",
+    "statusWithData": "{tasks} processes · {sources} sources · stored on the server.",
     "statusEmpty": "No processes yet — use the “New process” shortcut to start.",
     "noProcess": "No processes saved.",
     "createProcess": "Create process",
@@ -792,8 +792,8 @@
       "tipDblClickGroup": "Double-click: open group designer",
       "designingGroup": "Designing group \"{title}\"",
       "designingDiagram": "Designing main diagram",
-      "quotaError": "Browser storage is full — the Excel source is too large. Reduce size or remove unused sources.",
-      "storageFailed": "Failed to save in browser: {msg}",
+      "quotaError": "Local browser storage is full — the source is saved on the server, but its local copy does not fit. Remove unused sources.",
+      "storageFailed": "Failed to save the local browser copy: {msg}",
       "uploadError": "Upload error",
       "uploadAborted": "File upload aborted",
       "dsLoadError": "Error loading data source"
@@ -879,7 +879,7 @@
       "emptyGroup": "Empty group",
       "workflow": "Workflow",
       "diagram": "Diagram",
-      "localProcess": "Local process",
+      "localProcess": "Untitled process",
       "actionN": "Action {n}"
     },
     "ds": {
@@ -901,7 +901,7 @@
       "onServer": "On server (library)",
       "onLocal": "Local only (not on server yet)",
       "onServerHint": "This source is stored in the server library.",
-      "onLocalHint": "This source is only in this browser and has not reached the server yet.",
+      "onLocalHint": "This source is defined in this process graph and is not yet saved to the server library.",
       "detach": "Detach from process",
       "detached": "Source detached from this process (kept in library).",
       "remapSelectorsConfirm": "Default source changed. Update selectors that have matching columns?",
@@ -928,7 +928,7 @@
       "uploadParsing": "Parsing and preparing JSON...",
       "uploadSaving": "Preparing data for process...",
       "uploadDone": "Uploaded",
-      "uploadSaveError": "Failed to save source in local storage.",
+      "uploadSaveError": "Could not save the source.",
       "progressStarting": "Starting...",
       "progressSaving": "Saving to local storage...",
       "progressAttach": "Attaching to process...",
