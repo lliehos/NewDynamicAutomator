@@ -2110,6 +2110,19 @@ function dataSourceSafeFileName(ds) {
       const tid = payload.taskId;
       scheduleRender();
       setTimeout(() => flashTaskFields(tid, ["dataEdit", "sources"]), 320);
+      // If the open grid belongs to the source that just changed, repaint it from the server.
+      // Without this the viewer kept whatever it loaded, so a cell another user edited stayed
+      // wrong on screen until the user thought to hit refresh.
+      const action = String(payload.action || payload.Action || "");
+      const changedId = Number(payload.source?.id ?? payload.source?.Id ?? payload.source?.sourceId);
+      if (processViewerState.source && Number(processViewerState.source.id) === changedId) {
+        // Our own write already updated the grid optimistically; only a foreign action needs a pull.
+        const actor = payload.actorUserName || payload.ActorUserName;
+        const mine = actor && actor === (window.daCurrentUserName || null);
+        if (!mine) refreshProcessViewer();
+      } else if (action === "cell_patched" && processViewerState.source) {
+        refreshProcessViewer();
+      }
     });
   }
 

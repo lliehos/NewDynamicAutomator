@@ -620,11 +620,59 @@ public class DataSourcesApiController : ControllerBase
         if (!result.Ok && result.Conflict)
             return Conflict(result);
         if (!result.Ok) return BadRequest(result);
-        await _catalog.LibrarySourceChangedAsync(new { id, dataRevision = result.DataRevision }, "cell_patched",
-            User.Identity?.Name, UserId, ct);
+
+        // Everywhere the source is listed has to hear about a cell write, not just the page that
+        // made it. Read the source's current shape so listeners get a full row to upsert with:
+        // sending only {id, dataRevision} left the admin list unable to render anything but the id.
+        var meta = await _sources.GetMetaAsync(UserId, id, ct);
+        await _catalog.LibrarySourceChangedAsync(new
+        {
+            id,
+            title = meta?.Title,
+            columnCount = meta?.ColumnCount,
+            rowCount = meta?.RowCount,
+            dataRevision = result.DataRevision,
+            // The stamp of the value just written, so a listener can refresh a tooltip without
+            // re-reading the row.
+            rowIndex = req.RowIndex,
+            columnKey = req.ColumnKey,
+            cellValue = result.CellValue,
+            editorUserId = result.LastEditorUserId,
+            editorUserName = result.LastEditorUserName,
+            updatedAtUtc = result.UpdatedAtUtc
+        }, "cell_patched", User.Identity?.Name, UserId, ct);
+
         var linked = await _sources.GetLinkedProcessIdsAsync(id, ct);
         foreach (var processId in linked)
+        {
+            // The process-scoped event is what the processes page viewer listens to, so a linked
+            // process's open grid is repainted from the server instead of going stale.
+            await _catalog.SourceChangedAsync(processId, new
+            {
+                id,
+                columnCount = meta?.ColumnCount,
+                rowCount = meta?.RowCount,
+                dataRevision = result.DataRevision,
+                rowIndex = req.RowIndex,
+                columnKey = req.ColumnKey,
+                cellValue = result.CellValue,
+                editorUserName = result.LastEditorUserName,
+                updatedAtUtc = result.UpdatedAtUtc
+            }, "cell_patched", User.Identity?.Name, ct);
             await _catalog.BroadcastProcessListItemAsync(processId, "updated", User.Identity?.Name, ct);
+            // An editor holding this canvas needs to know the data under it moved. This is what the
+            // canvas/source-side listeners subscribe to.
+            await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
+            {
+                taskId = processId,
+                dataSourceId = id,
+                reason = "datasource_cell_patched",
+                rowIndex = req.RowIndex,
+                columnKey = req.ColumnKey,
+                userId = UserId,
+                userName = User.Identity?.Name
+            }, ct);
+        }
         return Ok(result);
     }
 

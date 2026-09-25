@@ -1268,6 +1268,18 @@
         daNotify(msg + who, action === "deleted" ? "info" : "success");
       }
       scheduleRender();
+
+      // A source that is open in the viewer has to follow the change, not just the list. Our own
+      // write already updated the grid, so re-reading on every event would fight the editor; we
+      // only pull when somebody else changed the source we are looking at.
+      const changedId = Number(payload.source?.id ?? payload.source?.Id ?? payload.source?.sourceId ?? payload.sourceId);
+      const actor = payload.actorUserName || payload.ActorUserName || "";
+      const mine = actor && actor === (window.daCurrentUserName || "");
+      if (!mine && viewerState.sourceId != null && changedId === Number(viewerState.sourceId)) {
+        if (action === "deleted") closeViewer();
+        else refreshViewer();
+      }
+
       setTimeout(() => {
         const tid = payload.taskId ?? payload.TaskId;
         document.querySelectorAll(`#da-source-rows tr, #da-source-cards .da-source-card`).forEach((el) => {

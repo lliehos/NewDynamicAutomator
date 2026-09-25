@@ -198,6 +198,11 @@
     <div class="drag-target"></div>
   </div>
   <script src="~/js/i18n.js?v=4"></script>
+  <script>
+    // The signed-in user's name, so live-update handlers can tell their own edit from someone
+    // else's and avoid re-reading (and fighting) the grid they just wrote to.
+    window.daCurrentUserName = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(User.Identity?.Name ?? ""));
+  </script>
   <script src="~/js/da-crypto.js?v=3"></script>
   <script src="~/js/da-secure-store.js?v=5"></script>
   <script src="~/assets/vendor/libs/jquery/jquery.js"></script>

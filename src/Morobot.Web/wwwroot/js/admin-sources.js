@@ -191,11 +191,14 @@
     ).join("");
   }
 
+  let viewerSourceId = null;
+
   async function viewSource(id, btn) {
     if (btn) { btn.disabled = true; }
     try {
       const ds = await fetchDetail(id);
       renderViewer(ds);
+      viewerSourceId = Number(id);
       const modal = document.getElementById("da-portal-ds-viewer");
       if (modal) modal.hidden = false;
     } catch (e) {
@@ -203,6 +206,14 @@
     } finally {
       if (btn) btn.disabled = false;
     }
+  }
+
+  /** Re-read the open source from the server so the admin viewer is not showing a stale table. */
+  async function refreshViewerIfOpen(changedId) {
+    if (viewerSourceId == null || Number(changedId) !== viewerSourceId) return;
+    const modal = document.getElementById("da-portal-ds-viewer");
+    if (!modal || modal.hidden) return;
+    try { renderViewer(await fetchDetail(viewerSourceId)); } catch { /* keep what we have */ }
   }
 
   async function downloadSource(id, btn) {
@@ -278,6 +289,9 @@
         return;
       }
       upsertRow(src, action, actor);
+      // The admin viewer (View button) must follow cell-level changes too, otherwise an admin
+      // watching a source sees a table that silently diverges from what is stored.
+      refreshViewerIfOpen(id);
     });
     const conn = await DaCatalog.ensure({ admin: true });
     setLive(!!conn, conn ? i18n.live : i18n.offline);
