@@ -36,8 +36,13 @@
       <td>@t.CreatedAtUtc.ToString("u")</td>
       <td class="admin-change-cell" data-flash="change"><span class="admin-change-badge is-idle">—</span></td>
       <td class="admin-play-cell" data-flash="play">
-        <span class="admin-play-ico" hidden title="@L["admin.processes.playing"]" aria-label="@L["admin.processes.playing"]">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg>
+        @* Both glyphs are in the DOM and the script shows one, so a live update does not have to
+           rebuild the icon. The pause glyph is shown up front: a row we have no play event for is
+           a stopped row, and leaving the cell empty made "finished" look like "unknown". The
+           playing list below corrects any row that is actually running. *@
+        <span class="admin-play-ico is-stopped" title="@L["admin.processes.stopped"]" aria-label="@L["admin.processes.stopped"]">
+          <svg class="ico-play" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="display:none"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg>
+          <svg class="ico-pause" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
         </span>
       </td>
       <td>
@@ -74,8 +79,9 @@
       shared: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.live.action.shared"]))
     },
     playing: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.processes.playing"])),
+    stopped: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.processes.stopped"])),
     playingBy: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.processes.playingBy"]))
   };
 </script>
-<script src="~/js/admin-processes.js?v=1"></script>
+<script src="~/js/admin-processes.js?v=play-pause-1"></script>
 }

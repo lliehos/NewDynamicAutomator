@@ -299,8 +299,20 @@ label { font-size: .9rem; }
   display: inline-flex;
   color: var(--morobot-primary, var(--morobot-primary-default));
 }
+/* Running: green and blinking. The colour is set on the playing state rather than the base rule
+   so the two states cannot both be right if a class is left behind. */
+.admin-play-ico.is-playing {
+  color: #16a34a;
+}
 .admin-play-ico.is-blink {
   animation: admin-play-blink 1s ease-in-out infinite;
+}
+/* Stopped: red and still, so "not running" is visible rather than an empty cell. */
+.admin-play-ico.is-stopped {
+  color: #dc2626;
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-play-ico.is-blink { animation: none; }
 }
 .admin-cell-flash { animation: admin-cell-flash 1s ease; }
 .admin-row-gone { opacity: .45; transition: opacity .4s ease; }

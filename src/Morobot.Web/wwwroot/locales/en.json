@@ -371,7 +371,8 @@
       "playingBy": "Playing by {user}",
       "delete": "Delete",
       "deleteConfirm": "Delete this process?",
-      "empty": "No processes yet."
+      "empty": "No processes yet.",
+      "stopped": "Stopped"
     },
     "sources": {
       "title": "Sources",

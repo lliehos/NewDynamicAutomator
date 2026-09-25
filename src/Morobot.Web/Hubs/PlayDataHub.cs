@@ -9,11 +9,28 @@ namespace Morobot.Web.Hubs;
 public class PlayDataHub : Hub
 {
     private readonly PlaySessionTracker _plays;
+    private readonly IHubContext<CatalogHub> _catalog;
 
-    public PlayDataHub(PlaySessionTracker plays) => _plays = plays;
+    public PlayDataHub(PlaySessionTracker plays, IHubContext<CatalogHub> catalog)
+    {
+        _plays = plays;
+        _catalog = catalog;
+    }
 
     public static string TaskGroup(long taskId) => $"task-ds-{taskId}";
     public static string TaskGroup(string taskId) => $"task-ds-{taskId}";
+
+    /// <summary>
+    /// Tell the admin overview that a process started or stopped.
+    ///
+    /// The admin page listens for "playState" on the catalog hub, not this one: it is watching
+    /// every process, not one task, and the catalog hub is where its other live feeds come from.
+    /// Nothing was publishing play state there, so the admin's play icons only ever showed what
+    /// was true when the page loaded and never reacted to a run starting or finishing.
+    /// </summary>
+    private Task NotifyCatalog(string taskId, bool playing, string? userName) =>
+        _catalog.Clients.Group(CatalogHub.AdminGroup)
+            .SendAsync("playState", new { taskId, playing, userName });
 
     public async Task JoinTask(string taskId)
     {
@@ -39,6 +56,7 @@ public class PlayDataHub : Hub
             playing = true,
             userName
         });
+        await NotifyCatalog(key, true, userName);
     }
 
     public async Task UnregisterPlay(string taskId)
@@ -51,6 +69,7 @@ public class PlayDataHub : Hub
             taskId = key,
             playing = false
         });
+        await NotifyCatalog(key, false, null);
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)

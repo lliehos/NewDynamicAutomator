@@ -59,23 +59,41 @@
     return document.querySelector(`#admin-process-rows tr[data-task-id="${CSS.escape(String(taskId))}"]`);
   }
 
+  /**
+   * Show the live state of a process as an icon: a blinking play while it is running, a red
+   * pause once it is not.
+   *
+   * The cell used to hide the icon entirely when a process was not playing, which left a blank
+   * cell that reads the same as "no information" - after a run ended there was no way to tell
+   * "it finished" from "we never knew". The pause icon says stopped, and its colour says it at a
+   * glance without reading the tooltip.
+   */
   function setPlaying(taskId, playing, userName) {
     const row = findRow(taskId);
     if (!row) return;
+    const cell = row.querySelector("[data-flash='play']");
     const ico = row.querySelector(".admin-play-ico");
     if (!ico) return;
+    ico.hidden = false;
+    const playGlyph = row.querySelector(".admin-play-ico .ico-play");
+    const pauseGlyph = row.querySelector(".admin-play-ico .ico-pause");
+    if (playGlyph) playGlyph.style.display = playing ? "" : "none";
+    if (pauseGlyph) pauseGlyph.style.display = playing ? "none" : "";
     if (playing) {
-      ico.hidden = false;
-      ico.classList.add("is-blink");
+      ico.classList.add("is-blink", "is-playing");
+      ico.classList.remove("is-stopped");
       const tip = (i18n.playingBy || i18n.playing || "Playing")
         .replace("{user}", userName || "—");
       ico.title = tip;
       ico.setAttribute("aria-label", tip);
     } else {
-      ico.hidden = true;
-      ico.classList.remove("is-blink");
+      ico.classList.remove("is-blink", "is-playing");
+      ico.classList.add("is-stopped");
+      const tip = i18n.stopped || "Stopped";
+      ico.title = tip;
+      ico.setAttribute("aria-label", tip);
     }
-    flashCell(row.querySelector("[data-flash='play']"));
+    flashCell(cell);
   }
 
   function upsertRow(task, action, actor) {
@@ -96,7 +114,7 @@
         <td data-flash="counts">${Number(task.groupCount || 0)} / ${Number(task.stepCount || 0)} / ${Number(task.dataSourceCount || 0)}</td>
         <td>${escapeHtml(task.createdAtUtc || "")}</td>
         <td class="admin-change-cell" data-flash="change"><span class="admin-change-badge is-idle">—</span></td>
-        <td class="admin-play-cell" data-flash="play"><span class="admin-play-ico" hidden><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg></span></td>
+        <td class="admin-play-cell" data-flash="play"><span class="admin-play-ico is-stopped"><svg class="ico-play" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="display:none"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg><svg class="ico-pause" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></span></td>
         <td></td>`;
       tbody.prepend(row);
     } else {
