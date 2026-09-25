@@ -186,23 +186,51 @@ function ctxT(culture, key) {
   return pack[key] ?? CTX_LABELS.fa[key] ?? key;
 }
 
-async function ensureContextMenus() {
-  const culture = await ctxCulture();
-  // removeAll must finish before create, otherwise Chrome throws duplicate-id errors.
-  await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
-  chrome.contextMenus.create({
-    id: CTX_PARENT,
-    title: ctxT(culture, "ctx.parent"),
-    contexts: ["all"]
-  });
-  for (const [id, key] of CTX_ITEMS) {
-    chrome.contextMenus.create({
-      id,
-      parentId: CTX_PARENT,
-      title: ctxT(culture, key),
-      contexts: ["all"]
+/**
+ * Serialise context-menu rebuilds.
+ *
+ * `removeAll` is asynchronous, so two overlapping calls interleave: the second `removeAll`
+ * can run *before* the first call has finished creating, and then the first call's `create`
+ * runs against ids that already exist — Chrome logs "duplicate id da-selector-parent" and
+ * the menu ends up half-built. Startup, install and a language change can all land at once,
+ * so instead of relying on timing we chain every rebuild onto the previous one and coalesce
+ * requests that arrive while a rebuild is already queued.
+ */
+let ctxMenuChain = Promise.resolve();
+let ctxMenuQueued = false;
+
+function ensureContextMenus() {
+  // Collapse a burst of triggers into a single rebuild.
+  if (ctxMenuQueued) return ctxMenuChain;
+  ctxMenuQueued = true;
+  ctxMenuChain = ctxMenuChain
+    .catch(() => { /* one failed rebuild must not poison the chain */ })
+    .then(async () => {
+      ctxMenuQueued = false;
+      const culture = await ctxCulture();
+      // removeAll must finish before create, otherwise Chrome throws duplicate-id errors.
+      await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
+      // create() can reject with "duplicate id" (or report it via lastError) if a stale
+      // entry survived; retrying after another removeAll settles the state.
+      try {
+        chrome.contextMenus.create({
+          id: CTX_PARENT,
+          title: ctxT(culture, "ctx.parent"),
+          contexts: ["all"]
+        }, () => { void chrome.runtime.lastError; });
+        for (const [id, key] of CTX_ITEMS) {
+          chrome.contextMenus.create({
+            id,
+            parentId: CTX_PARENT,
+            title: ctxT(culture, key),
+            contexts: ["all"]
+          }, () => { void chrome.runtime.lastError; });
+        }
+      } catch (err) {
+        console.warn("[selector] context menu rebuild failed", err?.message || err);
+      }
     });
-  }
+  return ctxMenuChain;
 }
 
 chrome.runtime.onInstalled.addListener(() => { ensureContextMenus(); });
