@@ -752,7 +752,11 @@
       "processesImported": "Processes imported:",
       "processesSkipped": "Skipped:",
       "errors": "Errors:",
-      "migrateAnother": "Migrate another"
+      "migrateAnother": "Migrate another",
+      "matchColumn": "Matching account",
+      "matchHint": "A user with this user name already exists here; the import will link to that account.",
+      "matched": "Links to account",
+      "newAccount": "New account"
     },
     "devices": {
       "title": "Devices",

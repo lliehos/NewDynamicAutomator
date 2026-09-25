@@ -15,6 +15,13 @@ public class LegacyUserRow
     public string? FirstName { get; set; }
     public string? LastName { get; set; }
     public int ProcessCount { get; set; }
+    /// <summary>
+    /// True when this system already has an account with the same user name. The import matches on
+    /// user name, so the operator needs to see which links will happen before running it.
+    /// </summary>
+    public bool MatchedHere { get; set; }
+    /// <summary>Id of the existing account, when <see cref="MatchedHere"/> is true.</summary>
+    public int? MatchedUserId { get; set; }
 }
 
 public class LegacyImportReport
@@ -81,6 +88,27 @@ ORDER BY u.UserName";
                     ProcessCount = r.IsDBNull(4) ? 0 : Convert.ToInt32(r.GetValue(4))
                 });
             }
+
+            // Mark which legacy user names already exist here. The import links on user name, so
+            // showing the match up front is what lets the operator confirm the connections rather
+            // than discovering them in the result log.
+            var names = list.Select(x => x.UserName).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
+            var existing = await _db.Users.AsNoTracking()
+                .Where(u => names.Contains(u.UserName))
+                .Select(u => new { u.Id, u.UserName })
+                .ToListAsync(ct);
+            var byName = existing
+                .GroupBy(x => x.UserName, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+            foreach (var row in list)
+            {
+                if (byName.TryGetValue(row.UserName ?? "", out var localId))
+                {
+                    row.MatchedHere = true;
+                    row.MatchedUserId = localId;
+                }
+            }
+
             return (list, null);
         }
         catch (Exception ex)

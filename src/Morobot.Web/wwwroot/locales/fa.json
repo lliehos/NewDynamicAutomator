@@ -752,7 +752,11 @@
       "processesImported": "فرآیند واردشده:",
       "processesSkipped": "ردشده:",
       "errors": "خطا:",
-      "migrateAnother": "انتقال دیگر"
+      "migrateAnother": "انتقال دیگر",
+      "matchColumn": "حساب متناظر",
+      "matchHint": "کاربری با همین نام کاربری در سامانه وجود دارد؛ انتقال به همان حساب متصل می‌شود.",
+      "matched": "متصل به حساب",
+      "newAccount": "حساب جدید"
     },
     "devices": {
       "title": "دستگاه‌ها",

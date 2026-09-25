@@ -26,6 +26,7 @@
         <th>@L["admin.users.userName"]</th>
         <th>@L["admin.users.firstName"]</th>
         <th>@L["admin.migrate.processCount"]</th>
+        <th>@L["admin.migrate.matchColumn"]</th>
       </tr>
     </thead>
     <tbody>
@@ -48,6 +49,16 @@
         <td>@u.UserName</td>
         <td>@($"{u.FirstName} {u.LastName}".Trim())</td>
         <td>@u.ProcessCount</td>
+        <td>
+          @if (u.MatchedHere)
+          {
+            <span class="admin-badge is-ok" title="@L["admin.migrate.matchHint"]">@L["admin.migrate.matched"] #@u.MatchedUserId</span>
+          }
+          else
+          {
+            <span class="admin-badge is-muted">@L["admin.migrate.newAccount"]</span>
+          }
+        </td>
       </tr>
     }
     </tbody>
