@@ -200,7 +200,6 @@
     "errorRequired": "Username and password are required.",
     "errorInvalid": "Invalid username or password.",
     "errorDeploymentBinding": "This account belongs to a previous install period. Import a valid license or contact your administrator.",
-    "errorDeploymentBinding": "This account belongs to a previous install period. Import a valid license or contact your administrator.",
     "errorGuestDeviceTaken": "This machine already has an active guest/local account. You cannot create multiple guest identities via multiple browsers.",
     "errorReserved": "This username is reserved and cannot be used.",
     "userName": "Username",
@@ -440,10 +439,22 @@
       "systemManaged": "System",
       "systemManagedHint": "This value is managed by the application and cannot be edited by hand.",
       "groups": {
-        "auth": { "title": "Authentication", "desc": "Sign-in and new-user registration behaviour." },
-        "updates": { "title": "Updates", "desc": "Update feed and the status of the last check." },
-        "deployment": { "title": "Deployment", "desc": "Licence-bound settings and restart state." },
-        "branding": { "title": "Branding", "desc": "Brand identity; edited from the Branding page." }
+        "auth": {
+          "title": "Authentication",
+          "desc": "Sign-in and new-user registration behaviour."
+        },
+        "updates": {
+          "title": "Updates",
+          "desc": "Update feed and the status of the last check."
+        },
+        "deployment": {
+          "title": "Deployment",
+          "desc": "Licence-bound settings and restart state."
+        },
+        "branding": {
+          "title": "Branding",
+          "desc": "Brand identity; edited from the Branding page."
+        }
       }
     },
     "license": {
@@ -1046,7 +1057,9 @@
       "waitForUrlLoad": "Wait for the page to finish loading",
       "waitForUrlLoadHint": "On (default): waits until the target page finishes loading. Off: the next step runs immediately.",
       "waitMaxMs": "Max wait (ms)",
-      "waitMaxMsHint": "Upper bound for the load wait; if it takes longer, execution continues."
+      "waitMaxMsHint": "Upper bound for the load wait; if it takes longer, execution continues.",
+      "aliasWrite": "Behaves the same as {list} - all three write the text into the field. Only the name differs.",
+      "aliasRead": "Behaves the same as {list} - both read the field's text. Only the name differs."
     },
     "nodes": {
       "start": "Start",

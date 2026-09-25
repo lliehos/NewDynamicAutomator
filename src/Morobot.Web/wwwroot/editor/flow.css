@@ -592,6 +592,12 @@ rect.flow-marquee{pointer-events:none}
 .sel-toolbar .btn-mini{flex:1}
 .hint{position:absolute;left:12px;bottom:12px;background:rgba(255,255,255,.92);padding:7px 10px;border-radius:10px;font-size:11px;color:#6f6b7d;pointer-events:none}
 .palette-hint{font-size:10px;color:#b0adbc;line-height:1.55;margin:10px 2px 0}
+/* Duplicate-action notice, shown under the action picker. It sits in the flow, not beside
+   it, so it pushes the rest of the inspector down instead of overlapping the next field. */
+.insp-alias-hint{margin:-4px 2px 10px;padding:6px 9px;border-radius:8px;background:#f7f6fb;color:#6f6b7d}
+.insp-alias-hint b{font-weight:600;color:#4b465c}
+/* The hint follows the UI language, which can differ from the page direction. */
+.insp-alias-hint[dir="ltr"]{text-align:left;unicode-bidi:plaintext}
 #ds-palette-hint{margin-top:12px;padding-top:10px;border-top:1px solid #f0eef6}
 .ds-panel{margin-top:14px;padding-top:12px;border-top:1px solid #eceaf5}
 .ds-panel h4{margin:0 0 8px;font-size:12px;color:#4b465c}

@@ -6110,7 +6110,8 @@
     const disabledAttr = active ? "" : "disabled";
 
     let body = field("عنوان", "title", n.title) +
-      `<div class="insp-field"><label>نوع اقدام</label><select data-k="actionType" ${disabledAttr}>${optActions(at)}</select></div>`;
+      `<div class="insp-field"><label>نوع اقدام</label><select data-k="actionType" ${disabledAttr}>${optActions(at)}</select></div>` +
+      actionAliasHint(at);
 
     if (at === "NewPage") {
       body += `<p class="palette-hint">تب جدید باز می‌شود و به آدرس می‌رود.</p>`;
@@ -7381,6 +7382,51 @@
     return ACTIONS.map((x) =>
       `<option value="${esc(x)}" ${String(cur) === x ? "selected" : ""}>${esc(actionTypeLabel(x))}</option>`
     ).join("");
+  }
+
+  /**
+   * The culture the editor is currently rendering in.
+   *
+   * DaI18n is the authority once it has loaded; data-culture is written by the handler below
+   * and on the server-rendered shell, so it covers the moment before DaI18n is ready. Persian
+   * is the default, matching the server.
+   */
+  function currentCulture() {
+    return (window.DaI18n && window.DaI18n.culture)
+      || document.documentElement.getAttribute("data-culture")
+      || "fa";
+  }
+  function isFaUi() {
+    return currentCulture() !== "en";
+  }
+
+  /**
+   * The picker offers every ActionType, and several of them are processed by the same branch
+   * of the player, so a user cannot tell them apart from the names alone. Rather than hide
+   * options (which would silently rewrite existing tasks), the duplicates are spelled out
+   * here, next to the UI element they appear in.
+   */
+  const ACTION_ALIAS_KEYS = [
+    // One "write into the field" branch in the player: all three call the same code path.
+    { ids: ["InputContent", "InsertContent", "LoadContent"], key: "editor.actions.aliasWrite" },
+    // One "read the field" branch: both return the element's text to the value table.
+    { ids: ["TakeContent", "SaveContent"], key: "editor.actions.aliasRead" }
+  ];
+
+  function actionAliasHint(at) {
+    const hit = ACTION_ALIAS_KEYS.find((g) => g.ids.includes(at));
+    if (!hit) return "";
+    const others = hit.ids.filter((x) => x !== at).map(actionTypeLabel);
+    // The separator differs per language, so it is not baked into the locale string.
+    const sep = isFaUi() ? "، " : ", ";
+    const names = others.map((x) => `<b>${esc(x)}</b>`).join(sep);
+    const raw = t(hit.key);
+    const head = raw.split("{list}")[0];
+    const tail = raw.split("{list}")[1] || "";
+    // The hint is a sentence about the UI, so it follows the UI language rather than the
+    // page default (which is RTL because the product is Persian-first).
+    const dir = isFaUi() ? "rtl" : "ltr";
+    return `<p class="palette-hint insp-alias-hint" dir="${dir}">${esc(head)}${names}${esc(tail)}</p>`;
   }
   function esc(s) {
     return String(s ?? "").replace(/[&<>"'`]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
@@ -8829,7 +8875,7 @@
 
   initSidePanels();
   document.addEventListener("da:locale", () => {
-    const cul = (window.DaI18n && DaI18n.culture) || document.documentElement.getAttribute("data-culture") || "fa";
+    const cul = currentCulture();
     const dir = cul === "en" ? "ltr" : "rtl";
     document.documentElement.setAttribute("lang", cul);
     document.documentElement.setAttribute("dir", dir);
