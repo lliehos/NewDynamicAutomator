@@ -831,6 +831,8 @@ public class DataSourceService
     /// <summary>Hydrate process graph dataSources from library links (fallback to embedded).</summary>
     public async Task<string?> HydrateCanvasAsync(int processId, string? graphJson, CancellationToken ct = default)
     {
+        graphJson = GraphJsonHelper.UnwrapEnvelope(graphJson);
+
         var links = await _db.ProcessDataSources.AsNoTracking()
             .Where(l => l.ProcessId == processId)
             .OrderBy(l => l.SortOrder)
