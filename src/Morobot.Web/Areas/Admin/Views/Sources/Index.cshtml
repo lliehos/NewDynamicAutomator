@@ -35,8 +35,8 @@
       <td data-flash="linked">@s.TaskTitle</td>
       <td>@s.Owner</td>
       <td>@s.LastEditor</td>
-      <td class="text-nowrap">@s.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
-      <td class="text-nowrap">@s.UpdatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+      <td class="text-nowrap">@Morobot.Web.Services.DateDisplay.DateTimeLocal(s.CreatedAtUtc)</td>
+      <td class="text-nowrap">@Morobot.Web.Services.DateDisplay.DateTimeLocal(s.UpdatedAtUtc)</td>
       <td data-flash="cols">@s.ColumnCount</td>
       <td data-flash="rows">@s.RowCount</td>
       <td class="admin-change-cell" data-flash="change"><span class="admin-change-badge is-idle">—</span></td>

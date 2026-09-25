@@ -33,7 +33,7 @@
         <dd class="num">
           @if (d.ValidityEndsAtUtc is not null)
           {
-            @d.ValidityEndsAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            @Morobot.Web.Services.DateDisplay.DateTimeLocal(d.ValidityEndsAtUtc.Value)
             @if (d.DaysRemaining is int daysLeft)
             {
               <span> (@string.Format(L["admin.license.daysRemaining"], daysLeft))</span>
@@ -47,7 +47,7 @@
         @if (d.ValidityStartsAtUtc is not null)
         {
           <dt>@L["admin.license.fieldValidityFrom"]</dt>
-          <dd class="num">@d.ValidityStartsAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</dd>
+          <dd class="num">@Morobot.Web.Services.DateDisplay.DateTimeLocal(d.ValidityStartsAtUtc.Value)</dd>
         }
         <dt>@L["admin.license.fieldStatus"]</dt>
         <dd>@StatusLabel(d.Status)</dd>
@@ -69,7 +69,7 @@
         @if (d.IssuedAtUtc is not null)
         {
           <dt>@L["admin.license.fieldIssued"]</dt>
-          <dd class="num">@d.IssuedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</dd>
+          <dd class="num">@Morobot.Web.Services.DateDisplay.DateTimeLocal(d.IssuedAtUtc.Value)</dd>
         }
         <dt>@L["admin.license.fieldMaxUsers"]</dt>
         <dd>@FormatLimit(d.MaxUsers)</dd>

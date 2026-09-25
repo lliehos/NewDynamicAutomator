@@ -50,7 +50,7 @@
     string? tip = null;
     if (seenUtc is DateTime seenAt)
     {
-      tip = L.T("admin.users.lastSeen", ("time", seenAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")));
+      tip = L.T("admin.users.lastSeen", ("time", Morobot.Web.Services.DateDisplay.DateTimeLocal(seenAt)));
       if (playing) tip = L["admin.users.playingNow"] + " · " + tip;
     }
     else if (playing)

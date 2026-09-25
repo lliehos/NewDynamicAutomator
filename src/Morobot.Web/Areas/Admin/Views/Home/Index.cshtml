@@ -184,7 +184,7 @@
             };
             <li>
               <div class="admin-event-meta">
-                <span>@e.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                <span>@Morobot.Web.Services.DateDisplay.UtcDateTimeLocal(e.CreatedAtUtc)</span>
                 <span class="admin-badge @badgeClass">@e.Level</span>
                 <span>@e.Category</span>
                 @if (!string.IsNullOrWhiteSpace(e.UserName))

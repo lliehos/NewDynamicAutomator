@@ -36,7 +36,7 @@
     <header class="sg-head">
       <p class="lp-kicker">@L["setupGuide.kicker"]</p>
       <h1>@L["setupGuide.title"]</h1>
-      <p class="sg-meta">@L.T("setupGuide.updated", ("date", Model.LastUpdatedUtc.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)))</p>
+      <p class="sg-meta">@L.T("setupGuide.updated", ("date", Morobot.Web.Services.DateDisplay.DateLocal(Model.LastUpdatedUtc)))</p>
     </header>
     <article class="sg-body markdown-body">
       @Html.Raw(Model.HtmlBody)

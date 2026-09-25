@@ -183,7 +183,7 @@
                 <span>
                   @L["admin.settings.lastChangedBy"]
                   <strong>@(string.IsNullOrWhiteSpace(s.LastChangedByUserName) ? L["admin.settings.unknownUser"] : s.LastChangedByUserName)</strong>
-                  · @s.LastChangedAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                  · @Morobot.Web.Services.DateDisplay.DateTimeLocal(s.LastChangedAtUtc.Value)
                 </span>
               </div>
             }

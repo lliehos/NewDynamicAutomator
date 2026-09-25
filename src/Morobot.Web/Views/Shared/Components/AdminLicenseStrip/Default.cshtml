@@ -9,8 +9,8 @@
   var mode = d.RuntimeMode;
   string modeLabel = L[$"admin.license.runtime.{mode}"];
   var days = d.DaysRemaining;
-  var endText = endLocal.ToString("yyyy-MM-dd HH:mm");
-  var startText = startLocal?.ToString("yyyy-MM-dd HH:mm");
+  var endText = Morobot.Web.Services.DateDisplay.DateTimeLocal(endLocal);
+  var startText = Morobot.Web.Services.DateDisplay.DateTimeLocal(startLocal);
 }
 <div class="admin-alert @Model.AlertClass admin-license-strip" role="status">
   <strong><i class="ti ti-clock" aria-hidden="true"></i> @L["admin.license.validityBannerTitle"]</strong>

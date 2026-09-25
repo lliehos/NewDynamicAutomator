@@ -61,7 +61,7 @@
         <dt>@L["admin.offlineUpdate.version"]</dt>
         <dd><code>@staged.Version</code></dd>
         <dt>@L["admin.offlineUpdate.stagedAt"]</dt>
-        <dd class="num">@staged.StagedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</dd>
+        <dd class="num">@Morobot.Web.Services.DateDisplay.DateTimeLocal(staged.StagedUtc)</dd>
       </dl>
       <div class="admin-alert is-warn">@L["admin.offlineUpdate.applyWarn"]</div>
       <form method="post" asp-action="Apply" class="admin-form-stack">

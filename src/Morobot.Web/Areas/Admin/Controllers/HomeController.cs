@@ -117,7 +117,7 @@ public class HomeController : Controller
             var next = day.AddDays(1);
             daily.Add(new AdminDailyPoint
             {
-                Label = day.ToString("MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+                Label = Morobot.Web.Services.DateDisplay.DayMonthLocal(day),
                 Events = eventsInWindow.Count(e => e.CreatedAtUtc >= day && e.CreatedAtUtc < next),
                 Processes = processesInWindow.Count(t => t >= day && t < next),
                 Plays = playsInWindow.Count(t => t >= day && t < next)
