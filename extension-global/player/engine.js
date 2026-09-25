@@ -795,6 +795,29 @@ async function delayAfterNode(graph, nextId) {
   await sleepInterruptible(ms);
 }
 
+/** Minimum pause when a back-edge is taken, so a polling loop cannot hammer the page. */
+const LOOP_BACK_MIN_PAUSE_MS = 500;
+
+/**
+ * Called just before moving to `nextId`. When that node has already run in this walk, the
+ * edge being followed is a loop-back, so this logs the iteration and enforces a floor on the
+ * pause. Without the floor a "wait until the condition is true" loop would re-evaluate as
+ * fast as the page allows — hammering the target site and flooding the log, while also
+ * giving the condition no time to become true.
+ */
+async function paceLoopBack(graph, nextId, visitCounts, loopBackLimit) {
+  if (!nextId) return;
+  const already = visitCounts.get(nextId) || 0;
+  if (already <= 0) return;
+  const node = findGraphNode(graph, nextId);
+  const label = node?.title || node?.conditionType || node?.actionType || nextId;
+  appendPlayLog("info", `↩ بازگشت به «${label}» — تکرار ${already + 1} از حداکثر ${loopBackLimit}`);
+  // Never let the diagram's own inter-step gap shrink a loop below the floor.
+  const gap = resolveStepDelayMs(graph);
+  const remaining = LOOP_BACK_MIN_PAUSE_MS - gap;
+  if (remaining > 0) await sleepInterruptible(remaining);
+}
+
 /** Process start: highlight border color for targeted elements. */
 function resolveHighlightColor(graph) {
   const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId)
@@ -1460,8 +1483,30 @@ function flowEdge(edges, fromId, preferredKinds) {
 }
 
 /**
+ * How many times a single node may be re-entered during one flow walk.
+ *
+ * A diagram may legitimately loop back (condition → step → same condition, "wait until
+ * true"), so a node cannot be limited to a single execution. But an unbounded loop would
+ * hang the browser with no way out, so each node gets a budget. The value comes from the
+ * root start node (`loopBackLimit`) and is clamped to a sane range; anything larger would
+ * make the run effectively unkillable.
+ */
+function resolveLoopBackLimit(graph) {
+  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId)
+    || (graph?.nodes || []).find((n) => n.kind === "start");
+  const raw = Number(start?.loopBackLimit ?? graph?.loopBackLimit);
+  if (!Number.isFinite(raw) || raw <= 0) return 100;
+  return Math.min(1000, Math.max(1, Math.floor(raw)));
+}
+
+/**
  * Walk the flow diagram from entryId:
  * start → next, action → next, condition → success|fail, group → inner then next.
+ *
+ * Re-entering a node is allowed (a loop-back edge is a supported shape), but each node has
+ * a visit budget — see resolveLoopBackLimit. Exceeding it means the loop never satisfied its
+ * exit condition, which stops the run with a message naming the node rather than silently
+ * ending it as a "duplicate loop" would.
  */
 async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal, opts = {}) {
   const nodes = new Map((graph.nodes || []).map((n) => [n.id, n]));
@@ -1470,17 +1515,26 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
   let cur = entryId;
   let guard = 0;
   let stepOrdinal = 0;
-  const visited = new Set();
+  const visitCounts = new Map();
+  const loopBackLimit = resolveLoopBackLimit(graph);
 
-  while (cur && !playAbort && !playStatus.lastError && guard++ < 500) {
+  while (cur && !playAbort && !playStatus.lastError && guard++ < 100000) {
     await waitIfPaused();
     if (playAbort) break;
 
-    if (visited.has(cur)) {
-      appendPlayLog("warn", `توقف به‌خاطر حلقهٔ تکراری در نود ${cur}`);
+    const visits = (visitCounts.get(cur) || 0) + 1;
+    visitCounts.set(cur, visits);
+    if (visits > loopBackLimit) {
+      const stuck = nodes.get(cur);
+      const label = stuck?.title || stuck?.conditionType || stuck?.actionType || cur;
+      appendPlayLog(
+        "error",
+        `«${label}» بیش از ${loopBackLimit} بار اجرا شد و شرط خروج آن برقرار نشد — اجرا متوقف شد. ` +
+        `(سقف تکرار را از نود شروع → «حداکثر بازگشت حلقه» تغییر دهید)`
+      );
+      playStatus.lastError = `حداکثر بازگشت حلقه در نود «${label}» رد شد`;
       break;
     }
-    visited.add(cur);
 
     const node = nodes.get(cur);
     if (!node) break;
@@ -1511,6 +1565,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       const nextId = flowEdge(edges, node.id, ["next"])?.to || null;
       // Delay after the step finished, before the next node.
       await delayAfterNode(graph, nextId);
+      await paceLoopBack(graph, nextId, visitCounts, loopBackLimit);
       cur = nextId;
       continue;
     }
@@ -1542,6 +1597,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       const e = flowEdge(edges, cur, pass ? ["success", "next"] : ["fail", "next"]);
       const nextId = e?.to || null;
       await delayAfterNode(graph, nextId);
+      await paceLoopBack(graph, nextId, visitCounts, loopBackLimit);
       cur = nextId;
       continue;
     }
@@ -1584,6 +1640,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       }
       const nextId = flowEdge(edges, node.id, ["next"])?.to || null;
       await delayAfterNode(graph, nextId);
+      await paceLoopBack(graph, nextId, visitCounts, loopBackLimit);
       cur = nextId;
       continue;
     }

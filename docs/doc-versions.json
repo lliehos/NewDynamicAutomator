@@ -3,8 +3,8 @@
   "documents": {
     "setupGuide": { "file": "setup-guide.md", "version": "1.7" },
     "vendorOpsGuide": { "file": "vendor-ops-guide.md", "version": "1.1.0" },
-    "visualEditor": { "file": "visual-editor.md", "version": "1.1" },
-    "playEngineLogic": { "file": "play-engine-logic.md", "version": "1.0" },
+    "visualEditor": { "file": "visual-editor.md", "version": "1.2" },
+    "playEngineLogic": { "file": "play-engine-logic.md", "version": "1.1" },
     "marketingBrochure": { "file": "marketing/morobot-brochure.html", "version": "1.1.0" },
     "vendorKit": { "folder": "tools/vendor-kit", "version": "1.0.1" }
   },

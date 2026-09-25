@@ -129,9 +129,23 @@
     return DEFAULT_HIGHLIGHT_COLOR;
   }
 
+  /**
+   * Upper bound on how many times the play engine may re-enter a single node, so a
+   * "wait until the condition is true" loop can never spin forever. Kept in step with the
+   * engine's own clamp (resolveLoopBackLimit) so the UI never promises a value the engine
+   * would refuse.
+   */
+  const DEFAULT_LOOP_BACK_LIMIT = 100;
+  const MAX_LOOP_BACK_LIMIT = 1000;
+  function clampLoopBackLimit(raw) {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return DEFAULT_LOOP_BACK_LIMIT;
+    return Math.min(MAX_LOOP_BACK_LIMIT, Math.max(1, Math.floor(n)));
+  }
+
   let graph = {
     nodes: [], edges: [], viewport: { x: 40, y: 40, zoom: 1 }, title: "",
-    dataSources: [], delayBeforeMs: 0, delayAfterMs: 0, stepDelayMs: 0,
+    dataSources: [], delayBeforeMs: 0, delayAfterMs: 0, stepDelayMs: 0, loopBackLimit: 100,
     highlightColor: DEFAULT_HIGHLIGHT_COLOR, canModify: true
   };
   let selected = new Set();
@@ -319,6 +333,7 @@
     graph.delayBeforeMs = graph.delayBeforeMs ?? local.delayBeforeMs ?? 0;
     graph.delayAfterMs = graph.delayAfterMs ?? local.delayAfterMs ?? 0;
     graph.stepDelayMs = graph.stepDelayMs ?? local.stepDelayMs ?? 0;
+    graph.loopBackLimit = clampLoopBackLimit(graph.loopBackLimit ?? local.loopBackLimit);
     graph.highlightColor = normalizeHighlightColor(graph.highlightColor ?? local.highlightColor);
     graph.repeatSourceType = graph.repeatSourceType || "None";
     const start = graph.nodes.find((n) => n.kind === "start");
@@ -328,6 +343,8 @@
       if (start.loopCount == null && graph.loopCount != null) start.loopCount = graph.loopCount;
       if (start.stepDelayMs == null) start.stepDelayMs = graph.stepDelayMs ?? 0;
       else graph.stepDelayMs = start.stepDelayMs;
+      if (start.loopBackLimit == null) start.loopBackLimit = graph.loopBackLimit ?? DEFAULT_LOOP_BACK_LIMIT;
+      else graph.loopBackLimit = clampLoopBackLimit(start.loopBackLimit);
       // Process-level ignore play errors — default ON.
       if (start.ignorePlayError == null && graph.ignorePlayError == null) start.ignorePlayError = true;
       else if (start.ignorePlayError == null) start.ignorePlayError = graph.ignorePlayError !== false;
@@ -369,6 +386,7 @@
       nodes: [{
         id: "start", kind: "start", title: t("editor.nodes.start"), x: 40, y: 220,
         repeatSourceType: "None", loopCount: 1, moveLoop: false, stepDelayMs: 0,
+        loopBackLimit: DEFAULT_LOOP_BACK_LIMIT,
         ignorePlayError: true, highlightColor: DEFAULT_HIGHLIGHT_COLOR
       }],
       edges: [],
@@ -376,6 +394,7 @@
       delayBeforeMs: 0,
       delayAfterMs: 0,
       stepDelayMs: 0,
+      loopBackLimit: DEFAULT_LOOP_BACK_LIMIT,
       ignorePlayError: true,
       highlightColor: DEFAULT_HIGHLIGHT_COLOR,
       repeatSourceType: "None"
@@ -412,6 +431,7 @@
                 dataSources: data.dataSources || data.DataSources || [],
                 designOrigin: data.designOrigin || data.DesignOrigin,
                 stepDelayMs: data.stepDelayMs,
+                loopBackLimit: data.loopBackLimit,
                 highlightColor: data.highlightColor,
                 ignorePlayError: data.ignorePlayError,
                 repeatSourceType: data.repeatSourceType
@@ -1851,6 +1871,11 @@
         <p class="palette-hint" style="margin:4px 0 0">${t("editor.insp.stepGapMsHint")}</p>
       </div>
       <div class="insp-field">
+        <label>${t("editor.insp.loopBackLimit")}</label>
+        <input type="number" min="1" max="1000" step="1" data-task-k="loopBackLimit" value="${Number(start?.loopBackLimit ?? graph.loopBackLimit) || 100}" ${disabled} />
+        <p class="palette-hint" style="margin:4px 0 0">${t("editor.insp.loopBackLimitHint")}</p>
+      </div>
+      <div class="insp-field">
         <label>${t("editor.insp.selectorLabel")}</label>
         <div class="insp-color-row">
           <input type="color" data-task-k="highlightColor" value="${esc(normalizeHighlightColor(start?.highlightColor || graph.highlightColor))}" ${disabled} />
@@ -1881,6 +1906,13 @@
           graph.stepDelayMs = num;
           const start = processStart();
           if (start) start.stepDelayMs = num;
+        } else if (k === "loopBackLimit") {
+          // Caps how many times the engine may re-enter one node, so a "wait until true"
+          // loop cannot spin forever. Mirrored on the graph for payloads without a start node.
+          const num = clampLoopBackLimit(inp.value);
+          graph.loopBackLimit = num;
+          const start = processStart();
+          if (start) start.loopBackLimit = num;
         } else if (k === "highlightColor") {
           const raw = String(inp.value || "").trim();
           if (inp.type === "text" && !/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(raw)) {
@@ -5237,6 +5269,10 @@
           const num = Math.max(0, Number(inp.value) || 0);
           n.stepDelayMs = num;
           if (n.kind === "start" && !n.groupNodeId) graph.stepDelayMs = num;
+        } else if (k === "loopBackLimit") {
+          const num = clampLoopBackLimit(inp.value);
+          n.loopBackLimit = num;
+          if (n.kind === "start" && !n.groupNodeId) graph.loopBackLimit = num;
         } else if (k === "highlightColor") {
           const raw = String(inp.value || "").trim();
           if (inp.type === "text" && !/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(raw)) {
@@ -7109,6 +7145,8 @@
     n.loopCount = n.loopCount ?? graph.loopCount ?? (Number(graph.constantValue) || 1);
     n.stepDelayMs = n.stepDelayMs ?? graph.stepDelayMs ?? 0;
     graph.stepDelayMs = n.stepDelayMs;
+    n.loopBackLimit = clampLoopBackLimit(n.loopBackLimit ?? graph.loopBackLimit);
+    graph.loopBackLimit = n.loopBackLimit;
     if (n.ignorePlayError == null && graph.ignorePlayError == null) n.ignorePlayError = true;
     else if (n.ignorePlayError == null) n.ignorePlayError = graph.ignorePlayError !== false;
     graph.ignorePlayError = n.ignorePlayError !== false;
@@ -7117,6 +7155,7 @@
     n.highlightColor = normalizeHighlightColor(n.highlightColor);
     const loopCount = n.loopCount || 1;
     const stepDelayMs = Math.max(0, Number(n.stepDelayMs) || 0);
+    const loopBackLimit = clampLoopBackLimit(n.loopBackLimit);
     const ignorePlayError = n.ignorePlayError !== false;
     const highlightColor = n.highlightColor;
     const masterId = ensureDefaultDataSource({ forceForRepeat: rst === "DataSource" });
@@ -7138,6 +7177,15 @@
         <input type="number" min="0" step="50" data-k="stepDelayMs" value="${esc(stepDelayMs)}" />
         <p class="palette-hint" style="margin:4px 0 0;line-height:1.6">
           بعد از اتمام هر مرحله، قبل از شروع مرحلهٔ بعدی این مدت صبر می‌شود (نه قبل از اولی).
+        </p>
+      </div>
+      <div class="insp-field">
+        <label>حداکثر بازگشت حلقه</label>
+        <input type="number" min="1" max="1000" step="1" data-k="loopBackLimit" value="${esc(loopBackLimit)}" />
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.6">
+          وقتی یالی به نود قبلی برمی‌گردد (مثل «شرط → مرحله → همان شرط»)، هر نود حداکثر این
+          تعداد بار دوباره اجرا می‌شود. اگر شرط خروج تا آن زمان برقرار نشود، اجرا با پیام روشن
+          متوقف می‌شود — نه بی‌صدا.
         </p>
       </div>
       <div class="insp-field">

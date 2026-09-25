@@ -1193,6 +1193,8 @@
       "waitMaxMs": "Max wait (ms)",
       "stepGapMs": "Gap between steps (ms)",
       "stepGapMsHint": "Pause after each step before moving to the next one (0 = no delay).",
+      "loopBackLimit": "Max loop-back visits",
+      "loopBackLimitHint": "When an edge points back to an earlier node (e.g. condition → step → same condition), each node may run at most this many times. If the exit condition is still not met, the run stops with a clear message.",
       "frameChain": "Frame chain (JSON)",
       "hasAttr": "Has attribute / property",
       "hasAttrHint": "e.g. options with a specific value: selector \"select option\" + attribute \"value\".",
