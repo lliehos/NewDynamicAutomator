@@ -44,6 +44,37 @@
     return parts.join(" · ") || "—";
   }
 
+  /**
+   * Permission checkboxes. Only the permissions the caller's own plan may grant are rendered, so the
+   * switch set doubles as a statement of what the plan allows. `prefs` seeds the checked state, which
+   * is what makes the same markup usable for both "add a share" and "edit an existing share" — the
+   * source-data switch in particular has to be shown already-on when editing, or saving would
+   * silently switch it off.
+   */
+  function permBoxHtml(g, prefs = {}) {
+    const checked = (on) => (on ? " checked" : "");
+    return [
+      g.view ? `<label><input type="checkbox" data-p="view"${checked(prefs.view !== false)} /> ${t("share.perm.view")}</label>` : "",
+      g.edit ? `<label><input type="checkbox" data-p="edit"${checked(prefs.edit)} /> ${t("share.perm.edit")}</label>` : "",
+      g.del ? `<label><input type="checkbox" data-p="del"${checked(prefs.del)} /> ${t("share.perm.delete")}</label>` : "",
+      g.exec ? `<label><input type="checkbox" data-p="exec"${checked(prefs.exec)} /> ${t("share.perm.execute")}</label>` : "",
+      // The "allow changing source data" switch — the whole point of this permission is that it can
+      // be withheld, so it must be visible and individually toggleable per user.
+      g.ds ? `<label title="${t("share.perm.dsHint")}"><input type="checkbox" data-p="ds"${checked(prefs.ds)} /> ${t("share.perm.ds")}</label>` : ""
+    ].filter(Boolean).join("");
+  }
+
+  function readPermsFrom(box) {
+    const on = (p) => !!box.querySelector(`input[data-p="${p}"]`)?.checked;
+    return {
+      canView: on("view") || on("edit") || on("del") || on("ds"),
+      canEdit: on("edit"),
+      canDelete: on("del"),
+      canExecute: on("exec"),
+      canChangeDataSource: on("ds")
+    };
+  }
+
   async function api(url, opts) {
     const res = await fetch(url, {
       credentials: "same-origin",
@@ -79,11 +110,7 @@
         <ul class="da-share-hits" id="da-share-hits" hidden></ul>
         <div id="da-share-selected" class="da-share-sub" hidden></div>
         <div class="da-share-perms" id="da-share-perms">
-          ${g.view ? `<label><input type="checkbox" data-p="view" checked /> ${t("share.perm.view")}</label>` : ""}
-          ${g.edit ? `<label><input type="checkbox" data-p="edit" /> ${t("share.perm.edit")}</label>` : ""}
-          ${g.del ? `<label><input type="checkbox" data-p="del" /> ${t("share.perm.delete")}</label>` : ""}
-          ${g.exec ? `<label><input type="checkbox" data-p="exec" /> ${t("share.perm.execute")}</label>` : ""}
-          ${g.ds ? `<label><input type="checkbox" data-p="ds" /> ${t("share.perm.ds")}</label>` : ""}
+          ${permBoxHtml(g, { view: true })}
         </div>
         <div class="da-share-actions">
           <button type="button" class="da-share-btn ghost" data-da-share-close>${t("share.close")}</button>
@@ -97,6 +124,9 @@
 
     let selected = null;
     let searchTimer = null;
+    /** Non-null while the permission row is editing an existing grant instead of adding a new one. */
+    let editingUid = null;
+    let editingShare = null;
     const qEl = backdrop.querySelector("#da-share-q");
     const hitsEl = backdrop.querySelector("#da-share-hits");
     const selEl = backdrop.querySelector("#da-share-selected");
@@ -108,20 +138,39 @@
     backdrop.querySelector("[data-da-share-close]")?.addEventListener("click", close);
 
     function readPerms() {
+      return readPermsFrom(backdrop.querySelector("#da-share-perms"));
+    }
+
+    /** Clear the permission row back to "add new share" defaults (view only). */
+    function resetPerms() {
       const box = backdrop.querySelector("#da-share-perms");
-      const on = (p) => !!box.querySelector(`input[data-p="${p}"]`)?.checked;
-      return {
-        canView: on("view") || on("edit") || on("del") || on("ds"),
-        canEdit: on("edit"),
-        canDelete: on("del"),
-        canExecute: on("exec"),
-        canChangeDataSource: on("ds")
-      };
+      if (box) box.innerHTML = permBoxHtml(g, { view: true });
+    }
+
+    /** Swap the permission row to an existing share's current grants so it can be edited. */
+    function loadPermsFor(share) {
+      const box = backdrop.querySelector("#da-share-perms");
+      if (!box) return;
+      box.innerHTML = permBoxHtml(g, {
+        view: share.canView,
+        edit: share.canEdit,
+        del: share.canDelete,
+        exec: share.canExecute,
+        ds: share.canChangeDataSource
+      });
     }
 
     function setSelected(u) {
       selected = u;
       hitsEl.hidden = true;
+      // Picking a user to ADD supersedes any row being edited.
+      if (u && editingUid != null) {
+        editingUid = null;
+        editingShare = null;
+        addBtn.textContent = t("share.add");
+        addBtn.dataset.mode = "add";
+        resetPerms();
+      }
       if (!u) {
         selEl.hidden = true;
         addBtn.disabled = true;
@@ -146,8 +195,31 @@
               <strong>${displayName(r) || r.userName}</strong>
               <div class="da-share-flags">${flagLabel(r)}</div>
             </div>
-            <button type="button" class="da-share-btn danger" data-revoke="${r.userId}">${t("share.revoke")}</button>
+            <div class="da-share-row-actions">
+              <button type="button" class="da-share-btn ghost" data-edit="${r.userId}">${t("share.perms")}</button>
+              <button type="button" class="da-share-btn danger" data-revoke="${r.userId}">${t("share.revoke")}</button>
+            </div>
           </li>`).join("");
+
+        // Edit an existing grant — the only way to flip the "allow changing source data" switch
+        // after the share exists. POSTing the same userId upserts, so one path serves both.
+        listEl.querySelectorAll("[data-edit]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const uid = Number(btn.getAttribute("data-edit"));
+            const share = others.find((o) => Number(o.userId) === uid);
+            if (!share) return;
+            editingUid = uid;
+            loadPermsFor(share);
+            addBtn.textContent = t("share.savePerms");
+            addBtn.disabled = false;
+            addBtn.dataset.mode = "edit";
+            // Point the header at the row being edited so it is obvious what the switches affect.
+            selEl.hidden = false;
+            selEl.textContent = t("share.editingPerms", { name: displayName(share) || share.userName });
+            editingShare = share;
+          });
+        });
+
         listEl.querySelectorAll("[data-revoke]").forEach((btn) => {
           btn.addEventListener("click", async () => {
             const uid = Number(btn.getAttribute("data-revoke"));
@@ -205,17 +277,33 @@
     });
 
     addBtn.addEventListener("click", async () => {
-      if (!selected) return;
       const perms = readPerms();
+      const isEdit = editingUid != null;
+      const targetId = isEdit ? editingUid : selected?.userId;
+      if (!targetId) return;
       try {
         await api(`/api/tasks/${taskId}/shares`, {
           method: "POST",
-          body: JSON.stringify({ userId: selected.userId, ...perms })
+          body: JSON.stringify({ userId: targetId, ...perms })
         });
-        setSelected(null);
-        qEl.value = "";
+        if (isEdit) {
+          // Leave edit mode and restore the "add" affordances.
+          editingUid = null;
+          editingShare = null;
+          addBtn.textContent = t("share.add");
+          addBtn.dataset.mode = "add";
+          resetPerms();
+          setSelected(null);
+          qEl.value = "";
+          if (window.daNotify) daNotify(perms.canChangeDataSource
+            ? t("share.permsSavedWithDs")
+            : t("share.permsSavedNoDs"), "success");
+        } else {
+          setSelected(null);
+          qEl.value = "";
+          if (window.daNotify) daNotify(t("share.added"), "success");
+        }
         await refreshList();
-        if (window.daNotify) daNotify(t("share.added"), "success");
       } catch (e) {
         if (window.daNotify) daNotify(e.message || t("share.error"), "error");
       }

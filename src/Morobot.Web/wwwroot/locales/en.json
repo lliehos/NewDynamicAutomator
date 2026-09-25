@@ -918,8 +918,14 @@
       "edit": "Edit",
       "delete": "Delete",
       "execute": "Execute",
-      "ds": "Change data source"
-    }
+      "ds": "Change data source",
+      "dsHint": "When off, this user cannot change the content of the process's data source."
+    },
+    "perms": "Permissions",
+    "savePerms": "Save permissions",
+    "editingPerms": "Editing permissions for {name}",
+    "permsSavedWithDs": "Permissions saved — changing the data source is allowed.",
+    "permsSavedNoDs": "Permissions saved — changing the data source is not allowed."
   },
   "dashboard": {
     "statusWithData": "{tasks} processes · {sources} sources · stored on the server.",

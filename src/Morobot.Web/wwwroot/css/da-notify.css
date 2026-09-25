@@ -229,6 +229,7 @@
 .da-share-btn.ghost { background: #e2e8f0; color: #334155; }
 .da-share-btn.danger { background: #fee2e2; color: #b91c1c; }
 .da-share-flags { color: #64748b; font-size: .78rem; }
+.da-share-row-actions { display: flex; gap: .35rem; flex-shrink: 0; }
 
 /* Live catalog flash / fade */
 .da-row-flash { animation: da-row-pulse .9s ease; }

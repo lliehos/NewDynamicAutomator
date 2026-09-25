@@ -766,7 +766,7 @@ public class DataSourceService
             .FirstOrDefaultAsync(d => d.Id == id, ct);
         if (entity is null)
             return new ReloadDataSourceResponse { Ok = false, Code = "notfound", Message = "منبع پیدا نشد." };
-        if (entity.OwnerUserId != userId)
+        if (await GetAccessibleAsync(userId, id, write: true, ct) is null)
             return new ReloadDataSourceResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
 
         var columns = NormalizeColumns(req.Columns, req.ColumnKeys);
@@ -892,10 +892,8 @@ public class DataSourceService
     public async Task<DataSourceStructureResponse> AddColumnAsync(
         int userId, int id, AddDataSourceColumnRequest req, CancellationToken ct = default)
     {
-        var entity = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == id, ct);
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
         if (entity is null)
-            return new DataSourceStructureResponse { Ok = false, Code = "notfound", Message = "منبع پیدا نشد." };
-        if (entity.OwnerUserId != userId)
             return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
 
         var columns = DeserializeColumns(entity.ColumnsJson);
@@ -957,10 +955,8 @@ public class DataSourceService
     public async Task<DataSourceStructureResponse> AddRowsAsync(
         int userId, int id, AddDataSourceRowRequest req, CancellationToken ct = default)
     {
-        var entity = await _db.DataSources.Include(d => d.ProcessLinks).FirstOrDefaultAsync(d => d.Id == id, ct);
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
         if (entity is null)
-            return new DataSourceStructureResponse { Ok = false, Code = "notfound", Message = "منبع پیدا نشد." };
-        if (entity.OwnerUserId != userId)
             return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
 
         var columns = DeserializeColumns(entity.ColumnsJson);
