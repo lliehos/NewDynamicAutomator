@@ -24,7 +24,7 @@
   <partial name="_BrandHead" model="brandHead" />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
-  <link rel="stylesheet" href="~/css/admin-app.css?v=10" />
+  <link rel="stylesheet" href="~/css/admin-app.css?v=11" />
   <link rel="stylesheet" href="~/css/da-switch.css?v=1" />
   <link rel="stylesheet" href="~/css/da-cropper.css?v=1" />
   <link rel="stylesheet" href="~/css/da-avatar.css?v=1" />
@@ -60,20 +60,27 @@
         <a class="@NavClass("Logs")" asp-area="Admin" asp-controller="Logs" asp-action="Index"><i class="ti ti-history" aria-hidden="true"></i>@L["admin.nav.events"]</a>
         <a asp-area="Admin" asp-controller="Logs" asp-action="Devices"><i class="ti ti-device-desktop" aria-hidden="true"></i>@L["admin.nav.devices"]</a>
       </nav>
-      <div class="admin-nav-foot">
-        <a asp-area="Panel" asp-controller="Home" asp-action="Index"><i class="ti ti-layout-dashboard" aria-hidden="true"></i>@L["common.panel"]</a>
-        <a asp-area="Panel" asp-controller="Account" asp-action="Logout"><i class="ti ti-logout" aria-hidden="true"></i>@L["common.logout"]</a>
-      </div>
     </aside>
     <main class="admin-main">
       <div class="admin-top">
         <h1>@ViewData["Title"]</h1>
-        <form method="post" asp-area="Admin" asp-controller="Settings" asp-action="SetLanguage" class="admin-lang">
-          @Html.AntiForgeryToken()
-          <input type="hidden" name="lang" value="@nextLang" />
-          <input type="hidden" name="returnUrl" value="@(Context.Request.Path + Context.Request.QueryString)" />
-          <button type="submit" class="btn-admin secondary">@langLabel</button>
-        </form>
+        <div class="admin-top-actions">
+          @* Panel entry and logout live here rather than at the bottom of the sidebar, so
+             they sit with the other account-level controls instead of being buried under
+             the whole navigation list. *@
+          <a class="btn-admin secondary admin-top-link" asp-area="Panel" asp-controller="Home" asp-action="Index">
+            <i class="ti ti-layout-dashboard" aria-hidden="true"></i><span>@L["common.panel"]</span>
+          </a>
+          <a class="btn-admin secondary admin-top-link" asp-area="Panel" asp-controller="Account" asp-action="Logout">
+            <i class="ti ti-logout" aria-hidden="true"></i><span>@L["common.logout"]</span>
+          </a>
+          <form method="post" asp-area="Admin" asp-controller="Settings" asp-action="SetLanguage" class="admin-lang">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="lang" value="@nextLang" />
+            <input type="hidden" name="returnUrl" value="@(Context.Request.Path + Context.Request.QueryString)" />
+            <button type="submit" class="btn-admin secondary">@langLabel</button>
+          </form>
+        </div>
       </div>
       @await Component.InvokeAsync("AdminLicenseStrip")
       @if (TempData["Danger"] != null)
