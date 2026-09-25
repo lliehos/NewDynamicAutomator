@@ -77,6 +77,10 @@ public class PlansController : Controller
         plan.MaxTasks = model.MaxTasks;
         plan.MaxDataSources = model.MaxDataSources;
         plan.MaxProcessSteps = model.MaxProcessSteps;
+        // Per-source ceilings. The effective ceiling is these lowered to the signed license's, so an
+        // admin can be stricter than the license but never looser.
+        plan.MaxSourceRows = model.MaxSourceRows;
+        plan.MaxSourceBytes = model.MaxSourceBytes;
         plan.CanPlay = model.CanPlay;
         plan.CanSelector = model.CanSelector;
         plan.CanRecord = model.CanRecord;

@@ -1,4 +1,4 @@
-@model IEnumerable<Morobot.Domain.Entities.Plan>
+﻿@model IEnumerable<Morobot.Domain.Entities.Plan>
 @using Morobot.Web.Areas.Admin.Models
 @{
   Layout = "_Layout";
@@ -32,14 +32,16 @@
       <td><code>@p.Code</code></td>
       <td>@p.NameEn / @p.NameFa</td>
       <td>
-        <span class="admin-chip" title="@L["admin.plans.maxTasks"]"><i class="ti ti-git-branch" aria-hidden="true"></i>@(@p.MaxTasks?.ToString() ?? "∞")</span>
-        <span class="admin-chip" title="@L["admin.plans.maxSources"]"><i class="ti ti-database" aria-hidden="true"></i>@(@p.MaxDataSources?.ToString() ?? "∞")</span>
-        <span class="admin-chip" title="@L["admin.plans.maxProcessSteps"]"><i class="ti ti-list-numbers" aria-hidden="true"></i>@(@p.MaxProcessSteps?.ToString() ?? "∞")</span>
+        <span class="admin-chip" title="@L["admin.plans.maxTasks"]"><i class="ti ti-git-branch" aria-hidden="true"></i>@(@p.MaxTasks?.ToString() ?? "âˆ‍")</span>
+        <span class="admin-chip" title="@L["admin.plans.maxSources"]"><i class="ti ti-database" aria-hidden="true"></i>@(@p.MaxDataSources?.ToString() ?? "âˆ‍")</span>
+        <span class="admin-chip" title="@L["admin.plans.maxProcessSteps"]"><i class="ti ti-list-numbers" aria-hidden="true"></i>@(@p.MaxProcessSteps?.ToString() ?? "âˆ‍")</span>
+        <span class="admin-chip" title="@L["admin.plans.maxSourceRows"]"><i class="ti ti-rows" aria-hidden="true"></i>@(@p.MaxSourceRows?.ToString() ?? "âˆ‍")</span>
+        <span class="admin-chip" title="@L["admin.plans.maxSourceBytes"]"><i class="ti ti-file-database" aria-hidden="true"></i>@(Morobot.Web.Areas.Admin.Views.Plans.PlanViewFormat.Size(p.MaxSourceBytes))</span>
       </td>
       <td><partial name="_AdminPlanCaps" model="p" /></td>
       <td>
-        ≥@p.MinPasswordLength
-        @(p.RequireLetterAndDigit ? " · Aa1" : "")
+        â‰¥@p.MinPasswordLength
+        @(p.RequireLetterAndDigit ? " آ· Aa1" : "")
       </td>
       <td><partial name="_AdminStatus" model="p.IsActive" /></td>
       <td>

@@ -32,6 +32,14 @@
       <label class="admin-label"><span>@L["admin.plans.maxProcessSteps"]</span><partial name="_AdminHint" model='L["admin.hints.maxSteps"]' /></label>
       <input class="form-control" name="MaxProcessSteps" value="@Model.MaxProcessSteps" placeholder="∞" />
     </div>
+    <div class="mb-2">
+      <label class="admin-label"><span>@L["admin.plans.maxSourceRows"]</span><partial name="_AdminHint" model='L["admin.hints.maxSourceRows"]' /></label>
+      <input class="form-control" name="MaxSourceRows" value="@Model.MaxSourceRows" placeholder="∞" />
+    </div>
+    <div class="mb-2">
+      <label class="admin-label"><span>@L["admin.plans.maxSourceBytes"]</span><partial name="_AdminHint" model='L["admin.hints.maxSourceBytes"]' /></label>
+      <input class="form-control" name="MaxSourceBytes" value="@Model.MaxSourceBytes" placeholder="∞" />
+    </div>
   </div>
 
   <div class="admin-form-card">

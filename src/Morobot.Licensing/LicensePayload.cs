@@ -37,4 +37,14 @@ public sealed class LicensePayload
     /// back to the product page compiled into the app.
     /// </summary>
     public string? ReferralWidgetUrl { get; set; }
+
+    /// <summary>
+    /// Hard ceiling on rows in any single data source, enforced regardless of plan. Null = no
+    /// ceiling. A signed license is the only thing that can raise this, so a deployment cannot
+    /// grant itself more rows than the vendor sold.
+    /// </summary>
+    public int? MaxSourceRows { get; set; }
+
+    /// <summary>Hard ceiling in bytes on any single data source's content. Null = no ceiling.</summary>
+    public long? MaxSourceBytes { get; set; }
 }

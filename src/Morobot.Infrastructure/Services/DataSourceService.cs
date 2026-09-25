@@ -45,6 +45,21 @@ public class DataSourceService
             entity.LastEditorUserId = userId;
     }
 
+    /// <summary>
+    /// Refuse content that breaks the effective row/byte ceiling. Throws
+    /// <see cref="SourceLimitExceededException"/> so callers can return a specific, translatable
+    /// message instead of a generic failure.
+    /// </summary>
+    static void EnsureWithinSourceLimits(EntitlementsDto entitlements, IReadOnlyList<DataSourceCellDto> cells)
+    {
+        var rowCount = cells.Count == 0 ? 0 : cells.Max(c => c.Index) + 1;
+        var bytes = cells.Sum(c => (long)Encoding.UTF8.GetByteCount(c.CellValue ?? ""));
+        var error = EntitlementService.CheckSourceLimits(entitlements, rowCount, bytes);
+        if (error is not null)
+            throw new SourceLimitExceededException(error, rowCount, bytes,
+                entitlements.MaxSourceRows, entitlements.MaxSourceBytes);
+    }
+
     /// <summary>Display name for an editor id, falling back to the login name then null.</summary>
     async Task<string?> ResolveEditorNameAsync(int? userId, CancellationToken ct)
     {
@@ -228,6 +243,9 @@ public class DataSourceService
             throw new InvalidOperationException("منبع ستون معتبری ندارد.");
         var cells = req.Cells ?? new List<DataSourceCellDto>();
         var rowCount = req.RowCount ?? (cells.Count == 0 ? 0 : cells.Max(c => c.Index) + 1);
+        // The row/byte ceiling is checked here as well as on reload: creating a source from a big
+        // file is the other way to grow past what was licensed.
+        EnsureWithinSourceLimits(entitlements, cells);
         var title = string.IsNullOrWhiteSpace(req.Title)
             ? $"منبع {DateTime.UtcNow:yyyy-MM-dd HH:mm}"
             : req.Title.Trim();
@@ -927,6 +945,24 @@ public class DataSourceService
             .ToList();
         var rowCount = req.RowCount ?? (cells.Count == 0 ? 0 : cells.Max(c => c.Index) + 1);
 
+        // A reload replaces the whole content, so it is a first-class way to break the ceiling.
+        var entitlements = await ResolveEntitlements(userId, ct);
+        try
+        {
+            EnsureWithinSourceLimits(entitlements, cells);
+        }
+        catch (SourceLimitExceededException ex)
+        {
+            return new ReloadDataSourceResponse
+            {
+                Ok = false,
+                Code = SourceLimitExceededException.Code,
+                Message = ex.Message,
+                DataSourceId = entity.Id,
+                DataSourceTitle = entity.Title
+            };
+        }
+
         entity.FileName = Trunc(req.FileName, 260) ?? entity.FileName;
         entity.ColumnCount = req.ColumnCount ?? columns.Count;
         entity.RowCount = rowCount;
@@ -1094,6 +1130,22 @@ public class DataSourceService
         var add = Math.Clamp(req.Count ?? 1, 1, 500);
         var (_, rowCount) = await GetDerivedCountersAsync(id, ct);
         rowCount = Math.Max(rowCount, entity.RowCount);
+
+        // Adding rows is the third way to grow a source, so it is capped too — otherwise a user at
+        // the ceiling could simply type more rows in one at a time.
+        var entitlements = await ResolveEntitlements(userId, ct);
+        if (entitlements.MaxSourceRows is int maxRows && rowCount + add > maxRows)
+        {
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = SourceLimitExceededException.Code,
+                DataSourceId = id,
+                Message = entitlements.SourceLimitFromLicense
+                    ? $"با افزودن {add} ردیف، تعداد ردیف‌ها ({rowCount + add}) از سقف لایسنس ({maxRows}) بیشتر می‌شود."
+                    : $"با افزودن {add} ردیف، تعداد ردیف‌ها ({rowCount + add}) از سقف سطح کاربری ({maxRows}) بیشتر می‌شود."
+            };
+        }
 
         // Build the cell rows first, then shift existing rows down when inserting in the middle.
         var at = req.BeforeIndex ?? rowCount;

@@ -101,6 +101,18 @@ public class EntitlementsDto
     public int? MaxDataSources { get; set; } = 1;
     /// <summary>Max step/action nodes per process. Null = unlimited.</summary>
     public int? MaxProcessSteps { get; set; }
+    /// <summary>
+    /// Row ceiling for one data source. Null = unlimited. This is the effective value: the plan's
+    /// own cap lowered to the signed license's ceiling, so it can never exceed what was licensed.
+    /// </summary>
+    public int? MaxSourceRows { get; set; }
+    /// <summary>Byte ceiling for one data source's content. Null = unlimited.</summary>
+    public long? MaxSourceBytes { get; set; }
+    /// <summary>
+    /// True when the ceiling came from the license rather than the plan — the UI uses this to say
+    /// "بنا به لایسنس" (because of the license) instead of blaming the plan.
+    /// </summary>
+    public bool SourceLimitFromLicense { get; set; }
     public int? TaskCount { get; set; }
     public int? DataSourceCount { get; set; }
     public DateTime? PlanExpiresAtUtc { get; set; }

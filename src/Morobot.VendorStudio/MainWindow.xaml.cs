@@ -90,7 +90,11 @@ public partial class MainWindow : Window
                 AllowLegacyMigration = AllowLegacyMigration.IsChecked == true,
                 UpdateServerUrl = string.IsNullOrWhiteSpace(UpdateUrl.Text) ? null : UpdateUrl.Text.Trim(),
                 AllowedHost = allowedHost,
-                ReferralWidgetUrl = referralUrl
+                ReferralWidgetUrl = referralUrl,
+                // Signed hard ceilings on one data source. Empty means the vendor set none, which
+                // lets the plan decide; a trial still gets its own small default.
+                MaxSourceRows = int.TryParse(MaxSourceRows.Text, out var maxRows) ? maxRows : null,
+                MaxSourceBytes = long.TryParse(MaxSourceBytes.Text, out var maxBytes) ? maxBytes : null
             };
 
             var privatePem = File.ReadAllText(PrivateKeyPath.Text.Trim());

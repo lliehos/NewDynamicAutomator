@@ -15,6 +15,16 @@ public class Plan
     public int? MaxDataSources { get; set; }
     /// <summary>Max step/action nodes per process graph. Null = unlimited.</summary>
     public int? MaxProcessSteps { get; set; }
+    /// <summary>
+    /// Most rows one data source may hold on this plan. Null = unlimited. The admin sets this, but
+    /// the effective ceiling is always the lower of this and the signed license's cap.
+    /// </summary>
+    public int? MaxSourceRows { get; set; }
+    /// <summary>
+    /// Largest content (bytes) one data source may hold on this plan. Null = unlimited. Same
+    /// license-vs-plan lowering rule as <see cref="MaxSourceRows"/>.
+    /// </summary>
+    public long? MaxSourceBytes { get; set; }
     public bool CanPlay { get; set; }
     public bool CanSelector { get; set; }
     public bool CanRecord { get; set; }

@@ -32,7 +32,7 @@ Morobot license tool (vendor-only — never deploy private keys to customers)
 
 Commands:
   genkeypair [--out-dir <path>]
-  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--update-url URL] [-o license.morobot]
+  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--update-url URL] [--max-source-rows N] [--max-source-bytes N] [-o license.morobot]
   package --project <path-to-Morobot.Web.csproj> --output <folder>
   package-update --version <semver> --source <published-folder> [-o <file.zip>] [--notes "text"] [--channel stable] [--min-current <semver>] [--product-name Morobot]
   verify --license <file.morobot> [--public-key <pem>]
@@ -129,6 +129,10 @@ static int Sign(string[] args)
         }
     }
 
+    // Hard ceilings on a single data source. Signed here so a deployment cannot raise them.
+    var maxSourceRows = ParseNullableInt(GetArg(args, "--max-source-rows"));
+    var maxSourceBytes = ParseNullableLong(GetArg(args, "--max-source-bytes"));
+
     var payload = new LicensePayload
     {
         LicenseId = Guid.NewGuid().ToString("D"),
@@ -144,7 +148,9 @@ static int Sign(string[] args)
         AllowLegacyMigration = allowLegacyMigration,
         UpdateServerUrl = updateUrl,
         AllowedHost = allowedHost,
-        ReferralWidgetUrl = referralUrl
+        ReferralWidgetUrl = referralUrl,
+        MaxSourceRows = maxSourceRows,
+        MaxSourceBytes = maxSourceBytes
     };
 
     var doc = LicenseCrypto.Sign(payload, privatePem);
@@ -153,6 +159,8 @@ static int Sign(string[] args)
     Console.WriteLine($"License written: {outPath}");
     Console.WriteLine($"LicenseId: {payload.LicenseId}");
     Console.WriteLine($"MaxUsers:  {(payload.MaxUsers?.ToString() ?? "unlimited")}");
+    Console.WriteLine($"MaxSourceRows:  {(payload.MaxSourceRows?.ToString() ?? "unlimited")}");
+    Console.WriteLine($"MaxSourceBytes: {(payload.MaxSourceBytes?.ToString() ?? "unlimited")}");
     Console.WriteLine($"Valid until: {payload.ValidUntilUtc:u}");
     return 0;
 }
@@ -213,6 +221,9 @@ static string? GetArg(string[] args, string name)
 
 static int? ParseNullableInt(string? raw)
     => int.TryParse(raw, out var n) ? n : null;
+
+static long? ParseNullableLong(string? raw)
+    => long.TryParse(raw, out var n) ? n : null;
 
 static long? ParseLong(string? raw)
     => long.TryParse(raw, out var n) ? n : null;

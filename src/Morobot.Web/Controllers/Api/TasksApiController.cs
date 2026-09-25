@@ -699,6 +699,20 @@ public class DataSourcesApiController : ControllerBase
             }, "created", User.Identity?.Name, UserId, ct);
             return Ok(created);
         }
+        catch (SourceLimitExceededException ex)
+        {
+            // Distinct code so the client can show the ceiling message (which names the number and
+            // whether the license or the plan set it) instead of a generic "could not create".
+            return Conflict(new
+            {
+                message = ex.Message,
+                code = SourceLimitExceededException.Code,
+                rowCount = ex.RowCount,
+                byteCount = ex.ByteCount,
+                maxRows = ex.MaxRows,
+                maxBytes = ex.MaxBytes
+            });
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { message = ex.Message, code = "limit" });
@@ -773,6 +787,9 @@ public class DataSourcesApiController : ControllerBase
                 "notfound" => NotFound(),
                 "forbidden" => Forbid(),
                 "blocked-missing-columns" => Conflict(result),
+                // A limit breach is not a bad request shape — answer 409 so the client can show the
+                // ceiling message rather than a generic validation error.
+                SourceLimitExceededException.Code => Conflict(result),
                 _ => BadRequest(result)
             };
         }
