@@ -52,10 +52,21 @@ public sealed class BrandHeadModel
     }
 
     public static BrandHeadModel FromDto(TenantBrandingDto dto, string? siteOrigin)
+        => FromDto(dto, siteOrigin, isFa: false);
+
+    /// <summary>
+    /// Resolve the model for one language, preferring the per-language value and falling back
+    /// to the shared one. A blank language value must not blank the name - an admin who only
+    /// filled the Persian side still gets a working English site (and vice versa).
+    /// </summary>
+    public static BrandHeadModel FromDto(TenantBrandingDto dto, string? siteOrigin, bool isFa)
     {
         var palette = CopyPalette(dto);
-        var app = string.IsNullOrWhiteSpace(dto.AppName) ? DefaultAppName : dto.AppName.Trim();
-        var title = string.IsNullOrWhiteSpace(dto.BrandTitle) ? app : dto.BrandTitle.Trim();
+        var app = Pick(isFa ? dto.AppNameFa : dto.AppNameEn, dto.AppName, DefaultAppName);
+        var title = Pick(isFa ? dto.BrandTitleFa : dto.BrandTitleEn, dto.BrandTitle, app);
+        var org = isFa
+            ? Pick(dto.OrganizationNameFa, dto.OrganizationName, null)
+            : Pick(dto.OrganizationNameEn, dto.OrganizationName, null);
         var showQr = !dto.IsLicensedBranding || dto.ShowReferralQrWidget;
 
         if (!dto.IsLicensedBranding)
@@ -66,7 +77,7 @@ public sealed class BrandHeadModel
                 // (copyright-badge removal, referral QR toggle) are gated by IsLicensedBranding.
                 AppName = app,
                 BrandTitle = title,
-                OrganizationName = dto.OrganizationName,
+                OrganizationName = org,
                 MarkPath = ResolveWebPath(dto.LogoUrl, DefaultMarkPath),
                 FaviconPath = ResolveWebPath(dto.FaviconUrl, string.IsNullOrWhiteSpace(dto.LogoUrl) ? DefaultMarkPath : ResolveWebPath(dto.LogoUrl, DefaultMarkPath)),
                 IconPngPath = DefaultIconPngPath,
@@ -91,7 +102,7 @@ public sealed class BrandHeadModel
         {
             AppName = app,
             BrandTitle = title,
-            OrganizationName = dto.OrganizationName,
+            OrganizationName = org,
             MarkPath = logoPath,
             FaviconPath = favPath,
             IconPngPath = favPath.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? favPath : DefaultIconPngPath,
@@ -149,6 +160,18 @@ public sealed class BrandHeadModel
             },
             updatedUtc = DateTime.UtcNow.ToString("O")
         };
+    }
+
+    /// <summary>
+    /// First non-blank of: the language-specific value, the shared value, the fallback.
+    /// Blank per-language values are common (an admin only fills one language) and must not
+    /// blank out the name, so each step falls through rather than taking the first non-null.
+    /// </summary>
+    private static string? Pick(string? languageValue, string? sharedValue, string? fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(languageValue)) return languageValue.Trim();
+        if (!string.IsNullOrWhiteSpace(sharedValue)) return sharedValue.Trim();
+        return fallback;
     }
 
     private static string ResolveWebPath(string? stored, string fallback)

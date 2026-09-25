@@ -13,6 +13,12 @@ public static class SystemSettingKeys
     public const string BrandAppName = "BrandAppName";
     public const string BrandTitle = "BrandTitle";
     public const string BrandOrganization = "BrandOrganization";
+    public const string BrandAppNameEn = "BrandAppNameEn";
+    public const string BrandAppNameFa = "BrandAppNameFa";
+    public const string BrandTitleEn = "BrandTitleEn";
+    public const string BrandTitleFa = "BrandTitleFa";
+    public const string BrandOrganizationEn = "BrandOrganizationEn";
+    public const string BrandOrganizationFa = "BrandOrganizationFa";
     public const string BrandLogoPath = "BrandLogoPath";
     public const string BrandFaviconPath = "BrandFaviconPath";
     public const string BrandColorPrimary = "BrandColorPrimary";
@@ -36,6 +42,12 @@ public static class SystemSettingKeys
         BrandAppName,
         BrandTitle,
         BrandOrganization,
+        BrandAppNameEn,
+        BrandAppNameFa,
+        BrandTitleEn,
+        BrandTitleFa,
+        BrandOrganizationEn,
+        BrandOrganizationFa,
         BrandLogoPath,
         BrandFaviconPath,
         BrandColorPrimary,

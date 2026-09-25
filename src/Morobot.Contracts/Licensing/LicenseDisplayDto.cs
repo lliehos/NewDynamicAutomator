@@ -40,6 +40,22 @@ public sealed class TenantBrandingDto
     public string? FaviconUrl { get; set; }
     public bool IsLicensedBranding { get; set; }
 
+    /// <summary>
+    /// Per-language overrides.
+    ///
+    /// The product is bilingual, but the name/title/organization were single values, so a
+    /// Persian deployment and an English one showed the same text. Each field now has an En
+    /// and an Fa value; the resolved AppName/BrandTitle/OrganizationName pick the one that
+    /// matches the reader's language. Leaving a language blank falls back to the shared
+    /// value, so an admin who only cares about one language does not have to fill both.
+    /// </summary>
+    public string? AppNameEn { get; set; }
+    public string? AppNameFa { get; set; }
+    public string? BrandTitleEn { get; set; }
+    public string? BrandTitleFa { get; set; }
+    public string? OrganizationNameEn { get; set; }
+    public string? OrganizationNameFa { get; set; }
+
     public string ColorPrimary { get; set; } = BrandPaletteDefaults.Primary;
     public string ColorPrimaryDark { get; set; } = BrandPaletteDefaults.PrimaryDark;
     public string ColorPrimaryLight { get; set; } = BrandPaletteDefaults.PrimaryLight;

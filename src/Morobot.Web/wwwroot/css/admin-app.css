@@ -960,6 +960,14 @@ label { font-size: .9rem; }
   gap: 1rem;
 }
 
+/* ── Bilingual value pairs ── */
+.admin-lang-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+.admin-lang-pair > div { min-width: 0; }
+
 /* ── Colour presets ── */
 .admin-preset-block {
   margin-bottom: 1.25rem;

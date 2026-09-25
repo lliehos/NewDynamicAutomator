@@ -139,6 +139,14 @@ public static class DbSeeder
         await Upsert(SystemSettingKeys.BrandAppName, "Morobot", "Branding", "نام اپلیکیشن", "Application name", "فقط با لایسنس معتبر.", "Licensed installs only.");
         await Upsert(SystemSettingKeys.BrandTitle, "Morobot", "Branding", "عنوان برند", "Brand title", null, null);
         await Upsert(SystemSettingKeys.BrandOrganization, "", "Branding", "نام سازمان", "Organization name", null, null);
+        // Per-language overrides. A blank value falls back to the shared value above, so these
+        // start empty and only take effect once an admin fills them in.
+        await Upsert(SystemSettingKeys.BrandAppNameFa, "", "Branding", "نام اپلیکیشن (فارسی)", "Application name (Persian)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
+        await Upsert(SystemSettingKeys.BrandAppNameEn, "", "Branding", "نام اپلیکیشن (انگلیسی)", "Application name (English)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
+        await Upsert(SystemSettingKeys.BrandTitleFa, "", "Branding", "عنوان برند (فارسی)", "Brand title (Persian)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
+        await Upsert(SystemSettingKeys.BrandTitleEn, "", "Branding", "عنوان برند (انگلیسی)", "Brand title (English)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
+        await Upsert(SystemSettingKeys.BrandOrganizationFa, "", "Branding", "نام سازمان (فارسی)", "Organization (Persian)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
+        await Upsert(SystemSettingKeys.BrandOrganizationEn, "", "Branding", "نام سازمان (انگلیسی)", "Organization (English)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
         await Upsert(SystemSettingKeys.BrandLogoPath, "", "Branding", "مسیر لوگو", "Logo path", "/uploads/branding/logo.png", "/uploads/branding/logo.png");
         await Upsert(SystemSettingKeys.BrandFaviconPath, "", "Branding", "مسیر فاوآیکون", "Favicon path", "/uploads/branding/favicon.png", "/uploads/branding/favicon.png");
         await Upsert(SystemSettingKeys.BrandColorPrimary, BrandPaletteDefaults.Primary, "Branding", "رنگ اصلی", "Primary color", null, null);

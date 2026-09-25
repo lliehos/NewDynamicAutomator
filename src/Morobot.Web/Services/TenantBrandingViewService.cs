@@ -20,7 +20,25 @@ public sealed class TenantBrandingViewService
     public async Task<BrandHeadModel> GetHeadAsync(CancellationToken ct = default)
     {
         var dto = await _branding.GetAsync(ct);
-        return BrandHeadModel.FromDto(dto, ResolveSiteOrigin());
+        // The brand name is shown on every page, so it has to follow the reader's language.
+        // `da_culture` is the same cookie the i18n layer writes, so both agree.
+        var isFa = ResolveIsFa();
+        return BrandHeadModel.FromDto(dto, ResolveSiteOrigin(), isFa);
+    }
+
+    /// <summary>True when the current request is being served in Persian.</summary>
+    private bool ResolveIsFa()
+    {
+        var ctx = _http.HttpContext;
+        if (ctx is null) return true;
+        var culture = ctx.Request.Cookies["da_culture"]
+                      ?? ctx.Request.Query["lang"].ToString();
+        if (string.IsNullOrWhiteSpace(culture))
+        {
+            // Fall back to the request's own culture when the cookie is absent.
+            culture = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+        }
+        return !string.Equals(culture, "en", StringComparison.OrdinalIgnoreCase);
     }
 
     public string? ResolveSiteOrigin()

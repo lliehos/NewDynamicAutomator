@@ -11,17 +11,52 @@
   @Html.AntiForgeryToken()
   <div class="admin-settings-card">
     <h3><i class="ti ti-palette" aria-hidden="true"></i>@L["admin.branding.identity"]</h3>
+    @* The shared value is the fallback; each language can override it. Leaving a language
+       blank keeps the shared value, so filling only one language still works. *@
     <div class="mb-3">
       <label class="admin-label" for="AppName">@L["admin.branding.appName"]</label>
       <input class="form-control" id="AppName" name="AppName" value="@Model.AppName" autocomplete="organization" />
+      <p class="admin-field-hint mb-0">@L["admin.branding.sharedValueHint"]</p>
     </div>
-    <div class="mb-3">
+    <div class="admin-lang-pair">
+      <div>
+        <label class="admin-label" for="AppNameFa">@L["admin.branding.appNameFa"]</label>
+        <input class="form-control" id="AppNameFa" name="AppNameFa" dir="rtl" lang="fa" value="@Model.AppNameFa" />
+      </div>
+      <div>
+        <label class="admin-label" for="AppNameEn">@L["admin.branding.appNameEn"]</label>
+        <input class="form-control" id="AppNameEn" name="AppNameEn" dir="ltr" lang="en" value="@Model.AppNameEn" />
+      </div>
+    </div>
+
+    <div class="mb-3 mt-3">
       <label class="admin-label" for="BrandTitle">@L["admin.branding.brandTitle"]</label>
       <input class="form-control" id="BrandTitle" name="BrandTitle" value="@Model.BrandTitle" />
     </div>
-    <div class="mb-3">
+    <div class="admin-lang-pair">
+      <div>
+        <label class="admin-label" for="BrandTitleFa">@L["admin.branding.brandTitleFa"]</label>
+        <input class="form-control" id="BrandTitleFa" name="BrandTitleFa" dir="rtl" lang="fa" value="@Model.BrandTitleFa" />
+      </div>
+      <div>
+        <label class="admin-label" for="BrandTitleEn">@L["admin.branding.brandTitleEn"]</label>
+        <input class="form-control" id="BrandTitleEn" name="BrandTitleEn" dir="ltr" lang="en" value="@Model.BrandTitleEn" />
+      </div>
+    </div>
+
+    <div class="mb-3 mt-3">
       <label class="admin-label" for="OrganizationName">@L["admin.branding.organization"]</label>
       <input class="form-control" id="OrganizationName" name="OrganizationName" value="@Model.OrganizationName" />
+    </div>
+    <div class="admin-lang-pair">
+      <div>
+        <label class="admin-label" for="OrganizationNameFa">@L["admin.branding.organizationFa"]</label>
+        <input class="form-control" id="OrganizationNameFa" name="OrganizationNameFa" dir="rtl" lang="fa" value="@Model.OrganizationNameFa" />
+      </div>
+      <div>
+        <label class="admin-label" for="OrganizationNameEn">@L["admin.branding.organizationEn"]</label>
+        <input class="form-control" id="OrganizationNameEn" name="OrganizationNameEn" dir="ltr" lang="en" value="@Model.OrganizationNameEn" />
+      </div>
     </div>
   </div>
 

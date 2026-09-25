@@ -46,7 +46,15 @@ public class SystemSettingsService
     public async Task SetAsync(string key, string value, CancellationToken ct = default)
     {
         var row = await _db.SystemSettings.FirstOrDefaultAsync(s => s.Key == key, ct);
-        if (row is null) return;
+        if (row is null)
+        {
+            // The settings table is seeded by DbSeeder; a missing key means the caller wrote to
+            // a key that was never declared there. Silently dropping the write makes the feature
+            // look broken with no error anywhere, so surface it instead.
+            throw new InvalidOperationException(
+                $"System setting '{key}' does not exist. Add it to DbSeeder so a row is created, " +
+                "otherwise the value cannot be persisted.");
+        }
         row.Value = (value ?? "").Trim();
         await _db.SaveChangesAsync(ct);
     }

@@ -33,6 +33,12 @@ public sealed class BrandingService
                 OrganizationName = await _settings.GetAsync(SystemSettingKeys.BrandOrganization, "", ct),
                 LogoUrl = await _settings.GetAsync(SystemSettingKeys.BrandLogoPath, "", ct),
                 FaviconUrl = await _settings.GetAsync(SystemSettingKeys.BrandFaviconPath, "", ct),
+                AppNameEn = await _settings.GetAsync(SystemSettingKeys.BrandAppNameEn, "", ct),
+                AppNameFa = await _settings.GetAsync(SystemSettingKeys.BrandAppNameFa, "", ct),
+                BrandTitleEn = await _settings.GetAsync(SystemSettingKeys.BrandTitleEn, "", ct),
+                BrandTitleFa = await _settings.GetAsync(SystemSettingKeys.BrandTitleFa, "", ct),
+                OrganizationNameEn = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationEn, "", ct),
+                OrganizationNameFa = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationFa, "", ct),
                 IsLicensedBranding = false,
                 ShowReferralQrWidget = true
             };
@@ -51,6 +57,12 @@ public sealed class BrandingService
             OrganizationName = string.IsNullOrWhiteSpace(org) ? state.Payload?.OrganizationName : org,
             LogoUrl = string.IsNullOrWhiteSpace(logo) ? null : logo,
             FaviconUrl = string.IsNullOrWhiteSpace(favicon) ? null : favicon,
+            AppNameEn = await _settings.GetAsync(SystemSettingKeys.BrandAppNameEn, "", ct),
+            AppNameFa = await _settings.GetAsync(SystemSettingKeys.BrandAppNameFa, "", ct),
+            BrandTitleEn = await _settings.GetAsync(SystemSettingKeys.BrandTitleEn, "", ct),
+            BrandTitleFa = await _settings.GetAsync(SystemSettingKeys.BrandTitleFa, "", ct),
+            OrganizationNameEn = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationEn, "", ct),
+            OrganizationNameFa = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationFa, "", ct),
             IsLicensedBranding = true
         };
         await ApplyPaletteFromSettingsAsync(dto, ct);
@@ -66,6 +78,12 @@ public sealed class BrandingService
         await _settings.SetAsync(SystemSettingKeys.BrandAppName, model.AppName, ct);
         await _settings.SetAsync(SystemSettingKeys.BrandTitle, model.BrandTitle, ct);
         await _settings.SetAsync(SystemSettingKeys.BrandOrganization, model.OrganizationName ?? "", ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandAppNameEn, model.AppNameEn ?? "", ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandAppNameFa, model.AppNameFa ?? "", ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandTitleEn, model.BrandTitleEn ?? "", ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandTitleFa, model.BrandTitleFa ?? "", ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandOrganizationEn, model.OrganizationNameEn ?? "", ct);
+        await _settings.SetAsync(SystemSettingKeys.BrandOrganizationFa, model.OrganizationNameFa ?? "", ct);
         if (!string.IsNullOrWhiteSpace(model.LogoUrl))
             await _settings.SetAsync(SystemSettingKeys.BrandLogoPath, model.LogoUrl, ct);
         if (!string.IsNullOrWhiteSpace(model.FaviconUrl))
