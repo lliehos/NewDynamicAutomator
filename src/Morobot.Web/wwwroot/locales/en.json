@@ -458,7 +458,8 @@
           "title": "Branding",
           "desc": "Brand identity; edited from the Branding page."
         }
-      }
+      },
+      "notSetYet": "Not set yet"
     },
     "license": {
       "title": "License",

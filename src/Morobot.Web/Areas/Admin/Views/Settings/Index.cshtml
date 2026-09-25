@@ -80,8 +80,21 @@
             }
             else if (readOnly)
             {
-              @* Rendered without a name so the POST simply omits it — the owning service keeps authority. *@
-              <input class="form-control admin-settings-ro" id="setting_@s.Key" value="@s.Value" readonly tabindex="-1" />
+              @* Printed, not put in a disabled box. An empty disabled input looks like a field
+                 waiting to be filled, which is exactly the wrong signal for a value the system
+                 owns and may not have set yet; a printed value (or a dash) reads as a fact.
+                 No name attribute, so the POST omits it and the owning service keeps authority. *@
+              var roText = string.IsNullOrWhiteSpace(s.Value) ? null : s.Value.Trim();
+              <div class="admin-settings-ro-value" id="setting_@s.Key">
+                @if (roText is null)
+                {
+                  <span class="admin-muted" title="@L["admin.settings.notSetYet"]">—</span>
+                }
+                else
+                {
+                  <code>@roText</code>
+                }
+              </div>
             }
             else
             {

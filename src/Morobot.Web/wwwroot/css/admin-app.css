@@ -1382,6 +1382,24 @@ label { font-size: .9rem; }
   border-style: dashed;
 }
 .admin-settings-ro:focus { box-shadow: none; border-color: rgba(226, 232, 240, .9); }
+/* A system-owned value shown as text rather than a box, so an unset value does not look like an
+   empty field inviting input. */
+.admin-settings-ro-value {
+  padding: .45rem .65rem;
+  border-radius: .5rem;
+  background: #f8fafc;
+  border: 1px dashed #e2e8f0;
+  font-size: .86rem;
+  color: #475569;
+  min-height: 2.35rem;
+  display: flex;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+.admin-settings-ro-value code {
+  font-size: .82rem;
+  color: #334155;
+}
 
 .admin-settings-ro-badge {
   display: inline-flex;
