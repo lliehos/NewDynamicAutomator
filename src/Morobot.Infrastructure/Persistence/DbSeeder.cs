@@ -132,6 +132,26 @@ public static class DbSeeder
             "Local = کاربران همین سامانه · Ldap = پوشهٔ سازمانی (Active Directory یا OpenLDAP)",
             "Local = users of this system · Ldap = an organisational directory (Active Directory or OpenLDAP)");
 
+        // The two independent provider switches. Seeded so a fresh install has them, and so the
+        // back-compat path (which looks for their presence) takes the modern branch straight away.
+        await Upsert(
+            SystemSettingKeys.AuthLocalEnabled,
+            "true",
+            "Auth",
+            "ورود با کاربران سامانه",
+            "Sign-in with system users",
+            "کاربران همین سامانه می‌توانند وارد شوند. حداقل یکی از دو حالت ورود باید روشن بماند.",
+            "Users of this system can sign in. At least one sign-in method must stay on.");
+
+        await Upsert(
+            SystemSettingKeys.AuthLdapEnabled,
+            "false",
+            "Auth",
+            "ورود با پوشهٔ سازمانی (LDAP)",
+            "Sign-in with the directory (LDAP)",
+            "وقتی روشن شود، فیلدهای تنظیمات LDAP نمایش داده می‌شوند. پیش‌فرض خاموش است.",
+            "Turning this on reveals the LDAP settings fields. Off by default.");
+
         await Upsert(
             SystemSettingKeys.LdapHost,
             "",

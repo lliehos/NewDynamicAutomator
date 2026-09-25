@@ -58,6 +58,27 @@ public class SettingsController : Controller
             // the bind password every time any other setting was saved.
             .Where(p => !(SystemSettingKeys.IsSensitiveForAdmin(p.Item1) && string.IsNullOrEmpty(p.Item2)))
             .ToList();
+
+        // The two sign-in switches must never both be off — that would leave nobody able to sign in,
+        // including the administrator who would fix it. The form's own JS prevents it, but a crafted
+        // POST would not, so the rule is enforced here too and the correction is reported.
+        var pairsByName = pairs.ToDictionary(p => p.Item1, p => p.Item2, StringComparer.OrdinalIgnoreCase);
+        if (pairsByName.ContainsKey(SystemSettingKeys.AuthLocalEnabled)
+            || pairsByName.ContainsKey(SystemSettingKeys.AuthLdapEnabled))
+        {
+            var local = IsTruthy(pairsByName.GetValueOrDefault(SystemSettingKeys.AuthLocalEnabled));
+            var ldap = IsTruthy(pairsByName.GetValueOrDefault(SystemSettingKeys.AuthLdapEnabled));
+            var (fixedLocal, fixedLdap, corrected) = SystemSettingKeys.NormalizeAuthProviders(local, ldap);
+            if (corrected)
+            {
+                SetPair(pairs, SystemSettingKeys.AuthLocalEnabled, fixedLocal ? "true" : "false");
+                SetPair(pairs, SystemSettingKeys.AuthLdapEnabled, fixedLdap ? "true" : "false");
+                TempData["Warn"] = _locale["admin.settings.oneAuthRequired"];
+            }
+            // Keep the legacy single row in step so anything still reading it agrees with the
+            // switches: LDAP-only means Ldap, otherwise Local.
+            SetPair(pairs, SystemSettingKeys.AuthMode, fixedLocal ? "Local" : "Ldap");
+        }
         // Record who made the change so the settings list can show it and the audit log can
         // answer it later; without the actor the history would be anonymous.
         var userId = int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null;
@@ -80,6 +101,24 @@ public class SettingsController : Controller
             if (!string.IsNullOrEmpty(v)) return v;
         }
         return "";
+    }
+
+    /// <summary>
+    /// Reads a posted switch. The value reaches us as the last entry of a "false,true" pair (see
+    /// <see cref="LastValue"/>), so the usual truthy spellings are accepted rather than only "true".
+    /// </summary>
+    private static bool IsTruthy(string? value) =>
+        value is "true" or "True" or "1" or "on" or "yes";
+
+    /// <summary>
+    /// Forces a key to the given value in the outgoing list, replacing the posted entry when there
+    /// is one so the corrected value is the only one that reaches the database.
+    /// </summary>
+    private static void SetPair(List<(string, string)> pairs, string key, string value)
+    {
+        var index = pairs.FindIndex(p => string.Equals(p.Item1, key, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0) pairs[index] = (pairs[index].Item1, value);
+        else pairs.Add((key, value));
     }
 
     [HttpPost]

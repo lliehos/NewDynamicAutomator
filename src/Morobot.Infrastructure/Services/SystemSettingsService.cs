@@ -19,6 +19,14 @@ public class SystemSettingsService
         return string.IsNullOrWhiteSpace(row?.Value) ? fallback : row!.Value.Trim();
     }
 
+    /// <summary>
+    /// True when a row for this key exists at all, regardless of its value. Used to tell "this
+    /// install has never had the setting" (fall back to a legacy key) from "the setting is present
+    /// but blank/false".
+    /// </summary>
+    public Task<bool> ExistsAsync(string key, CancellationToken ct = default) =>
+        _db.SystemSettings.AsNoTracking().AnyAsync(s => s.Key == key, ct);
+
     public async Task<Plan> GetDefaultRegisterPlanAsync(CancellationToken ct = default)
     {
         var code = await GetAsync(SystemSettingKeys.DefaultRegisterPlan, nameof(PlanCode.Free), ct);

@@ -473,6 +473,7 @@
         }
       },
       "notSetYet": "Not set yet",
+      "oneAuthRequired": "At least one sign-in method must stay on. Both were off, so \"System users\" was turned back on.",
       "authModeLocal": "System users (local)",
       "authModeLdap": "Organisational directory (LDAP)",
       "secretKeep": "Enter a new value to change it; blank = keep current",

@@ -38,6 +38,20 @@ public static class SystemSettingKeys
     /// directory decides who may sign in.
     /// </summary>
     public const string AuthMode = "AuthMode";
+
+    /// <summary>
+    /// "true" when the built-in user table may sign users in. Paired with
+    /// <see cref="AuthLdapEnabled"/>: the two switches replace the old single-choice AuthMode on
+    /// the settings page, and at least one of them must stay on.
+    /// </summary>
+    public const string AuthLocalEnabled = "AuthLocalEnabled";
+
+    /// <summary>
+    /// "true" when an external directory may sign users in. Default is off, so an install that
+    /// never configured a directory keeps using the local table only.
+    /// </summary>
+    public const string AuthLdapEnabled = "AuthLdapEnabled";
+
     /// <summary>Directory host name or IP, without a scheme or port.</summary>
     public const string LdapHost = "LdapHost";
     public const string LdapPort = "LdapPort";
@@ -195,6 +209,44 @@ public static class SystemSettingKeys
     /// <summary>True when the value is a secret that must not be rendered back to the browser.</summary>
     public static bool IsSensitiveForAdmin(string? key) =>
         !string.IsNullOrWhiteSpace(key) && SensitiveForAdmin.Contains(key);
+
+    /// <summary>
+    /// Directory fields that only make sense while the LDAP switch is on. The settings page hides
+    /// them when it is off, so the Auth card stays readable for the common local-only install
+    /// instead of showing five empty boxes that do nothing.
+    /// </summary>
+    public static readonly IReadOnlySet<string> LdapOnlyKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        LdapHost,
+        LdapPort,
+        LdapBaseDn,
+        LdapBindDn,
+        LdapBindPassword,
+        LdapUserTemplate,
+        LdapUseTls
+    };
+
+    /// <summary>True when the key belongs to the directory configuration.</summary>
+    public static bool IsLdapOnly(string? key) =>
+        !string.IsNullOrWhiteSpace(key) && LdapOnlyKeys.Contains(key);
+
+    /// <summary>
+    /// The two identity-store switches. At least one must remain on: turning both off would leave
+    /// no way to sign in at all, including the administrator who would fix it.
+    /// </summary>
+    public static readonly IReadOnlyList<string> AuthProviderSwitchKeys = new[] { AuthLocalEnabled, AuthLdapEnabled };
+
+    /// <summary>
+    /// Normalises a pair of provider switches so at least one is on. Returns the possibly-corrected
+    /// values plus whether a correction was needed, which the caller turns into a warning.
+    /// </summary>
+    public static (bool local, bool ldap, bool corrected) NormalizeAuthProviders(bool local, bool ldap)
+    {
+        if (local || ldap) return (local, ldap, false);
+        // Both off: keep the local table on, because it is the only provider that can never be
+        // broken by an external dependency.
+        return (true, false, true);
+    }
 
     /// <summary>
     /// How each settings group is presented on Admin → Settings: display order plus the locale key

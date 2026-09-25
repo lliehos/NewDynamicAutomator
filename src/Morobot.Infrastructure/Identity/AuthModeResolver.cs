@@ -8,9 +8,13 @@ namespace Morobot.Infrastructure.Identity;
 /// Reads the sign-in configuration out of the settings table.
 /// </summary>
 /// <remarks>
-/// The mode is parsed leniently and falls back to <see cref="AuthMode.Local"/>. A settings row
-/// that was hand-edited, or a half-finished switch to a directory, must never be able to lock
-/// everyone out of an installation — including the administrator who would fix it.
+/// Two switches replaced the old single-choice <c>AuthMode</c>: one for the built-in user table and
+/// one for the directory. Making them independent is what lets an install accept both at once —
+/// the previous enum could only ever name one, so switching LDAP on silently stopped local
+/// sign-in, including for the administrator who had just enabled it.
+///
+/// Parsing is lenient and always resolves to a usable configuration. A hand-edited settings row, or
+/// a half-finished switch to a directory, must never be able to lock everyone out.
 /// </remarks>
 public sealed class AuthModeResolver
 {
@@ -21,11 +25,44 @@ public sealed class AuthModeResolver
         _settings = settings;
     }
 
-    public async Task<AuthMode> GetModeAsync(CancellationToken ct = default)
+    /// <summary>Which providers may sign a user in.</summary>
+    public sealed record AuthProviders(bool Local, bool Ldap)
     {
-        var raw = await _settings.GetAsync(SystemSettingKeys.AuthMode, nameof(AuthMode.Local), ct);
-        return ParseMode(raw);
+        /// <summary>True when only the directory may sign users in.</summary>
+        public bool LdapOnly => Ldap && !Local;
+
+        /// <summary>
+        /// The legacy single value, kept so existing callers and logs keep working. When both
+        /// providers are enabled this reports Local, because a local match is tried first and is
+        /// the provider that cannot be unavailable.
+        /// </summary>
+        public AuthMode Mode => Local ? AuthMode.Local : AuthMode.Ldap;
     }
+
+    /// <summary>Read the two switch values, normalised so at least one is on.</summary>
+    public async Task<AuthProviders> GetProvidersAsync(CancellationToken ct = default)
+    {
+        var localRaw = await _settings.GetAsync(SystemSettingKeys.AuthLocalEnabled, "true", ct);
+        var ldapRaw = await _settings.GetAsync(SystemSettingKeys.AuthLdapEnabled, "false", ct);
+
+        // Back-compat: an install whose only row is the old AuthMode must keep its behaviour.
+        var hasNewKeys = await _settings.ExistsAsync(SystemSettingKeys.AuthLocalEnabled, ct)
+                         || await _settings.ExistsAsync(SystemSettingKeys.AuthLdapEnabled, ct);
+        if (!hasNewKeys)
+        {
+            var legacy = ParseMode(await _settings.GetAsync(SystemSettingKeys.AuthMode, nameof(AuthMode.Local), ct));
+            return legacy == AuthMode.Ldap
+                ? new AuthProviders(Local: false, Ldap: true)
+                : new AuthProviders(Local: true, Ldap: false);
+        }
+
+        var normalized = SystemSettingKeys.NormalizeAuthProviders(IsTrue(localRaw), IsTrue(ldapRaw));
+        return new AuthProviders(normalized.local, normalized.ldap);
+    }
+
+    /// <summary>The provider that decides sign-in, for callers that only need one answer.</summary>
+    public async Task<AuthMode> GetModeAsync(CancellationToken ct = default)
+        => (await GetProvidersAsync(ct)).Mode;
 
     /// <summary>
     /// Mode parsing, kept pure so the fallback behaviour is testable without a database.

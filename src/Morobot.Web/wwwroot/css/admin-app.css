@@ -1440,6 +1440,69 @@ label { font-size: .9rem; }
 .admin-settings-field { margin-bottom: 1rem; }
 .admin-settings-field:last-child { margin-bottom: .25rem; }
 
+/* ── Sign-in switches (Admin → Settings → Auth) ──
+   These two are booleans, so they read as switches rather than text boxes: "off" as a word in a
+   text field is easy to mistype and easy to misread, while a switch shows its state at a glance.
+   The checkbox stays in the markup and carries the name, so the form posts it unchanged; the
+   track and knob are drawn by the sibling span. */
+.admin-settings-switch {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  margin: 0;
+}
+.admin-settings-switch input[type="checkbox"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.admin-settings-switch-track {
+  position: relative;
+  display: inline-block;
+  width: 3rem;
+  height: 1.6rem;
+  border-radius: 999px;
+  background: #cbd5e1;
+  transition: background .18s ease;
+  flex: 0 0 auto;
+}
+.admin-settings-switch-track::after {
+  content: "";
+  position: absolute;
+  top: .2rem;
+  inset-inline-start: .2rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .3);
+  transition: inset-inline-start .18s ease;
+}
+.admin-settings-switch input:checked + .admin-settings-switch-track {
+  background: var(--brand-primary, #1b8777);
+}
+.admin-settings-switch input:checked + .admin-settings-switch-track::after {
+  inset-inline-start: 1.6rem;
+}
+/* A disabled switch cannot be changed, so it must not look changeable — the last remaining
+   sign-in method is disabled to make "at least one must stay on" visible rather than enforced
+   silently on save. */
+.admin-settings-switch input:disabled + .admin-settings-switch-track {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.admin-settings-switch input:focus-visible + .admin-settings-switch-track {
+  box-shadow: 0 0 0 3px var(--brand-bg-soft, #eef4f2);
+}
+/* While the LDAP sign-in switch is off its connection fields are hidden, but they stay in the
+   form so their values survive a save rather than being blanked by tidying the page. */
+.admin-settings-ldap-field[aria-hidden="true"] { display: none; }
+
 /* System-managed values read as information, not as an input. */
 .admin-settings-ro {
   background: #f1f5f9;

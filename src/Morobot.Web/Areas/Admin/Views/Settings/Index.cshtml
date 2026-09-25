@@ -58,6 +58,9 @@
           // controls, below. Rendering it again here would put two controls with the same name in
           // the form, and both would post.
           if (SystemSettingKeys.DiagramColorPairs.Any(p => p.EnabledSwitch == s.Key)) continue;
+          // The legacy single-value auth row is superseded by the two switches below. Leaving it
+          // on the page would offer a second, contradictory way to choose the same thing.
+          if (s.Key == SystemSettingKeys.AuthMode) continue;
           var hint = isFa ? s.HintFa : s.HintEn;
           var label = isFa ? s.LabelFa : s.LabelEn;
           var readOnly = SystemSettingKeys.IsReadOnlyForAdmin(s.Key);
@@ -71,7 +74,13 @@
           var switchKey = hasSwitch ? SystemSettingKeys.DiagramColorPairs.First(p => p.Setting == s.Key).EnabledSwitch : null;
           var switchOn = switchKey is not null && Model.Settings.Any(x => x.Key == switchKey
             && (string.Equals(x.Value, "true", StringComparison.OrdinalIgnoreCase) || x.Value == "1"));
-          <div class="admin-settings-field">
+          // The two sign-in switches: rendered as checkboxes, and the LDAP-only fields below are
+          // hidden while the LDAP switch is off (the server keeps them intact either way).
+          var isAuthSwitch = s.Key is SystemSettingKeys.AuthLocalEnabled or SystemSettingKeys.AuthLdapEnabled;
+          var authSwitchOn = string.Equals(s.Value, "true", StringComparison.OrdinalIgnoreCase) || s.Value == "1";
+          var isLdapField = SystemSettingKeys.IsLdapOnly(s.Key);
+          <div class="admin-settings-field@(isLdapField ? " admin-settings-ldap-field" : null)"
+               @(isLdapField ? "data-ldap-field" : null)>
             <label class="admin-label" for="setting_@s.Key">
               <span>@label</span>
               @if (readOnly)
@@ -82,7 +91,18 @@
               }
             </label>
 
-            @if (s.Key == SystemSettingKeys.DefaultRegisterPlan)
+            @if (isAuthSwitch)
+            {
+              @* A hidden "false" plus a checkbox: the browser posts the checkbox value only when
+                 ticked, so the hidden entry guarantees a value either way and the last one wins. *@
+              <label class="admin-settings-switch" for="setting_@s.Key">
+                <input type="hidden" name="setting_@s.Key" value="false" />
+                <input type="checkbox" id="setting_@s.Key" name="setting_@s.Key" value="true"
+                       data-auth-switch="true" @(authSwitchOn ? "checked" : null) />
+                <span class="admin-settings-switch-track" aria-hidden="true"></span>
+              </label>
+            }
+            else if (s.Key == SystemSettingKeys.DefaultRegisterPlan)
             {
               <select class="form-select" id="setting_@s.Key" name="setting_@s.Key">
                 @foreach (var plan in Model.Plans.Where(p => p.IsActive).OrderBy(p => p.SortOrder))
@@ -209,5 +229,65 @@
       text.addEventListener('input', syncText);
       text.addEventListener('change', syncText);
     });
+  })();
+
+  // The two sign-in switches and the LDAP fields they govern.
+  //
+  // The LDAP fields are only meaningful while the LDAP switch is on, so they are hidden when it
+  // is off — hidden with CSS rather than removed, so their values still post and turning the
+  // switch off and back on does not lose the host name someone just typed.
+  //
+  // The two switches may not both be off: that would lock everyone out of the system, including
+  // whoever would have to turn one back on. The rule is enforced on the server as well (see
+  // SettingsController); here it is applied as you click, so the page never shows an impossible
+  // state and never needs a round trip to explain itself.
+  (function () {
+    var grid = document.querySelector('.admin-settings-grid');
+    if (!grid) return;
+    var localId = '@SystemSettingKeys.AuthLocalEnabled';
+    var ldapId = '@SystemSettingKeys.AuthLdapEnabled';
+    var localBox = document.getElementById('setting_' + localId);
+    var ldapBox = document.getElementById('setting_' + ldapId);
+    if (!localBox || !ldapBox) return;
+
+    var ldapFields = grid.querySelectorAll('[data-ldap-field]');
+
+    function syncLdapFields() {
+      var on = ldapBox.checked;
+      ldapFields.forEach(function (f) {
+        // Visual hiding only: the inputs keep their names and values so a save made while LDAP
+        // is off does not blank the connection details.
+        f.style.display = on ? '' : 'none';
+        f.setAttribute('aria-hidden', on ? 'false' : 'true');
+        // The group count in the heading is decorative and would be wrong once fields are hidden.
+        f.querySelectorAll('input,select,textarea').forEach(function (el) {
+          if (on) el.removeAttribute('tabindex');
+          else el.setAttribute('tabindex', '-1');
+        });
+      });
+      // Never let the last method be switched off. Disabling rather than ignoring the click
+      // shows why it will not move, instead of a click that appears to do nothing.
+      localBox.disabled = ldapBox.checked && localBox.checked;
+    }
+
+    function onLocalChange() {
+      if (!localBox.checked && !ldapBox.checked) {
+        // The user just turned the last one off: put LDAP on instead, which is the only way to
+        // keep at least one method available.
+        ldapBox.checked = true;
+      }
+      syncLdapFields();
+    }
+
+    function onLdapChange() {
+      if (!localBox.checked && !ldapBox.checked) {
+        localBox.checked = true;
+      }
+      syncLdapFields();
+    }
+
+    localBox.addEventListener('change', onLocalChange);
+    ldapBox.addEventListener('change', onLdapChange);
+    syncLdapFields();
   })();
 </script>
