@@ -1,8 +1,12 @@
 .da-recorder-root {
   position: fixed !important;
-  left: 18px !important;
-  right: auto !important;
-  bottom: 18px !important;
+  /* left/bottom are only the starting corner: the drag writes an inline left+top, and an inline
+     style cannot beat !important. Keeping these without !important lets dragging win while still
+     giving a sane default corner. */
+  left: 18px;
+  right: auto;
+  bottom: 18px;
+  top: auto;
   z-index: 2147483647 !important;
   font-family: Tahoma, sans-serif !important;
   direction: rtl !important;
@@ -14,6 +18,22 @@
 }
 .da-recorder-root > * {
   pointer-events: auto !important;
+}
+/* The header (and the chip row) act as the drag handle, so they should look draggable. */
+.da-fab-head {
+  cursor: grab;
+  touch-action: none;
+}
+.da-recorder-root.is-dragging .da-fab-head,
+.da-recorder-root.is-dragging .da-fab-chip-row {
+  cursor: grabbing;
+}
+.da-recorder-root.is-dragging {
+  user-select: none;
+}
+.da-fab-chip-row {
+  cursor: grab;
+  touch-action: none;
 }
 .da-fab-btn {
   width: 58px;

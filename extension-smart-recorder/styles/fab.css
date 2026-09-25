@@ -7,6 +7,8 @@
   right: auto;
   bottom: 18px;
   top: auto;
+  /* Set by the resize handle. 1 = the default 56px mark. */
+  --da-smart-scale: 1;
   z-index: 2147483647 !important;
   display: flex !important;
   flex-direction: column !important;
@@ -27,12 +29,43 @@
 .da-smart-root.is-dragging .da-smart-save {
   pointer-events: none;
 }
+.da-smart-root.is-resizing .da-smart-logo-btn img {
+  pointer-events: none;
+}
 /* A movable grab area should look movable. */
 .da-smart-root .da-smart-logo-btn {
   cursor: grab;
 }
 .da-smart-root.is-dragging .da-smart-logo-btn {
   cursor: grabbing;
+}
+/* Resize handle: bottom-left, so it never overlaps the logo the user clicks to stop. */
+.da-smart-resize {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nesw-resize;
+  touch-action: none;
+  z-index: 3;
+}
+.da-smart-resize::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  width: 9px;
+  height: 9px;
+  border-left: 2px solid rgba(255, 255, 255, 0.85);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 1px;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
+}
+.da-smart-resize:hover::before,
+.da-smart-root.is-resizing .da-smart-resize::before {
+  border-color: #28c76f;
 }
 .da-smart-root img {
   -webkit-user-drag: none;
@@ -74,8 +107,8 @@
 }
 .da-smart-root > * { pointer-events: auto !important; }
 .da-smart-logo-btn {
-  width: 56px;
-  height: 56px;
+  width: calc(56px * var(--da-smart-scale, 1));
+  height: calc(56px * var(--da-smart-scale, 1));
   padding: 0;
   border: 0;
   border-radius: 14px;
@@ -84,10 +117,12 @@
   box-shadow: 0 8px 22px rgba(13, 148, 136, 0.35);
   overflow: hidden;
   display: block;
+  /* Anchor for the resize handle. */
+  position: relative;
 }
 .da-smart-logo-btn img {
-  width: 56px;
-  height: 56px;
+  width: 100%;
+  height: 100%;
   display: block;
 }
 .da-smart-logo-btn.thinking {

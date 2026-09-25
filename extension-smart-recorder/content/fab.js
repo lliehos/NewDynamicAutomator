@@ -95,8 +95,8 @@ function waitForActiveSession(maxMs = 6000) {
     <button type="button" class="da-smart-logo-btn" id="da-smart-toggle" title="Stop thinking" aria-label="Stop thinking">
       <img src="${markUrl}" width="56" height="56" alt="${tr("fab.markAlt")}" />
     </button>
-  `;
-  document.documentElement.appendChild(root);
+    <div class="da-smart-resize" id="da-smart-resize" title="${tr("fab.resize")}" aria-label="${tr("fab.resize")}" role="separator"></div>
+  `;  document.documentElement.appendChild(root);
   Object.assign(root.style, {
     position: "fixed", left: "18px", right: "auto", bottom: "18px", top: "auto",
     zIndex: "2147483647"
@@ -212,6 +212,9 @@ function waitForActiveSession(maxMs = 6000) {
     // Only the primary button, and never from the save button: that one is a plain action.
     if (ev.button !== 0) return;
     if (ev.target.closest("#da-smart-save")) return;
+    // The resize handle has its own gesture; letting the drag start here would move the FAB while
+    // the user is trying to size it.
+    if (ev.target.closest("#da-smart-resize")) return;
     const rect = root.getBoundingClientRect();
     dragState = {
       pointerId: ev.pointerId,
@@ -286,6 +289,92 @@ function waitForActiveSession(maxMs = 6000) {
   restorePosition();
   restoreGuidePref();
 
+  /**
+   * Resize the FAB.
+   *
+   * The mark is the control the user clicks to stop, so a fixed size is a real accessibility limit
+   * on a high-DPI screen. The size is a scale factor (not px) and is stored next to the position,
+   * so it follows the user between pages; it is clamped so the FAB always fits on screen.
+   */
+  const FAB_SIZE_KEY = "fabSize";
+  const FAB_MIN_SCALE = 0.75;
+  const FAB_MAX_SCALE = 2.5;
+  const FAB_BASE_PX = 56;
+
+  const resizeHandle = root.querySelector("#da-smart-resize");
+  let resizeState = null;
+  let fabScale = 1;
+
+  function applyScale(scale) {
+    const next = Math.min(FAB_MAX_SCALE, Math.max(FAB_MIN_SCALE, Number(scale) || 1));
+    fabScale = next;
+    const px = Math.round(FAB_BASE_PX * next);
+    root.style.setProperty("--da-smart-scale", String(next));
+    const img = root.querySelector("#da-smart-toggle img");
+    if (img) {
+      img.setAttribute("width", String(px));
+      img.setAttribute("height", String(px));
+    }
+    // Keep the FAB inside the viewport after it grows, using the stored fractions.
+    chrome.storage.local.get(FAB_POS_KEY).then((stored) => {
+      applyStoredPosition(stored && stored[FAB_POS_KEY]);
+    }).catch(() => {});
+  }
+
+  async function restoreSize() {
+    try {
+      const stored = await chrome.storage.local.get(FAB_SIZE_KEY);
+      const s = stored && stored[FAB_SIZE_KEY];
+      if (typeof s === "number") applyScale(s);
+    } catch { /* keep the default size */ }
+  }
+
+  async function saveSize() {
+    try { await chrome.storage.local.set({ [FAB_SIZE_KEY]: fabScale }); } catch { /* best effort */ }
+  }
+
+  if (resizeHandle) {
+    resizeHandle.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      // The handle drives resizing only; without this the drag handler on root would also fire and
+      // the FAB would move while the user is trying to size it.
+      ev.preventDefault();
+      ev.stopPropagation();
+      const rect = root.getBoundingClientRect();
+      resizeState = {
+        pointerId: ev.pointerId,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        startSize: Math.max(rect.width, rect.height) || FAB_BASE_PX,
+        scale: fabScale
+      };
+      root.classList.add("is-resizing");
+      resizeHandle.setPointerCapture?.(ev.pointerId);
+    });
+
+    resizeHandle.addEventListener("pointermove", (ev) => {
+      if (!resizeState || ev.pointerId !== resizeState.pointerId) return;
+      ev.preventDefault();
+      // The handle sits at the bottom-left, so growth follows the upward/leftward movement too.
+      const dx = resizeState.startX - ev.clientX;
+      const dy = ev.clientY - resizeState.startY;
+      const delta = (dx + dy) / 2;
+      const target = Math.max(FAB_BASE_PX * FAB_MIN_SCALE * 0.8, resizeState.startSize + delta);
+      applyScale(target / FAB_BASE_PX);
+    });
+
+    const endResize = (ev) => {
+      if (!resizeState || (ev && ev.pointerId !== resizeState.pointerId)) return;
+      resizeState = null;
+      root.classList.remove("is-resizing");
+      saveSize();
+    };
+    resizeHandle.addEventListener("pointerup", endResize);
+    resizeHandle.addEventListener("pointercancel", endResize);
+  }
+
+  restoreSize();
+
   function applyLabels() {
     const label = tr(logoBtn.classList.contains("save-ready") ? "fab.learningComplete" : "fab.stopThinking");
     // The action and the drag hint are both true of the same button, so the tooltip says both:
@@ -296,6 +385,13 @@ function waitForActiveSession(maxMs = 6000) {
     const saveLabel = tr("fab.save");
     saveBtn.title = saveLabel;
     saveBtn.setAttribute("aria-label", saveLabel);
+    // The resize handle is a control, so its label must follow the language too.
+    const resizeEl = root.querySelector("#da-smart-resize");
+    if (resizeEl) {
+      const resizeLabel = tr("fab.resize");
+      resizeEl.title = resizeLabel;
+      resizeEl.setAttribute("aria-label", resizeLabel);
+    }
     const img = logoBtn.querySelector("img");
     if (img) img.alt = tr("fab.markAlt");
     // The guide is the only place the gesture is documented, so it has to follow the language

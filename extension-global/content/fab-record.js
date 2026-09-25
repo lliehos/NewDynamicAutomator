@@ -30,7 +30,7 @@
   root.innerHTML = `
     <div class="da-fab-panel" id="da-fab-panel" hidden>
       <div class="da-fab-resize" id="da-fab-resize" title="${t("rec.resize")}" aria-label="${t("rec.resize")}"></div>
-      <div class="da-fab-head">
+      <div class="da-fab-head" title="${t("rec.dragHint")}">
         <div class="da-fab-status" id="da-fab-status">...</div>
         <button type="button" id="da-fab-close" class="da-ico-btn da-fab-close" title="${t("rec.closeHud")}" aria-label="${t("rec.closeHud")}" hidden>${ICO_CLOSE}</button>
       </div>
@@ -251,6 +251,127 @@
 
   bindHudResize();
   restoreHudSize();
+
+  /**
+   * Move the recorder HUD out of the way.
+   *
+   * Independent of resizing: the header (or chip row) is the drag handle so the buttons inside stay
+   * clickable, and the position survives navigation because it is stored per edge as a fraction —
+   * a narrower window then cannot leave the HUD off-screen.
+   */
+  const HUD_POS_KEY = "daRecHudPos";
+  const HUD_DRAG_THRESHOLD = 4;
+  let hudPos = null;
+
+  function hudViewport() {
+    return {
+      w: window.innerWidth || document.documentElement.clientWidth || 0,
+      h: window.innerHeight || document.documentElement.clientHeight || 0
+    };
+  }
+
+  function applyHudPosition(pos) {
+    if (!pos || typeof pos.fx !== "number" || typeof pos.fy !== "number") return;
+    const rect = root.getBoundingClientRect();
+    const { w, h } = hudViewport();
+    const margin = 18;
+    const fx = Math.min(1, Math.max(0, pos.fx));
+    const fy = Math.min(1, Math.max(0, pos.fy));
+    const usableX = Math.max(0, w - (rect.width || 360) - margin * 2);
+    const usableY = Math.max(0, h - (rect.height || 120) - margin * 2);
+    Object.assign(root.style, {
+      left: `${Math.round(margin + usableX * fx)}px`,
+      top: `${Math.round(margin + usableY * fy)}px`,
+      right: "auto",
+      bottom: "auto"
+    });
+    hudPos = { fx, fy };
+  }
+
+  async function restoreHudPosition() {
+    try {
+      const data = await chrome.storage.local.get(HUD_POS_KEY);
+      applyHudPosition(data?.[HUD_POS_KEY]);
+    } catch { /* keep the default corner */ }
+  }
+
+  function bindHudDrag() {
+    const handles = [root.querySelector(".da-fab-head"), chipRow].filter(Boolean);
+    let state = null;
+
+    for (const handle of handles) {
+      handle.addEventListener("pointerdown", (e) => {
+        if (e.button != null && e.button !== 0) return;
+        // Do not start a drag from a real control (close button, switch, resize handle).
+        if (e.target.closest("button, a, input, select, textarea, #da-fab-resize")) return;
+        const rect = root.getBoundingClientRect();
+        state = {
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          originLeft: rect.left,
+          originTop: rect.top,
+          moved: false
+        };
+        handle.setPointerCapture?.(e.pointerId);
+      });
+
+      handle.addEventListener("pointermove", (e) => {
+        if (!state || e.pointerId !== state.pointerId) return;
+        const dx = e.clientX - state.startX;
+        const dy = e.clientY - state.startY;
+        if (!state.moved && Math.hypot(dx, dy) < HUD_DRAG_THRESHOLD) return;
+        if (!state.moved) {
+          state.moved = true;
+          root.classList.add("is-dragging");
+          document.body.style.userSelect = "none";
+        }
+        e.preventDefault();
+        const { w, h } = hudViewport();
+        const rect = root.getBoundingClientRect();
+        const left = Math.min(Math.max(0, w - rect.width), Math.max(0, state.originLeft + dx));
+        const top = Math.min(Math.max(0, h - rect.height), Math.max(0, state.originTop + dy));
+        Object.assign(root.style, {
+          left: `${Math.round(left)}px`,
+          top: `${Math.round(top)}px`,
+          right: "auto",
+          bottom: "auto"
+        });
+      });
+
+      const end = (e) => {
+        if (!state || (e && e.pointerId !== state.pointerId)) return;
+        const moved = state.moved;
+        state = null;
+        root.classList.remove("is-dragging");
+        document.body.style.removeProperty("user-select");
+        if (!moved) return;
+        const rect = root.getBoundingClientRect();
+        const { w, h } = hudViewport();
+        const margin = 18;
+        const usableX = Math.max(1, w - rect.width - margin * 2);
+        const usableY = Math.max(1, h - rect.height - margin * 2);
+        hudPos = {
+          fx: Math.min(1, Math.max(0, (rect.left - margin) / usableX)),
+          fy: Math.min(1, Math.max(0, (rect.top - margin) / usableY))
+        };
+        chrome.storage.local.set({ [HUD_POS_KEY]: hudPos }).catch(() => {});
+        root.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }, { capture: true, once: true });
+      };
+      handle.addEventListener("pointerup", end);
+      handle.addEventListener("pointercancel", end);
+    }
+
+    window.addEventListener("resize", () => {
+      if (hudPos) applyHudPosition(hudPos);
+    });
+  }
+
+  bindHudDrag();
+  restoreHudPosition();
 
   function escapeHtml(s) {
     return String(s ?? "").replace(/[&<>"'`]/g, (c) =>

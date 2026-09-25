@@ -68,7 +68,7 @@
   root.innerHTML = `
     <div class="da-fab-panel" id="da-fab-panel" hidden>
       <div class="da-fab-resize" id="da-fab-resize" title="${t("play.resize")}" aria-label="${t("play.resize")}"></div>
-      <div class="da-fab-head">
+      <div class="da-fab-head" title="${t("play.dragHint")}">
         <div class="da-fab-status" id="da-fab-status">...</div>
         <button type="button" id="da-fab-close" class="da-ico-btn da-fab-close" title="${t("play.closeHud")}" aria-label="${t("play.closeHud")}" hidden>${ICO_CLOSE}</button>
       </div>
@@ -286,7 +286,136 @@
 
   bindHudResize();
   restoreHudSize();
-  // Re-apply after first show in case panel was hidden during restore
+
+  /**
+   * Move the HUD out of the way.
+   *
+   * The panel covers the page being played, and on many sites the bottom-left corner holds a real
+   * control. Sized and positioned independently: resizing must not move it and dragging must not
+   * resize it. The position is stored as edge distances plus fractions, so a narrower window does
+   * not push the HUD off-screen.
+   */
+  const HUD_POS_KEY = "daPlayHudPos";
+  const HUD_DRAG_THRESHOLD = 4;
+  let hudPos = null;
+
+  function hudViewport() {
+    return {
+      w: window.innerWidth || document.documentElement.clientWidth || 0,
+      h: window.innerHeight || document.documentElement.clientHeight || 0
+    };
+  }
+
+  function applyHudPosition(pos) {
+    if (!pos || typeof pos.fx !== "number" || typeof pos.fy !== "number") return;
+    const rect = root.getBoundingClientRect();
+    const { w, h } = hudViewport();
+    const margin = 18;
+    const fx = Math.min(1, Math.max(0, pos.fx));
+    const fy = Math.min(1, Math.max(0, pos.fy));
+    const usableX = Math.max(0, w - (rect.width || 360) - margin * 2);
+    const usableY = Math.max(0, h - (rect.height || 120) - margin * 2);
+    Object.assign(root.style, {
+      left: `${Math.round(margin + usableX * fx)}px`,
+      top: `${Math.round(margin + usableY * fy)}px`,
+      right: "auto",
+      bottom: "auto"
+    });
+    hudPos = { fx, fy };
+  }
+
+  async function restoreHudPosition() {
+    try {
+      const data = await chrome.storage.local.get(HUD_POS_KEY);
+      applyHudPosition(data?.[HUD_POS_KEY]);
+    } catch { /* keep the default corner */ }
+  }
+
+  async function persistHudPosition() {
+    if (!hudPos) return;
+    try { await chrome.storage.local.set({ [HUD_POS_KEY]: hudPos }); } catch { /* best effort */ }
+  }
+
+  function bindHudDrag() {
+    if (!panel) return;
+    // Drag from the panel header (or the chip row): the buttons inside stay clickable.
+    const handles = [root.querySelector(".da-fab-head"), chipRow].filter(Boolean);
+    let state = null;
+
+    for (const handle of handles) {
+      handle.addEventListener("pointerdown", (e) => {
+        if (e.button != null && e.button !== 0) return;
+        // Never start a drag from an interactive control inside the header.
+        if (e.target.closest("button, a, input, select, textarea, #da-fab-resize")) return;
+        const rect = root.getBoundingClientRect();
+        state = {
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          originLeft: rect.left,
+          originTop: rect.top,
+          moved: false
+        };
+        handle.setPointerCapture?.(e.pointerId);
+      });
+
+      handle.addEventListener("pointermove", (e) => {
+        if (!state || e.pointerId !== state.pointerId) return;
+        const dx = e.clientX - state.startX;
+        const dy = e.clientY - state.startY;
+        if (!state.moved && Math.hypot(dx, dy) < HUD_DRAG_THRESHOLD) return;
+        if (!state.moved) {
+          state.moved = true;
+          root.classList.add("is-dragging");
+          document.body.style.userSelect = "none";
+        }
+        e.preventDefault();
+        const { w, h } = hudViewport();
+        const rect = root.getBoundingClientRect();
+        const left = Math.min(Math.max(0, w - rect.width), Math.max(0, state.originLeft + dx));
+        const top = Math.min(Math.max(0, h - rect.height), Math.max(0, state.originTop + dy));
+        Object.assign(root.style, {
+          left: `${Math.round(left)}px`,
+          top: `${Math.round(top)}px`,
+          right: "auto",
+          bottom: "auto"
+        });
+      });
+
+      const end = (e) => {
+        if (!state || (e && e.pointerId !== state.pointerId)) return;
+        const moved = state.moved;
+        state = null;
+        root.classList.remove("is-dragging");
+        document.body.style.removeProperty("user-select");
+        if (!moved) return;
+        const rect = root.getBoundingClientRect();
+        const { w, h } = hudViewport();
+        const margin = 18;
+        const usableX = Math.max(1, w - rect.width - margin * 2);
+        const usableY = Math.max(1, h - rect.height - margin * 2);
+        hudPos = {
+          fx: Math.min(1, Math.max(0, (rect.left - margin) / usableX)),
+          fy: Math.min(1, Math.max(0, (rect.top - margin) / usableY))
+        };
+        persistHudPosition();
+        // Swallow the click that follows the release so the drag is not read as a button press.
+        root.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }, { capture: true, once: true });
+      };
+      handle.addEventListener("pointerup", end);
+      handle.addEventListener("pointercancel", end);
+    }
+
+    window.addEventListener("resize", () => {
+      if (hudPos) applyHudPosition(hudPos);
+    });
+  }
+
+  bindHudDrag();
+  restoreHudPosition();
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local" || !changes[HUD_SIZE_KEY]) return;
     const saved = changes[HUD_SIZE_KEY].newValue;
