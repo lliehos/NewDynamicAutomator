@@ -14,14 +14,36 @@
   <div class="card-admin">
     <h3><i class="ti ti-package" aria-hidden="true"></i>@L["admin.offlineUpdate.uploadTitle"]</h3>
     <p class="admin-field-hint">@L["admin.offlineUpdate.uploadHint"]</p>
-    <form method="post" asp-action="Upload" enctype="multipart/form-data" class="admin-form-stack">
+    <form method="post" asp-action="Upload" enctype="multipart/form-data" class="admin-form-stack" id="offline-upload-form"
+          data-max-mb="@maxMb"
+          data-msg-too-large="@L["admin.offlineUpdate.errTooLargeClient"]"
+          data-msg-wrong-type="@L["admin.offlineUpdate.errWrongType"]"
+          data-msg-ready="@L["admin.offlineUpdate.fileReady"]">
       @Html.AntiForgeryToken()
-      <label class="admin-label" for="package">@L["admin.offlineUpdate.file"]</label>
-      <input class="form-control" type="file" id="package" name="package" accept=".zip,application/zip" required />
+      @* The file input is the real control; the drop zone is a labelled stand-in that forwards
+         clicks and drops to it, so the page keeps working if the script never runs. *@
+      <label class="admin-dropzone" id="offline-dropzone" for="package">
+        <i class="ti ti-cloud-upload admin-dropzone-icon" aria-hidden="true"></i>
+        <span class="admin-dropzone-title">@L["admin.offlineUpdate.dropTitle"]</span>
+        <span class="admin-dropzone-sub">@L["admin.offlineUpdate.dropSub"]</span>
+        <span class="admin-dropzone-pick">@L["admin.offlineUpdate.pickFile"]</span>
+        <input class="admin-dropzone-input" type="file" id="package" name="package" accept=".zip,application/zip" required />
+      </label>
       <p class="admin-field-hint">@string.Format(L["admin.offlineUpdate.maxSize"], maxMb)</p>
-      <button type="submit" class="btn-admin">
-        <i class="ti ti-upload" aria-hidden="true"></i> @L["admin.offlineUpdate.uploadSubmit"]
-      </button>
+
+      <div class="admin-alert is-muted is-hidden" id="offline-file-note" role="status"></div>
+      <div class="admin-alert is-error is-hidden" id="offline-client-error" role="alert"></div>
+
+      <div class="admin-btn-row">
+        <button type="submit" class="btn-admin" id="offline-upload-submit" disabled>
+          <i class="ti ti-upload" aria-hidden="true"></i> <span id="offline-upload-submit-text">@L["admin.offlineUpdate.uploadSubmit"]</span>
+        </button>
+        <button type="button" class="btn-admin secondary is-hidden" id="offline-upload-clear">@L["admin.offlineUpdate.clearFile"]</button>
+      </div>
+      <div class="admin-inline-progress is-hidden" id="offline-upload-progress" role="status" aria-live="polite">
+        <div class="admin-inline-progress-bar"><span></span></div>
+        <span class="admin-inline-progress-text">@L["admin.offlineUpdate.uploading"]</span>
+      </div>
     </form>
     <partial name="_AdminHint" model='L["admin.offlineUpdate.uploadSafety"]' />
   </div>
@@ -34,6 +56,7 @@
     }
     else
     {
+      <div class="admin-alert is-ok">@L["admin.offlineUpdate.stagedReady"]</div>
       <dl class="admin-kv">
         <dt>@L["admin.offlineUpdate.version"]</dt>
         <dd><code>@staged.Version</code></dd>
@@ -44,11 +67,13 @@
       <form method="post" asp-action="Apply" class="admin-form-stack">
         @Html.AntiForgeryToken()
         <label class="admin-inline-check">
-          <input type="checkbox" name="stopFirst" value="true" />
+          <input type="checkbox" name="stopFirst" value="true" id="offline-stop-first" />
           <span>@L["admin.offlineUpdate.confirmStopped"]</span>
         </label>
         <div class="admin-btn-row">
-          <button type="submit" class="btn-admin">@L["admin.offlineUpdate.applySubmit"]</button>
+          @* Launching the updater while the app still holds its own DLLs open can only
+             half-apply, so the button stays disabled until the operator confirms. *@
+          <button type="submit" class="btn-admin" id="offline-apply-submit" disabled>@L["admin.offlineUpdate.applySubmit"]</button>
         </div>
       </form>
       <form method="post" asp-action="Discard">
@@ -72,3 +97,7 @@
     <partial name="_AdminHint" model='L["admin.offlineUpdate.manualSafety"]' />
   </div>
 </div>
+
+@section Scripts {
+  <script src="~/js/admin-offline-update.js?v=offline-upload-1"></script>
+}

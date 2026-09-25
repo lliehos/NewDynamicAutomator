@@ -874,6 +874,97 @@ label { font-size: .9rem; }
 .admin-form-stack { display: flex; flex-direction: column; gap: .75rem; }
 .card-admin.is-muted { opacity: .92; }
 
+/* ── Offline update: upload ──
+   The upload box is the whole point of the page, so it is a drop target rather than a bare
+   file input. The real input is hidden inside the label and the zone forwards the click. */
+.admin-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .3rem;
+  padding: 1.6rem 1rem;
+  border: 2px dashed var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+  border-radius: .85rem;
+  background: #fbfcfe;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.admin-dropzone:hover { border-color: var(--morobot-primary, var(--morobot-primary-default)); }
+.admin-dropzone:focus-within {
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  box-shadow: 0 0 0 3px var(--morobot-soft, var(--morobot-soft-default));
+}
+.admin-dropzone.is-drop {
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  border-style: solid;
+}
+.admin-dropzone.has-file {
+  border-style: solid;
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  background: var(--morobot-soft, var(--morobot-soft-default));
+}
+.admin-dropzone.is-invalid { border-color: #dc2626; background: #fef2f2; }
+.admin-dropzone-icon { font-size: 1.9rem; color: var(--morobot-primary, var(--morobot-primary-default)); }
+.admin-dropzone-title { font-size: .95rem; font-weight: 700; color: #334155; }
+.admin-dropzone-sub { font-size: .8rem; color: #7c8598; }
+.admin-dropzone-pick {
+  margin-top: .35rem;
+  padding: .3rem .7rem;
+  border-radius: .5rem;
+  border: 1px solid var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+  background: #fff;
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+}
+/* Visually hidden, but still focusable and still the control that posts the file. */
+.admin-dropzone-input {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0);
+  white-space: nowrap; border: 0;
+}
+.admin-btn-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.admin-inline-progress { display: flex; align-items: center; gap: .6rem; }
+.admin-inline-progress-bar {
+  position: relative;
+  flex: 1;
+  height: .4rem;
+  border-radius: 999px;
+  background: var(--morobot-soft-2, var(--morobot-soft-2-default));
+  overflow: hidden;
+}
+/* The bar is indeterminate: the server answers once, after staging, so there is no honest
+   percentage to show while the request is in flight. */
+.admin-inline-progress-bar > span {
+  position: absolute;
+  inset-block: 0;
+  width: 40%;
+  border-radius: 999px;
+  background: var(--morobot-primary, var(--morobot-primary-default));
+  animation: admin-progress-slide 1.1s ease-in-out infinite;
+}
+.admin-inline-progress-text { font-size: .8rem; color: #64748b; white-space: nowrap; }
+@keyframes admin-progress-slide {
+  0% { inset-inline-start: -40%; }
+  100% { inset-inline-start: 100%; }
+}
+/* The page is Persian-first, so the bar sweeps in the writing direction; with RTL that is
+   right to left, which the logical inset-inline-start already handles. */
+@media (prefers-reduced-motion: reduce) {
+  .admin-inline-progress-bar > span { animation: none; width: 100%; inset-inline-start: 0; opacity: .5; }
+}
+.admin-alert.is-muted {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+.is-hidden { display: none !important; }
+
 @media (max-width: 900px) {
   .admin-shell { grid-template-columns: 1fr; }
   .admin-nav { flex-direction: row; flex-wrap: wrap; align-items: center; }

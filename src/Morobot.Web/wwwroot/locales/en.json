@@ -621,7 +621,16 @@
       "entry.hashMismatch": "A file does not match its manifest hash; the package is incomplete or tampered with.",
       "archive.corrupt": "The archive could not be read; the zip is damaged.",
       "upload.missing": "The archive file was not found.",
-      "errUnknown": "The update package was rejected."
+      "errUnknown": "The update package was rejected.",
+      "dropTitle": "Drop the package file here",
+      "dropSub": "or click this box to choose a file",
+      "pickFile": "Choose file",
+      "clearFile": "Remove file",
+      "fileReady": "Ready to verify: {name} ({size})",
+      "uploading": "Uploading and verifying...",
+      "errWrongType": "Only a zip file is accepted.",
+      "errTooLargeClient": "The file is {size}, over the {max} MB limit.",
+      "stagedReady": "The package was verified and staged."
     },
     "plans": {
       "title": "Plans",
