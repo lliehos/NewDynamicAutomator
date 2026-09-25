@@ -884,7 +884,42 @@ rect.flow-marquee{pointer-events:none}
   min-height:0;
   overflow:auto;
   padding:0 0 12px;
+  position:relative;
 }
+/* Overlay for a long grid operation (add row/column, refresh). Absolute inside the scroll area so
+   the table keeps its size and the page does not jump. */
+.ds-grid-loader{
+  position:absolute;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  background:rgba(255,255,255,.72);
+  backdrop-filter:saturate(120%) blur(1px);
+  z-index:5;
+}
+.ds-grid-loader-text{font-size:12px;color:#4b5563;}
+.ds-grid-spinner{
+  width:18px;height:18px;border-radius:50%;
+  border:2px solid rgba(13,148,136,.25);
+  border-top-color:#0d9488;
+  animation:ds-grid-spin .8s linear infinite;
+}
+@keyframes ds-grid-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){
+  .ds-grid-spinner{animation-duration:2.4s}
+}
+.ds-viewer-foot{
+  display:flex;align-items:center;justify-content:center;gap:12px;
+  padding:8px 12px;border-top:1px solid #eee;flex:0 0 auto;
+}
+.ds-viewer-page{font-size:12px;color:#6b7280;}
+.da-list-pager{
+  display:flex;align-items:center;justify-content:center;gap:12px;
+  padding:12px 0 4px;
+}
+.da-list-pageinfo{font-size:12px;color:#6b7280;}
 .ds-viewer-table{
   width:100%;
   border-collapse:separate;

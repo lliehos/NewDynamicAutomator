@@ -565,8 +565,27 @@
     /** rowIndex → columnKey → cellRevision, so concurrent writes can be detected. */
     cellRevisions: null,
     /** rowIndex → columnKey → {userId, userName, updatedAtUtc} for the cell tooltip. */
-    cellMeta: null
+    cellMeta: null,
+    /** 0-based page shown by the grid; a big source renders one page at a time. */
+    page: 0
   };
+
+  /**
+   * Rows per grid page. A source can hold thousands of rows, so rendering them all would build a
+   * huge DOM and freeze the tab; paging keeps the grid responsive and the scroll sane.
+   */
+  const GRID_PAGE_SIZE = 200;
+
+  /** Show/hide the grid's busy overlay. A counter keeps nested calls from hiding it too early. */
+  let gridBusyDepth = 0;
+  function setGridBusy(on, textKey) {
+    const el = document.getElementById("da-portal-ds-loader");
+    const txt = document.getElementById("da-portal-ds-loader-text");
+    if (on) gridBusyDepth++; else gridBusyDepth = Math.max(0, gridBusyDepth - 1);
+    if (!el) return;
+    if (txt) txt.textContent = t(textKey || "sources.working") || "در حال انجام…";
+    el.hidden = gridBusyDepth === 0;
+  }
 
   function cellKey(row, col) {
     return `${row}:${col}`;
@@ -720,13 +739,39 @@
       + `</tr>`;
     if (!rows.length) {
       tbody.innerHTML = `<tr><td colspan="${headers.length + 1}" class="ds-viewer-empty">ردیفی نیست — راست‌کلیک کنید و ردیف اضافه کنید</td></tr>`;
+      renderViewerPager(0, 0);
       return;
     }
-    tbody.innerHTML = rows.map((r, i) =>
-      `<tr><th class="ds-row-idx" data-row-index="${i}">${i + 1}</th>${r.map((v, ci) =>
-        `<td data-row="${i}" data-col="${escapeHtml(colKeys[ci])}" title="${escapeHtml(cellTooltip(i, colKeys[ci]))}">${escapeHtml(v)}</td>`
-      ).join("")}</tr>`
-    ).join("");
+    // Only the current page is materialised. The row's real index travels in data-row, so editing,
+    // the tooltip and the revision lookup keep working against the true row, not the page offset.
+    const totalPages = Math.max(1, Math.ceil(rows.length / GRID_PAGE_SIZE));
+    if (viewerState.page >= totalPages) viewerState.page = totalPages - 1;
+    if (viewerState.page < 0) viewerState.page = 0;
+    const from = viewerState.page * GRID_PAGE_SIZE;
+    const slice = rows.slice(from, from + GRID_PAGE_SIZE);
+    tbody.innerHTML = slice.map((r, i) => {
+      const rowIndex = from + i;
+      return `<tr><th class="ds-row-idx" data-row-index="${rowIndex}">${(rowIndex + 1).toLocaleString("fa-IR")}</th>${r.map((v, ci) =>
+        `<td data-row="${rowIndex}" data-col="${escapeHtml(colKeys[ci])}" title="${escapeHtml(cellTooltip(rowIndex, colKeys[ci]))}">${escapeHtml(v)}</td>`
+      ).join("")}</tr>`;
+    }).join("");
+    renderViewerPager(rows.length, totalPages);
+  }
+
+  /** Show/hide and fill the pager; hidden entirely for a source that fits in one page. */
+  function renderViewerPager(totalRows, totalPages) {
+    const foot = document.getElementById("da-portal-ds-pager");
+    const info = document.getElementById("da-portal-ds-pageinfo");
+    const prev = document.getElementById("da-portal-ds-prev");
+    const next = document.getElementById("da-portal-ds-next");
+    if (!foot) return;
+    foot.hidden = totalPages <= 1;
+    if (foot.hidden) return;
+    const page = viewerState.page + 1;
+    if (info) info.textContent = t("sources.pageInfo", { page, total: totalPages, rows: totalRows })
+      || `صفحه ${page} از ${totalPages} — ${totalRows} ردیف`;
+    if (prev) prev.disabled = viewerState.page <= 0;
+    if (next) next.disabled = viewerState.page >= totalPages - 1;
   }
 
   /**
@@ -985,6 +1030,9 @@
     };
 
     try {
+      // Adding a row/column changes the source's shape, so the grid has to be re-read; on a large
+      // source that takes a moment, and without the overlay the click looks like it did nothing.
+      setGridBusy(true, action.startsWith("row-") ? "sources.addingRow" : "sources.addingColumn");
       if (action.startsWith("row-")) {
         const beforeIndex = beforeIndexFor("row");
         const res = await fetch(`/api/datasources/${sourceId}/rows/add`, {
@@ -1010,9 +1058,13 @@
         if (!res.ok) throw new Error(body.message || t("sources.addColFail") || "افزودن ستون ناموفق بود.");
         notify(t("sources.colAdded", { key: body.addedColumnKey || key }) || `ستون «${body.addedColumnKey || key}» اضافه شد.`, "success");
       }
-      await refreshViewer();
+      // refreshViewer shows its own overlay, so tell it not to double-count ours.
+      await refreshViewer({ busy: false });
     } catch (e) {
       notify(e.message || "انجام نشد.", "error");
+    } finally {
+      // Always clear the overlay, even when the request failed, or the grid would stay greyed out.
+      setGridBusy(false);
     }
   }
 
@@ -1025,9 +1077,12 @@
   }
 
   /** Reload the open source from the server and repaint the grid (keeps the zoom/scroll owner). */
-  async function refreshViewer() {
+  async function refreshViewer(opts) {
     const sourceId = viewerState.sourceId;
     if (sourceId == null) return;
+    // A caller that already shows its own overlay passes busy:false so the counter stays balanced.
+    const busy = opts?.busy !== false;
+    if (busy) setGridBusy(true, "sources.loadingGrid");
     try {
       // One walk supplies the cells, the per-cell revisions the inline editor checks against, and
       // the per-cell editor stamps the tooltips show — so the three can never disagree.
@@ -1037,14 +1092,23 @@
       viewerState.lastSource = fresh;
       renderViewerTable(fresh);
     } catch { /* leave the grid as-is */ }
+    finally { if (busy) setGridBusy(false); }
   }
 
   async function openViewer(taskId, sourceId) {
     viewerState.taskId = taskId;
     viewerState.sourceId = Number(sourceId);
+    // A freshly opened source starts at its first page; keeping an old page index would show a
+    // different source's rows or an out-of-range page.
+    viewerState.page = 0;
     // Read the source straight from the server: the grid needs real cell values and the current
     // column set, which the list payload deliberately omits (it is a summary-only shape).
-    await refreshViewer();
+    setGridBusy(true, "sources.loadingGrid");
+    try {
+      await refreshViewer();
+    } finally {
+      setGridBusy(false);
+    }
     if (!viewerState.lastSource) {
       const entry = findEntry(taskId, sourceId);
       if (!entry) {
@@ -1067,6 +1131,7 @@
     viewerState.lastSource = null;
     viewerState.cellRevisions = null;
     viewerState.cellMeta = null;
+    viewerState.page = 0;
     editingCell = null;
     setLiveStatus(false);
     if (viewerState.connection) {
@@ -1132,24 +1197,52 @@
     });
   }
 
+  /** Rows per list page. The library can grow large, so the table shows a page at a time. */
+  const LIST_PAGE_SIZE = 50;
+  let listPage = 0;
+  let lastListRows = [];
+
+  /** While the library is being fetched, say so instead of leaving a stale table on screen. */
+  function showListLoading() {
+    const rowsEl = document.getElementById("da-source-rows");
+    const cardsEl = document.getElementById("da-source-cards");
+    const status = document.getElementById("da-sources-status");
+    const msg = t("sources.listLoading") || "در حال بارگذاری فهرست منابع…";
+    if (status) status.textContent = msg;
+    if (rowsEl && !rowsEl.querySelector("tr[data-da-row]")) {
+      rowsEl.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-6">${escapeHtml(msg)}</td></tr>`;
+    }
+    if (cardsEl && !cardsEl.querySelector(".da-source-card")) {
+      cardsEl.innerHTML = `<div class="da-task-empty text-muted">${escapeHtml(msg)}</div>`;
+    }
+  }
+
   function paintRows(rows) {
     const rowsEl = document.getElementById("da-source-rows");
     const cardsEl = document.getElementById("da-source-cards");
     const status = document.getElementById("da-sources-status");
+    lastListRows = rows;
     if (status) {
+      const pages = Math.max(1, Math.ceil(rows.length / LIST_PAGE_SIZE));
       status.textContent = rows.length
-        ? `${rows.length.toLocaleString("fa-IR")} منبع — ${t("sources.libraryHint")}`
+        ? `${rows.length.toLocaleString("fa-IR")} منبع${pages > 1 ? ` · صفحه ${(listPage + 1).toLocaleString("fa-IR")} از ${pages.toLocaleString("fa-IR")}` : ""} — ${t("sources.libraryHint")}`
         : t("sources.libraryHint");
     }
+    // Clamp the page first, so removing rows (or a refresh) can never leave us past the end.
+    const totalPages = Math.max(1, Math.ceil(rows.length / LIST_PAGE_SIZE));
+    if (listPage >= totalPages) listPage = totalPages - 1;
+    if (listPage < 0) listPage = 0;
+    const pageRows = rows.slice(listPage * LIST_PAGE_SIZE, (listPage + 1) * LIST_PAGE_SIZE);
+
     if (rowsEl) {
       if (!rows.length) {
         rowsEl.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-6">منبعی یافت نشد. از ویرایشگر فرآیند فایل اکسل اضافه کنید.</td></tr>`;
       } else {
-        rowsEl.innerHTML = rows.map((r) => {
+        rowsEl.innerHTML = pageRows.map((r) => {
           const label = r.ds.title || r.ds.fileName || "منبع";
           const cols = (r.ds.columnCount ?? (r.ds.columnKeys || r.ds.columns || []).length) || 0;
           const rowCount = r.ds.rowCount ?? 0;
-          return `<tr>
+          return `<tr data-da-row="${escapeHtml(String(r.ds.id ?? ""))}">
             <td>
               <div class="fw-semibold">${escapeHtml(label)}${r.isMaster ? ` <span class="ds-badge-master">پیش‌فرض</span>` : ""}</div>
             </td>
@@ -1167,9 +1260,9 @@
       if (!rows.length) {
         cardsEl.innerHTML = `<div class="da-task-empty text-muted">منبعی نیست.</div>`;
       } else {
-        cardsEl.innerHTML = rows.map((r) => {
+        cardsEl.innerHTML = pageRows.map((r) => {
           const label = r.ds.title || r.ds.fileName || "منبع";
-          return `<div class="da-source-card card mb-2"><div class="card-body">
+          return `<div class="da-source-card card mb-2" data-da-row="${escapeHtml(String(r.ds.id ?? ""))}"><div class="card-body">
             <div class="fw-semibold mb-1">${escapeHtml(label)}</div>
             <div class="text-muted small mb-2">${escapeHtml(r.taskTitle)}</div>
             <div class="ds-actions">${actionButtons(r)}</div>
@@ -1178,6 +1271,21 @@
       }
       bindActions(cardsEl);
     }
+    renderListPager(totalPages);
+  }
+
+  /** The list pager; hidden when everything fits on one page. */
+  function renderListPager(totalPages) {
+    const foot = document.getElementById("da-sources-pager");
+    if (!foot) return;
+    foot.hidden = totalPages <= 1;
+    if (foot.hidden) return;
+    const info = document.getElementById("da-sources-pageinfo");
+    const prev = document.getElementById("da-sources-prev");
+    const next = document.getElementById("da-sources-next");
+    if (info) info.textContent = `صفحه ${(listPage + 1).toLocaleString("fa-IR")} از ${totalPages.toLocaleString("fa-IR")}`;
+    if (prev) prev.disabled = listPage <= 0;
+    if (next) next.disabled = listPage >= totalPages - 1;
   }
 
   function render() {
@@ -1185,6 +1293,9 @@
   }
 
   async function renderAsync() {
+    // Only show the loader when there is nothing on screen yet; a refresh with rows already
+    // visible would otherwise flash the table away on every live event.
+    if (!lastListRows.length) showListLoading();
     const lib = await fetchLibrarySources();
     if (lib !== null) {
       paintRows(lib);
@@ -1199,6 +1310,37 @@
   document.getElementById("da-portal-ds-refresh")?.addEventListener("click", () => {
     if (viewerState.taskId == null || viewerState.sourceId == null) return;
     refreshViewer();
+  });
+  // Paging is pure rendering: the data is already loaded, so this only re-slices the rows.
+  document.getElementById("da-portal-ds-prev")?.addEventListener("click", () => {
+    if (viewerState.page <= 0) return;
+    viewerState.page -= 1;
+    const src = viewerState.lastSource || viewerSource();
+    if (src) renderViewerTable(src);
+  });
+  document.getElementById("da-portal-ds-next")?.addEventListener("click", () => {
+    const src = viewerState.lastSource || viewerSource();
+    if (!src) return;
+    const { rows } = dataSourceTableRows(src);
+    const totalPages = Math.max(1, Math.ceil(rows.length / GRID_PAGE_SIZE));
+    if (viewerState.page >= totalPages - 1) return;
+    viewerState.page += 1;
+    renderViewerTable(src);
+  });
+
+  // List paging is pure re-rendering of the rows we already fetched.
+  document.getElementById("da-sources-prev")?.addEventListener("click", () => {
+    if (listPage <= 0) return;
+    listPage -= 1;
+    paintRows(lastListRows);
+    document.getElementById("da-sources-panel")?.scrollIntoView({ block: "start" });
+  });
+  document.getElementById("da-sources-next")?.addEventListener("click", () => {
+    const totalPages = Math.max(1, Math.ceil(lastListRows.length / LIST_PAGE_SIZE));
+    if (listPage >= totalPages - 1) return;
+    listPage += 1;
+    paintRows(lastListRows);
+    document.getElementById("da-sources-panel")?.scrollIntoView({ block: "start" });
   });
 
   // --- Grid interactions: double-click edits a cell, right-click opens the add menu ----------

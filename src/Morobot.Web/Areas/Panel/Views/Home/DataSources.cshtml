@@ -35,6 +35,13 @@
     <div class="da-task-list d-md-none" id="da-source-cards" aria-live="polite">
       <div class="da-task-empty text-muted">در حال بارگذاری...</div>
     </div>
+
+    <!-- List pager: the library can hold many sources, so the table shows one page at a time. -->
+    <div class="da-list-pager" id="da-sources-pager" hidden>
+      <button type="button" class="btn btn-sm btn-label-secondary" id="da-sources-prev">قبلی</button>
+      <span class="da-list-pageinfo" id="da-sources-pageinfo"></span>
+      <button type="button" class="btn btn-sm btn-label-secondary" id="da-sources-next">بعدی</button>
+    </div>
   </div>
 </div>
 
@@ -62,12 +69,23 @@
         <thead></thead>
         <tbody></tbody>
       </table>
+      <!-- Shown while a long grid operation runs (add row/column, refresh) so the user sees that the
+           click registered; without it a slow reload just looks frozen. -->
+      <div class="ds-grid-loader" id="da-portal-ds-loader" hidden>
+        <span class="ds-grid-spinner" aria-hidden="true"></span>
+        <span class="ds-grid-loader-text" id="da-portal-ds-loader-text"></span>
+      </div>
+    </div>
+    <div class="ds-viewer-foot" id="da-portal-ds-pager" hidden>
+      <button type="button" class="btn btn-sm btn-label-secondary" id="da-portal-ds-prev">قبلی</button>
+      <span class="ds-viewer-page" id="da-portal-ds-pageinfo"></span>
+      <button type="button" class="btn btn-sm btn-label-secondary" id="da-portal-ds-next">بعدی</button>
     </div>
   </div>
 </div>
 
 @section Scripts {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<link rel="stylesheet" href="~/editor/flow.css?v=grid-inline-1" />
-<script src="~/js/local-data-sources.js?v=live-all-1"></script>
+<link rel="stylesheet" href="~/editor/flow.css?v=list-paging-1" />
+<script src="~/js/local-data-sources.js?v=list-paging-1"></script>
 }
