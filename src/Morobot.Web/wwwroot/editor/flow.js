@@ -315,6 +315,59 @@
     graph.edges = graph.edges.filter((e) => e.from !== start.id || e.id === keep.id);
   }
 
+  /**
+   * Collapse duplicate root start nodes down to one.
+   *
+   * A recorded graph can arrive with more than one `kind:"start"`, and the editor has no
+   * concept of a second entry point: `processStart()` returns the first match, so the other
+   * one is drawn on the canvas but never executed, and its incoming/outgoing edges become
+   * unreachable dead weight. The recorder is not the only source - an older save or a
+   * hand-edited graph can carry the same shape - so this runs on every load rather than at
+   * the import call site.
+   *
+   * The first start node wins, because that is the one `processStart()` would have picked;
+   * keeping it means the surviving node is the one the graph already behaved as if it had.
+   * The duplicates' process-wide settings are only copied across when the survivor has none,
+   * so a real value on the kept node is never overwritten by a discarded one.
+   *
+   * Start nodes inside a group are a separate concern (one per group, see groupStart) and are
+   * left alone.
+   */
+  function dedupeRootStartNodes() {
+    if (!Array.isArray(graph?.nodes)) return;
+    const starts = graph.nodes.filter((n) => n.kind === "start" && !n.groupNodeId);
+    if (starts.length <= 1) return;
+
+    const keep = starts[0];
+    const dropped = starts.slice(1);
+    const droppedIds = new Set(dropped.map((n) => n.id));
+
+    for (const d of dropped) {
+      // Fill in only what the survivor is missing; never clobber a value it already has.
+      for (const key of ["repeatSourceType", "dataSourceId", "loopCount", "stepDelayMs",
+        "loopBackLimit", "ignorePlayError", "highlightColor", "moveLoop"]) {
+        if (keep[key] == null && d[key] != null) keep[key] = d[key];
+      }
+    }
+
+    graph.nodes = graph.nodes.filter((n) => !droppedIds.has(n.id));
+
+    // Re-point edges so nothing is orphaned by the removal: an edge into a discarded start
+    // becomes an edge into the survivor, and an edge out of it is dropped (the survivor
+    // already has its own single outgoing edge, and enforceSingleStartOut keeps it to one).
+    graph.edges = (graph.edges || [])
+      .filter((e) => !droppedIds.has(e.from))
+      .map((e) => (droppedIds.has(e.to) ? { ...e, to: keep.id } : e));
+    // A re-pointed edge can duplicate one that already exists; keep the first of each pair.
+    const seen = new Set();
+    graph.edges = graph.edges.filter((e) => {
+      const sig = `${e.from}|${e.to}|${e.kind}`;
+      if (seen.has(sig)) return false;
+      seen.add(sig);
+      return true;
+    });
+  }
+
   function stripCanvasMeta(g) {
     if (!g || typeof g !== "object") return;
     delete g.updatedAtUtc;
@@ -358,6 +411,7 @@
     const stamp = local.updatedAtUtc || local.UpdatedAtUtc || null;
     if (stamp) loadedUpdatedAtUtc = stamp;
     migrateActionKinds(graph);
+    dedupeRootStartNodes();
     enforceSingleStartOut();
     normalizeProcessRepeat();
     titleEl.textContent = graph.title || local.title || t("editor.ribbon.workflow");
