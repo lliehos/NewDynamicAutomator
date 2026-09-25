@@ -157,6 +157,14 @@
     return String(raw).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "data-source";
   }
 
+  /** Download name is the source's own name (title); the imported file name is only a fallback. */
+  function downloadName(ds) {
+    const raw = (ds?.title && String(ds.title).trim())
+      || (ds?.fileName && String(ds.fileName).replace(/\.(xlsx|xlsm|csv)$/i, ""))
+      || "data-source";
+    return String(raw).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "data-source";
+  }
+
   async function fetchDetail(id) {
     const res = await fetch(`/Admin/Sources/Detail/${encodeURIComponent(id)}`, { credentials: "same-origin" });
     if (!res.ok) throw new Error(i18n.viewFail || "load failed");
@@ -204,7 +212,7 @@
       const table = dataSourceTableRows(ds);
       if (!table.colKeys.length) throw new Error(i18n.noRows || "empty");
       const payload = {
-        title: safeName(ds),
+        title: downloadName(ds),
         columns: table.columns.map((c) => ({ key: c.key, title: c.title })),
         columnKeys: table.colKeys,
         cells: (ds.cells || []).map((c) => ({
@@ -224,7 +232,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${safeName(ds)}.xlsx`;
+      a.download = `${downloadName(ds)}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();

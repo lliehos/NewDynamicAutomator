@@ -38,6 +38,29 @@ public class TasksController : Controller
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
+    /// <summary>
+    /// Build an ASCII-safe fallback for the Content-Disposition <c>filename</c> parameter.
+    ///
+    /// The real name travels in <c>filename*</c> (RFC 5987, UTF-8) and every current browser
+    /// prefers it. Some older clients only look at the plain <c>filename</c>, and ASP.NET Core
+    /// replaces non-ASCII with escapes that a few of them render as '?' or blanks. Rather than
+    /// let the name become unreadable there, keep ASCII letters/digits, turn spaces into '_'
+    /// and drop everything else, so such a client at least gets a stable, legible file name
+    /// instead of a row of '?'.
+    /// </summary>
+    private static string AsciiDownloadFallback(string name)
+    {
+        var sb = new System.Text.StringBuilder(name.Length);
+        foreach (var ch in name)
+        {
+            if (ch < 128 && char.IsLetterOrDigit(ch)) sb.Append(ch);
+            else if (ch is '_' or '-' or '.') sb.Append(ch);
+            else if (ch == ' ') sb.Append('_');
+        }
+        var trimmed = sb.ToString().Trim('_', '.', '-');
+        return string.IsNullOrEmpty(trimmed) ? "data-source" : trimmed;
+    }
+
     [HttpPost]
     [ValidateAntiForgeryToken]
     public IActionResult Create(string title)
@@ -139,16 +162,25 @@ public class TasksController : Controller
             }
 
             var bytes = _dataSources.BuildExcel(columns, request.Cells ?? new List<DataSourceCellDto>());
+            // The download name is the source's own name, not the file it was imported from.
             var baseName = string.IsNullOrWhiteSpace(request.Title) ? "data-source" : request.Title.Trim();
             foreach (var ch in Path.GetInvalidFileNameChars())
                 baseName = baseName.Replace(ch, '_');
             if (!baseName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
                 baseName += ".xlsx";
 
+            // Send the real (possibly Persian) name in filename* and keep a plain ASCII
+            // fallback in filename so clients that ignore RFC 5987 still get a usable name.
+            var cd = new Microsoft.Net.Http.Headers.ContentDispositionHeaderValue("attachment")
+            {
+                FileName = AsciiDownloadFallback(baseName),
+                FileNameStar = baseName
+            };
+            Response.Headers.ContentDisposition = cd.ToString();
+
             return File(
                 bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                baseName);
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         }
         catch (InvalidOperationException ex)
         {

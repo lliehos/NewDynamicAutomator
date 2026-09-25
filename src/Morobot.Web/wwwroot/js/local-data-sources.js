@@ -165,6 +165,17 @@
     return String(raw).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "data-source";
   }
 
+  /**
+   * Download name of a source, which is the source's own name (title), not the file it was
+   * imported from. The imported file name is only a fallback for sources that have no title.
+   */
+  function dataSourceDownloadName(ds) {
+    const raw = (ds?.title && String(ds.title).trim())
+      || (ds?.fileName && String(ds.fileName).replace(/\.(xlsx|xlsm|csv)$/i, ""))
+      || "data-source";
+    return String(raw).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "data-source";
+  }
+
   function dataSourceTableRows(ds) {
     const keys = Array.isArray(ds?.columnKeys) && ds.columnKeys.length
       ? ds.columnKeys.map(String)
@@ -235,7 +246,7 @@
     }
     try {
       const payload = {
-        title: dataSourceSafeFileName(ds),
+        title: dataSourceDownloadName(ds),
         columns: table.columns.map((c) => ({ key: c.key, title: c.title })),
         columnKeys: table.colKeys,
         cells: (ds.cells || []).map((c) => ({
@@ -253,8 +264,8 @@
         const err = await res.json().catch(() => ({}));
         throw new Error(err.message || `خطا در ساخت اکسل (کد ${res.status})`);
       }
-      downloadBlobFile(await res.blob(), `${dataSourceSafeFileName(ds)}.xlsx`);
-      notify(`فایل «${dataSourceSafeFileName(ds)}.xlsx» دانلود شد.`, "success");
+      downloadBlobFile(await res.blob(), `${dataSourceDownloadName(ds)}.xlsx`);
+      notify(`فایل «${dataSourceDownloadName(ds)}.xlsx» دانلود شد.`, "success");
     } catch (e) {
       try {
         downloadAsCsv(ds);
