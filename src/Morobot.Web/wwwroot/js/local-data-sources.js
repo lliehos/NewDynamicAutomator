@@ -371,6 +371,16 @@
     const columns = head.columns || [];
     const columnKeys = head.columnKeys || columns.map((c) => c.key);
     const cells = [];
+    const cellRevisions = {};
+    const cellMeta = {};
+    const mergeExtras = (page) => {
+      for (const [row, cols] of Object.entries(page?.cellRevisions || {})) {
+        cellRevisions[row] = Object.assign(cellRevisions[row] || {}, cols);
+      }
+      for (const [row, cols] of Object.entries(page?.cellMeta || {})) {
+        cellMeta[row] = Object.assign(cellMeta[row] || {}, cols);
+      }
+    };
     const pushRows = (rows) => {
       for (const row of rows || []) {
         for (const [k, v] of Object.entries(row.values || {})) {
@@ -379,6 +389,7 @@
       }
     };
     pushRows(head.rows);
+    mergeExtras(head);
 
     // Keep paging while the server reports more rows than we have collected.
     let got = (head.rows || []).length;
@@ -391,6 +402,7 @@
       const rows = page.rows || [];
       if (!rows.length) break;
       pushRows(rows);
+      mergeExtras(page);
       got += rows.length;
     }
 
@@ -404,7 +416,10 @@
       rowCount: Math.max(total, got),
       columnCount: head.columnCount ?? columns.length,
       dataRevision: head.dataRevision,
-      hexRevision: head.hexRevision
+      hexRevision: head.hexRevision,
+      // Carried back so one walk serves the grid, its tooltips and its concurrency check.
+      cellRevisions,
+      cellMeta
     };
   }
 
@@ -548,7 +563,9 @@
     /** Source detail loaded by refreshViewer, for grids whose process is not in the local cache. */
     lastSource: null,
     /** rowIndex → columnKey → cellRevision, so concurrent writes can be detected. */
-    cellRevisions: null
+    cellRevisions: null,
+    /** rowIndex → columnKey → {userId, userName, updatedAtUtc} for the cell tooltip. */
+    cellMeta: null
   };
 
   function cellKey(row, col) {
@@ -707,9 +724,47 @@
     }
     tbody.innerHTML = rows.map((r, i) =>
       `<tr><th class="ds-row-idx" data-row-index="${i}">${i + 1}</th>${r.map((v, ci) =>
-        `<td data-row="${i}" data-col="${escapeHtml(colKeys[ci])}" title="${t("sources.inlineEditHint") || "برای ویرایش دابل‌کلیک کنید"}">${escapeHtml(v)}</td>`
+        `<td data-row="${i}" data-col="${escapeHtml(colKeys[ci])}" title="${escapeHtml(cellTooltip(i, colKeys[ci]))}">${escapeHtml(v)}</td>`
       ).join("")}</tr>`
     ).join("");
+  }
+
+  /**
+   * Tooltip for one cell: who last changed it and when. Shown only in the grid — the Excel export
+   * is the data itself and must not carry this change log.
+   */
+  function cellTooltip(rowIndex, columnKey) {
+    const hint = t("sources.inlineEditHint") || "برای ویرایش دابل‌کلیک کنید";
+    const meta = viewerState.cellMeta?.[rowIndex]?.[columnKey];
+    const when = formatCellStamp(meta?.updatedAtUtc);
+    if (!meta || (!meta.userName && !when)) {
+      // An imported cell has no per-cell editor; say so rather than showing an empty tooltip.
+      return when
+        ? `${hint}\n${t("sources.cellMetaImported") || "وارد‌شده از فایل"} · ${when}`
+        : hint;
+    }
+    const byUser = meta.userName ? (t("sources.cellMetaEditedBy", { user: meta.userName }) || meta.userName) : "";
+    const atTime = when ? (t("sources.cellMetaEditedAt", { time: when }) || when) : "";
+    return [hint, [byUser, atTime].filter(Boolean).join(" · ")].filter(Boolean).join("\n");
+  }
+
+  /**
+   * Format a cell timestamp using the active UI language, so a Persian UI shows a Jalali date and
+   * an English UI a Gregorian one. Falls back to the raw value if the locale data is unavailable.
+   */
+  function formatCellStamp(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const lang = (typeof window !== "undefined" && window.daCurrentLang) || document.documentElement.lang || "fa";
+    try {
+      return new Intl.DateTimeFormat(lang === "en" ? "en-GB" : "fa-IR", {
+        dateStyle: "short",
+        timeStyle: "short"
+      }).format(d);
+    } catch {
+      return d.toISOString();
+    }
   }
 
   /** Column keys + row count of the source currently open in the viewer (from the local cache). */
@@ -726,6 +781,18 @@
     const row = revs[rowIndex];
     if (!row) return undefined;
     return row[columnKey];
+  }
+
+  /** Record the editor stamp for one cell so a re-render (or an immediate tooltip) shows it. */
+  function setCellMeta(rowIndex, columnKey, userId, userName, updatedAtUtc) {
+    if (!viewerState.cellMeta) viewerState.cellMeta = {};
+    viewerState.cellMeta[rowIndex] = viewerState.cellMeta[rowIndex] || {};
+    viewerState.cellMeta[rowIndex][columnKey] = {
+      userId: userId ?? null,
+      userName: userName ?? null,
+      // A write always has a server timestamp; fall back to now so the tooltip is never blank.
+      updatedAtUtc: updatedAtUtc ?? new Date().toISOString()
+    };
   }
 
   /**
@@ -758,8 +825,14 @@
           viewerState.cellRevisions[rowIndex] = viewerState.cellRevisions[rowIndex] || {};
           if (body.currentCellRevision != null) viewerState.cellRevisions[rowIndex][columnKey] = body.currentCellRevision;
         }
+        // The value on screen is now the other writer's, so its stamp has to come from them too —
+        // leaving our own name in the tooltip would credit us for a value we did not write.
+        setCellMeta(rowIndex, columnKey, body.currentCellUserId, body.currentCellUserName, body.currentCellUpdatedAtUtc);
         const td = document.querySelector(`#da-portal-ds-table td[data-row="${rowIndex}"][data-col="${CSS.escape(columnKey)}"]`);
-        if (td && body.currentCellValue != null) td.textContent = String(body.currentCellValue);
+        if (td) {
+          if (body.currentCellValue != null) td.textContent = String(body.currentCellValue);
+          td.title = cellTooltip(rowIndex, columnKey);
+        }
         if (source) setLocalCell(source, rowIndex, columnKey, body.currentCellValue ?? "");
         return false;
       }
@@ -770,6 +843,8 @@
         viewerState.cellRevisions[rowIndex] = viewerState.cellRevisions[rowIndex] || {};
         if (body.cellRevision != null) viewerState.cellRevisions[rowIndex][columnKey] = body.cellRevision;
       }
+      // We wrote this value, so the tooltip should now name us and the moment we wrote it.
+      setCellMeta(rowIndex, columnKey, body.lastEditorUserId, body.lastEditorUserName, body.updatedAtUtc);
       if (source) setLocalCell(source, rowIndex, columnKey, value);
       notify(t("sources.cellSaved") || "سلول ذخیره شد.", "success");
       return true;
@@ -954,14 +1029,11 @@
     const sourceId = viewerState.sourceId;
     if (sourceId == null) return;
     try {
-      // fetchSourceContent walks every page and carries the per-cell revisions the inline editor
-      // needs for its optimistic-concurrency check, so one call serves both purposes.
-      const [fresh, page] = await Promise.all([
-        fetchSourceContent(sourceId),
-        fetch(`/api/datasources/${sourceId}/rows?from=0&count=${SOURCE_PAGE_SIZE}`, { credentials: "same-origin" })
-          .then((r) => r.ok ? r.json() : null)
-      ]);
-      viewerState.cellRevisions = page?.cellRevisions || null;
+      // One walk supplies the cells, the per-cell revisions the inline editor checks against, and
+      // the per-cell editor stamps the tooltips show — so the three can never disagree.
+      const fresh = await fetchSourceContent(sourceId);
+      viewerState.cellRevisions = fresh.cellRevisions || null;
+      viewerState.cellMeta = fresh.cellMeta || null;
       viewerState.lastSource = fresh;
       renderViewerTable(fresh);
     } catch { /* leave the grid as-is */ }
@@ -994,6 +1066,7 @@
     viewerState.taskId = null;
     viewerState.lastSource = null;
     viewerState.cellRevisions = null;
+    viewerState.cellMeta = null;
     editingCell = null;
     setLiveStatus(false);
     if (viewerState.connection) {

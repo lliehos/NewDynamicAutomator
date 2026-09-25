@@ -45,6 +45,19 @@ public class DataSourceService
             entity.LastEditorUserId = userId;
     }
 
+    /// <summary>Display name for an editor id, falling back to the login name then null.</summary>
+    async Task<string?> ResolveEditorNameAsync(int? userId, CancellationToken ct)
+    {
+        if (userId is not int uid || uid <= 0) return null;
+        var u = await _db.Users.AsNoTracking()
+            .Where(x => x.Id == uid)
+            .Select(x => new { x.UserName, x.FirstName, x.LastName })
+            .FirstOrDefaultAsync(ct);
+        if (u is null) return null;
+        var full = string.Join(" ", new[] { u.FirstName, u.LastName }.Where(p => !string.IsNullOrWhiteSpace(p)));
+        return string.IsNullOrWhiteSpace(full) ? u.UserName : full.Trim();
+    }
+
     public ParsedExcelDto ParseExcelOnly(Stream excelStream, string? suggestedTitle = null)
     {
         var (columns, cells) = ParseExcel(excelStream);
@@ -312,11 +325,41 @@ public class DataSourceService
         var rows = await q
             .OrderBy(c => c.RowIndex)
             .ThenBy(c => c.ColumnKey)
-            .Select(c => new { c.RowIndex, c.ColumnKey, c.CellValue, c.CellRevision })
+            .Select(c => new
+            {
+                c.RowIndex,
+                c.ColumnKey,
+                c.CellValue,
+                c.CellRevision,
+                c.LastEditorUserId,
+                c.UpdatedAtUtc
+            })
             .ToListAsync(ct);
 
         var byRow = new Dictionary<int, DataSourceRowDto>();
         var revisions = new Dictionary<int, Dictionary<string, long>>();
+        // Only cells a person actually touched carry an editor stamp, so resolve those names in one
+        // extra query rather than joining the user table into the hot row query.
+        var meta = new Dictionary<int, Dictionary<string, DataSourceCellMetaDto>>();
+        var editorIds = rows.Where(r => r.LastEditorUserId is > 0)
+            .Select(r => r.LastEditorUserId!.Value)
+            .Distinct()
+            .ToList();
+        var editorNames = editorIds.Count == 0
+            ? new Dictionary<int, string>()
+            : (await _db.Users.AsNoTracking()
+                .Where(u => editorIds.Contains(u.Id))
+                .Select(u => new { u.Id, u.UserName, u.FirstName, u.LastName })
+                .ToListAsync(ct))
+                .ToDictionary(
+                    u => u.Id,
+                    u =>
+                    {
+                        var full = string.Join(" ",
+                            new[] { u.FirstName, u.LastName }.Where(p => !string.IsNullOrWhiteSpace(p)));
+                        return string.IsNullOrWhiteSpace(full) ? u.UserName : full.Trim();
+                    });
+
         long maxCellRevision = 0;
         foreach (var c in rows)
         {
@@ -325,9 +368,16 @@ public class DataSourceService
                 row = new DataSourceRowDto { RowIndex = c.RowIndex };
                 byRow[c.RowIndex] = row;
                 revisions[c.RowIndex] = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+                meta[c.RowIndex] = new Dictionary<string, DataSourceCellMetaDto>(StringComparer.OrdinalIgnoreCase);
             }
             row.Values[c.ColumnKey] = c.CellValue ?? "";
             revisions[c.RowIndex][c.ColumnKey] = c.CellRevision;
+            meta[c.RowIndex][c.ColumnKey] = new DataSourceCellMetaDto
+            {
+                UserId = c.LastEditorUserId,
+                UserName = c.LastEditorUserId is int uid && editorNames.TryGetValue(uid, out var name) ? name : null,
+                UpdatedAtUtc = c.UpdatedAtUtc
+            };
             if (c.CellRevision > maxCellRevision) maxCellRevision = c.CellRevision;
         }
 
@@ -345,7 +395,8 @@ public class DataSourceService
             DataRevision = d.DataRevision == 0 ? maxCellRevision : d.DataRevision,
             HexRevision = BuildRevisionToken(rows.Select(r => (r.RowIndex, r.ColumnKey, r.CellRevision))),
             Rows = byRow.Values.OrderBy(r => r.RowIndex).ToList(),
-            CellRevisions = revisions
+            CellRevisions = revisions,
+            CellMeta = meta
         };
     }
 
@@ -406,6 +457,7 @@ public class DataSourceService
                 && locked.CellRevision != exp)
             {
                 await tx.RollbackAsync(ct);
+                var conflictingEditor = await ResolveEditorNameAsync(locked.LastEditorUserId, ct);
                 return new PatchDataSourceCellResponse
                 {
                     Ok = false,
@@ -414,7 +466,10 @@ public class DataSourceService
                     DataRevision = ds.DataRevision,
                     CurrentDataRevision = ds.DataRevision,
                     CurrentCellRevision = locked.CellRevision,
-                    CurrentCellValue = locked.CellValue
+                    CurrentCellValue = locked.CellValue,
+                    CurrentCellUserId = locked.LastEditorUserId,
+                    CurrentCellUserName = conflictingEditor,
+                    CurrentCellUpdatedAtUtc = locked.UpdatedAtUtc
                 };
             }
 
@@ -440,7 +495,9 @@ public class DataSourceService
                     RowIndex = req.RowIndex,
                     ColumnKey = key,
                     CellValue = value,
-                    CellRevision = 1
+                    CellRevision = 1,
+                    LastEditorUserId = userId > 0 ? userId : null,
+                    UpdatedAtUtc = DateTime.UtcNow
                 };
                 _db.DataSourceCells.Add(locked);
             }
@@ -448,6 +505,10 @@ public class DataSourceService
             {
                 locked.CellValue = value;
                 locked.CellRevision++;
+                // Provenance travels with the value: the tooltip must name whoever wrote the number
+                // the user is looking at, not the source's owner.
+                locked.LastEditorUserId = userId > 0 ? userId : null;
+                locked.UpdatedAtUtc = DateTime.UtcNow;
             }
 
             // Do NOT touch the DataSources row on the hot path: writing DataRevision/RowCount/
@@ -459,13 +520,17 @@ public class DataSourceService
 
             // Parent row is untouched on purpose, so report the derived source revision.
             var (derivedRevision, _) = await GetDerivedCountersAsync(id, ct);
+            var editorName = await ResolveEditorNameAsync(locked.LastEditorUserId, ct);
 
             return new PatchDataSourceCellResponse
             {
                 Ok = true,
                 DataRevision = Math.Max(derivedRevision, locked.CellRevision),
                 CellRevision = locked.CellRevision,
-                CellValue = value
+                CellValue = value,
+                LastEditorUserId = locked.LastEditorUserId,
+                LastEditorUserName = editorName,
+                UpdatedAtUtc = locked.UpdatedAtUtc
             };
         }
         catch (Exception ex)
@@ -1053,7 +1118,11 @@ public class DataSourceService
                     DataSourceId = id,
                     RowIndex = at + r,
                     ColumnKey = col.Key,
-                    CellValue = ""
+                    CellValue = "",
+                    // An explicitly added row is a user action, so its (empty) cells are stamped too —
+                    // otherwise the tooltip would call a row the user just created an "import".
+                    LastEditorUserId = userId > 0 ? userId : null,
+                    UpdatedAtUtc = DateTime.UtcNow
                 });
             }
         }

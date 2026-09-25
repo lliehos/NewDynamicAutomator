@@ -87,6 +87,28 @@ public class PatchDataSourceCellResponse
     public long? CurrentCellRevision { get; set; }
     public string? CurrentCellValue { get; set; }
     public string? Message { get; set; }
+
+    /// <summary>Editor of the value just written — the grid uses it to refresh the cell tooltip.</summary>
+    public int? LastEditorUserId { get; set; }
+    public string? LastEditorUserName { get; set; }
+    public DateTime? UpdatedAtUtc { get; set; }
+
+    // On a conflict the on-screen value becomes the other writer's, so its stamp is sent back too.
+    public int? CurrentCellUserId { get; set; }
+    public string? CurrentCellUserName { get; set; }
+    public DateTime? CurrentCellUpdatedAtUtc { get; set; }
+}
+
+/// <summary>
+/// Who last changed one cell and when — surfaced as the grid's cell tooltip.
+/// <see cref="UserId"/> is null when the value came from an import rather than a person.
+/// </summary>
+public class DataSourceCellMetaDto
+{
+    public int? UserId { get; set; }
+    /// <summary>Display name of the last editor, already resolved for the caller.</summary>
+    public string? UserName { get; set; }
+    public DateTime? UpdatedAtUtc { get; set; }
 }
 
 public class DataSourceRowDto
@@ -116,6 +138,11 @@ public class DataSourcePageDto
     public List<DataSourceRowDto> Rows { get; set; } = new();
     /// <summary>rowIndex → columnKey → cellRevision (for optimistic writes from the grid).</summary>
     public Dictionary<int, Dictionary<string, long>> CellRevisions { get; set; } = new();
+    /// <summary>
+    /// rowIndex → columnKey → last editor/time. Tooltip-only: deliberately kept out of the Excel
+    /// payload, which is meant to be the data itself and not a change log.
+    /// </summary>
+    public Dictionary<int, Dictionary<string, DataSourceCellMetaDto>> CellMeta { get; set; } = new();
 }
 
 public class CreateDataSourceRequest

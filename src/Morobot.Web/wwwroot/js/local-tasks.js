@@ -730,13 +730,47 @@ function dataSourceSafeFileName(ds) {
     }
     tbody.innerHTML = rows.map((r, i) =>
       `<tr><th class="ds-row-idx">${i + 1}</th>${r.map((v, ci) =>
-        `<td data-row="${i}" data-col="${escapeHtml(colKeys[ci])}" title="${t("sources.inlineEditHint") || "برای ویرایش دابل‌کلیک کنید"}">${escapeHtml(v)}</td>`
+        `<td data-row="${i}" data-col="${escapeHtml(colKeys[ci])}" title="${escapeHtml(processCellTooltip(i, colKeys[ci]))}">${escapeHtml(v)}</td>`
       ).join("")}</tr>`
     ).join("");
   }
 
+  /**
+   * Tooltip for one cell on the processes grid: who last changed it and when. Grid-only — the
+   * Excel export carries the data and must not embed this change log.
+   */
+  function processCellTooltip(rowIndex, columnKey) {
+    const hint = t("sources.inlineEditHint") || "برای ویرایش دابل‌کلیک کنید";
+    const meta = processViewerState.cellMeta?.[rowIndex]?.[columnKey];
+    const when = formatProcessCellStamp(meta?.updatedAtUtc);
+    if (!meta || (!meta.userName && !when)) {
+      return when
+        ? `${hint}\n${t("sources.cellMetaImported") || "وارد‌شده از فایل"} · ${when}`
+        : hint;
+    }
+    const byUser = meta.userName ? (t("sources.cellMetaEditedBy", { user: meta.userName }) || meta.userName) : "";
+    const atTime = when ? (t("sources.cellMetaEditedAt", { time: when }) || when) : "";
+    return [hint, [byUser, atTime].filter(Boolean).join(" · ")].filter(Boolean).join("\n");
+  }
+
+  /** Language-aware stamp so a Persian UI shows a Jalali date and an English UI a Gregorian one. */
+  function formatProcessCellStamp(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const lang = (typeof window !== "undefined" && window.daCurrentLang) || document.documentElement.lang || "fa";
+    try {
+      return new Intl.DateTimeFormat(lang === "en" ? "en-GB" : "fa-IR", {
+        dateStyle: "short",
+        timeStyle: "short"
+      }).format(d);
+    } catch {
+      return d.toISOString();
+    }
+  }
+
   // --- Grid editing on the processes page (same behaviour as the sources page) ----------------
-  const processViewerState = { source: null, cellRevisions: null, editing: null };
+  const processViewerState = { source: null, cellRevisions: null, cellMeta: null, editing: null };
 
   /**
    * Read a source's current content straight from the server, paging until it is exhausted.
@@ -753,6 +787,16 @@ function dataSourceSafeFileName(ds) {
 
     const columns = head.columns || [];
     const cells = [];
+    const cellRevisions = {};
+    const cellMeta = {};
+    const mergeExtras = (page) => {
+      for (const [row, cols] of Object.entries(page?.cellRevisions || {})) {
+        cellRevisions[row] = Object.assign(cellRevisions[row] || {}, cols);
+      }
+      for (const [row, cols] of Object.entries(page?.cellMeta || {})) {
+        cellMeta[row] = Object.assign(cellMeta[row] || {}, cols);
+      }
+    };
     const pushRows = (rows) => {
       for (const row of rows || []) {
         for (const [k, v] of Object.entries(row.values || {})) {
@@ -761,6 +805,7 @@ function dataSourceSafeFileName(ds) {
       }
     };
     pushRows(head.rows);
+    mergeExtras(head);
 
     let got = (head.rows || []).length;
     const total = Number(head.rowCount) || got;
@@ -771,6 +816,7 @@ function dataSourceSafeFileName(ds) {
       const rows = page.rows || [];
       if (!rows.length) break;
       pushRows(rows);
+      mergeExtras(page);
       got += rows.length;
     }
 
@@ -783,7 +829,8 @@ function dataSourceSafeFileName(ds) {
       cells,
       rowCount: Math.max(total, got),
       columnCount: head.columnCount ?? columns.length,
-      cellRevisions: head.cellRevisions || null
+      cellRevisions,
+      cellMeta
     };
   }
 
@@ -794,9 +841,22 @@ function dataSourceSafeFileName(ds) {
     try {
       const fresh = await fetchProcessSourceContent(sourceId);
       processViewerState.cellRevisions = fresh.cellRevisions;
+      processViewerState.cellMeta = fresh.cellMeta;
       delete fresh.cellRevisions;
+      delete fresh.cellMeta;
       renderProcessViewerTable(fresh);
     } catch { /* keep the current grid */ }
+  }
+
+  /** Record the editor stamp for one cell so a re-render shows the right tooltip. */
+  function setProcessCellMeta(rowIndex, columnKey, userId, userName, updatedAtUtc) {
+    if (!processViewerState.cellMeta) processViewerState.cellMeta = {};
+    processViewerState.cellMeta[rowIndex] = processViewerState.cellMeta[rowIndex] || {};
+    processViewerState.cellMeta[rowIndex][columnKey] = {
+      userId: userId ?? null,
+      userName: userName ?? null,
+      updatedAtUtc: updatedAtUtc ?? new Date().toISOString()
+    };
   }
 
   function processCellRevision(rowIndex, columnKey) {
@@ -839,8 +899,13 @@ function dataSourceSafeFileName(ds) {
         if (!processViewerState.cellRevisions) processViewerState.cellRevisions = {};
         processViewerState.cellRevisions[rowIndex] = processViewerState.cellRevisions[rowIndex] || {};
         if (body.currentCellRevision != null) processViewerState.cellRevisions[rowIndex][columnKey] = body.currentCellRevision;
+        // The value now on screen belongs to the other writer, so the tooltip must name them.
+        setProcessCellMeta(rowIndex, columnKey, body.currentCellUserId, body.currentCellUserName, body.currentCellUpdatedAtUtc);
         const td = document.querySelector(`#da-portal-ds-table td[data-row="${rowIndex}"][data-col="${CSS.escape(columnKey)}"]`);
-        if (td && body.currentCellValue != null) td.textContent = String(body.currentCellValue);
+        if (td) {
+          if (body.currentCellValue != null) td.textContent = String(body.currentCellValue);
+          td.title = processCellTooltip(rowIndex, columnKey);
+        }
         if (processViewerState.source && body.currentCellValue != null) {
           setProcessLocalCell(processViewerState.source, rowIndex, columnKey, body.currentCellValue);
         }
@@ -851,6 +916,8 @@ function dataSourceSafeFileName(ds) {
       if (!processViewerState.cellRevisions) processViewerState.cellRevisions = {};
       processViewerState.cellRevisions[rowIndex] = processViewerState.cellRevisions[rowIndex] || {};
       if (body.cellRevision != null) processViewerState.cellRevisions[rowIndex][columnKey] = body.cellRevision;
+      // We wrote this value — the tooltip should now name us and when we wrote it.
+      setProcessCellMeta(rowIndex, columnKey, body.lastEditorUserId, body.lastEditorUserName, body.updatedAtUtc);
       if (processViewerState.source) setProcessLocalCell(processViewerState.source, rowIndex, columnKey, value);
       notifyHome(t("sources.cellSaved") || "سلول ذخیره شد.", "success");
       return true;

@@ -234,6 +234,14 @@ public class AppDbContext : DbContext
             e.Property(x => x.ColumnKey).HasMaxLength(120).IsRequired();
             e.Property(x => x.CellValue).IsRequired();
             e.HasIndex(x => new { x.DataSourceId, x.RowIndex, x.ColumnKey }).IsUnique();
+            // Cell provenance. NoAction (not SetNull): SQL Server rejects a second cascade path into
+            // DataSourceCells, and deleting a user must not touch the data they entered — the
+            // tooltip simply falls back to "unknown editor" when the id no longer resolves.
+            e.HasOne<AppUser>()
+                .WithMany()
+                .HasForeignKey(x => x.LastEditorUserId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.NoAction);
             e.HasOne(x => x.DataSource)
                 .WithMany(x => x.Cells)
                 .HasForeignKey(x => x.DataSourceId)
