@@ -1,41 +1,52 @@
 /* Portal home — mobile app shell + Morobot brand palette */
 
+/*
+ * The palette values are emitted by _BrandTheme (rendered from Admin -> Branding) as an
+ * inline <style> in the head, which this file is loaded after. Those values therefore
+ * already win and the admin's palette drives the shell.
+ *
+ * This file must NOT re-declare the same names with a literal value, because it comes
+ * later in document order and would pin the shell to teal. It also must not use
+ * `--x: var(--x, fallback)` - a custom property referencing itself is invalid and
+ * resolves to nothing, which blanks the colour entirely.
+ *
+ * So the fallback lives in a separate name that _BrandTheme never sets. Anything that
+ * needs the palette uses `var(--morobot-x, var(--morobot-x-default))`, which reads the
+ * brand value when present and the shipped default otherwise.
+ */
 :root,
-[data-style="light"] {
-  --morobot-primary: #0d9488;
-  --morobot-primary-dark: #0f766e;
-  --morobot-primary-hover: #0f766e;
-  --morobot-primary-light: #5eead4;
-  --morobot-accent: #0891b2;
-  --morobot-soft: #ecfdf5;
-  --morobot-soft-2: #ccfbf1;
-  --morobot-ink: #134e4a;
-  --morobot-border-subtle: #99f6e4;
-  --bs-primary: #0d9488;
-  --bs-primary-rgb: 13, 148, 136;
-  --bs-primary-bg-subtle: #ecfdf5;
-  --bs-primary-border-subtle: #99f6e4;
-  --bs-primary-text-emphasis: #0f766e;
+[data-style="light"],
+html.light-style {
+  --morobot-primary-default: #0d9488;
+  --morobot-primary-dark-default: #0f766e;
+  --morobot-primary-hover-default: #0f766e;
+  --morobot-primary-light-default: #5eead4;
+  --morobot-primary-rgb-default: 13, 148, 136;
+  --morobot-accent-default: #0891b2;
+  --morobot-soft-default: #ecfdf5;
+  --morobot-soft-2-default: #ccfbf1;
+  --morobot-ink-default: #134e4a;
+  --morobot-border-subtle-default: #99f6e4;
 }
 
 /* Beat Vuexy theme-default purple (#7367f0) with matching specificity */
 .btn-primary {
-  --bs-btn-bg: var(--morobot-primary);
-  --bs-btn-border-color: var(--morobot-primary);
-  --bs-btn-hover-bg: var(--morobot-primary-hover);
-  --bs-btn-hover-border-color: var(--morobot-primary-hover);
-  --bs-btn-active-bg: var(--morobot-primary-dark);
-  --bs-btn-active-border-color: var(--morobot-primary-dark);
-  --bs-btn-disabled-bg: var(--morobot-primary);
-  --bs-btn-disabled-border-color: var(--morobot-primary);
+  --bs-btn-bg: var(--morobot-primary, var(--morobot-primary-default));
+  --bs-btn-border-color: var(--morobot-primary, var(--morobot-primary-default));
+  --bs-btn-hover-bg: var(--morobot-primary-hover, var(--morobot-primary-hover-default));
+  --bs-btn-hover-border-color: var(--morobot-primary-hover, var(--morobot-primary-hover-default));
+  --bs-btn-active-bg: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  --bs-btn-active-border-color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  --bs-btn-disabled-bg: var(--morobot-primary, var(--morobot-primary-default));
+  --bs-btn-disabled-border-color: var(--morobot-primary, var(--morobot-primary-default));
   color: #fff !important;
-  background-color: var(--morobot-primary) !important;
-  border-color: var(--morobot-primary) !important;
-  box-shadow: 0 0.125rem 0.375rem 0 rgba(13, 148, 136, 0.3) !important;
+  background-color: var(--morobot-primary, var(--morobot-primary-default)) !important;
+  border-color: var(--morobot-primary, var(--morobot-primary-default)) !important;
+  box-shadow: 0 0.125rem 0.375rem 0 rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.3) !important;
 }
 
 .btn-primary.btn[class*=btn-]:not([class*=btn-label-]):not([class*=btn-outline-]):not([class*=btn-text-]):not(.btn-icon):not(:disabled):not(.disabled) {
-  box-shadow: 0 0.125rem 0.375rem 0 rgba(13, 148, 136, 0.3) !important;
+  box-shadow: 0 0.125rem 0.375rem 0 rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.3) !important;
 }
 
 .btn-primary:hover,
@@ -43,8 +54,8 @@
 .btn-primary:focus,
 .btn-primary.focus {
   color: #fff !important;
-  background-color: var(--morobot-primary-hover) !important;
-  border-color: var(--morobot-primary-hover) !important;
+  background-color: var(--morobot-primary-hover, var(--morobot-primary-hover-default)) !important;
+  border-color: var(--morobot-primary-hover, var(--morobot-primary-hover-default)) !important;
 }
 
 .btn-check:checked + .btn-primary,
@@ -54,26 +65,26 @@
 .btn-primary.show.dropdown-toggle,
 .show > .btn-primary.dropdown-toggle {
   color: #fff !important;
-  background-color: var(--morobot-primary-dark) !important;
-  border-color: var(--morobot-primary-dark) !important;
+  background-color: var(--morobot-primary-dark, var(--morobot-primary-dark-default)) !important;
+  border-color: var(--morobot-primary-dark, var(--morobot-primary-dark-default)) !important;
 }
 
 .btn-primary.disabled,
 .btn-primary:disabled {
   color: #fff !important;
-  background-color: var(--morobot-primary) !important;
-  border-color: var(--morobot-primary) !important;
+  background-color: var(--morobot-primary, var(--morobot-primary-default)) !important;
+  border-color: var(--morobot-primary, var(--morobot-primary-default)) !important;
 }
 
 .btn-outline-primary {
-  --bs-btn-color: var(--morobot-primary);
-  --bs-btn-border-color: var(--morobot-primary);
-  --bs-btn-hover-bg: var(--morobot-primary);
-  --bs-btn-hover-border-color: var(--morobot-primary);
-  --bs-btn-active-bg: var(--morobot-primary-dark);
-  --bs-btn-active-border-color: var(--morobot-primary-dark);
-  color: var(--morobot-primary) !important;
-  border-color: var(--morobot-primary) !important;
+  --bs-btn-color: var(--morobot-primary, var(--morobot-primary-default));
+  --bs-btn-border-color: var(--morobot-primary, var(--morobot-primary-default));
+  --bs-btn-hover-bg: var(--morobot-primary, var(--morobot-primary-default));
+  --bs-btn-hover-border-color: var(--morobot-primary, var(--morobot-primary-default));
+  --bs-btn-active-bg: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  --bs-btn-active-border-color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  color: var(--morobot-primary, var(--morobot-primary-default)) !important;
+  border-color: var(--morobot-primary, var(--morobot-primary-default)) !important;
 }
 
 .btn-outline-primary:hover,
@@ -81,36 +92,36 @@
 .btn-outline-primary:active,
 .btn-outline-primary.active {
   color: #fff !important;
-  background-color: var(--morobot-primary) !important;
-  border-color: var(--morobot-primary) !important;
+  background-color: var(--morobot-primary, var(--morobot-primary-default)) !important;
+  border-color: var(--morobot-primary, var(--morobot-primary-default)) !important;
 }
 
 .btn-label-primary {
-  background: var(--morobot-soft) !important;
-  color: var(--morobot-primary-dark) !important;
+  background: var(--morobot-soft, var(--morobot-soft-default)) !important;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default)) !important;
   border-color: transparent !important;
 }
 
 .bg-primary {
-  background-color: var(--morobot-primary) !important;
+  background-color: var(--morobot-primary, var(--morobot-primary-default)) !important;
 }
 
 .text-primary {
-  color: var(--morobot-primary) !important;
+  color: var(--morobot-primary, var(--morobot-primary-default)) !important;
 }
 
 .bg-label-primary {
-  background-color: var(--morobot-soft) !important;
-  color: var(--morobot-primary-dark) !important;
+  background-color: var(--morobot-soft, var(--morobot-soft-default)) !important;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default)) !important;
 }
 
 /* Sidebar active — must beat [dir=rtl] .bg-menu-theme… !important purple gradient */
 .bg-menu-theme.menu-vertical .menu-item.active > .menu-link:not(.menu-toggle),
 [dir=rtl] .bg-menu-theme.menu-vertical .menu-item.active > .menu-link:not(.menu-toggle),
 .menu-vertical .menu-item.active > .menu-link {
-  background: linear-gradient(-270deg, rgba(13, 148, 136, 0.75) 0%, #0d9488 100%) !important;
+  background: linear-gradient(-270deg, rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.75) 0%, var(--morobot-primary, var(--morobot-primary-default)) 100%) !important;
   color: #fff !important;
-  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.35) !important;
+  box-shadow: 0 2px 8px rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.35) !important;
 }
 
 .bg-menu-theme.menu-vertical .menu-item.active > .menu-link:not(.menu-toggle) .menu-icon,
@@ -120,15 +131,15 @@
 
 .layout-wrapper:not(.layout-horizontal) .bg-menu-theme .menu-inner > .menu-item.active:before,
 [dir=rtl] .layout-wrapper:not(.layout-horizontal) .bg-menu-theme .menu-inner > .menu-item.active:before {
-  background: var(--morobot-primary) !important;
+  background: var(--morobot-primary, var(--morobot-primary-default)) !important;
 }
 
 .menu-vertical .menu-link:hover {
-  color: var(--morobot-primary-dark);
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
 }
 
 .menu-vertical .menu-item:not(.active) > .menu-link:hover {
-  background: var(--morobot-soft) !important;
+  background: var(--morobot-soft, var(--morobot-soft-default)) !important;
 }
 
 .bg-menu-theme .menu-item.active > .menu-link {
@@ -136,13 +147,13 @@
 }
 
 .app-brand .app-brand-text {
-  color: var(--morobot-primary-dark);
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
 }
 
 .form-control:focus,
 .form-select:focus {
-  border-color: var(--morobot-primary);
-  box-shadow: 0 0 0 0.2rem rgba(13, 148, 136, 0.2);
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  box-shadow: 0 0 0 0.2rem rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.2);
 }
 
 .da-home {
@@ -161,7 +172,7 @@
   font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: #0d9488;
+  color: var(--morobot-primary, var(--morobot-primary-default));
   margin-bottom: 0.15rem;
   display: flex;
   align-items: center;
@@ -200,8 +211,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #ecfdf5;
-  color: #0d9488;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary, var(--morobot-primary-default));
   flex-shrink: 0;
 }
 
@@ -275,14 +286,14 @@
 }
 
 .da-dash-shot:hover {
-  border-color: rgba(13, 148, 136, 0.35);
-  box-shadow: 0 6px 16px rgba(13, 148, 136, 0.1);
+  border-color: rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.35);
+  box-shadow: 0 6px 16px rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.1);
   color: inherit;
 }
 
 .da-dash-shot .ti {
   font-size: 1.35rem;
-  color: #0d9488;
+  color: var(--morobot-primary, var(--morobot-primary-default));
   margin-bottom: 2px;
 }
 
@@ -298,8 +309,8 @@
 }
 
 .da-dash-shot-primary {
-  background: linear-gradient(145deg, #ecfdf5, #fff);
-  border-color: rgba(13, 148, 136, 0.25);
+  background: linear-gradient(145deg, var(--morobot-soft, var(--morobot-soft-default)), #fff);
+  border-color: rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.25);
 }
 
 .da-dash-recent {
@@ -322,7 +333,7 @@
 }
 
 .da-dash-row:hover {
-  border-color: rgba(13, 148, 136, 0.35);
+  border-color: rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.35);
   color: inherit;
 }
 
@@ -372,7 +383,7 @@
 
 .morobot-brand-link .app-brand-text {
   margin-inline-start: 0.35rem !important;
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
 }
 
 .morobot-brand-link .morobot-brand-en {
@@ -398,7 +409,7 @@
   height: 112px;
   object-fit: contain;
   border-radius: 22px;
-  box-shadow: 0 10px 28px rgba(13, 148, 136, 0.22);
+  box-shadow: 0 10px 28px rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.22);
 }
 
 .morobot-login-titles {
@@ -409,7 +420,7 @@
 }
 
 .morobot-login-titles .app-brand-text {
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   font-size: 1.45rem;
 }
 
@@ -676,8 +687,8 @@
 }
 
 .da-task-actions .ds-icon-btn.is-play {
-  color: #0d9488;
-  background: #ecfdf5;
+  color: var(--morobot-primary, var(--morobot-primary-default));
+  background: var(--morobot-soft, var(--morobot-soft-default));
 }
 
 .da-play-target-menu {
@@ -759,17 +770,17 @@
 }
 
 .da-task-actions .ds-icon-btn.is-smart {
-  color: #0d9488;
-  background: #ccfbf1;
+  color: var(--morobot-primary, var(--morobot-primary-default));
+  background: var(--morobot-soft-2, var(--morobot-soft-2-default));
 }
 
 .da-task-actions .ds-icon-btn.is-edit {
-  color: #0f766e;
-  background: #ccfbf1;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  background: var(--morobot-soft-2, var(--morobot-soft-2-default));
 }
 
 .da-task-actions .ds-icon-btn.is-view {
-  color: #0d9488;
+  color: var(--morobot-primary, var(--morobot-primary-default));
 }
 
 .da-task-actions .ds-icon-btn.is-xlsx {
@@ -820,9 +831,9 @@
   height: 56px;
   border: 0;
   border-radius: 50%;
-  background: var(--morobot-primary);
+  background: var(--morobot-primary, var(--morobot-primary-default));
   color: #fff;
-  box-shadow: 0 8px 24px rgba(13, 148, 136, 0.45);
+  box-shadow: 0 8px 24px rgba(var(--morobot-primary-rgb, var(--morobot-primary-rgb-default)), 0.45);
   display: inline-flex;
   align-items: center;
   justify-content: center;

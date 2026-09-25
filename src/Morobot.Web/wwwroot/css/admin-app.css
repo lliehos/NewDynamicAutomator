@@ -1,7 +1,7 @@
 /* Admin shell — isolated from Panel Vuexy theme (no core.css) */
 body {
   font-family: Vazirmatn, Tahoma, sans-serif;
-  background: linear-gradient(160deg, #f0fdfa 0%, #f8fafc 42%, #eef2ff 100%);
+  background: linear-gradient(160deg, var(--morobot-soft, var(--morobot-soft-default)) 0%, #f8fafc 42%, #eef2ff 100%);
   margin: 0;
   color: #334155;
 }
@@ -49,7 +49,7 @@ textarea.admin-mono {
   min-height: 100vh;
 }
 .admin-nav {
-  background: linear-gradient(180deg, #0f766e 0%, #115e59 55%, #134e4a 100%);
+  background: linear-gradient(180deg, var(--morobot-primary-dark, var(--morobot-primary-dark-default)) 0%, var(--morobot-ink, var(--morobot-ink-default)) 55%, var(--morobot-ink, var(--morobot-ink-default)) 100%);
   color: #fff;
   padding: 1.25rem 1rem;
   display: flex;
@@ -98,7 +98,7 @@ textarea.admin-mono {
   margin: 0;
   font-size: 1.4rem;
   font-weight: 700;
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   font-family: Vazirmatn, Tahoma, sans-serif;
 }
 /* Account controls (panel, logout, language) share the top bar with the page title. */
@@ -137,8 +137,8 @@ table.admin-table td {
   vertical-align: middle;
 }
 table.admin-table th {
-  background: #f0fdfa;
-  color: #0f766e;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   font-weight: 700;
   font-size: .82rem;
   text-transform: none;
@@ -147,7 +147,7 @@ table.admin-table th {
   display: inline-block;
   padding: .4rem .85rem;
   border-radius: .55rem;
-  background: #0d9488;
+  background: var(--morobot-primary, var(--morobot-primary-default));
   color: #fff;
   text-decoration: none;
   border: 0;
@@ -167,7 +167,7 @@ table.admin-table th {
   margin-bottom: 1rem;
   box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
 }
-.card-admin.is-ok { border-inline-start: 4px solid #0d9488; }
+.card-admin.is-ok { border-inline-start: 4px solid var(--morobot-primary, var(--morobot-primary-default)); }
 .form-control,
 .form-select {
   display: block;
@@ -209,9 +209,9 @@ textarea.form-control,
   border: 1px solid #fde68a;
 }
 .admin-alert.is-ok {
-  background: #ecfdf5;
-  color: #0f766e;
-  border: 1px solid #99f6e4;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  border: 1px solid var(--morobot-border-subtle, var(--morobot-border-subtle-default));
 }
 /* Licence inside its last month: a distinct orange, so it reads as "act soon" and is not
    mistaken for either the calm green of a healthy licence or the red of an expired one. */
@@ -247,7 +247,7 @@ label { font-size: .9rem; }
   margin-bottom: .9rem;
   padding: .55rem .85rem;
   background: rgba(255, 255, 255, .72);
-  border: 1px solid #ccfbf1;
+  border: 1px solid var(--morobot-soft-2, var(--morobot-soft-2-default));
   border-radius: .75rem;
   font-size: .86rem;
   color: #475569;
@@ -266,7 +266,7 @@ label { font-size: .9rem; }
 }
 .admin-live-feed {
   margin-inline-start: auto;
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   font-weight: 600;
   opacity: .85;
 }
@@ -284,7 +284,7 @@ label { font-size: .9rem; }
 }
 .admin-change-badge.is-created { background: #dcfce7; color: #15803d; }
 .admin-change-badge.is-updated,
-.admin-change-badge.is-renamed { background: #ccfbf1; color: #0f766e; }
+.admin-change-badge.is-renamed { background: var(--morobot-soft-2, var(--morobot-soft-2-default)); color: var(--morobot-primary-dark, var(--morobot-primary-dark-default)); }
 .admin-change-badge.is-deleted,
 .admin-change-badge.is-detached { background: #fee2e2; color: #b91c1c; }
 .admin-change-badge.is-attached,
@@ -297,7 +297,7 @@ label { font-size: .9rem; }
 }
 .admin-play-ico {
   display: inline-flex;
-  color: #0d9488;
+  color: var(--morobot-primary, var(--morobot-primary-default));
 }
 .admin-play-ico.is-blink {
   animation: admin-play-blink 1s ease-in-out infinite;
@@ -373,7 +373,7 @@ label { font-size: .9rem; }
   transition: inset-inline-start .25s ease;
 }
 .admin-switch input:checked + .admin-switch-ui {
-  background: #0d9488;
+  background: var(--morobot-primary, var(--morobot-primary-default));
   box-shadow: inset 0 0 0 1px rgba(13, 148, 136, .35);
 }
 .admin-switch input:checked + .admin-switch-ui::after {
@@ -389,7 +389,7 @@ label { font-size: .9rem; }
   pointer-events: none;
 }
 .admin-switch input:checked ~ .admin-switch-text {
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   font-weight: 600;
 }
 .admin-switch-grid {
@@ -426,7 +426,7 @@ label { font-size: .9rem; }
   margin: 0 0 .85rem;
   font-size: .95rem;
   font-weight: 700;
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   font-family: Syne, Vazirmatn, sans-serif;
 }
 .admin-form-card hr {
@@ -473,7 +473,7 @@ label { font-size: .9rem; }
 .admin-settings-card h3 {
   margin: 0 0 .75rem;
   font-size: .95rem;
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   font-weight: 700;
 }
 .admin-field-hint {
@@ -523,7 +523,7 @@ label { font-size: .9rem; }
 .admin-dash-stat b {
   font-size: 1.55rem;
   font-weight: 700;
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   line-height: 1.15;
 }
 .admin-dash-stat span {
@@ -554,7 +554,7 @@ label { font-size: .9rem; }
 .admin-dash-section h2 {
   margin: 0 0 .75rem;
   font-size: 1rem;
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   font-weight: 700;
 }
 .admin-dash-section-head {
@@ -576,16 +576,16 @@ label { font-size: .9rem; }
   gap: .15rem;
   padding: .75rem .85rem;
   border-radius: .65rem;
-  background: #f0fdfa;
-  color: #0f766e;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   text-decoration: none;
   font-size: .86rem;
   font-weight: 600;
-  border: 1px solid #ccfbf1;
+  border: 1px solid var(--morobot-soft-2, var(--morobot-soft-2-default));
   transition: background .15s ease, transform .15s ease;
 }
 .admin-dash-link:hover {
-  background: #ccfbf1;
+  background: var(--morobot-soft-2, var(--morobot-soft-2-default));
   transform: translateY(-1px);
 }
 .admin-dash-link small {
@@ -610,7 +610,7 @@ label { font-size: .9rem; }
 }
 .admin-plan-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #0d9488, #14b8a6);
+  background: linear-gradient(90deg, var(--morobot-primary, var(--morobot-primary-default)), var(--morobot-primary, var(--morobot-primary-default)));
   border-radius: 999px;
   min-width: 2px;
 }
@@ -771,11 +771,11 @@ label { font-size: .9rem; }
   gap: .25rem;
   padding: .18rem .45rem;
   border-radius: 999px;
-  background: #f0fdfa;
-  color: #0f766e;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   font-size: .72rem;
   font-weight: 600;
-  border: 1px solid #ccfbf1;
+  border: 1px solid var(--morobot-soft-2, var(--morobot-soft-2-default));
 }
 .admin-chip .ti { font-size: .85rem; }
 .admin-status {
@@ -814,8 +814,8 @@ label { font-size: .9rem; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f0fdfa;
-  color: #0f766e;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
 }
 .admin-dash-stat-ico .ti { font-size: 1.15rem; }
 .admin-dash-link {
@@ -945,13 +945,13 @@ label { font-size: .9rem; }
 }
 .btn-admin-outline {
   background: #fff;
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   border: 1px solid rgba(15, 118, 110, .45);
   box-shadow: none;
 }
 .btn-admin-outline:hover {
-  background: #f0fdfa;
-  color: #115e59;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-ink, var(--morobot-ink-default));
 }
 
 .admin-color-grid {
@@ -985,7 +985,7 @@ label { font-size: .9rem; }
 .admin-switch-line input[type="checkbox"] {
   width: 1.1rem;
   height: 1.1rem;
-  accent-color: var(--morobot-primary, #0d9488);
+  accent-color: var(--morobot-primary, var(--morobot-primary, var(--morobot-primary-default)));
 }
 
 /* ---- Dashboard charts & analytics widgets ---- */
@@ -1042,7 +1042,7 @@ label { font-size: .9rem; }
 }
 .admin-kpi b {
   font-size: 1.25rem;
-  color: #0f766e;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
   font-variant-numeric: tabular-nums;
 }
 .admin-kpi span { font-size: .74rem; color: #64748b; }
@@ -1073,9 +1073,9 @@ label { font-size: .9rem; }
   transition: background .15s, color .15s, border-color .15s;
 }
 .admin-pager-btn:hover:not(:disabled) {
-  background: #f0fdfa;
-  border-color: var(--morobot-primary, #0f766e);
-  color: var(--morobot-primary, #0f766e);
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  border-color: var(--morobot-primary, var(--morobot-primary-dark, var(--morobot-primary-dark-default)));
+  color: var(--morobot-primary, var(--morobot-primary-dark, var(--morobot-primary-dark-default)));
 }
 .admin-pager-btn:disabled {
   opacity: .4;
