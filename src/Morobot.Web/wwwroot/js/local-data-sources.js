@@ -466,7 +466,16 @@
     render();
   }
 
-  let viewerState = { taskId: null, sourceId: null, connection: null, blinkTimers: new Map() };
+  let viewerState = {
+    taskId: null,
+    sourceId: null,
+    connection: null,
+    blinkTimers: new Map(),
+    /** Source detail loaded by refreshViewer, for grids whose process is not in the local cache. */
+    lastSource: null,
+    /** rowIndex → columnKey → cellRevision, so concurrent writes can be detected. */
+    cellRevisions: null
+  };
 
   function cellKey(row, col) {
     return `${row}:${col}`;
@@ -611,31 +620,318 @@
     if (titleEl) titleEl.textContent = ds.title || dataSourceSafeFileName(ds);
     if (subEl) {
       subEl.textContent = `${colKeys.length} ستون · ${rows.length} ردیف${ds.fileName ? ` · ${ds.fileName}` : ""}`
-        + " — هنگام اجرا خواندن/نوشتن زنده به‌روز می‌شود";
+        + ` — ${t("sources.inlineHint") || "دابل‌کلیک: ویرایش · راست‌کلیک: افزودن ردیف/ستون"}`;
     }
     const thead = table.querySelector("thead");
     const tbody = table.querySelector("tbody");
-    thead.innerHTML = `<tr><th class="ds-row-idx">#</th>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
+    thead.innerHTML = `<tr><th class="ds-row-idx">#</th>`
+      + headers.map((h, ci) => `<th data-col="${escapeHtml(colKeys[ci])}" data-col-index="${ci}" title="${escapeHtml(h)}">${escapeHtml(h)}</th>`).join("")
+      + `</tr>`;
     if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="${headers.length + 1}" class="ds-viewer-empty">ردیفی نیست</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="${headers.length + 1}" class="ds-viewer-empty">ردیفی نیست — راست‌کلیک کنید و ردیف اضافه کنید</td></tr>`;
       return;
     }
     tbody.innerHTML = rows.map((r, i) =>
-      `<tr><th class="ds-row-idx">${i + 1}</th>${r.map((v, ci) =>
-        `<td data-row="${i}" data-col="${escapeHtml(colKeys[ci])}">${escapeHtml(v)}</td>`
+      `<tr><th class="ds-row-idx" data-row-index="${i}">${i + 1}</th>${r.map((v, ci) =>
+        `<td data-row="${i}" data-col="${escapeHtml(colKeys[ci])}" title="${t("sources.inlineEditHint") || "برای ویرایش دابل‌کلیک کنید"}">${escapeHtml(v)}</td>`
       ).join("")}</tr>`
     ).join("");
   }
 
-  async function openViewer(taskId, sourceId) {
-    const entry = findEntry(taskId, sourceId);
-    if (!entry) {
-      notify("منبع پیدا نشد.", "error");
-      return;
+  /** Column keys + row count of the source currently open in the viewer (from the local cache). */
+  function viewerSource() {
+    if (viewerState.taskId == null || viewerState.sourceId == null) return null;
+    const entry = findEntry(viewerState.taskId, viewerState.sourceId);
+    if (entry) return entry.ds;
+    return viewerState.lastSource || null;
+  }
+
+  function cellRevisionFor(rowIndex, columnKey) {
+    const revs = viewerState.cellRevisions;
+    if (!revs) return undefined;
+    const row = revs[rowIndex];
+    if (!row) return undefined;
+    return row[columnKey];
+  }
+
+  /**
+   * Write one cell. The grid sends the revision it last saw so a concurrent writer produces a 409
+   * we can surface, instead of silently overwriting their value.
+   */
+  async function saveCell(rowIndex, columnKey, value) {
+    const sourceId = viewerState.sourceId;
+    const source = viewerSource();
+    if (sourceId == null) return false;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/cells`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rowIndex,
+          columnKey,
+          cellValue: value,
+          expectedCellRevision: cellRevisionFor(rowIndex, columnKey)
+        })
+      });
+
+      if (res.status === 409) {
+        const body = await res.json().catch(() => ({}));
+        notify((t("sources.cellConflict") || "این سلول توسط کاربر دیگری تغییر کرده است.")
+          + (body.currentCellValue != null ? ` (${body.currentCellValue})` : ""), "warn");
+        // Adopt the server's value + revision so the next write succeeds.
+        if (viewerState.cellRevisions) {
+          viewerState.cellRevisions[rowIndex] = viewerState.cellRevisions[rowIndex] || {};
+          if (body.currentCellRevision != null) viewerState.cellRevisions[rowIndex][columnKey] = body.currentCellRevision;
+        }
+        const td = document.querySelector(`#da-portal-ds-table td[data-row="${rowIndex}"][data-col="${CSS.escape(columnKey)}"]`);
+        if (td && body.currentCellValue != null) td.textContent = String(body.currentCellValue);
+        if (source) setLocalCell(source, rowIndex, columnKey, body.currentCellValue ?? "");
+        return false;
+      }
+      if (!res.ok) throw new Error(`cell ${res.status}`);
+
+      const body = await res.json();
+      if (viewerState.cellRevisions) {
+        viewerState.cellRevisions[rowIndex] = viewerState.cellRevisions[rowIndex] || {};
+        if (body.cellRevision != null) viewerState.cellRevisions[rowIndex][columnKey] = body.cellRevision;
+      }
+      if (source) setLocalCell(source, rowIndex, columnKey, value);
+      notify(t("sources.cellSaved") || "سلول ذخیره شد.", "success");
+      return true;
+    } catch (e) {
+      notify(e.message || t("sources.cellSaveFail") || "ذخیرهٔ سلول ناموفق بود.", "error");
+      return false;
     }
+  }
+
+  /** Mirror a written cell into the local cache so a re-render shows it before the next fetch. */
+  function setLocalCell(ds, rowIndex, columnKey, value) {
+    ds.cells = Array.isArray(ds.cells) ? ds.cells : [];
+    const hit = ds.cells.find((c) =>
+      (c.key === columnKey || c.Key === columnKey)
+      && Number(c.index ?? c.Index ?? c.rowIndex) === rowIndex);
+    if (hit) {
+      if (hit.cellValue !== undefined) hit.cellValue = value;
+      else if (hit.CellValue !== undefined) hit.CellValue = value;
+      else hit.value = value;
+    } else {
+      ds.cells.push({ key: columnKey, index: rowIndex, cellValue: value });
+    }
+    const rc = Number(ds.rowCount) || 0;
+    if (rowIndex + 1 > rc) ds.rowCount = rowIndex + 1;
+  }
+
+  let editingCell = null;
+
+  /** Double-click → swap the cell for an input; Enter/blur commits, Escape reverts. */
+  function beginCellEdit(td) {
+    if (!td || editingCell) return;
+    const rowIndex = Number(td.dataset.row);
+    const columnKey = td.dataset.col;
+    if (!Number.isFinite(rowIndex) || !columnKey) return;
+
+    const before = td.textContent ?? "";
+    td.classList.add("ds-cell-editing");
+    td.innerHTML = "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "ds-cell-input";
+    input.value = before;
+    input.autocomplete = "off";
+    td.appendChild(input);
+    input.focus();
+    input.select();
+    editingCell = { td, input, rowIndex, columnKey, before, done: false };
+
+    const finish = async (commit) => {
+      if (editingCell?.done) return;
+      if (editingCell) editingCell.done = true;
+      const next = input.value;
+      td.classList.remove("ds-cell-editing");
+      td.textContent = commit ? next : before;
+      editingCell = null;
+      if (!commit || next === before) return;
+      const ok = await saveCell(rowIndex, columnKey, next);
+      if (!ok) td.textContent = before;
+    };
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      // Keep grid-level shortcuts (Delete, arrows) from firing while typing.
+      e.stopPropagation();
+    });
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("dblclick", (e) => e.stopPropagation());
+  }
+
+  /** Row/column context menu for the source grid. */
+  function showGridMenu(x, y, td) {
+    const source = viewerSource();
+    if (!source || viewerState.sourceId == null) return;
+    const rowIndex = td ? Number(td.dataset.row) : null;
+    const columnKey = td ? td.dataset.col : null;
+
+    const items = [
+      { id: "row-after", label: t("sources.addRowAfter") || "افزودن ردیف بعد از این" },
+      { id: "row-before", label: t("sources.addRowBefore") || "افزودن ردیف قبل از این" },
+      { sep: true },
+      { id: "col-after", label: t("sources.addColAfter") || "افزودن ستون بعد از این" },
+      { id: "col-before", label: t("sources.addColBefore") || "افزودن ستون قبل از این" }
+    ];
+    if (!td) {
+      // Clicked a header or empty area — offer append-only actions.
+      items.splice(0, items.length,
+        { id: "row-append", label: t("sources.addRowAppend") || "افزودن ردیف در پایان" },
+        { sep: true },
+        { id: "col-append", label: t("sources.addColAppend") || "افزودن ستون در پایان" });
+    }
+
+    const menu = document.createElement("div");
+    menu.className = "ds-grid-menu";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = items.map((it) => it.sep
+      ? `<div class="ds-grid-menu-sep"></div>`
+      : `<button type="button" class="ds-grid-menu-item" data-action="${it.id}">${escapeHtml(it.label)}</button>`
+    ).join("");
+    document.body.appendChild(menu);
+    // Flip near the viewport edges so the menu is never cut off.
+    const rect = menu.getBoundingClientRect();
+    const left = Math.min(x, window.innerWidth - rect.width - 8);
+    const top = Math.min(y, window.innerHeight - rect.height - 8);
+    menu.style.left = `${Math.max(4, left)}px`;
+    menu.style.top = `${Math.max(4, top)}px`;
+
+    const close = () => {
+      menu.remove();
+      document.removeEventListener("mousedown", onDocDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+    const onDocDown = (e) => { if (!menu.contains(e.target)) close(); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("mousedown", onDocDown, true);
+    document.addEventListener("keydown", onKey, true);
+
+    menu.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-action]");
+      if (!btn) return;
+      const action = btn.dataset.action;
+      close();
+      await runGridAction(action, rowIndex, columnKey);
+    });
+  }
+
+  async function runGridAction(action, rowIndex, columnKey) {
+    const sourceId = viewerState.sourceId;
+    if (sourceId == null) return;
+    const source = viewerSource();
+    const columns = (source?.columnKeys || source?.columns || []).map((c) => String(c.key || c.Key || c));
+    const rowCount = Number(source?.rowCount) || 0;
+
+    const beforeIndexFor = (kind) => {
+      if (action === `${kind}-before`) return rowIndex ?? undefined;
+      if (action === `${kind}-after`) return rowIndex == null ? undefined : rowIndex + 1;
+      return undefined; // append
+    };
+
+    try {
+      if (action.startsWith("row-")) {
+        const beforeIndex = beforeIndexFor("row");
+        const res = await fetch(`/api/datasources/${sourceId}/rows/add`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ beforeIndex, count: 1 })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || t("sources.addRowFail") || "افزودن ردیف ناموفق بود.");
+        notify(t("sources.rowAdded") || "ردیف اضافه شد.", "success");
+      } else {
+        const beforeIndex = beforeIndexFor("col");
+        // Derive a free key from the current columns, mirroring the server's generator.
+        const key = nextColumnKey(columns);
+        const res = await fetch(`/api/datasources/${sourceId}/columns`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key, title: key, beforeIndex })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || t("sources.addColFail") || "افزودن ستون ناموفق بود.");
+        notify(t("sources.colAdded", { key: body.addedColumnKey || key }) || `ستون «${body.addedColumnKey || key}» اضافه شد.`, "success");
+      }
+      await refreshViewer();
+    } catch (e) {
+      notify(e.message || "انجام نشد.", "error");
+    }
+  }
+
+  /** First free c<n> not already used by the source. */
+  function nextColumnKey(existingKeys) {
+    const used = new Set((existingKeys || []).map((k) => String(k).toLowerCase()));
+    let n = used.size + 1;
+    while (used.has(`c${n}`)) n++;
+    return `c${n}`;
+  }
+
+  /** Reload the open source from the server and repaint the grid (keeps the zoom/scroll owner). */
+  async function refreshViewer() {
+    const sourceId = viewerState.sourceId;
+    if (sourceId == null) return;
+    try {
+      const [detail, page] = await Promise.all([
+        fetch(`/api/datasources/${sourceId}`, { credentials: "same-origin" }).then((r) => r.ok ? r.json() : null),
+        // The row page is the only response that carries per-cell revisions, which the inline
+        // editor needs for its optimistic-concurrency check.
+        fetch(`/api/datasources/${sourceId}/rows?from=0&count=2000`, { credentials: "same-origin" })
+          .then((r) => r.ok ? r.json() : null)
+      ]);
+      if (!detail && !page) return;
+
+      const columns = detail?.columns || page?.columns || [];
+      const columnKeys = detail?.columnKeys || page?.columnKeys || columns.map((c) => c.key);
+
+      let cells = detail?.cells || [];
+      if (page?.rows?.length) {
+        // Prefer the row page: it is authoritative and its cells are what the grid renders.
+        cells = [];
+        for (const row of page.rows) {
+          for (const [k, v] of Object.entries(row.values || {})) {
+            cells.push({ key: k, index: row.rowIndex, cellValue: v });
+          }
+        }
+      }
+
+      viewerState.lastSource = {
+        id: Number(sourceId),
+        title: detail?.title || page?.title || "",
+        fileName: detail?.fileName,
+        columns,
+        columnKeys,
+        cells,
+        rowCount: page?.rowCount ?? detail?.rowCount ?? 0,
+        columnCount: page?.columnCount ?? detail?.columnCount ?? columns.length
+      };
+      viewerState.cellRevisions = page?.cellRevisions || null;
+      renderViewerTable(viewerState.lastSource);
+    } catch { /* leave the grid as-is */ }
+  }
+
+  async function openViewer(taskId, sourceId) {
     viewerState.taskId = taskId;
     viewerState.sourceId = Number(sourceId);
-    renderViewerTable(entry.ds);
+    // Read the source straight from the server: the grid needs real cell values and the current
+    // column set, which the list payload deliberately omits (it is a summary-only shape).
+    await refreshViewer();
+    if (!viewerState.lastSource) {
+      const entry = findEntry(taskId, sourceId);
+      if (!entry) {
+        notify("منبع پیدا نشد.", "error");
+        return;
+      }
+      renderViewerTable(entry.ds);
+    }
     const modal = document.getElementById("da-portal-ds-viewer");
     if (modal) modal.hidden = false;
     setLiveStatus(false, "● اتصال…");
@@ -647,6 +943,9 @@
     if (modal) modal.hidden = true;
     viewerState.sourceId = null;
     viewerState.taskId = null;
+    viewerState.lastSource = null;
+    viewerState.cellRevisions = null;
+    editingCell = null;
     setLiveStatus(false);
     if (viewerState.connection) {
       try { await viewerState.connection.stop(); } catch { /* ignore */ }
@@ -777,17 +1076,39 @@
   });
   document.getElementById("da-portal-ds-refresh")?.addEventListener("click", () => {
     if (viewerState.taskId == null || viewerState.sourceId == null) return;
-    const entry = findEntry(viewerState.taskId, viewerState.sourceId);
-    if (entry) renderViewerTable(entry.ds);
+    refreshViewer();
   });
+
+  // --- Grid interactions: double-click edits a cell, right-click opens the add menu ----------
+  const viewerTable = document.getElementById("da-portal-ds-table");
+  if (viewerTable) {
+    viewerTable.addEventListener("dblclick", (e) => {
+      const td = e.target.closest("td[data-row][data-col]");
+      if (!td) return;
+      e.preventDefault();
+      beginCellEdit(td);
+    });
+    viewerTable.addEventListener("contextmenu", (e) => {
+      const modal = document.getElementById("da-portal-ds-viewer");
+      if (!modal || modal.hidden) return;
+      e.preventDefault();
+      const td = e.target.closest("td[data-row][data-col]");
+      showGridMenu(e.clientX, e.clientY, td);
+    });
+  }
+
   document.addEventListener("keydown", (e) => {
     const modal = document.getElementById("da-portal-ds-viewer");
-    if (e.key === "Escape" && modal && !modal.hidden) closeViewer();
+    if (!modal || modal.hidden) return;
+    // Escape belongs to the cell editor while a cell is open — do not close the whole viewer.
+    if (e.key === "Escape" && !editingCell) closeViewer();
   });
 
   window.addEventListener("da-local-tasks", () => {
     renderAsync();
-    if (viewerState.taskId != null && viewerState.sourceId != null) {
+    // The local cache is a summary shape; repainting the open grid from it would drop the real
+    // cell values and any optimistic revisions, so only repaint when the server load failed.
+    if (viewerState.taskId != null && viewerState.sourceId != null && !viewerState.lastSource) {
       const entry = findEntry(viewerState.taskId, viewerState.sourceId);
       if (entry) renderViewerTable(entry.ds);
     }

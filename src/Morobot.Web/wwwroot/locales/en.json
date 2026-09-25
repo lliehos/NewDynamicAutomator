@@ -805,7 +805,22 @@
     "reloadNoColumns": "The Excel file has no valid columns (the first row must be headers).",
     "reloadMissingTitle": "Referenced columns were removed",
     "reloadMissingHead": "These columns are missing from the new file but the following steps depend on them:",
-    "reloadMissingFoot": "If you continue, those steps will not find their value. Continue?"
+    "reloadMissingFoot": "If you continue, those steps will not find their value. Continue?",
+    "inlineHint": "Double-click: edit · Right-click: add row/column",
+    "inlineEditHint": "Double-click to edit",
+    "cellSaved": "Cell saved.",
+    "cellSaveFail": "Could not save the cell.",
+    "cellConflict": "Another user changed this cell.",
+    "addRowAfter": "Add row after this",
+    "addRowBefore": "Add row before this",
+    "addRowAppend": "Add row at end",
+    "addColAfter": "Add column after this",
+    "addColBefore": "Add column before this",
+    "addColAppend": "Add column at end",
+    "rowAdded": "Row added.",
+    "colAdded": "Column \"{key}\" added.",
+    "addRowFail": "Could not add the row.",
+    "addColFail": "Could not add the column."
   },
   "settings": {
     "title": "Account settings",

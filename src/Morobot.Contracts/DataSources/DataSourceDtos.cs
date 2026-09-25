@@ -134,6 +134,40 @@ public class UpdateDataSourceRequest
     public string? Title { get; set; }
 }
 
+/// <summary>Append one column to a library source (grid context menu → add column).</summary>
+public class AddDataSourceColumnRequest
+{
+    /// <summary>Optional key; a free key is generated when omitted.</summary>
+    public string? Key { get; set; }
+    public string? Title { get; set; }
+    /// <summary>Insert before this 0-based column index; append when omitted.</summary>
+    public int? BeforeIndex { get; set; }
+}
+
+/// <summary>Insert or append a blank row in a library source.</summary>
+public class AddDataSourceRowRequest
+{
+    /// <summary>Insert before this 0-based row index; append when omitted.</summary>
+    public int? BeforeIndex { get; set; }
+    public int? Count { get; set; }
+}
+
+/// <summary>Result of a structural edit on a source (row/column added).</summary>
+public class DataSourceStructureResponse
+{
+    public bool Ok { get; set; }
+    public string? Code { get; set; }
+    public string? Message { get; set; }
+    public int DataSourceId { get; set; }
+    public List<DataSourceColumnDto> Columns { get; set; } = new();
+    public List<string> ColumnKeys { get; set; } = new();
+    public int ColumnCount { get; set; }
+    public int RowCount { get; set; }
+    public long DataRevision { get; set; }
+    /// <summary>Key of the column that was added, when a column was added.</summary>
+    public string? AddedColumnKey { get; set; }
+}
+
 public class UploadDataSourceResponse
 {
     public int Id { get; set; }

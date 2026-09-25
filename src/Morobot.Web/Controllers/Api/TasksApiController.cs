@@ -544,6 +544,73 @@ public class DataSourcesApiController : ControllerBase
         return dto is null ? NotFound() : Ok(dto);
     }
 
+    /// <summary>Grid context menu — append/insert a column. Safe for running processes (nothing binds to it yet).</summary>
+    [HttpPost("{id:int}/columns")]
+    public async Task<IActionResult> AddColumn(
+        int id, [FromBody] Morobot.Contracts.DataSources.AddDataSourceColumnRequest req, CancellationToken ct)
+    {
+        var result = await _sources.AddColumnAsync(UserId, id, req ?? new(), ct);
+        if (!result.Ok)
+            return result.Code switch
+            {
+                "notfound" => NotFound(),
+                "forbidden" => Forbid(),
+                _ => BadRequest(result)
+            };
+        await BroadcastSourceShapeAsync(id, result, "column_added", ct);
+        return Ok(result);
+    }
+
+    /// <summary>Grid context menu — append/insert blank row(s).</summary>
+    [HttpPost("{id:int}/rows/add")]
+    public async Task<IActionResult> AddRows(
+        int id, [FromBody] Morobot.Contracts.DataSources.AddDataSourceRowRequest req, CancellationToken ct)
+    {
+        var result = await _sources.AddRowsAsync(UserId, id, req ?? new(), ct);
+        if (!result.Ok)
+            return result.Code switch
+            {
+                "notfound" => NotFound(),
+                "forbidden" => Forbid(),
+                _ => BadRequest(result)
+            };
+        await BroadcastSourceShapeAsync(id, result, "row_added", ct);
+        return Ok(result);
+    }
+
+    /// <summary>Tell clients + connected editors that a source's shape (columns/rows) changed.</summary>
+    private async Task BroadcastSourceShapeAsync(
+        int dataSourceId, Morobot.Contracts.DataSources.DataSourceStructureResponse result, string reason, CancellationToken ct)
+    {
+        await _catalog.LibrarySourceChangedAsync(new
+        {
+            id = result.DataSourceId,
+            columnCount = result.ColumnCount,
+            rowCount = result.RowCount,
+            dataRevision = result.DataRevision,
+            addedColumnKey = result.AddedColumnKey
+        }, reason, User.Identity?.Name, UserId, ct);
+
+        var linked = await _sources.GetLinkedProcessIdsAsync(dataSourceId, ct);
+        foreach (var processId in linked)
+        {
+            await _catalog.SourceChangedAsync(processId, new
+            {
+                id = result.DataSourceId,
+                dataRevision = result.DataRevision,
+                addedColumnKey = result.AddedColumnKey
+            }, reason, User.Identity?.Name, ct);
+            await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
+            {
+                taskId = processId,
+                dataSourceId = result.DataSourceId,
+                reason,
+                userId = UserId,
+                userName = User.Identity?.Name
+            }, ct);
+        }
+    }
+
     [HttpPatch("{id:int}/cells")]
     public async Task<IActionResult> PatchCell(
         int id, [FromBody] Morobot.Contracts.DataSources.PatchDataSourceCellRequest req, CancellationToken ct)

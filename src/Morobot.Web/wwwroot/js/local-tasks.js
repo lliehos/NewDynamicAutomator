@@ -694,21 +694,263 @@ function dataSourceSafeFileName(ds) {
     const { headers, colKeys, rows } = dataSourceTableRows(ds);
     if (titleEl) titleEl.textContent = ds.title || dataSourceSafeFileName(ds);
     if (subEl) {
-      subEl.textContent = `${colKeys.length} ستون · ${rows.length} ردیف${ds.fileName ? ` · ${ds.fileName}` : ""}`;
+      subEl.textContent = `${colKeys.length} ستون · ${rows.length} ردیف${ds.fileName ? ` · ${ds.fileName}` : ""}`
+        + ` — ${t("sources.inlineHint") || "دابل‌کلیک: ویرایش · راست‌کلیک: افزودن ردیف/ستون"}`;
     }
+    processViewerState.source = ds;
     const thead = table.querySelector("thead");
     const tbody = table.querySelector("tbody");
     if (!thead || !tbody) return;
-    thead.innerHTML = `<tr><th class="ds-row-idx">#</th>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr>`;
+    thead.innerHTML = `<tr><th class="ds-row-idx">#</th>`
+      + headers.map((h, ci) => `<th data-col="${escapeHtml(colKeys[ci])}" title="${escapeHtml(h)}">${escapeHtml(h)}</th>`).join("")
+      + `</tr>`;
     if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="${headers.length + 1}" class="ds-viewer-empty">${escapeHtml(t("tasks.noDataSource") === t("tasks.noDataSource") ? "ردیفی نیست" : "ردیفی نیست")}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="${headers.length + 1}" class="ds-viewer-empty">ردیفی نیست — راست‌کلیک کنید و ردیف اضافه کنید</td></tr>`;
       return;
     }
     tbody.innerHTML = rows.map((r, i) =>
       `<tr><th class="ds-row-idx">${i + 1}</th>${r.map((v, ci) =>
-        `<td data-row="${i}" data-col="${escapeHtml(colKeys[ci])}">${escapeHtml(v)}</td>`
+        `<td data-row="${i}" data-col="${escapeHtml(colKeys[ci])}" title="${t("sources.inlineEditHint") || "برای ویرایش دابل‌کلیک کنید"}">${escapeHtml(v)}</td>`
       ).join("")}</tr>`
     ).join("");
+  }
+
+  // --- Grid editing on the processes page (same behaviour as the sources page) ----------------
+  const processViewerState = { source: null, cellRevisions: null, editing: null };
+
+  /** Re-read the open source from the server: the list payload is a summary without cell values. */
+  async function refreshProcessViewer() {
+    const sourceId = processViewerState.source?.id;
+    if (!sourceId) return;
+    try {
+      const [detail, page] = await Promise.all([
+        fetch(`/api/datasources/${sourceId}`, { credentials: "same-origin" }).then((r) => r.ok ? r.json() : null),
+        fetch(`/api/datasources/${sourceId}/rows?from=0&count=2000`, { credentials: "same-origin" })
+          .then((r) => r.ok ? r.json() : null)
+      ]);
+      if (!detail && !page) return;
+      const columns = detail?.columns || page?.columns || [];
+      let cells = detail?.cells || [];
+      if (page?.rows?.length) {
+        cells = [];
+        for (const row of page.rows) {
+          for (const [k, v] of Object.entries(row.values || {})) {
+            cells.push({ key: k, index: row.rowIndex, cellValue: v });
+          }
+        }
+      }
+      processViewerState.cellRevisions = page?.cellRevisions || null;
+      renderProcessViewerTable({
+        id: Number(sourceId),
+        title: detail?.title || page?.title || "",
+        fileName: detail?.fileName,
+        columns,
+        columnKeys: detail?.columnKeys || page?.columnKeys || columns.map((c) => c.key),
+        cells,
+        rowCount: page?.rowCount ?? detail?.rowCount ?? 0,
+        columnCount: page?.columnCount ?? detail?.columnCount ?? columns.length
+      });
+    } catch { /* keep the current grid */ }
+  }
+
+  function processCellRevision(rowIndex, columnKey) {
+    const row = processViewerState.cellRevisions?.[rowIndex];
+    return row ? row[columnKey] : undefined;
+  }
+
+  function setProcessLocalCell(source, rowIndex, columnKey, value) {
+    source.cells = Array.isArray(source.cells) ? source.cells : [];
+    const hit = source.cells.find((c) =>
+      (c.key === columnKey || c.Key === columnKey)
+      && Number(c.index ?? c.Index ?? c.rowIndex) === rowIndex);
+    if (hit) {
+      if (hit.cellValue !== undefined) hit.cellValue = value;
+      else if (hit.CellValue !== undefined) hit.CellValue = value;
+      else hit.value = value;
+    } else {
+      source.cells.push({ key: columnKey, index: rowIndex, cellValue: value });
+    }
+  }
+
+  async function saveProcessCell(rowIndex, columnKey, value) {
+    const sourceId = processViewerState.source?.id;
+    if (!sourceId) return false;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/cells`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rowIndex,
+          columnKey,
+          cellValue: value,
+          expectedCellRevision: processCellRevision(rowIndex, columnKey)
+        })
+      });
+      if (res.status === 409) {
+        const body = await res.json().catch(() => ({}));
+        notifyHome(t("sources.cellConflict") || "این سلول توسط کاربر دیگری تغییر کرده است.", "warn");
+        if (!processViewerState.cellRevisions) processViewerState.cellRevisions = {};
+        processViewerState.cellRevisions[rowIndex] = processViewerState.cellRevisions[rowIndex] || {};
+        if (body.currentCellRevision != null) processViewerState.cellRevisions[rowIndex][columnKey] = body.currentCellRevision;
+        const td = document.querySelector(`#da-portal-ds-table td[data-row="${rowIndex}"][data-col="${CSS.escape(columnKey)}"]`);
+        if (td && body.currentCellValue != null) td.textContent = String(body.currentCellValue);
+        if (processViewerState.source && body.currentCellValue != null) {
+          setProcessLocalCell(processViewerState.source, rowIndex, columnKey, body.currentCellValue);
+        }
+        return false;
+      }
+      if (!res.ok) throw new Error(`cell ${res.status}`);
+      const body = await res.json();
+      if (!processViewerState.cellRevisions) processViewerState.cellRevisions = {};
+      processViewerState.cellRevisions[rowIndex] = processViewerState.cellRevisions[rowIndex] || {};
+      if (body.cellRevision != null) processViewerState.cellRevisions[rowIndex][columnKey] = body.cellRevision;
+      if (processViewerState.source) setProcessLocalCell(processViewerState.source, rowIndex, columnKey, value);
+      notifyHome(t("sources.cellSaved") || "سلول ذخیره شد.", "success");
+      return true;
+    } catch (e) {
+      notifyHome(e.message || t("sources.cellSaveFail") || "ذخیرهٔ سلول ناموفق بود.", "error");
+      return false;
+    }
+  }
+
+  function beginProcessCellEdit(td) {
+    if (!td || processViewerState.editing) return;
+    const rowIndex = Number(td.dataset.row);
+    const columnKey = td.dataset.col;
+    if (!Number.isFinite(rowIndex) || !columnKey) return;
+
+    const before = td.textContent ?? "";
+    td.classList.add("ds-cell-editing");
+    td.innerHTML = "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "ds-cell-input";
+    input.value = before;
+    input.autocomplete = "off";
+    td.appendChild(input);
+    input.focus();
+    input.select();
+    processViewerState.editing = { td, input, rowIndex, columnKey, before, done: false };
+
+    const finish = async (commit) => {
+      const state = processViewerState.editing;
+      if (!state || state.done) return;
+      state.done = true;
+      const next = input.value;
+      td.classList.remove("ds-cell-editing");
+      td.textContent = commit ? next : before;
+      processViewerState.editing = null;
+      if (!commit || next === before) return;
+      const ok = await saveProcessCell(rowIndex, columnKey, next);
+      if (!ok) td.textContent = before;
+    };
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      e.stopPropagation();
+    });
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("dblclick", (e) => e.stopPropagation());
+  }
+
+  function showProcessGridMenu(x, y, td) {
+    const source = processViewerState.source;
+    if (!source) return;
+    const rowIndex = td ? Number(td.dataset.row) : null;
+    const columnKey = td ? td.dataset.col : null;
+
+    let items = [
+      { id: "row-after", label: t("sources.addRowAfter") || "افزودن ردیف بعد از این" },
+      { id: "row-before", label: t("sources.addRowBefore") || "افزودن ردیف قبل از این" },
+      { sep: true },
+      { id: "col-after", label: t("sources.addColAfter") || "افزودن ستون بعد از این" },
+      { id: "col-before", label: t("sources.addColBefore") || "افزودن ستون قبل از این" }
+    ];
+    if (!td) {
+      items = [
+        { id: "row-append", label: t("sources.addRowAppend") || "افزودن ردیف در پایان" },
+        { sep: true },
+        { id: "col-append", label: t("sources.addColAppend") || "افزودن ستون در پایان" }
+      ];
+    }
+
+    const menu = document.createElement("div");
+    menu.className = "ds-grid-menu";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = items.map((it) => it.sep
+      ? `<div class="ds-grid-menu-sep"></div>`
+      : `<button type="button" class="ds-grid-menu-item" data-action="${it.id}">${escapeHtml(it.label)}</button>`
+    ).join("");
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+    menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+
+    const close = () => {
+      menu.remove();
+      document.removeEventListener("mousedown", onDocDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+    const onDocDown = (e) => { if (!menu.contains(e.target)) close(); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("mousedown", onDocDown, true);
+    document.addEventListener("keydown", onKey, true);
+
+    menu.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-action]");
+      if (!btn) return;
+      const action = btn.dataset.action;
+      close();
+      await runProcessGridAction(action, rowIndex, columnKey);
+    });
+  }
+
+  function nextProcessColumnKey(existingKeys) {
+    const used = new Set((existingKeys || []).map((k) => String(k).toLowerCase()));
+    let n = used.size + 1;
+    while (used.has(`c${n}`)) n++;
+    return `c${n}`;
+  }
+
+  async function runProcessGridAction(action, rowIndex, columnKey) {
+    const source = processViewerState.source;
+    const sourceId = source?.id;
+    if (!sourceId) return;
+    const beforeIndexFor = (kind) => {
+      if (action === `${kind}-before`) return rowIndex ?? undefined;
+      if (action === `${kind}-after`) return rowIndex == null ? undefined : rowIndex + 1;
+      return undefined;
+    };
+    try {
+      if (action.startsWith("row-")) {
+        const res = await fetch(`/api/datasources/${sourceId}/rows/add`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ beforeIndex: beforeIndexFor("row"), count: 1 })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || t("sources.addRowFail") || "افزودن ردیف ناموفق بود.");
+        notifyHome(t("sources.rowAdded") || "ردیف اضافه شد.", "success");
+      } else {
+        const existing = (source.columnKeys || source.columns || []).map((c) => String(c.key || c.Key || c));
+        const key = nextProcessColumnKey(existing);
+        const res = await fetch(`/api/datasources/${sourceId}/columns`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key, title: key, beforeIndex: beforeIndexFor("col") })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || t("sources.addColFail") || "افزودن ستون ناموفق بود.");
+        notifyHome(t("sources.colAdded", { key: body.addedColumnKey || key }) || `ستون «${body.addedColumnKey || key}» اضافه شد.`, "success");
+      }
+      await refreshProcessViewer();
+    } catch (e) {
+      notifyHome(e.message || "انجام نشد.", "error");
+    }
   }
 
   async function viewProcessData(taskId, btn) {
@@ -722,7 +964,10 @@ function dataSourceSafeFileName(ds) {
       renderProcessViewerTable(hit.ds);
       const modal = document.getElementById("da-portal-ds-viewer");
       if (modal) modal.hidden = false;
-      else notifyHome("نمایشگر داده در این صفحه نیست.", "error");
+      else { notifyHome("نمایشگر داده در این صفحه نیست.", "error"); return; }
+      // The list/canvas snapshot is a summary without cell VALUES, so pull the real rows (and the
+      // per-cell revisions the inline editor needs) before anyone tries to edit.
+      await refreshProcessViewer();
     } catch (e) {
       notifyHome(String(e.message || e), "error");
     } finally {
@@ -1719,6 +1964,45 @@ function dataSourceSafeFileName(ds) {
       setTimeout(() => flashTaskFields(tid, ["dataEdit", "sources"]), 320);
     });
   }
+
+  // --- Process data viewer: modal controls + grid interactions -------------------------------
+  // The processes page has its own lighter viewer (this file), separate from the sources page.
+  (function wireProcessViewer() {
+    const table = document.getElementById("da-portal-ds-table");
+    if (!table) return;
+
+    document.querySelectorAll("[data-portal-ds-close]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const modal = document.getElementById("da-portal-ds-viewer");
+        if (modal) modal.hidden = true;
+        processViewerState.source = null;
+        processViewerState.cellRevisions = null;
+      });
+    });
+    document.getElementById("da-portal-ds-refresh")?.addEventListener("click", () => {
+      if (processViewerState.source) refreshProcessViewer();
+    });
+
+    table.addEventListener("dblclick", (e) => {
+      const td = e.target.closest("td[data-row][data-col]");
+      if (!td) return;
+      e.preventDefault();
+      beginProcessCellEdit(td);
+    });
+    table.addEventListener("contextmenu", (e) => {
+      const modal = document.getElementById("da-portal-ds-viewer");
+      if (!modal || modal.hidden) return;
+      e.preventDefault();
+      showProcessGridMenu(e.clientX, e.clientY, e.target.closest("td[data-row][data-col]"));
+    });
+
+    document.addEventListener("keydown", (e) => {
+      const modal = document.getElementById("da-portal-ds-viewer");
+      if (!modal || modal.hidden) return;
+      // Escape belongs to the cell editor while a cell is open.
+      if (e.key === "Escape" && !processViewerState.editing) modal.hidden = true;
+    });
+  })();
 
   scheduleRender();
   document.addEventListener("da:locale", () => scheduleRender());

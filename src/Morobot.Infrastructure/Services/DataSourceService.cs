@@ -882,6 +882,160 @@ public class DataSourceService
         return envelope;
     }
 
+    /// <summary>
+    /// Append (or insert) a column on a library source.
+    ///
+    /// Adding a column is harmless to running processes — nothing binds to it yet — so unlike a
+    /// reload this needs no compatibility check. The key must stay unique inside the source because
+    /// nodes bind to it by name.
+    /// </summary>
+    public async Task<DataSourceStructureResponse> AddColumnAsync(
+        int userId, int id, AddDataSourceColumnRequest req, CancellationToken ct = default)
+    {
+        var entity = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "notfound", Message = "منبع پیدا نشد." };
+        if (entity.OwnerUserId != userId)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+        var existing = new HashSet<string>(columns.Select(c => c.Key), StringComparer.OrdinalIgnoreCase);
+
+        var key = (req.Key ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            // Generate c1, c2, … skipping any key already in use.
+            var n = columns.Count + 1;
+            do { key = $"c{n++}"; } while (existing.Contains(key));
+        }
+        if (existing.Contains(key))
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "duplicate-key",
+                Message = $"ستونی با کلید «{key}» از قبل وجود دارد.",
+                DataSourceId = id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+
+        var title = string.IsNullOrWhiteSpace(req.Title) ? key : req.Title.Trim();
+        var column = new DataSourceColumnDto { Key = key, Title = title };
+        var at = req.BeforeIndex ?? columns.Count;
+        if (at < 0) at = 0;
+        if (at > columns.Count) at = columns.Count;
+        columns.Insert(at, column);
+
+        entity.ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts);
+        entity.ColumnCount = columns.Count;
+        // A new column has no cells yet, so the row count is unchanged; keep it truthful.
+        entity.DataRevision += 1;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        StampDataEditor(entity, userId);
+        await _db.SaveChangesAsync(ct);
+
+        var (_, rc) = await GetDerivedCountersAsync(id, ct);
+        var rowCount = Math.Max(entity.RowCount, rc);
+        await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+        return new DataSourceStructureResponse
+        {
+            Ok = true,
+            DataSourceId = entity.Id,
+            Columns = columns,
+            ColumnKeys = columns.Select(c => c.Key).ToList(),
+            ColumnCount = columns.Count,
+            RowCount = rowCount,
+            DataRevision = entity.DataRevision,
+            AddedColumnKey = key
+        };
+    }
+
+    /// <summary>
+    /// Insert blank rows into a library source. Blank rows are materialised as empty cells so the
+    /// normal row-page query returns them (it drives row count from the cell table, not the parent).
+    /// </summary>
+    public async Task<DataSourceStructureResponse> AddRowsAsync(
+        int userId, int id, AddDataSourceRowRequest req, CancellationToken ct = default)
+    {
+        var entity = await _db.DataSources.Include(d => d.ProcessLinks).FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "notfound", Message = "منبع پیدا نشد." };
+        if (entity.OwnerUserId != userId)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+        if (columns.Count == 0)
+            return new DataSourceStructureResponse
+            {
+                Ok = false, Code = "no-columns", Message = "منبع ستونی ندارد؛ اول یک ستون اضافه کنید."
+            };
+
+        var add = Math.Clamp(req.Count ?? 1, 1, 500);
+        var (_, rowCount) = await GetDerivedCountersAsync(id, ct);
+        rowCount = Math.Max(rowCount, entity.RowCount);
+
+        // Build the cell rows first, then shift existing rows down when inserting in the middle.
+        var at = req.BeforeIndex ?? rowCount;
+        if (at < 0) at = 0;
+        if (at > rowCount) at = rowCount;
+
+        var existing = await _db.DataSourceCells.Where(c => c.DataSourceId == id).ToListAsync(ct);
+        if (at < rowCount)
+        {
+            // Shift down from the end so no two rows collide on the (DataSourceId, RowIndex, ColumnKey) key.
+            foreach (var cell in existing.OrderByDescending(c => c.RowIndex))
+            {
+                if (cell.RowIndex >= at) cell.RowIndex += add;
+            }
+        }
+        for (var r = 0; r < add; r++)
+        {
+            foreach (var col in columns)
+            {
+                _db.DataSourceCells.Add(new DataSourceCell
+                {
+                    DataSourceId = id,
+                    RowIndex = at + r,
+                    ColumnKey = col.Key,
+                    CellValue = ""
+                });
+            }
+        }
+
+        entity.RowCount = rowCount + add;
+        entity.DataRevision += 1;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        StampDataEditor(entity, userId);
+        await _db.SaveChangesAsync(ct);
+
+        await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+        return new DataSourceStructureResponse
+        {
+            Ok = true,
+            DataSourceId = entity.Id,
+            Columns = columns,
+            ColumnKeys = columns.Select(c => c.Key).ToList(),
+            ColumnCount = columns.Count,
+            RowCount = entity.RowCount,
+            DataRevision = entity.DataRevision
+        };
+    }
+
+    /// <summary>Re-stamp every linked process graph with this source's current shape.</summary>
+    private async Task RefreshLinkedProcessSnapshotsAsync(DataSource entity, CancellationToken ct)
+    {
+        var processIds = await _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.DataSourceId == entity.Id)
+            .Select(l => l.ProcessId)
+            .Distinct()
+            .ToListAsync(ct);
+        foreach (var pid in processIds)
+        {
+            try { await RefreshSourceSnapshotInProcessGraphAsync(pid, entity, ct); }
+            catch (Exception ex) { _log.LogWarning(ex, "Refresh source {Ds} snapshot on process {P}", entity.Id, pid); }
+        }
+    }
+
     public async Task<bool> DeleteLibraryAsync(int userId, int id, CancellationToken ct = default)
     {
         var entity = await _db.DataSources
