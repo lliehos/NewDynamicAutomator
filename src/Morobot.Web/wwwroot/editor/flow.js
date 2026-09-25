@@ -404,7 +404,7 @@
       // Fill in only what the survivor is missing; never clobber a value it already has.
       for (const key of ["repeatSourceType", "dataSourceId", "loopCount", "stepDelayMs",
         "loopBackLimit", "ignorePlayError", "highlightColor", "moveLoop",
-        "repeatFromIndex", "repeatToIndex"]) {
+        "repeatFromIndex", "repeatToIndex", "dedicatedRow", "rowIndexType", "specificRowIndex"]) {
         if (keep[key] == null && d[key] != null) keep[key] = d[key];
       }
     }
@@ -459,6 +459,18 @@
       if (start.loopCount == null && graph.loopCount != null) start.loopCount = graph.loopCount;
       if (start.repeatFromIndex == null) start.repeatFromIndex = graph.repeatFromIndex;
       if (start.repeatToIndex == null) start.repeatToIndex = graph.repeatToIndex;
+      // Dedicated row: normalise so a legacy graph (no field) reads as "off", and a graph that has
+      // the switch on but no pointer gets a working default instead of an invalid empty state.
+      start.dedicatedRow = start.dedicatedRow === true;
+      if (start.dedicatedRow) {
+        if (!start.rowIndexType || start.rowIndexType === "None") start.rowIndexType = "CurrentLoop";
+        if (start.rowIndexType === "SpecificRow" && !Number.isFinite(Number(start.specificRowIndex))) {
+          start.specificRowIndex = 0;
+        }
+      } else {
+        start.rowIndexType = "None";
+        start.specificRowIndex = null;
+      }
       if (start.stepDelayMs == null) start.stepDelayMs = graph.stepDelayMs ?? 0;
       else graph.stepDelayMs = start.stepDelayMs;
       if (start.loopBackLimit == null) start.loopBackLimit = graph.loopBackLimit ?? DEFAULT_LOOP_BACK_LIMIT;
@@ -5489,6 +5501,40 @@
         } else if (k === "moveLoop") {
           n.moveLoop = inp.value === "1" || inp.value === "true" || inp.checked === true;
           if (n.moveLoop || (n.repeatSourceType || "None") !== "DataSource") n.dataSourceId = null;
+        } else if (k === "dedicatedRow") {
+          n.dedicatedRow = inp.checked === true;
+          // Turning the switch on with no pointer yet means "a row, chosen how?" - default to the
+          // loop's own row so the group keeps working exactly as before until the user changes it.
+          if (n.dedicatedRow && !n.rowIndexType) n.rowIndexType = "CurrentLoop";
+          if (!n.dedicatedRow) {
+            // Switching off clears the pointer so a stale hidden value cannot come back later.
+            n.rowIndexType = "None";
+            n.specificRowIndex = null;
+          }
+          renderInspector();
+          return;
+        } else if (k === "rowIndexType") {
+          n.rowIndexType = inp.value;
+          if (inp.value === "SpecificRow") {
+            // Seed a valid index so the numeric field is never blank-and-invalid on first show.
+            const rc = dataSourceRowCount(n.dataSourceId || n.saveDataSourceId);
+            const maxRow = rc > 0 ? rc - 1 : null;
+            if (n.specificRowIndex == null) n.specificRowIndex = 0;
+            if (maxRow != null && n.specificRowIndex > maxRow) n.specificRowIndex = maxRow;
+          } else {
+            n.specificRowIndex = null;
+          }
+          renderInspector();
+          return;
+        } else if (k === "specificRowIndex") {
+          const raw = String(inp.value || "").trim();
+          const rc = dataSourceRowCount(n.dataSourceId || n.saveDataSourceId);
+          const maxRow = rc > 0 ? rc - 1 : null;
+          let num = raw === "" ? 0 : Math.max(0, Math.floor(Number(raw) || 0));
+          // Clamp to the source's real range: a row that does not exist would silently read empty.
+          if (maxRow != null && num > maxRow) num = maxRow;
+          n.specificRowIndex = num;
+          return;
         } else if (k === "repeatSourceType") {
           let next = inp.value;
           // Process-level start cannot repeat by page elements.
@@ -6277,6 +6323,33 @@
       } else {
         const v = validateSelectorBlock(n, { label: "سلکتور تکرار" });
         if (!v.ok) reasons.push(v.reason);
+      }
+    }
+
+    // Dedicated-row rules. Only checked when the switch is on, so an author who never turned it on
+    // is never blocked by it.
+    if (n.dedicatedRow === true) {
+      const pointer = String(n.rowIndexType || "None");
+      if (pointer === "None") {
+        reasons.push("برای ردیف اختصاصی، نوع اشاره‌گر ردیف انتخاب نشده");
+      } else if (pointer === "SpecificRow") {
+        const idx = Number(n.specificRowIndex);
+        if (!Number.isFinite(idx) || idx < 0) {
+          reasons.push("شماره ردیف اختصاصی نامعتبر است");
+        } else {
+          // A pinned row must exist in the source it points at; otherwise the step would silently
+          // read an empty row and the process would look like it "did nothing".
+          const dsId = n.dataSourceId ?? n.saveDataSourceId ?? graph.dataSourceId;
+          const rc = dataSourceRowCount(dsId);
+          if (rc > 0 && idx > rc - 1) {
+            reasons.push(`شماره ردیف اختصاصی ${idx} خارج از بازهٔ منبع است (0 تا ${rc - 1})`);
+          }
+        }
+      }
+      // A dedicated row needs a source to resolve against, unless it just follows the loop.
+      if ((pointer === "FirstRow" || pointer === "LastRow" || pointer === "SpecificRow")
+        && (n.dataSourceId == null && n.saveDataSourceId == null && graph.dataSourceId == null)) {
+        reasons.push("برای اشاره‌گر ردیف منبع، منبع داده مشخص نشده");
       }
     }
     return { ok: reasons.length === 0, reasons };
@@ -7572,6 +7645,16 @@
     n.loopCount = n.loopCount || 1;
     const loopCount = n.loopCount || 1;
     const dsOpts = processDataSourceOptions(n.dataSourceId);
+    // "Dedicated row" is deliberately OFF by default: a group normally follows the row its loop is
+    // on, and pinning a row is the exception, so it stays hidden until the user asks for it.
+    const dedicatedRow = n.dedicatedRow === true;
+    const rowPointer = String(n.rowIndexType || "None");
+    const specificRow = n.specificRowIndex == null ? "" : String(n.specificRowIndex);
+    // Bound the specific-row field by the chosen source's real row count so the user cannot type a
+    // row that does not exist; an unknown/empty source leaves it unconstrained.
+    const rowCount = dataSourceRowCount(n.dataSourceId);
+    const maxRow = rowCount > 0 ? rowCount - 1 : null;
+    const hasRows = maxRow != null;
     return `
       <p class="palette-hint" style="margin:0 0 10px;line-height:1.7">
         تکرار این گروه: یک‌بار، تعداد ثابت، المان‌های صفحه، یا ردیف منبع داده.
@@ -7596,7 +7679,44 @@
       <div id="insp-el">
         ${selectorFieldHtml(n, "سلکتور المان‌ها (تکرار گروه)")}
       </div>
+      <div class="insp-section-title">${esc(t("editor.row.dedicatedTitle") || "ردیف اختصاصی")}</div>
+      <div class="insp-field">
+        <label class="insp-switch">
+          <input type="checkbox" data-k="dedicatedRow" ${dedicatedRow ? "checked" : ""} />
+          <span>${esc(t("editor.row.dedicatedEnable") || "این گروه روی یک ردیف مشخص کار کند")}</span>
+        </label>
+      </div>
+      <div id="insp-dedicated-row" style="${dedicatedRow ? "" : "display:none"}">
+        <div class="insp-field">
+          <label>${esc(t("editor.row.pointerType") || "اشاره‌گر ردیف")}</label>
+          <select data-k="rowIndexType">
+            <option value="CurrentLoop" ${rowPointer === "CurrentLoop" ? "selected" : ""}>${esc(t("editor.row.currentLoop") || "ردیف حلقهٔ فعلی")}</option>
+            <option value="ParentLoop" ${rowPointer === "ParentLoop" ? "selected" : ""}>${esc(t("editor.row.parentLoop") || "ردیف حلقهٔ والد")}</option>
+            <option value="TotalLoop" ${rowPointer === "TotalLoop" ? "selected" : ""}>${esc(t("editor.row.totalLoop") || "اندیس کل حلقه")}</option>
+            <option value="FirstRow" ${rowPointer === "FirstRow" ? "selected" : ""}>${esc(t("editor.row.firstRow") || "اولین ردیف منبع")}</option>
+            <option value="LastRow" ${rowPointer === "LastRow" ? "selected" : ""}>${esc(t("editor.row.lastRow") || "آخرین ردیف منبع")}</option>
+            <option value="SpecificRow" ${rowPointer === "SpecificRow" ? "selected" : ""}>${esc(t("editor.row.specificRow") || "یک ردیف مشخص")}</option>
+            <option value="None" ${rowPointer === "None" ? "selected" : ""}>${esc(t("editor.row.none") || "بدون اشاره‌گر (ردیف حلقه)")}</option>
+          </select>
+        </div>
+        <div class="insp-field" id="insp-specific-row" style="${rowPointer === "SpecificRow" ? "" : "display:none"}">
+          <label>${esc(t("editor.row.specificIndex") || "شماره ردیف")}</label>
+          <input type="number" min="0" ${maxRow != null ? `max="${maxRow}"` : ""} data-k="specificRowIndex" value="${esc(specificRow)}" />
+          ${rowCount > 0
+            ? `<p class="palette-hint">${esc(t("editor.row.rangeHint", { count: rowCount, max: maxRow }) || `منبع ${rowCount} ردیف دارد؛ بازهٔ مجاز: 0 تا ${maxRow}`)}</p>`
+            : `<p class="palette-hint">${esc(t("editor.row.pickSourceFirst") || "اول منبع داده را انتخاب کنید تا بازهٔ مجاز ردیف‌ها مشخص شود.")}</p>`}
+        </div>
+      </div>
     `;
+  }
+
+  /** Row count of a process data source, for bounding a specific-row input. 0 when unknown. */
+  function dataSourceRowCount(dsId) {
+    if (dsId == null || dsId === "") return 0;
+    const ds = (graph.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+    if (!ds) return 0;
+    const n = Number(ds.rowCount);
+    return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
   function groupInspectorHtml(n) {
@@ -7717,6 +7837,7 @@
     "highlightColor", "url", "value", "waitMaxMs", "selectorWaitMs",
     "loopCount", "loopBackLimit", "stepDelayMs", "delayBeforeMs", "delayAfterMs",
     "repeatFromIndex", "repeatToIndex",
+    "specificRowIndex",
     "systemClockFormat"
   ]);
   /** Keys that hold a free-text label the user reads, so they follow the UI direction. */

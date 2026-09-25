@@ -1758,7 +1758,18 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
           if (playAbort) break;
           await waitIfPaused();
           const gRow = groupIters.indices[gi];
-          const effectiveRow = moveLoop ? gRow : parentRow;
+          // "Dedicated row" pins the row this group works on, either to a source position (first /
+          // last / an explicit index) or to a loop position (this / parent / total). When the switch
+          // is off the group keeps following its loop exactly as before.
+          const pinnedRow = resolveDedicatedRow(gStart, graph, {
+            groupRow: gRow,
+            parentRow,
+            loopIndex,
+            loopTotal,
+            groupIndex: gi,
+            groupTotal: groupIters.total
+          });
+          const effectiveRow = pinnedRow != null ? pinnedRow : (moveLoop ? gRow : parentRow);
           if (groupIters.total > 1) {
             appendPlayLog("info", `تکرار گروه «${node.title || node.id}» ${gi + 1}/${groupIters.total} (${groupIters.label || groupIters.type})`);
           }
@@ -3587,6 +3598,61 @@ function collectReachableFromStart(graph) {
     }
   }
   return reachable;
+}
+
+/**
+ * Resolve the row a group with "dedicated row" enabled must work on.
+ *
+ * Returns null when the switch is off or unusable, so the caller falls back to the normal loop-follow
+ * behaviour. Every branch is deliberately tolerant: a pointer that cannot be resolved must not crash
+ * a run, it just leaves the group following its loop.
+ */
+function resolveDedicatedRow(startNode, graph, ctx) {
+  if (!startNode || startNode.dedicatedRow !== true) return null;
+  const pointer = String(startNode.rowIndexType || "None");
+  const { groupRow, parentRow, loopIndex, groupIndex } = ctx || {};
+  switch (pointer) {
+    case "CurrentLoop":
+      return Number.isFinite(Number(groupRow)) ? Number(groupRow) : null;
+    case "ParentLoop":
+      return Number.isFinite(Number(parentRow)) ? Number(parentRow) : null;
+    // "TotalLoop" is an index into the whole loop run, so it reuses the outer loop position rather
+    // than the source row the group happens to be on.
+    case "TotalLoop":
+      return Number.isFinite(Number(loopIndex)) ? Number(loopIndex) : (Number.isFinite(Number(groupIndex)) ? Number(groupIndex) : null);
+    case "FirstRow":
+      return 0;
+    case "LastRow": {
+      const ds = findDedicatedRowSource(startNode, graph);
+      const rc = Number(ds?.rowCount);
+      if (Number.isFinite(rc) && rc > 0) return rc - 1;
+      // Fall back to the last row we can actually see in the graph when the count is unknown.
+      const idxs = (ds?.cells || [])
+        .map((c) => Number(c.index ?? c.Index ?? c.rowIndex))
+        .filter((x) => Number.isFinite(x));
+      return idxs.length ? Math.max(...idxs) : null;
+    }
+    case "SpecificRow": {
+      const idx = Number(startNode.specificRowIndex);
+      if (!Number.isFinite(idx) || idx < 0) return null;
+      // Clamp to the source so a stale index (source shrank after the graph was saved) reads the
+      // nearest existing row instead of silently reading nothing.
+      const ds = findDedicatedRowSource(startNode, graph);
+      const rc = Number(ds?.rowCount);
+      if (Number.isFinite(rc) && rc > 0 && idx > rc - 1) return rc - 1;
+      return idx;
+    }
+    default:
+      return null;
+  }
+}
+
+/** The source a row pointer resolves against: the node's own pick, else the process default. */
+function findDedicatedRowSource(startNode, graph) {
+  const sources = graph?.dataSources || [];
+  const id = startNode?.dataSourceId ?? startNode?.saveDataSourceId ?? graph?.dataSourceId;
+  if (id == null || id === "") return null;
+  return sources.find((d) => Number(d.id) === Number(id)) || null;
 }
 
 /** Expand group iterations from group-start repeat settings (Loops / DataSource / Elements). */

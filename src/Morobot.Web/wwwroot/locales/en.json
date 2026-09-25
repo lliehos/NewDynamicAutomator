@@ -1186,6 +1186,21 @@
       "localProcess": "Untitled process",
       "actionN": "Action {n}"
     },
+    "row": {
+      "dedicatedTitle": "Dedicated row",
+      "dedicatedEnable": "This group works on one specific row",
+      "pointerType": "Row pointer",
+      "currentLoop": "Current loop's row",
+      "parentLoop": "Parent loop's row",
+      "totalLoop": "Whole-loop index",
+      "firstRow": "First row of the source",
+      "lastRow": "Last row of the source",
+      "specificRow": "One specific row",
+      "none": "No pointer (follow the loop)",
+      "specificIndex": "Row number",
+      "rangeHint": "The source has {count} rows; allowed range: 0 to {max}",
+      "pickSourceFirst": "Pick a data source first so the allowed row range is known."
+    },
     "ds": {
       "emptyList": "No source (add Excel on Start node)",
       "removed": "Source",
