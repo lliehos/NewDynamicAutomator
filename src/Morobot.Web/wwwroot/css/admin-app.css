@@ -882,6 +882,24 @@ label { font-size: .9rem; }
   gap: 1rem;
   align-items: start;
 }
+/* Licence page: the status read-out is a long list of key/value rows and needs the wider
+   column; the action cards stack in the narrower one. Stacked rather than side by side because
+   they are a short list the admin works down, and three narrow columns wrapped badly. */
+@media (min-width: 960px) {
+  .admin-license-grid {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  }
+}
+.admin-license-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+/* The cards are inside a flex column now, so the grid's own gap no longer spaces them. */
+.admin-license-actions > .card-admin,
+.admin-license-actions > .admin-settings-card {
+  margin-bottom: 0;
+}
 .admin-kv {
   display: grid;
   grid-template-columns: max-content 1fr;

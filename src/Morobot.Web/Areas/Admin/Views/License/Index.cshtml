@@ -20,7 +20,11 @@
 }' />
 
 <div class="admin-license-grid">
-    <div class="card-admin @StatusClass(d.Status)">
+    @* The status card holds the whole read-out and needs the room; it takes the wide column.
+       Everything the admin *does* (import, request, update, migrate) is a narrow card in the
+       second column, stacked, so the actions are one column to scan rather than scattered
+       around the facts. *@
+    <div class="card-admin admin-license-status @StatusClass(d.Status)">
       <h3><i class="ti ti-certificate" aria-hidden="true"></i>@L["admin.license.current"]</h3>
       <dl class="admin-kv">
         <dt>@L["admin.license.fieldRuntimeMode"]</dt>
@@ -113,6 +117,7 @@
       <partial name="_AdminHint" model='L["admin.hints.licenseSafeFields"]' />
     </div>
 
+    <div class="admin-license-actions">
     <div class="card-admin">
       <h3><i class="ti ti-upload" aria-hidden="true"></i>@L["admin.license.importTitle"]</h3>
       <p class="admin-field-hint">@L["admin.license.importHint"]</p>
@@ -182,4 +187,5 @@
         <partial name="_AdminHint" model='L["admin.license.legacyHint"]' />
       </div>
     }
+    </div>
   </div>
