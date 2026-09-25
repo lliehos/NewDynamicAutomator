@@ -622,6 +622,66 @@ public class DataSourceService
     };
 
     /// <summary>
+    /// Re-bind nodes that kept a column name but lost the source id when their source was detached.
+    /// </summary>
+    /// <remarks>
+    /// Detaching a source deliberately keeps the column name on each node (only the numeric id is
+    /// cleared). That is what makes this repair possible: when a source is attached whose columns
+    /// carry those same names, the node is wired back up automatically instead of the operator having
+    /// to re-pick every column by hand. Names are compared case-insensitively because the legacy
+    /// data and the hand-written graphs both vary in casing.
+    ///
+    /// Only nodes with NO source id are touched — a node already bound to another source keeps its
+    /// binding, so attaching a second source can never silently steal an existing one.
+    /// </remarks>
+    private async Task<int> RebindOrphanedColumnsAsync(int processId, DataSource ds, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return 0;
+
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+
+        JsonObject? body;
+        try { body = JsonNode.Parse(bodyJson) as JsonObject; }
+        catch { return 0; }
+        if (body?["nodes"] is not JsonArray nodes) return 0;
+
+        var available = DeserializeColumns(ds.ColumnsJson)
+            .Select(c => c.Key?.Trim())
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (available.Count == 0) return 0;
+
+        var repaired = 0;
+        foreach (var n in nodes)
+        {
+            if (n is not JsonObject no) continue;
+            foreach (var (idProp, columnProp, _) in ColumnBindings)
+            {
+                // A node that still points at some source is not orphaned — leave it alone.
+                if (no[idProp]?.GetValue<int?>() is not null) continue;
+                var bound = ReadString(no, columnProp);
+                if (string.IsNullOrWhiteSpace(bound)) continue;
+                if (!available.Contains(bound.Trim())) continue;
+
+                no[idProp] = ds.Id;
+                repaired++;
+            }
+        }
+        if (repaired == 0) return 0;
+
+        process.GraphJson = envelope is null
+            ? body.ToJsonString(JsonOpts)
+            : EnvelopeWithBody(envelope, body).ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        _log.LogInformation("Re-bound {Count} orphaned column(s) on process {P} to source {Ds}",
+            repaired, processId, ds.Id);
+        return repaired;
+    }
+
+    /// <summary>
     /// Compare an incoming column set against the columns live process nodes currently read.
     ///
     /// Replacing a source's file used to be an all-or-nothing overwrite: dropping a column silently
@@ -1096,7 +1156,11 @@ public class DataSourceService
             SortOrder = sort
         });
         await _db.SaveChangesAsync(ct);
-        // Graph snapshot is written by the editor canvas save (SyncFromCanvas).
+
+        // Re-wire any node that kept a column name from a previously detached source. Without this
+        // the bindings would only come back for an editor that re-read the canvas; the stored graph
+        // (and therefore the list counts and the player) would stay broken.
+        await RebindOrphanedColumnsAsync(processId, ds, ct);
         return (true, null);
     }
 
@@ -1130,8 +1194,71 @@ public class DataSourceService
             }
         }
 
-        // Do not mutate GraphJson / UpdatedAtUtc — editor save owns the canvas document.
+        // Clear the detached source's id from the graph while KEEPING every column name. The id must
+        // go because the process no longer links that source, and a node pointing at an unlinked
+        // source reads nothing at run time. The column name is deliberately kept so that linking a
+        // source with those same names later re-wires the node automatically (RebindOrphanedColumns
+        // on attach, and RepointOrphanedColumns when the canvas is read).
+        await ScrubSourceIdFromProcessGraphAsync(processId, dataSourceId, ct);
         return (true, null);
+    }
+
+    /// <summary>
+    /// Null out every source-id property that points at <paramref name="dataSourceId"/> and drop the
+    /// source from the graph's snapshot list, but leave the column-name fields untouched.
+    /// </summary>
+    private async Task ScrubSourceIdFromProcessGraphAsync(int processId, int dataSourceId, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return;
+
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+
+        JsonObject? body;
+        try { body = JsonNode.Parse(bodyJson) as JsonObject; }
+        catch { return; }
+        if (body is null) return;
+
+        var changed = false;
+        if (body["dataSources"] is JsonArray arr)
+        {
+            for (var i = arr.Count - 1; i >= 0; i--)
+            {
+                if (arr[i] is JsonObject o && (o["id"]?.GetValue<int?>() ?? o["Id"]?.GetValue<int?>()) == dataSourceId)
+                {
+                    arr.RemoveAt(i);
+                    changed = true;
+                }
+            }
+        }
+        if (body["nodes"] is JsonArray nodes)
+        {
+            foreach (var n in nodes)
+            {
+                if (n is not JsonObject no) continue;
+                foreach (var (idProp, _, _) in ColumnBindings)
+                {
+                    if (no[idProp]?.GetValue<int?>() == dataSourceId)
+                    {
+                        no[idProp] = null;
+                        changed = true;
+                    }
+                }
+                if (no["dataSourceId"]?.GetValue<int?>() == dataSourceId)
+                {
+                    no.Remove("dataSourceId");
+                    changed = true;
+                }
+            }
+        }
+        if (!changed) return;
+
+        process.GraphJson = envelope is null
+            ? body.ToJsonString(JsonOpts)
+            : EnvelopeWithBody(envelope, body).ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
     }
 
     /// <summary>
@@ -1309,7 +1436,57 @@ public class DataSourceService
                 }
             }
         }
+
+        // Auto-repair on the read path. Detaching a source keeps each node's column NAME and clears
+        // only the numeric id, precisely so this can run: when a source carrying those names is
+        // linked again, the bindings come back without the operator re-picking every column. Doing
+        // it here (rather than writing on attach) keeps the graph write owned by the editor's own
+        // canvas save, so an open editor's concurrency check is not surprised by a background write.
+        RepointOrphanedColumns(obj, links);
+
         return obj.ToJsonString(JsonOpts);
+    }
+
+    /// <summary>
+    /// Point nodes whose column name matches one of the linked sources back at that source, but
+    /// only when they have no source id. A node already bound elsewhere keeps its binding, so a
+    /// second source can never silently take over an existing one.
+    /// </summary>
+    private static int RepointOrphanedColumns(JsonObject obj, IReadOnlyList<ProcessDataSource> links)
+    {
+        if (obj["nodes"] is not JsonArray nodes) return 0;
+
+        // sourceId → available column keys (ordinal-ignore-case, since casing varies between the
+        // legacy import and hand-written graphs).
+        var bySource = new List<(int Id, HashSet<string> Keys)>();
+        foreach (var link in links)
+        {
+            if (link.DataSource is null) continue;
+            var keys = DeserializeColumns(link.DataSource.ColumnsJson)
+                .Select(c => c.Key?.Trim())
+                .Where(k => !string.IsNullOrWhiteSpace(k))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (keys.Count > 0) bySource.Add((link.DataSourceId, keys!));
+        }
+        if (bySource.Count == 0) return 0;
+
+        var repaired = 0;
+        foreach (var n in nodes)
+        {
+            if (n is not JsonObject no) continue;
+            foreach (var (idProp, columnProp, _) in ColumnBindings)
+            {
+                if (no[idProp]?.GetValue<int?>() is not null) continue;      // already bound
+                var bound = ReadString(no, columnProp);
+                if (string.IsNullOrWhiteSpace(bound)) continue;
+
+                var hit = bySource.FirstOrDefault(s => s.Keys.Contains(bound.Trim()));
+                if (hit.Keys is null) continue;
+                no[idProp] = hit.Id;
+                repaired++;
+            }
+        }
+        return repaired;
     }
 
     private async Task PatchSourceTitleInProcessGraphAsync(int processId, int dataSourceId, string title, CancellationToken ct)
