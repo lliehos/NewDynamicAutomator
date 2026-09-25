@@ -5,6 +5,28 @@ body {
   margin: 0;
   color: #334155;
 }
+/*
+ * Form controls do not inherit font-family - the browser gives them its own default
+ * (Arial here), so every input, select, textarea and button in the admin shell rendered
+ * in Arial while the surrounding text used Vazirmatn. Persian text looked wrong and the
+ * weights did not match. Set the family explicitly on the controls themselves.
+ */
+input,
+select,
+textarea,
+button {
+  font-family: Vazirmatn, Tahoma, sans-serif;
+}
+/* Keep the monospace fields (connection strings, selectors, ids) monospaced. */
+code,
+kbd,
+pre,
+samp,
+.admin-mono,
+input[type="text"].admin-mono,
+textarea.admin-mono {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
 .admin-shell .num,
 .admin-dash-stat b,
 .admin-kv dd,
