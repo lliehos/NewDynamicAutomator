@@ -6471,10 +6471,13 @@
         ` : ""}
         <div class="insp-field">
           <label>${label}</label>
-          <input data-k="${valueKey}" data-da-selector="1" data-dyn-validate="${dynOn ? "1" : "0"}"
-            class="${borderCls.trim()}" value="${esc(selVal)}"
-            placeholder="${esc(dynOn ? DYN_SEL_PLACEHOLDER : "#btn")}"
-            ${dynOn && !hasPh ? `aria-invalid="true"` : ""} />
+          <!-- A selector can be long (a nested frame chain plus attribute filters) and a
+               single-line input hid most of it. This textarea grows with its content so
+               the whole selector is readable without scrolling inside the box. -->
+          <textarea data-k="${valueKey}" data-da-selector="1" data-dyn-validate="${dynOn ? "1" : "0"}"
+            data-auto-grow="1" rows="1" dir="ltr"
+            class="insp-selector-input ${borderCls.trim()}" placeholder="${esc(dynOn ? DYN_SEL_PLACEHOLDER : "#btn")}"
+            ${dynOn && !hasPh ? `aria-invalid="true"` : ""}>${esc(selVal)}</textarea>
           <div class="sel-toolbar">
             <button type="button" class="btn-mini" data-sel-act="save-mem" data-sel-key="${valueKey}" title="ذخیره آبجکت سلکتور در حافظه افزونه">ذخیره در حافظه</button>
             <button type="button" class="btn-mini" data-sel-act="load-mem" data-sel-key="${valueKey}" title="جایگزینی با آبجکت کپی‌شده (کپی آبجکت سلکتور)">خواندن از حافظه</button>
@@ -6597,8 +6600,19 @@
     return "DASEL:" + JSON.stringify(payload);
   }
 
-  function readSelectorFieldLive(n, preferKey) {
-    const key = preferKey || "selectorValue";
+  /**
+   * Resize a textarea to exactly fit its content.
+   *
+   * Height is reset to "auto" first so the box can shrink as well as grow - without that
+   * reset the scrollHeight never decreases and the field only ever gets taller.
+   */
+  function autoGrowTextarea(el) {
+    if (!el || el.tagName !== "TEXTAREA") return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }
+
+  function readSelectorFieldLive(n, preferKey) {    const key = preferKey || "selectorValue";
     const inp = inspector.querySelector(`[data-k="${key}"]`);
     if (inp) n[key] = inp.value;
     const frameTa = inspector.querySelector("[data-k=framePathJson]");
@@ -6897,6 +6911,12 @@
       inp.addEventListener("input", liveValidate);
       if (inp.getAttribute("data-dyn-validate") === "1") {
         syncDynSelectorValidation(inp, true);
+      }
+      // Grow the selector box to fit its content. Re-run on input so it shrinks again when
+      // text is removed, not just grows.
+      if (inp.getAttribute("data-auto-grow") === "1") {
+        autoGrowTextarea(inp);
+        inp.addEventListener("input", () => autoGrowTextarea(inp));
       }
     });
   }

@@ -322,6 +322,21 @@ rect.flow-marquee{pointer-events:none}
   padding:8px 10px;
   font-family:inherit;
 }
+/*
+ * Selector box: a textarea that grows with its content (see autoGrowTextarea in flow.js).
+ * `resize:none` because the height is managed by script - letting the user drag it would
+ * fight with the auto-grow. Monospace and LTR because selectors are CSS, not prose.
+ */
+.insp-field textarea.insp-selector-input{
+  resize:none;
+  overflow:hidden;
+  min-height:38px;
+  line-height:1.5;
+  font-family:ui-monospace,"Cascadia Code",Consolas,monospace;
+  font-size:12px;
+  white-space:pre-wrap;
+  word-break:break-all;
+}
 .insp-field input[type="checkbox"],
 .insp-field input[type="radio"]{
   width:auto;
