@@ -1316,6 +1316,10 @@
       "clockTimestamp": "milliseconds since 1970",
       "elementVisible": "Element is visible",
       "elementHidden": "Element is hidden",
+      "memoryValue": "Memory variable value",
+      "memorySubject": "Memory variable to check",
+      "memorySubjectHint": "This variable's value is compared against the compare value.",
+      "memoryNoneYet": "No variable stored yet - first write one with the \"Store a value in a memory variable\" action.",
       "clockCompareValue": "Compare value",
       "clockCompareHint": "Enter the value in the \"{fmt}\" format, otherwise the condition can never pass."
     },

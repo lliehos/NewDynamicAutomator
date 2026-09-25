@@ -6276,6 +6276,13 @@
         reasons.push("ستون مورد بررسی انتخاب نشده");
       }
     }
+    if (ct === "MemoryValue") {
+      // The whole condition hinges on a named variable, so an empty name makes it meaningless —
+      // and it would silently compare against "" at runtime.
+      if (!String(n.memoryVariableName || "").trim()) {
+        reasons.push("متغیر حافظه مورد بررسی انتخاب نشده");
+      }
+    }
 
       if (conditionNeedsCompareOperand(ct, eq)) {
       if (src === "Constant") {
@@ -7321,6 +7328,7 @@
       case "NotFindElement": return "نبود المان";
       case "FindElements": return "تعداد المان‌ها";
       case "DriverTabs": return "تعداد تب‌ها";
+      case "MemoryValue": return "مقدار متغیر حافظه";
       case "SystemDate": return "تاریخ سیستم";
       case "SystemTime": return "زمان سیستم";
       default: return "نوع؟";
@@ -7343,7 +7351,7 @@
   }
 
   function conditionNeedsCompare(ct) {
-    return ["Url", "ElementValue", "SourceValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
+    return ["Url", "ElementValue", "SourceValue", "MemoryValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
   }
 
   /** Whether a compare operand (constant / element / DS) is needed. */
@@ -7369,6 +7377,8 @@
 
     const needsSubjectSelector = ["ElementValue", "FindElement", "NotFindElement", "FindElements", "ElementVisible", "ElementHidden"].includes(ct);
     const needsSubjectDs = ct === "SourceValue";
+    // A memory condition compares a named variable instead of a page element or a source cell.
+    const needsSubjectMemory = ct === "MemoryValue";
     const needsOperand = conditionNeedsCompareOperand(ct, eq);
     const allowCompareDs = needsOperand && ct !== "SourceValue";
 
@@ -7409,6 +7419,7 @@
           <option value="Url" ${ct === "Url" ? "selected" : ""}>آدرس صفحه (Url)</option>
           <option value="ElementValue" ${ct === "ElementValue" ? "selected" : ""}>مقدار المان صفحه</option>
           <option value="SourceValue" ${ct === "SourceValue" ? "selected" : ""}>مقدار منبع داده</option>
+          <option value="MemoryValue" ${ct === "MemoryValue" ? "selected" : ""}>${esc(t("editor.cond.memoryValue") || "مقدار متغیر حافظه")}</option>
           <option value="FindElement" ${ct === "FindElement" ? "selected" : ""}>وجود المان</option>
           <option value="NotFindElement" ${ct === "NotFindElement" ? "selected" : ""}>نبود المان</option>
           <option value="ElementVisible" ${ct === "ElementVisible" ? "selected" : ""}>${t("editor.cond.elementVisible")}</option>
@@ -7449,6 +7460,18 @@
         <div class="insp-field"><label>ستون</label>
           <select data-k="dynamicSourceColumnName"><option value="">— انتخاب ستون —</option>${subjectColOpts}</select>
         </div>`;
+    }
+
+    if (needsSubjectMemory) {
+      const memNames = knownMemoryVariableNames();
+      html += `<div class="insp-section-title">${esc(t("editor.cond.memorySubject") || "متغیر حافظه مورد بررسی")}</div>` +
+        `<div class="insp-field"><label>${esc(t("editor.actions.memoryName") || "نام متغیر حافظه")}</label>
+          <input data-k="memoryVariableName" list="mem-var-list-cond-subject" value="${esc(n.memoryVariableName || "")}" placeholder="${esc(t("editor.actions.memoryNamePlaceholder"))}" />
+          <datalist id="mem-var-list-cond-subject">${memNames.map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
+        </div>
+        ${!memNames.length
+          ? `<p class="palette-hint">${esc(t("editor.cond.memoryNoneYet") || "هنوز متغیری ذخیره نشده — ابتدا با اکشن «ذخیره اطلاعات در متغیر حافظه» یک مقدار بنویسید.")}</p>`
+          : `<p class="palette-hint">${esc(t("editor.cond.memorySubjectHint") || "مقدار این متغیر با مقدار مقایسه سنجیده می‌شود.")}</p>`}`;
     }
 
     if (needsOperand) {

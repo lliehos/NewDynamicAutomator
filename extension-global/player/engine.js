@@ -118,7 +118,7 @@ function stepShowsTargetSelector(n) {
 }
 
 function conditionNeedsCompare(ct) {
-  return ["Url", "ElementValue", "SourceValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
+  return ["Url", "ElementValue", "SourceValue", "MemoryValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
 }
 
 function conditionNeedsCompareOperand(ct, eq) {
@@ -299,6 +299,10 @@ function validateConditionNodeForPlay(n, graph) {
       reasons.push(tv("cond.srcColMissing"));
     }
   }
+  if (ct === "MemoryValue" && !String(n.memoryVariableName || "").trim()) {
+    // Without a name the condition would compare against "" and quietly take one branch forever.
+    reasons.push(tv("cond.memVarMissing"));
+  }
 
   if (conditionNeedsCompareOperand(ct, eq)) {
     if (src === "Constant") {
@@ -443,6 +447,7 @@ const ENGINE_MSG = {
     "cond.typeMissing": "نوع شرط انتخاب نشده",
     "cond.srcDsMissing": "منبع مورد بررسی انتخاب نشده",
     "cond.srcColMissing": "ستون مورد بررسی انتخاب نشده",
+    "cond.memVarMissing": "متغیر حافظه مورد بررسی انتخاب نشده",
     "cond.numMissing": "مقدار عددی مقایسه مشخص نیست",
     "cond.valueEmpty": "مقدار مقایسه خالی است",
     "cond.userDateMissing": "تاریخ سیستم کاربر مشخص نیست",
@@ -511,6 +516,7 @@ const ENGINE_MSG = {
     "cond.typeMissing": "Condition type is not selected",
     "cond.srcDsMissing": "No data source selected to check",
     "cond.srcColMissing": "No column selected to check",
+    "cond.memVarMissing": "No memory variable selected to check",
     "cond.numMissing": "Numeric comparison value is not set",
     "cond.valueEmpty": "Comparison value is empty",
     "cond.userDateMissing": "User system date is not set",
@@ -1187,6 +1193,8 @@ function conditionNeedsBrowserTab(node) {
   if (!node) return false;
   if (conditionNeedsPageElement(node)) return true;
   const ct = node.conditionType || "None";
+  // MemoryValue reads the variable table, so it must not force a tab to be open — the same reason
+  // SourceValue is excluded below.
   return ct === "Url" || ct === "DriverTabs";
 }
 
@@ -1976,6 +1984,21 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
       const left = ct === "SourceValue"
         ? ((await resolveStepParamAsync(node, graph, rowIndex)) || "")
         : (await readElementText(tabId, node, graph, rowIndex));
+      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
+      return compareConditionValues(left, right, node.equalityType || "equal");
+    }
+
+    // The subject is a memory variable, so this condition needs no page and no tab: it compares
+    // what an earlier step stored against the compare operand, just like SourceValue does for a
+    // source cell. An unset variable is "" so a HasValue/HasNotValue check still means something.
+    if (ct === "MemoryValue") {
+      const name = String(node.memoryVariableName || "").trim();
+      if (!name) {
+        appendPlayLog("warn", "شرط متغیر حافظه بدون نام — شاخه fail");
+        return false;
+      }
+      const vars = await getPlayMemoryVars();
+      const left = vars[name] != null ? String(vars[name]) : "";
       const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
       return compareConditionValues(left, right, node.equalityType || "equal");
     }
