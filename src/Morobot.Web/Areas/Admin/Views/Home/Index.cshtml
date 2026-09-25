@@ -97,18 +97,6 @@
         </div>
       }
     </section>
-
-    <section class="admin-dash-section">
-      <h2><i class="ti ti-bolt" aria-hidden="true"></i>@L["admin.dashboard.shortcuts"]</h2>
-      <div class="admin-dash-shortcuts">
-        <a class="admin-dash-link" asp-controller="Users" asp-action="Index"><i class="ti ti-users" aria-hidden="true"></i>@L["admin.nav.users"]<small>@L["admin.dashboard.shortUsers"]</small></a>
-        <a class="admin-dash-link" asp-controller="Processes" asp-action="Index"><i class="ti ti-git-branch" aria-hidden="true"></i>@L["admin.nav.processes"]<small>@L["admin.dashboard.shortProcesses"]</small></a>
-        <a class="admin-dash-link" asp-controller="Sources" asp-action="Index"><i class="ti ti-database" aria-hidden="true"></i>@L["admin.nav.sources"]<small>@L["admin.dashboard.shortSources"]</small></a>
-        <a class="admin-dash-link" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]<small>@L["admin.dashboard.shortPlans"]</small></a>
-        <a class="admin-dash-link" asp-controller="Logs" asp-action="Index"><i class="ti ti-history" aria-hidden="true"></i>@L["admin.nav.events"]<small>@L["admin.dashboard.shortEvents"]</small></a>
-        <a class="admin-dash-link" asp-controller="Settings" asp-action="Index"><i class="ti ti-settings" aria-hidden="true"></i>@L["admin.nav.settings"]<small>@L["admin.dashboard.shortSettings"]</small></a>
-      </div>
-    </section>
   </div>
 
   <div>
@@ -154,43 +142,56 @@
         <div class="admin-kpi @(Model.ProblemEvents7d > 0 ? "is-warn" : null)"><b>@Model.ProblemEvents7d</b><span>@L["admin.dashboard.statProblems7d"]</span></div>
       </div>
     </section>
+
+    <section class="admin-dash-section">
+      <div class="admin-dash-section-head">
+        <h2><i class="ti ti-bell" aria-hidden="true"></i>@L["admin.dashboard.recentEvents"]</h2>
+        <a class="btn-admin secondary" asp-controller="Logs" asp-action="Index">@L["common.all"]</a>
+      </div>
+      @if (Model.RecentEvents.Count == 0)
+      {
+        <p class="admin-field-hint">@L["admin.dashboard.noEvents"]</p>
+      }
+      else
+      {
+        <ul class="admin-event-list">
+          @foreach (var e in Model.RecentEvents)
+          {
+            var badgeClass = e.Level switch
+            {
+              "Error" => "is-err",
+              "Warn" => "is-warn",
+              _ => "is-ok"
+            };
+            <li>
+              <div class="admin-event-meta">
+                <span>@e.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                <span class="admin-badge @badgeClass">@e.Level</span>
+                <span>@e.Category</span>
+                @if (!string.IsNullOrWhiteSpace(e.UserName))
+                {
+                  <span>@e.UserName</span>
+                }
+              </div>
+              <div class="admin-event-msg">@e.Message</div>
+            </li>
+          }
+        </ul>
+      }
+    </section>
   </div>
 </div>
 
-  <section class="admin-dash-section">
-    <div class="admin-dash-section-head">
-      <h2><i class="ti ti-bell" aria-hidden="true"></i>@L["admin.dashboard.recentEvents"]</h2>
-      <a class="btn-admin secondary" asp-controller="Logs" asp-action="Index">@L["common.all"]</a>
-    </div>
-    @if (Model.RecentEvents.Count == 0)
-    {
-      <p class="admin-field-hint">@L["admin.dashboard.noEvents"]</p>
-    }
-    else
-    {
-      <ul class="admin-event-list">
-        @foreach (var e in Model.RecentEvents)
-        {
-          var badgeClass = e.Level switch
-          {
-            "Error" => "is-err",
-            "Warn" => "is-warn",
-            _ => "is-ok"
-          };
-          <li>
-            <div class="admin-event-meta">
-              <span>@e.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
-              <span class="admin-badge @badgeClass">@e.Level</span>
-              <span>@e.Category</span>
-              @if (!string.IsNullOrWhiteSpace(e.UserName))
-              {
-                <span>@e.UserName</span>
-              }
-            </div>
-            <div class="admin-event-msg">@e.Message</div>
-          </li>
-        }
-      </ul>
-    }
-  </section>
-</div>
+@* Shortcuts span the full width under the two-column grid: they are a launcher, not a panel of
+   data, so they read better as one row of equal tiles than squeezed into a column. *@
+<section class="admin-dash-section admin-dash-shortcuts-section">
+  <h2><i class="ti ti-bolt" aria-hidden="true"></i>@L["admin.dashboard.shortcuts"]</h2>
+  <div class="admin-dash-shortcuts">
+    <a class="admin-dash-link" asp-controller="Users" asp-action="Index"><i class="ti ti-users" aria-hidden="true"></i>@L["admin.nav.users"]<small>@L["admin.dashboard.shortUsers"]</small></a>
+    <a class="admin-dash-link" asp-controller="Processes" asp-action="Index"><i class="ti ti-git-branch" aria-hidden="true"></i>@L["admin.nav.processes"]<small>@L["admin.dashboard.shortProcesses"]</small></a>
+    <a class="admin-dash-link" asp-controller="Sources" asp-action="Index"><i class="ti ti-database" aria-hidden="true"></i>@L["admin.nav.sources"]<small>@L["admin.dashboard.shortSources"]</small></a>
+    <a class="admin-dash-link" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]<small>@L["admin.dashboard.shortPlans"]</small></a>
+    <a class="admin-dash-link" asp-controller="Logs" asp-action="Index"><i class="ti ti-history" aria-hidden="true"></i>@L["admin.nav.events"]<small>@L["admin.dashboard.shortEvents"]</small></a>
+    <a class="admin-dash-link" asp-controller="Settings" asp-action="Index"><i class="ti ti-settings" aria-hidden="true"></i>@L["admin.nav.settings"]<small>@L["admin.dashboard.shortSettings"]</small></a>
+  </div>
+</section>
