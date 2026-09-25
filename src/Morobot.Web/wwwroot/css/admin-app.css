@@ -959,6 +959,74 @@ label { font-size: .9rem; }
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 1rem;
 }
+
+/* ── Colour presets ── */
+.admin-preset-block {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+}
+.admin-preset-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.admin-preset-current {
+  font-size: .82rem;
+  font-weight: 700;
+  color: var(--morobot-primary, var(--morobot-primary-default));
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  border: 1px solid var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+  border-radius: 999px;
+  padding: .12rem .6rem;
+  white-space: nowrap;
+}
+.admin-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: .6rem;
+}
+.admin-preset {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .5rem .65rem;
+  border: 2px solid #e2e8f0;
+  border-radius: .65rem;
+  background: #fff;
+  cursor: pointer;
+  text-align: start;
+  font: inherit;
+  font-size: .85rem;
+  color: #334155;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.admin-preset:hover { border-color: var(--morobot-primary-light, var(--morobot-primary-light-default)); }
+.admin-preset.is-active {
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  box-shadow: 0 0 0 3px var(--morobot-soft-2, var(--morobot-soft-2-default));
+  font-weight: 700;
+}
+.admin-preset-swatch {
+  display: inline-flex;
+  width: 2.1rem;
+  height: 1.5rem;
+  border-radius: .35rem;
+  overflow: hidden;
+  flex: 0 0 auto;
+  border: 1px solid rgba(15, 23, 42, .08);
+}
+.admin-preset-swatch i { flex: 1; display: block; }
+.admin-preset-swatch-custom {
+  align-items: center;
+  justify-content: center;
+  background: #f1f5f9;
+  color: #64748b;
+  border-style: dashed;
+}
+.admin-preset-name { min-width: 0; }
+
 .admin-color-row {
   display: flex;
   gap: .5rem;

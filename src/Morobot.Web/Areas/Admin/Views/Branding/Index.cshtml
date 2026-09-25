@@ -2,6 +2,8 @@
 @{
   Layout = "_Layout";
   ViewData["Title"] = L["admin.branding.title"];
+  // Preset names are supplied for both languages; pick the one the admin is reading in.
+  var isFa = L.IsRtl;
 }
 <partial name="_AdminPageHead" model='new AdminPageHeadModel { Summary = L["admin.branding.intro"] }' />
 
@@ -82,6 +84,63 @@
   <div class="admin-settings-card">
     <h3><i class="ti ti-color-swatch" aria-hidden="true"></i>@L["admin.branding.colors"]</h3>
     <p class="admin-field-hint mb-3">@L["admin.branding.colorsIntro"]</p>
+
+    @{
+      // A preset sets every colour at once, so the eight inputs below stay consistent.
+      // Picking any single colour afterwards switches the selection to "custom".
+      var presets = Morobot.Contracts.Licensing.BrandPaletteDefaults.Presets;
+      var activePreset = Morobot.Contracts.Licensing.BrandPaletteDefaults.MatchPreset(
+        Model.ColorPrimary, Model.ColorPrimaryDark, Model.ColorAccent);
+    }
+    <div class="admin-preset-block" data-presets>
+      <div class="admin-preset-head">
+        <span class="admin-label">@L["admin.branding.presetTitle"]</span>
+        <span class="admin-preset-current" data-preset-current>
+          @(activePreset is null
+            ? L["admin.branding.presetCustom"]
+            : (isFa ? activePreset.NameFa : activePreset.NameEn))
+        </span>
+      </div>
+      <p class="admin-field-hint mb-2">@L["admin.branding.presetHint"]</p>
+      <div class="admin-preset-grid" role="radiogroup" aria-label="@L["admin.branding.presetTitle"]">
+        @foreach (var p in presets)
+        {
+          var isActive = activePreset is not null && activePreset.Id == p.Id;
+          <button type="button"
+                  class="admin-preset @(isActive ? "is-active" : null)"
+                  role="radio"
+                  aria-checked="@(isActive ? "true" : "false")"
+                  data-preset="@p.Id"
+                  data-primary="@p.Primary"
+                  data-primary-dark="@p.PrimaryDark"
+                  data-primary-light="@p.PrimaryLight"
+                  data-accent="@p.Accent"
+                  data-soft="@p.Soft"
+                  data-soft2="@p.Soft2"
+                  data-ink="@p.Ink"
+                  data-border-subtle="@p.BorderSubtle"
+                  title="@(isFa ? p.NameFa : p.NameEn)">
+            <span class="admin-preset-swatch" aria-hidden="true">
+              <i style="background:@p.Primary"></i>
+              <i style="background:@p.PrimaryDark"></i>
+              <i style="background:@p.Accent"></i>
+              <i style="background:@p.Soft"></i>
+            </span>
+            <span class="admin-preset-name">@(isFa ? p.NameFa : p.NameEn)</span>
+          </button>
+        }
+        <button type="button"
+                class="admin-preset admin-preset-custom @(activePreset is null ? "is-active" : null)"
+                role="radio"
+                aria-checked="@(activePreset is null ? "true" : "false")"
+                data-preset-custom
+                title="@L["admin.branding.presetCustom"]">
+          <span class="admin-preset-swatch admin-preset-swatch-custom" aria-hidden="true"><i class="ti ti-color-picker"></i></span>
+          <span class="admin-preset-name">@L["admin.branding.presetCustom"]</span>
+        </button>
+      </div>
+    </div>
+
     <div class="admin-color-grid">
       @foreach (var f in new[] {
         new { Id = "ColorPrimary", Key = "admin.branding.colorPrimary", Val = Model.ColorPrimary },
@@ -238,6 +297,64 @@
       if (color && v) color.value = v;
     });
   });
+
+  // ---- Colour presets ----
+  // A preset writes all eight colour fields at once. Editing any field by hand marks the
+  // selection as "custom" so the UI does not keep claiming a preset is active after the
+  // admin has changed one of its colours.
+  var presetBlock = document.querySelector("[data-presets]");
+  if (presetBlock) {
+    var currentLabel = presetBlock.querySelector("[data-preset-current]");
+    var customLabel = presetBlock.querySelector("[data-preset-custom] .admin-preset-name")?.textContent
+      || "custom";
+
+    function setActivePreset(id) {
+      presetBlock.querySelectorAll(".admin-preset").forEach(function (btn) {
+        var on = btn.getAttribute("data-preset") === id
+          || (id === null && btn.hasAttribute("data-preset-custom"));
+        btn.classList.toggle("is-active", on);
+        btn.setAttribute("aria-checked", on ? "true" : "false");
+      });
+      if (currentLabel) {
+        if (id === null) currentLabel.textContent = customLabel;
+        else {
+          var nameEl = presetBlock.querySelector('[data-preset="' + id + '"] .admin-preset-name');
+          currentLabel.textContent = nameEl ? nameEl.textContent : customLabel;
+        }
+      }
+    }
+
+    function setColorField(id, value) {
+      var color = document.getElementById(id);
+      var hex = document.getElementById(id + "-hex");
+      if (color) color.value = value;
+      if (hex) hex.value = value;
+    }
+
+    presetBlock.querySelectorAll(".admin-preset[data-preset]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        setColorField("ColorPrimary", btn.getAttribute("data-primary"));
+        setColorField("ColorPrimaryDark", btn.getAttribute("data-primary-dark"));
+        setColorField("ColorPrimaryLight", btn.getAttribute("data-primary-light"));
+        setColorField("ColorAccent", btn.getAttribute("data-accent"));
+        setColorField("ColorSoft", btn.getAttribute("data-soft"));
+        setColorField("ColorSoft2", btn.getAttribute("data-soft2"));
+        setColorField("ColorInk", btn.getAttribute("data-ink"));
+        setColorField("ColorBorderSubtle", btn.getAttribute("data-border-subtle"));
+        setActivePreset(btn.getAttribute("data-preset"));
+      });
+    });
+
+    presetBlock.querySelector("[data-preset-custom]")?.addEventListener("click", function () {
+      setActivePreset(null);
+    });
+
+    // A manual colour edit means the palette no longer matches a preset.
+    document.querySelectorAll("[data-hex-pair]").forEach(function (el) {
+      el.addEventListener("input", function () { setActivePreset(null); });
+      el.addEventListener("change", function () { setActivePreset(null); });
+    });
+  }
 })();
 </script>
 }
