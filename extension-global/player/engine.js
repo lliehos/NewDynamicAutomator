@@ -949,10 +949,57 @@ function processStartNode(graph) {
     || null;
 }
 
+/**
+ * Narrow a 0-based row-index list to the configured start/end range.
+ *
+ * The range is inclusive at both ends and expressed 1-based in the UI, because that is how the
+ * spreadsheet the rows come from is numbered — an author reading "rows 5 to 10" in Excel must
+ * get rows 5 to 10 here, not 6 to 11.
+ *
+ * A range that is missing, reversed, or outside the data is treated as "no restriction" rather
+ * than as an error: a stale range saved against a source that later shrank must not silently
+ * reduce a run to nothing. An end beyond the last row is clamped, since asking for rows 5..500
+ * of a 20-row source plainly means "5 to the end".
+ */
+function applyIndexRange(indices, fromRaw, toRaw) {
+  const total = indices.length;
+  if (!total) return indices;
+
+  const toOneBased = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : null;
+  };
+  let from = toOneBased(fromRaw);
+  let to = toOneBased(toRaw);
+
+  // Nothing meaningful configured.
+  if (from == null && to == null) return indices;
+
+  if (from == null) from = 1;
+  if (to == null) to = total;
+
+  if (from > to) {
+    // A reversed range is a typo, not an instruction to run nothing.
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+
+  const start = Math.max(1, from);
+  const end = Math.min(total, to);
+  if (start > end) return indices;
+
+  return indices.slice(start - 1, end);
+}
+
 /** Resolve process-level iterations from the root start node. */
 function resolveProcessIterations(graph) {
   const start = processStartNode(graph);
   const rst = start?.repeatSourceType || graph.repeatSourceType || "None";
+  // The range lives on the root start node, falling back to the graph, matching how the other
+  // repeat fields are read. Only DataSource repeats have rows to range over.
+  const fromRaw = start?.repeatFromIndex ?? graph.repeatFromIndex;
+  const toRaw = start?.repeatToIndex ?? graph.repeatToIndex;
   if (rst === "Loops") {
     const n = Math.max(1, Number(start?.loopCount ?? graph.loopCount ?? graph.constantValue) || 1);
     return {
@@ -984,12 +1031,24 @@ function resolveProcessIterations(graph) {
         warn: "منبع پیش‌فرض ردیفی ندارد؛ یک‌بار اجرا می‌شود."
       };
     }
+    const allIndices = Array.from({ length: count }, (_, i) => i);
+    const indices = applyIndexRange(allIndices, fromRaw, toRaw);
+    // Only mention the range when it actually narrowed the run, so the ordinary whole-source
+    // case does not grow a label that says "rows 1..N".
+    const ranged = indices.length !== allIndices.length
+      || (fromRaw != null || toRaw != null) && indices.length > 0;
+    const rangeNote = ranged
+      ? ` · ردیف ${indices.length ? allIndices.indexOf(indices[0]) + 1 : "-"} تا ${indices.length ? allIndices.indexOf(indices[indices.length - 1]) + 1 : "-"}`
+      : "";
     return {
       type: "DataSource",
-      indices: Array.from({ length: count }, (_, i) => i),
-      total: count,
+      indices,
+      total: indices.length,
+      sourceRowCount: count,
+      repeatFromIndex: fromRaw ?? null,
+      repeatToIndex: toRaw ?? null,
       dataSourceId: dsId,
-      label: `منبع «${ds?.title || dsId}» × ${count} ردیف`
+      label: `منبع «${ds?.title || dsId}» × ${indices.length} ردیف${rangeNote}`
     };
   }
   return { type: "None", indices: [0], total: 1, label: "یک‌بار" };

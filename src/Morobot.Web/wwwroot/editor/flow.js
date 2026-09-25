@@ -187,6 +187,18 @@
     return Math.min(MAX_LOOP_BACK_LIMIT, Math.max(1, Math.floor(n)));
   }
 
+  /**
+   * A repeat row bound is either a positive whole number or "no bound" (null).
+   * Blank, zero, negative and non-numeric all mean "no bound": a bound the engine cannot honour
+   * is worse than no bound, because the run would silently do fewer rows than the author meant.
+   */
+  function normalizeRepeatIndex(raw) {
+    if (raw == null || raw === "") return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 1) return null;
+    return Math.floor(n);
+  }
+
   let graph = {
     nodes: [], edges: [], viewport: { x: 40, y: 40, zoom: 1 }, title: "",
     dataSources: [], delayBeforeMs: 0, delayAfterMs: 0,
@@ -391,7 +403,8 @@
     for (const d of dropped) {
       // Fill in only what the survivor is missing; never clobber a value it already has.
       for (const key of ["repeatSourceType", "dataSourceId", "loopCount", "stepDelayMs",
-        "loopBackLimit", "ignorePlayError", "highlightColor", "moveLoop"]) {
+        "loopBackLimit", "ignorePlayError", "highlightColor", "moveLoop",
+        "repeatFromIndex", "repeatToIndex"]) {
         if (keep[key] == null && d[key] != null) keep[key] = d[key];
       }
     }
@@ -435,11 +448,17 @@
     graph.loopBackLimit = clampLoopBackLimit(graph.loopBackLimit ?? local.loopBackLimit);
     graph.highlightColor = normalizeHighlightColor(graph.highlightColor ?? local.highlightColor);
     graph.repeatSourceType = graph.repeatSourceType || "None";
+    // Row range for a source-backed repeat. Kept null when unset so "no bound on this end"
+    // survives a save/load cycle instead of being silently turned into 1 or the last row.
+    graph.repeatFromIndex = normalizeRepeatIndex(graph.repeatFromIndex);
+    graph.repeatToIndex = normalizeRepeatIndex(graph.repeatToIndex);
     const start = graph.nodes.find((n) => n.kind === "start");
     if (start) {
       start.repeatSourceType = start.repeatSourceType || graph.repeatSourceType || "None";
       if (start.dataSourceId == null && graph.dataSourceId != null) start.dataSourceId = graph.dataSourceId;
       if (start.loopCount == null && graph.loopCount != null) start.loopCount = graph.loopCount;
+      if (start.repeatFromIndex == null) start.repeatFromIndex = graph.repeatFromIndex;
+      if (start.repeatToIndex == null) start.repeatToIndex = graph.repeatToIndex;
       if (start.stepDelayMs == null) start.stepDelayMs = graph.stepDelayMs ?? 0;
       else graph.stepDelayMs = start.stepDelayMs;
       if (start.loopBackLimit == null) start.loopBackLimit = graph.loopBackLimit ?? DEFAULT_LOOP_BACK_LIMIT;
@@ -5443,6 +5462,16 @@
           const num = clampLoopBackLimit(inp.value);
           n.loopBackLimit = num;
           if (n.kind === "start" && !n.groupNodeId) graph.loopBackLimit = num;
+        } else if (k === "repeatFromIndex" || k === "repeatToIndex") {
+          // Stored as entered, including blank: blank means "no bound on this end", which is
+          // different from 1 and from the last row (those pin the range once the source changes).
+          const raw = String(inp.value || "").trim();
+          const num = raw === "" ? null : Math.max(1, Math.floor(Number(raw) || 1));
+          n[k] = num;
+          if (n.kind === "start" && !n.groupNodeId) graph[k] = num;
+          // Recompute the caption so the author sees the effect of the edit immediately.
+          renderInspector();
+          return;
         } else if (k === "highlightColor") {
           const raw = String(inp.value || "").trim();
           if (inp.type === "text" && !/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(raw)) {
@@ -7487,7 +7516,53 @@
         <p class="palette-hint" style="margin:4px 0 0">وقتی نوع تکرار «منبع پیش‌فرض» باشد این انتخاب الزامی است.</p>
         ${dsWarn}
       </div>
+      ${repeatRangeHtml(n, rst)}
     `;
+  }
+
+  /**
+   * Row range for a source-backed repeat.
+   *
+   * Shown only when the repeat actually walks the source's rows: offering "rows 5 to 10" on a
+   * one-shot process would be a control that does nothing. Both ends are optional — a blank end
+   * means "from the first row" or "to the last row", which keeps working when the source grows,
+   * unlike a range pinned to today's last row.
+   */
+  function repeatRangeHtml(n, rst) {
+    if (rst !== "DataSource") return "";
+    const fromVal = n.repeatFromIndex ?? graph.repeatFromIndex ?? "";
+    const toVal = n.repeatToIndex ?? graph.repeatToIndex ?? "";
+    const total = repeatRowCount(n);
+    const hint = total
+      ? `منبع ${total} ردیف دارد. خالی گذاشتن هر طرف یعنی «از ابتدا» یا «تا انتها».`
+      : "تعداد ردیف‌های منبع نامشخص است؛ خالی گذاشتن محدوده یعنی همهٔ ردیف‌ها.";
+    return `
+      <div class="insp-field">
+        <label>محدودهٔ ردیف‌ها (اختیاری)</label>
+        <div class="insp-range-row">
+          <input type="number" min="1" step="1" dir="ltr" data-k="repeatFromIndex" value="${esc(fromVal)}"
+                 placeholder="از" aria-label="از ردیف" />
+          <span class="insp-range-sep">تا</span>
+          <input type="number" min="1" step="1" dir="ltr" data-k="repeatToIndex" value="${esc(toVal)}"
+                 placeholder="تا" aria-label="تا ردیف" />
+        </div>
+        <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">${esc(hint)}</p>
+      </div>`;
+  }
+
+  /** Row count of the process's master data source, or 0 when it cannot be determined. */
+  function repeatRowCount(n) {
+    const dsId = n?.dataSourceId ?? graph.dataSourceId;
+    const ds = (graph.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+    const count = Number(ds?.rowCount) || 0;
+    if (count) return count;
+    if (Array.isArray(ds?.cells) && ds.cells.length) {
+      const idxs = new Set(ds.cells
+        .map((c) => Number(c.index ?? c.Index ?? c.rowIndex))
+        .filter((x) => Number.isFinite(x)));
+      return idxs.size || 0;
+    }
+    return 0;
   }
 
   /** Repeat settings for start node inside a group (may use page selectors). */
@@ -7641,6 +7716,7 @@
     "saveColumnName", "constantEqualValue",
     "highlightColor", "url", "value", "waitMaxMs", "selectorWaitMs",
     "loopCount", "loopBackLimit", "stepDelayMs", "delayBeforeMs", "delayAfterMs",
+    "repeatFromIndex", "repeatToIndex",
     "systemClockFormat"
   ]);
   /** Keys that hold a free-text label the user reads, so they follow the UI direction. */
