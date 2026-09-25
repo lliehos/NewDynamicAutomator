@@ -203,6 +203,70 @@ public class AuthService
             .OrderBy(p => p.SortOrder)
             .ToListAsync(ct);
 
+    /// <summary>
+    /// Create the local row for a directory user signing in for the first time.
+    /// </summary>
+    /// <remarks>
+    /// The account is created with:
+    /// <list type="bullet">
+    /// <item>no usable password — a random hash, never revealed, because the directory owns the
+    ///       credential. Only the Admin break-glass path ever consults a local hash, and this is not
+    ///       an Admin, so the random value can never be matched.</item>
+    /// <item>the Local plan, the same starting point a self-registered account gets, so an
+    ///       unconfigured new user cannot accidentally receive paid entitlements.</item>
+    /// <item>an empty profile, which is what sends them to the completion page on the next
+    ///       request.</item>
+    /// </list>
+    /// Returns null when the user name cannot be used (for example a name reserved by the system).
+    /// </remarks>
+    private async Task<AppUser?> ProvisionLdapUserAsync(string? requestedName, string? ip, CancellationToken ct)
+    {
+        var name = (requestedName ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 100)
+            return null;
+        if (ReservedUserNames.IsReserved(name))
+        {
+            await _events.LogAsync("Warning", "Auth", "LdapProvisionRefused",
+                "Directory sign-in refused: the user name is reserved.", null, name, ipAddress: ip, ct: ct);
+            return null;
+        }
+        // A concurrent first sign-in could have created it already; re-read before inserting.
+        var existing = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.UserName == name, ct);
+        if (existing is not null) return existing;
+
+        var localPlan = await _db.Plans.FirstOrDefaultAsync(p => p.Code == nameof(PlanCode.Local), ct);
+        var user = new AppUser
+        {
+            UserName = name,
+            FirstName = null,
+            LastName = null,
+            IsActive = true,
+            Role = UserRole.User,
+            PlanId = localPlan?.Id,
+            Plan = localPlan,
+            CreatedAtUtc = DateTime.UtcNow,
+            PreferredLanguage = "fa"
+        };
+        // Random, discardable: the directory is the password authority for this account.
+        user.PasswordHash = _hasher.HashPassword(user, Guid.NewGuid().ToString("N") + "Aa1!");
+        _db.Users.Add(user);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            // Lost a race with a simultaneous first login — use the row the other request created.
+            _db.Entry(user).State = EntityState.Detached;
+            return await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.UserName == name, ct);
+        }
+
+        await _events.LogAsync("Audit", "Auth", "LdapUserProvisioned",
+            $"Directory user {name} was provisioned on first sign-in (profile incomplete).",
+            user.Id, user.UserName, ipAddress: ip, ct: ct);
+        return user;
+    }
+
     public async Task<(LoginResponse? ok, string? errorKey)> LoginAsync(LoginRequest request, string? ip = null, CancellationToken ct = default)
     {
         var user = await _db.Users
@@ -241,13 +305,28 @@ public class AuthService
                 return (null, "login.errorLdapMisconfigured");
             }
 
-            if (user is null || !user.IsActive)
-                return (null, "login.errorInvalid");
-
+            // The bind must happen BEFORE anything is written. Provisioning first would leave a
+            // stray account behind on every mistyped password, which an attacker could use to fill
+            // the user table. The directory also needs no local row to validate credentials.
             var ldapResult = await _ldap.AuthenticateAsync(options, request.UserName, password, ct);
             if (ldapResult == LdapAuthResult.Unavailable)
                 return (null, "login.errorLdapUnavailable");
             if (ldapResult != LdapAuthResult.Success)
+                return (null, "login.errorInvalid");
+
+            if (user is null)
+            {
+                // First directory sign-in for this account. The directory has now proved the
+                // password, so the local row is created here without one — there is nothing to
+                // store, and LDAP remains the only credential source for this account. The row
+                // starts with an empty profile, which sends the user to the completion page on the
+                // next request (RequireProfileCompleteFilter).
+                var provisioned = await ProvisionLdapUserAsync(request.UserName, ip, ct);
+                if (provisioned is null)
+                    return (null, "login.errorInvalid");
+                user = provisioned;
+            }
+            if (!user.IsActive)
                 return (null, "login.errorInvalid");
 
             await _events.LogAsync("Audit", "Auth", "LoginLdap",
