@@ -59,6 +59,7 @@
   const ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
   const ICO_OPEN = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14 3h7v7h-2V6.4l-9.3 9.3-1.4-1.4L17.6 5H14V3zM5 5h6v2H7v10h10v-4h2v6H5V5z"/></svg>`;
   const ICO_RENAME = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 17.5V20h2.5L18 8.5 15.5 6 4 17.5zm16.7-11.2a1 1 0 0 0 0-1.4l-2.1-2.1a1 1 0 0 0-1.4 0l-1.6 1.6 3.5 3.5 1.6-1.6z"/></svg>`;
+  const ICO_RELOAD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5a7 7 0 0 1 6.5 4.4l1.9-1.1V13h-4.7l1.8-1A5 5 0 1 0 12 17v2a7 7 0 1 1 0-14z"/></svg>`;
 
   function iconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
@@ -96,10 +97,128 @@
     }
   }
 
+  /**
+   * Replace the file behind a library source without changing its id, title or process links.
+   *
+   * A process node binds a source *column by name*, so if the new file dropped a column that a
+   * step still reads the step would break mid-play. We therefore analyse first and list the exact
+   * steps before anything is written; the user can still go ahead deliberately.
+   */
+  async function reloadLibrarySource(sourceId, currentTitle) {
+    const pick = document.createElement("input");
+    pick.type = "file";
+    pick.accept = ".xlsx,.xlsm,.csv";
+    pick.hidden = true;
+    document.body.appendChild(pick);
+    const file = await new Promise((resolve) => {
+      pick.addEventListener("change", () => resolve(pick.files?.[0] || null), { once: true });
+      pick.click();
+    });
+    pick.remove();
+    if (!file) return;
+
+    let parsed;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/Panel/Tasks/ParseExcel", {
+        method: "POST",
+        credentials: "same-origin",
+        body: fd
+      });
+      if (!res.ok) throw new Error(t("sources.reloadParseFail") || "فایل اکسل خوانده نشد.");
+      parsed = await res.json();
+    } catch (e) {
+      notify(e.message || t("sources.reloadParseFail") || "فایل اکسل خوانده نشد.", "error");
+      return;
+    }
+    if (!parsed || !Array.isArray(parsed.columns) || !parsed.columns.length) {
+      notify(t("sources.reloadNoColumns") || "فایل اکسل ستون معتبری ندارد.", "error");
+      return;
+    }
+
+    const payload = {
+      fileName: file.name,
+      columns: parsed.columns,
+      columnKeys: parsed.columnKeys || parsed.columns.map((c) => c.key),
+      cells: parsed.cells || [],
+      columnCount: parsed.columnCount,
+      rowCount: parsed.rowCount
+    };
+
+    // Dry run first — the server tells us which steps would lose a column they read.
+    let compat = null;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/analyze-columns`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) compat = await res.json();
+    } catch { /* the real call re-checks server-side anyway */ }
+
+    let force = false;
+    if (compat && compat.missingColumns && compat.missingColumns.length) {
+      const ok = await confirmMissingColumns(compat, currentTitle);
+      if (!ok) return;
+      force = true;
+    } else if (!confirm((t("sources.reloadConfirm") || "محتوای منبع «{title}» با فایل «{file}» جایگزین شود؟")
+      .replace("{title}", currentTitle || "").replace("{file}", file.name))) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/reload`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, force })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (body && body.compatibility && body.compatibility.missingColumns?.length) {
+          await confirmMissingColumns(body.compatibility, currentTitle);
+        } else {
+          notify(body.message || t("sources.reloadFail") || "بارگذاری مجدد انجام نشد.", "error");
+        }
+        return;
+      }
+      notify((t("sources.reloaded") || "منبع «{title}» بازخوانی شد ({rows} ردیف).")
+        .replace("{title}", body.dataSourceTitle || currentTitle || "")
+        .replace("{rows}", String(body.rowCount ?? 0)), "success");
+      await renderAsync();
+    } catch (e) {
+      notify(e.message || t("sources.reloadFail") || "بارگذاری مجدد انجام نشد.", "error");
+    }
+  }
+
+  /** Precise warning: name every process + step that reads a column the new file dropped. */
+  async function confirmMissingColumns(compat, title) {
+    const lines = [];
+    for (const miss of compat.missingColumns || []) {
+      const nodes = (miss.nodes || []).map((n) => `«${n.nodeTitle}»${n.processTitle ? ` — ${n.processTitle}` : ""}`);
+      lines.push(`• ستون «${miss.columnKey}» (${miss.columnTitle}) توسط: ${nodes.join("، ")}`);
+    }
+    const head = (t("sources.reloadMissingHead")
+      || "این ستون‌ها در فایل جدید نیستند ولی گره‌های زیر به آن‌ها وابسته‌اند:");
+    const foot = (t("sources.reloadMissingFoot")
+      || "اگر ادامه دهید، این گره‌ها مقدار لازم را پیدا نمی‌کنند. ادامه می‌دهید؟");
+    const text = `${head}\n\n${lines.join("\n")}\n\n${foot}\n(${title || ""})`;
+    if (window.DaNotify?.confirm) {
+      return !!(await DaNotify.confirm(text, {
+        title: t("sources.reloadMissingTitle") || "ستون‌های وابسته حذف شده‌اند",
+        okText: t("common.confirm") || "ادامه",
+        cancelText: t("common.cancel"),
+        danger: true
+      }));
+    }
+    return confirm(text);
+  }
+
   async function fetchLibrarySources() {
     try {
       const res = await fetch("/api/datasources", { credentials: "same-origin" });
-      if (!res.ok) return null;
       const list = await res.json();
       if (!Array.isArray(list)) return null;
       return list.map((d) => ({
@@ -549,6 +668,7 @@
       : "";
     return `
       ${Number(sid) > 0 ? iconBtn("js-rename", t("sources.rename"), ICO_RENAME, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
+      ${Number(sid) > 0 ? iconBtn("js-reload", t("sources.reloadFile"), ICO_RELOAD, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
       ${row.taskId != null ? iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `data-task="${tid}" data-id="${sid}"`) : ""}
       ${row.taskId != null ? iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`) : ""}
       ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-id="${sid}"`)}
@@ -562,6 +682,9 @@
     if (!root) return;
     root.querySelectorAll(".js-rename").forEach((btn) => {
       btn.addEventListener("click", () => renameLibrarySource(btn.dataset.id, btn.dataset.title || ""));
+    });
+    root.querySelectorAll(".js-reload").forEach((btn) => {
+      btn.addEventListener("click", () => reloadLibrarySource(btn.dataset.id, btn.dataset.title || ""));
     });
     root.querySelectorAll(".js-view").forEach((btn) => {
       btn.addEventListener("click", () => openViewer(btn.dataset.task, btn.dataset.id));

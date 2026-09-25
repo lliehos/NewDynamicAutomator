@@ -626,6 +626,75 @@ public class DataSourcesApiController : ControllerBase
         return Ok(new { ok = true });
     }
 
+    /// <summary>
+    /// Dry-run: would replacing this source's content drop a column that live process nodes read?
+    /// The client calls this before writing anything so it can list the affected steps.
+    /// </summary>
+    [HttpPost("{id:int}/analyze-columns")]
+    public async Task<IActionResult> AnalyzeColumns(
+        int id, [FromBody] Morobot.Contracts.DataSources.ReloadDataSourceRequest req, CancellationToken ct)
+    {
+        var incomingKeys = (req.Columns is { Count: > 0 })
+            ? req.Columns.Where(c => !string.IsNullOrWhiteSpace(c.Key)).Select(c => c.Key.Trim()).ToList()
+            : (req.ColumnKeys ?? new List<string>());
+        var result = await _sources.AnalyzeColumnCompatibilityAsync(UserId, id, incomingKeys, ct);
+        return result is null ? NotFound() : Ok(result);
+    }
+
+    /// <summary>
+    /// Replace a library source's columns + cells in place, keeping its id, title and process links.
+    /// Refused with <c>blocked-missing-columns</c> unless the caller passes <c>force</c>, so a column
+    /// dropped by mistake cannot silently break a process that reads it.
+    /// </summary>
+    [HttpPost("{id:int}/reload")]
+    public async Task<IActionResult> Reload(
+        int id, [FromBody] Morobot.Contracts.DataSources.ReloadDataSourceRequest req, CancellationToken ct)
+    {
+        var result = await _sources.ReloadContentAsync(UserId, id, req, ct);
+        if (!result.Ok)
+        {
+            return result.Code switch
+            {
+                "notfound" => NotFound(),
+                "forbidden" => Forbid(),
+                "blocked-missing-columns" => Conflict(result),
+                _ => BadRequest(result)
+            };
+        }
+
+        await _catalog.LibrarySourceChangedAsync(new
+        {
+            id = result.DataSourceId,
+            title = result.DataSourceTitle,
+            columnCount = result.ColumnCount,
+            rowCount = result.RowCount,
+            dataRevision = result.DataRevision
+        }, "reloaded", User.Identity?.Name, UserId, ct);
+
+        var linked = await _sources.GetLinkedProcessIdsAsync(id, ct);
+        foreach (var processId in linked)
+        {
+            await _catalog.SourceChangedAsync(processId, new
+            {
+                id = result.DataSourceId,
+                title = result.DataSourceTitle,
+                dataRevision = result.DataRevision
+            }, "reloaded", User.Identity?.Name, ct);
+            await _catalog.BroadcastProcessListItemAsync(processId, "updated", User.Identity?.Name, ct);
+            // Tell any editor holding this canvas that the source's shape changed under it.
+            await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
+            {
+                taskId = processId,
+                dataSourceId = result.DataSourceId,
+                reason = "datasource_reloaded",
+                userId = UserId,
+                userName = User.Identity?.Name
+            }, ct);
+        }
+
+        return Ok(result);
+    }
+
     [HttpGet("count")]
     public async Task<IActionResult> Count(CancellationToken ct)
     {

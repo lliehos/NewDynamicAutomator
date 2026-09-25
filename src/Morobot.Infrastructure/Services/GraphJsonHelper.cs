@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Morobot.Infrastructure.Services;
 
@@ -55,6 +56,50 @@ public static class GraphJsonHelper
         }
 
         return graphJson;
+    }
+
+    /// <summary>
+    /// If <paramref name="graphJson"/> is an envelope, return its root object and hand back the
+    /// inner graph text; otherwise return <c>null</c> and the input as the body.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="UnwrapEnvelope"/>: callers that need to *write back* must keep the
+    /// envelope's other fields, so they need the wrapper object itself, not just the inner string.
+    /// </remarks>
+    public static JsonObject? TryParseEnvelope(string? graphJson, out string bodyJson)
+    {
+        bodyJson = graphJson ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(graphJson)) return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(graphJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+
+            // A root that already has nodes IS the graph, not an envelope.
+            if (doc.RootElement.TryGetProperty("nodes", out _)
+                || doc.RootElement.TryGetProperty("Nodes", out _))
+                return null;
+
+            if (!doc.RootElement.TryGetProperty("graphJson", out var inner)
+                && !doc.RootElement.TryGetProperty("GraphJson", out inner))
+                return null;
+
+            var innerText = inner.ValueKind switch
+            {
+                JsonValueKind.String => inner.GetString(),
+                JsonValueKind.Object => inner.GetRawText(),
+                _ => null
+            };
+            if (string.IsNullOrWhiteSpace(innerText)) return null;
+
+            bodyJson = innerText;
+            return JsonNode.Parse(graphJson) as JsonObject;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     public static int CountSources(string? graphJson)

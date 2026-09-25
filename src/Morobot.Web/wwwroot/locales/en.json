@@ -796,7 +796,16 @@
     "rename": "Rename",
     "renamePrompt": "Enter a new data source title",
     "renamed": "Data source title saved.",
-    "renameFail": "Could not save title."
+    "renameFail": "Could not save title.",
+    "reloadFile": "Reload file",
+    "reloadConfirm": "Replace the content of \"{title}\" with \"{file}\"?",
+    "reloaded": "Data source \"{title}\" reloaded ({rows} rows).",
+    "reloadFail": "Could not reload the data source.",
+    "reloadParseFail": "Could not read the Excel file.",
+    "reloadNoColumns": "The Excel file has no valid columns (the first row must be headers).",
+    "reloadMissingTitle": "Referenced columns were removed",
+    "reloadMissingHead": "These columns are missing from the new file but the following steps depend on them:",
+    "reloadMissingFoot": "If you continue, those steps will not find their value. Continue?"
   },
   "settings": {
     "title": "Account settings",

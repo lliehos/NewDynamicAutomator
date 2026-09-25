@@ -605,6 +605,283 @@ public class DataSourceService
         return (true, null, processIds);
     }
 
+    /// <summary>
+    /// Column→node bindings a process node can use to read a library source. The JSON property for
+    /// the bound column always sits next to the property holding the source id, so the pair is
+    /// declared once here and reused by the dependency scan.
+    /// </summary>
+    private static readonly (string IdProp, string ColumnProp, string Binding)[] ColumnBindings =
+    {
+        ("dataSourceId", "dynamicSourceColumnName", "value"),
+        ("sourceId", "dynamicSourceColumnName", "value"),
+        ("selectorDataSourceId", "selectorDynamicColumn", "selector"),
+        ("equalSelectorDataSourceId", "equalSelectorDynamicColumn", "equalSelector"),
+        ("attributeDataSourceId", "attributeDynamicColumn", "attribute"),
+        ("equalAttributeDataSourceId", "equalAttributeDynamicColumn", "equalAttribute"),
+        ("saveDataSourceId", "saveColumnName", "save")
+    };
+
+    /// <summary>
+    /// Compare an incoming column set against the columns live process nodes currently read.
+    ///
+    /// Replacing a source's file used to be an all-or-nothing overwrite: dropping a column silently
+    /// broke every step bound to it, and the failure only showed up mid-play. This returns the exact
+    /// process / node list so the operator can be told before anything is written.
+    /// </summary>
+    public async Task<ColumnCompatibilityDto?> AnalyzeColumnCompatibilityAsync(
+        int userId, int dataSourceId, IReadOnlyList<string> incomingColumnKeys, CancellationToken ct = default)
+    {
+        var ds = await GetAccessibleAsync(userId, dataSourceId, write: true, ct);
+        if (ds is null) return null;
+
+        var current = DeserializeColumns(ds.ColumnsJson);
+        return await BuildCompatibilityAsync(ds, current, incomingColumnKeys, ct);
+    }
+
+    private async Task<ColumnCompatibilityDto> BuildCompatibilityAsync(
+        DataSource ds, List<DataSourceColumnDto> current, IReadOnlyList<string> incomingColumnKeys, CancellationToken ct)
+    {
+        var incoming = (incomingColumnKeys ?? Array.Empty<string>())
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Select(k => k.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var incomingSet = new HashSet<string>(incoming, StringComparer.OrdinalIgnoreCase);
+        var currentKeys = current.Where(c => !string.IsNullOrWhiteSpace(c.Key)).Select(c => c.Key.Trim()).ToList();
+
+        var dto = new ColumnCompatibilityDto
+        {
+            DataSourceId = ds.Id,
+            DataSourceTitle = ds.Title,
+            CurrentColumnKeys = currentKeys,
+            IncomingColumnKeys = incoming,
+            AddedColumnKeys = incoming.Where(k => !currentKeys.Contains(k, StringComparer.OrdinalIgnoreCase)).ToList()
+        };
+
+        // Columns present today but absent from the new file — only these can break a node.
+        var dropped = current
+            .Where(c => !string.IsNullOrWhiteSpace(c.Key) && !incomingSet.Contains(c.Key.Trim()))
+            .ToList();
+
+        var processIds = await _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.DataSourceId == ds.Id)
+            .Select(l => l.ProcessId)
+            .Distinct()
+            .ToListAsync(ct);
+        if (processIds.Count == 0) return dto;
+
+        var processes = await _db.Processes.AsNoTracking()
+            .Where(p => processIds.Contains(p.Id))
+            .Select(p => new { p.Id, p.Title, p.GraphJson })
+            .ToListAsync(ct);
+
+        var affectedNodes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var droppedCol in dropped)
+        {
+            var missing = new MissingColumnDto
+            {
+                ColumnKey = droppedCol.Key.Trim(),
+                ColumnTitle = string.IsNullOrWhiteSpace(droppedCol.Title) ? droppedCol.Key.Trim() : droppedCol.Title.Trim()
+            };
+            foreach (var p in processes)
+            {
+                foreach (var hit in FindColumnUsages(p.GraphJson, ds.Id, droppedCol.Key))
+                {
+                    hit.ProcessId = p.Id;
+                    hit.ProcessTitle = p.Title;
+                    missing.Nodes.Add(hit);
+                    affectedNodes.Add($"{p.Id}:{hit.NodeId}:{hit.Binding}");
+                }
+            }
+            if (missing.Nodes.Count > 0) dto.MissingColumns.Add(missing);
+        }
+        dto.AffectedNodeCount = affectedNodes.Count;
+        return dto;
+    }
+
+    /// <summary>
+    /// Walk a process graph for nodes bound to <paramref name="dataSourceId"/> whose bound column
+    /// equals <paramref name="columnKey"/>. Handles the plain graph and the envelope wrapper.
+    /// </summary>
+    private static List<ColumnDependencyNodeDto> FindColumnUsages(string? graphJson, int dataSourceId, string columnKey)
+    {
+        var hits = new List<ColumnDependencyNodeDto>();
+        graphJson = GraphJsonHelper.UnwrapEnvelope(graphJson);
+        if (string.IsNullOrWhiteSpace(graphJson)) return hits;
+
+        JsonObject? root;
+        try { root = JsonNode.Parse(graphJson) as JsonObject; }
+        catch { return hits; }
+        if (root is null) return hits;
+
+        if (root["nodes"] is not JsonArray nodes) return hits;
+
+        foreach (var n in nodes)
+        {
+            if (n is not JsonObject no) continue;
+
+            var nodeId = ReadString(no, "id") ?? ReadString(no, "Id") ?? "";
+            var kind = ReadString(no, "kind") ?? ReadString(no, "Kind") ?? "";
+            var nodeTitle = ReadString(no, "title") ?? ReadString(no, "Title") ?? "";
+
+            foreach (var (idProp, columnProp, binding) in ColumnBindings)
+            {
+                if (no[idProp]?.GetValue<int?>() != dataSourceId) continue;
+                var bound = ReadString(no, columnProp);
+                if (string.IsNullOrWhiteSpace(bound)) continue;
+                if (!string.Equals(bound.Trim(), columnKey.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+                if (hits.Any(h => h.NodeId == nodeId && h.Binding == binding)) continue;
+
+                hits.Add(new ColumnDependencyNodeDto
+                {
+                    NodeId = nodeId,
+                    Kind = kind,
+                    NodeTitle = string.IsNullOrWhiteSpace(nodeTitle) ? nodeId : nodeTitle,
+                    Binding = binding
+                });
+            }
+        }
+        return hits;
+    }
+
+    private static string? ReadString(JsonObject obj, string prop)
+    {
+        var node = obj[prop];
+        if (node is null) return null;
+        try { return node.GetValue<string>(); }
+        catch { return node.ToJsonString()?.Trim('"'); }
+    }
+
+    /// <summary>
+    /// Push a new file's content over an existing library source, keeping its id, title and links.
+    ///
+    /// A column that live nodes still read is refused unless <paramref name="req"/>.Force is set, so
+    /// an accidental column rename in Excel cannot quietly break a working process.
+    /// </summary>
+    public async Task<ReloadDataSourceResponse> ReloadContentAsync(
+        int userId, int id, ReloadDataSourceRequest req, CancellationToken ct = default)
+    {
+        var entity = await _db.DataSources
+            .Include(d => d.ProcessLinks)
+            .FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (entity is null)
+            return new ReloadDataSourceResponse { Ok = false, Code = "notfound", Message = "منبع پیدا نشد." };
+        if (entity.OwnerUserId != userId)
+            return new ReloadDataSourceResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = NormalizeColumns(req.Columns, req.ColumnKeys);
+        if (columns.Count == 0)
+            return new ReloadDataSourceResponse
+            {
+                Ok = false,
+                Code = "invalid",
+                Message = "فایل اکسل ستون معتبری ندارد (ردیف اول باید هدر باشد)."
+            };
+
+        var current = DeserializeColumns(entity.ColumnsJson);
+        var compatibility = await BuildCompatibilityAsync(
+            entity, current, columns.Select(c => c.Key).ToList(), ct);
+        if (compatibility.HasBlockingMissingColumns && !req.Force)
+        {
+            return new ReloadDataSourceResponse
+            {
+                Ok = false,
+                Code = "blocked-missing-columns",
+                Message = "برخی ستون‌ها حذف شده‌اند ولی گره‌هایی از فرآیند به آن‌ها وابسته‌اند.",
+                DataSourceId = entity.Id,
+                DataSourceTitle = entity.Title,
+                Compatibility = compatibility
+            };
+        }
+
+        var cells = req.Cells ?? new List<DataSourceCellDto>();
+        // Cells for columns that no longer exist would be invisible but still counted, so drop them.
+        var columnSet = new HashSet<string>(columns.Select(c => c.Key.Trim()), StringComparer.OrdinalIgnoreCase);
+        cells = cells
+            .Where(c => !string.IsNullOrWhiteSpace(c.Key) && columnSet.Contains(c.Key.Trim()))
+            .ToList();
+        var rowCount = req.RowCount ?? (cells.Count == 0 ? 0 : cells.Max(c => c.Index) + 1);
+
+        entity.FileName = Trunc(req.FileName, 260) ?? entity.FileName;
+        entity.ColumnCount = req.ColumnCount ?? columns.Count;
+        entity.RowCount = rowCount;
+        entity.ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts);
+        entity.CellsJson = JsonSerializer.Serialize(cells, JsonOpts);
+        entity.DataRevision += 1;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        StampDataEditor(entity, userId);
+        await _db.SaveChangesAsync(ct);
+
+        await ReplaceAllCellsAsync(entity.Id, cells, ct);
+
+        var processIds = entity.ProcessLinks.Select(l => l.ProcessId).Distinct().ToList();
+        foreach (var pid in processIds)
+        {
+            try { await RefreshSourceSnapshotInProcessGraphAsync(pid, entity, ct); }
+            catch (Exception ex) { _log.LogWarning(ex, "Refresh source {Ds} snapshot on process {P}", id, pid); }
+        }
+
+        return new ReloadDataSourceResponse
+        {
+            Ok = true,
+            DataSourceId = entity.Id,
+            DataSourceTitle = entity.Title,
+            ColumnCount = entity.ColumnCount,
+            RowCount = entity.RowCount,
+            ColumnKeys = columns.Select(c => c.Key).ToList(),
+            DataRevision = entity.DataRevision,
+            Compatibility = compatibility
+        };
+    }
+
+    /// <summary>
+    /// Re-stamp the linked process graphs with this source's new shape (columnKeys/columns/rowCount)
+    /// so an open editor does not keep offering columns the source no longer has.
+    /// </summary>
+    private async Task RefreshSourceSnapshotInProcessGraphAsync(int processId, DataSource ds, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return;
+
+        // Stored graphs come in two shapes: a plain graph, or an envelope whose real body lives in a
+        // "graphJson" string. Unwrap first — reading dataSources off the envelope root finds an empty
+        // array and silently patches nothing.
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+
+        JsonObject? body;
+        try { body = JsonNode.Parse(bodyJson) as JsonObject; }
+        catch { return; }
+        if (body is null) return;
+        if (body["dataSources"] is not JsonArray arr) return;
+
+        var changed = false;
+        for (var i = 0; i < arr.Count; i++)
+        {
+            if (arr[i] is not JsonObject o) continue;
+            var sid = o["id"]?.GetValue<int?>() ?? o["Id"]?.GetValue<int?>();
+            if (sid != ds.Id) continue;
+            arr[i] = ToGraphNode(ds);
+            changed = true;
+        }
+        if (!changed) return;
+
+        process.GraphJson = envelope is null
+            ? body.ToJsonString(JsonOpts)
+            : EnvelopeWithBody(envelope, body).ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    private static JsonObject EnvelopeWithBody(JsonObject envelope, JsonObject body)
+    {
+        envelope["graphJson"] = body.ToJsonString(JsonOpts);
+        // The envelope mirrors the body's source list for list views; keep the two in step.
+        if (body["dataSources"] is JsonArray sources)
+            envelope["dataSources"] = JsonNode.Parse(sources.ToJsonString())!.AsArray();
+        return envelope;
+    }
+
     public async Task<bool> DeleteLibraryAsync(int userId, int id, CancellationToken ct = default)
     {
         var entity = await _db.DataSources
