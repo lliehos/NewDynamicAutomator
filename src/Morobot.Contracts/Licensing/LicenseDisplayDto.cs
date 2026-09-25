@@ -29,6 +29,8 @@ public sealed class LicenseDisplayDto
     public string? UpdateServerUrl { get; set; }
     public string? PendingConnectionRestart { get; set; }
     public string? AllowedHost { get; set; }
+    /// <summary>Signed link for the referral QR widget (null = use the built-in product page).</summary>
+    public string? ReferralWidgetUrl { get; set; }
 }
 
 public sealed class TenantBrandingDto
@@ -67,6 +69,12 @@ public sealed class TenantBrandingDto
 
     /// <summary>Panel referral QR widget (morobot.ir). Enterprise can disable when licensed.</summary>
     public bool ShowReferralQrWidget { get; set; } = true;
+
+    /// <summary>
+    /// Vendor-signed link for the referral widget, taken from the licence file. Null when the
+    /// licence names none, in which case the product page compiled into the app is used.
+    /// </summary>
+    public string? ReferralWidgetUrl { get; set; }
 }
 
 public sealed class UpdateCheckResultDto

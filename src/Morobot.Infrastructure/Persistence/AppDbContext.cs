@@ -114,6 +114,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.OrganizationName).HasMaxLength(200);
             e.Property(x => x.DatabaseServerHint).HasMaxLength(200);
             e.Property(x => x.AllowedHost).HasMaxLength(253);
+            e.Property(x => x.ReferralWidgetUrl).HasMaxLength(500);
             e.Property(x => x.TrialDays).HasDefaultValue(3);
             e.Property(x => x.AllowUpdates).HasDefaultValue(true);
             e.HasIndex(x => x.ImportedAtUtc);

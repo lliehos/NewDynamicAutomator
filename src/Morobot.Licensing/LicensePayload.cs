@@ -31,4 +31,10 @@ public sealed class LicensePayload
     public string? UpdateServerUrl { get; set; }
     /// <summary>When set, HTTP Host (or this IP) must match. Empty = no host lock.</summary>
     public string? AllowedHost { get; set; }
+    /// <summary>
+    /// Link the in-panel referral QR widget points at. Vendor-signed rather than a database
+    /// setting so a deployment cannot repoint the traffic the widget sends out. Empty falls
+    /// back to the product page compiled into the app.
+    /// </summary>
+    public string? ReferralWidgetUrl { get; set; }
 }

@@ -118,9 +118,25 @@
                        ToolTip="دامنه (با یا بدون https) یا آدرس IPv4/IPv6"/>
             </StackPanel>
 
-            <!-- Max users -->
+            <!-- Referral widget link -->
             <StackPanel Style="{StaticResource VsFieldBlock}">
               <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE71B;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="لینک ویجت معرفی"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="آدرسی که QR ویجت معرفی در پنل کاربری به آن اشاره می‌کند. خالی = صفحهٔ پیش‌فرض محصول."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="فقط http یا https. این مقدار امضا می‌شود و از سمت مشتری قابل تغییر نیست؛ مثلاً https://morobot.ir/customer"/>
+              <TextBox x:Name="ReferralUrl" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"
+                       ToolTip="مثال: https://morobot.ir"/>
+            </StackPanel>
+
+            <!-- Max users -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">              <StackPanel Orientation="Horizontal">
                 <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE716;"/>
                 <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="سقف کاربر"/>
                 <Border Style="{StaticResource VsBadgeOptional}">

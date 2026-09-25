@@ -16,5 +16,7 @@ public class StoredLicense
     public int TrialDays { get; set; } = 3;
     public string? DatabaseServerHint { get; set; }
     public string? AllowedHost { get; set; }
+    /// <summary>Signed referral-widget link; null = use the page compiled into the app.</summary>
+    public string? ReferralWidgetUrl { get; set; }
     public DateTime ImportedAtUtc { get; set; }
 }

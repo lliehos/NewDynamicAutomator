@@ -243,7 +243,8 @@
       "invalid": "License is not valid.",
       "invalidHost": "Allowed host or IP in the license is invalid.",
       "hostMismatch": "This license is locked to a specific host/IP; the current request does not match.",
-      "seatLimit": "Active user cap reached."
+      "seatLimit": "Active user cap reached.",
+      "invalidReferralUrl": "The referral widget link in the license is invalid."
     }
   },
   "password": {
@@ -527,7 +528,9 @@
         "SequenceRollback": "Older than current license",
         "Valid": "Valid",
         "HostMismatch": "Request host/IP does not match license"
-      }
+      },
+      "fieldReferralUrl": "Referral widget link",
+      "fieldReferralUrlDefault": "Product default"
     },
     "branding": {
       "title": "Organization branding",

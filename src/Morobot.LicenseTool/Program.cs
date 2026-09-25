@@ -32,7 +32,7 @@ Morobot license tool (vendor-only — never deploy private keys to customers)
 
 Commands:
   genkeypair [--out-dir <path>]
-  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--update-url URL] [-o license.morobot]
+  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--update-url URL] [-o license.morobot]
   package --project <path-to-Morobot.Web.csproj> --output <folder>
   package-update --version <semver> --source <published-folder> [-o <file.zip>] [--notes "text"] [--channel stable] [--min-current <semver>] [--product-name Morobot]
   verify --license <file.morobot> [--public-key <pem>]
@@ -117,6 +117,18 @@ static int Sign(string[] args)
         allowedHost = normalizedHost;
     }
 
+    var referralUrlRaw = GetArg(args, "--referral-url");
+    string? referralUrl = null;
+    if (!string.IsNullOrWhiteSpace(referralUrlRaw))
+    {
+        referralUrl = LicenseReferralUrl.TryNormalize(referralUrlRaw);
+        if (referralUrl is null)
+        {
+            Console.Error.WriteLine("Invalid --referral-url (use an http or https address).");
+            return 1;
+        }
+    }
+
     var payload = new LicensePayload
     {
         LicenseId = Guid.NewGuid().ToString("D"),
@@ -131,7 +143,8 @@ static int Sign(string[] args)
         AllowUpdates = allowUpdates,
         AllowLegacyMigration = allowLegacyMigration,
         UpdateServerUrl = updateUrl,
-        AllowedHost = allowedHost
+        AllowedHost = allowedHost,
+        ReferralWidgetUrl = referralUrl
     };
 
     var doc = LicenseCrypto.Sign(payload, privatePem);

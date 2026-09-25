@@ -34,7 +34,6 @@ public sealed class BrandHeadModel
 
     public bool ShowReferralQr { get; init; } = true;
     public string ReferralProductUrl { get; init; } = BrandPaletteDefaults.ReferralProductUrl;
-
     public string PageTitleSuffix => AppName;
 
     /// <summary>
@@ -68,6 +67,11 @@ public sealed class BrandHeadModel
             ? Pick(dto.OrganizationNameFa, dto.OrganizationName, null)
             : Pick(dto.OrganizationNameEn, dto.OrganizationName, null);
         var showQr = !dto.IsLicensedBranding || dto.ShowReferralQrWidget;
+        // The widget link is vendor-signed inside the licence. Falling back to the page compiled
+        // into the app keeps the widget working on a trial, where no licence exists yet.
+        var referralUrl = dto.ReferralWidgetUrl;
+        if (string.IsNullOrWhiteSpace(referralUrl))
+            referralUrl = BrandPaletteDefaults.ReferralProductUrl;
 
         if (!dto.IsLicensedBranding)
         {
@@ -83,6 +87,7 @@ public sealed class BrandHeadModel
                 IconPngPath = DefaultIconPngPath,
                 IsLicensedBranding = false,
                 ShowReferralQr = true,
+                ReferralProductUrl = referralUrl,
                 ColorPrimary = palette.primary,
                 ColorPrimaryDark = palette.primaryDark,
                 ColorPrimaryLight = palette.primaryLight,
@@ -110,6 +115,7 @@ public sealed class BrandHeadModel
             FaviconAbsoluteUrl = ToAbsolute(siteOrigin, dto.FaviconUrl ?? dto.LogoUrl),
             IsLicensedBranding = true,
             ShowReferralQr = showQr,
+            ReferralProductUrl = referralUrl,
             ColorPrimary = palette.primary,
             ColorPrimaryDark = palette.primaryDark,
             ColorPrimaryLight = palette.primaryLight,

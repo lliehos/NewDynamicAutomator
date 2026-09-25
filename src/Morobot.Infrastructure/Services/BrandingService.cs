@@ -40,7 +40,8 @@ public sealed class BrandingService
                 OrganizationNameEn = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationEn, "", ct),
                 OrganizationNameFa = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationFa, "", ct),
                 IsLicensedBranding = false,
-                ShowReferralQrWidget = true
+                ShowReferralQrWidget = true,
+                ReferralWidgetUrl = LicenseReferralUrl.TryNormalize(state.Payload?.ReferralWidgetUrl)
             };
         }
 
@@ -63,7 +64,8 @@ public sealed class BrandingService
             BrandTitleFa = await _settings.GetAsync(SystemSettingKeys.BrandTitleFa, "", ct),
             OrganizationNameEn = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationEn, "", ct),
             OrganizationNameFa = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationFa, "", ct),
-            IsLicensedBranding = true
+            IsLicensedBranding = true,
+            ReferralWidgetUrl = LicenseReferralUrl.TryNormalize(state.Payload?.ReferralWidgetUrl)
         };
         await ApplyPaletteFromSettingsAsync(dto, ct);
         return dto;

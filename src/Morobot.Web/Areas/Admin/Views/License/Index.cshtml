@@ -113,6 +113,17 @@
         </dd>
         <dt>@L["admin.license.fieldAllowUpdates"]</dt>
         <dd>@(d.AllowUpdates ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
+        <dt>@L["admin.license.fieldReferralUrl"]</dt>
+        <dd>
+          @if (string.IsNullOrWhiteSpace(d.ReferralWidgetUrl))
+          {
+            <span class="admin-muted">@L["admin.license.fieldReferralUrlDefault"]</span>
+          }
+          else
+          {
+            <a href="@d.ReferralWidgetUrl" target="_blank" rel="noopener"><code>@d.ReferralWidgetUrl</code></a>
+          }
+        </dd>
       </dl>
       <partial name="_AdminHint" model='L["admin.hints.licenseSafeFields"]' />
     </div>

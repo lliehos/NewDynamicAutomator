@@ -242,6 +242,7 @@ public sealed class LicenseService
             dto.Sequence = payload.Sequence;
             dto.DatabaseServerHint = ExtractServerHint(payload.DatabaseConnectionString);
             dto.AllowedHost = payload.AllowedHost;
+            dto.ReferralWidgetUrl = LicenseReferralUrl.TryNormalize(payload.ReferralWidgetUrl);
             if (payload.ValidUntilUtc > DateTime.UtcNow)
                 dto.DaysRemaining = (int)Math.Ceiling((payload.ValidUntilUtc - DateTime.UtcNow).TotalDays);
         }
@@ -250,6 +251,7 @@ public sealed class LicenseService
         ApplyValidityWindow(dto, trial, runtime, stored, payload);
 
         dto.AllowedHost ??= stored?.AllowedHost;
+        dto.ReferralWidgetUrl ??= stored?.ReferralWidgetUrl;
 
         if (runtime.Reason == LicenseRestrictionReason.HostMismatch)
         {
@@ -343,6 +345,9 @@ public sealed class LicenseService
             && !LicenseHostBinding.TryNormalize(payload.AllowedHost, out _))
             return (false, "license.error.invalidHost");
 
+        if (!LicenseReferralUrl.IsAcceptable(payload.ReferralWidgetUrl))
+            return (false, "license.error.invalidReferralUrl");
+
         var utcNow = DateTime.UtcNow;
         if (utcNow < anchor.LastTrustedUtc.AddMinutes(-5))
             return (false, "license.error.clockRollback");
@@ -367,6 +372,7 @@ public sealed class LicenseService
                 : LicenseHostBinding.TryNormalize(payload.AllowedHost, out var normalizedHost)
                     ? normalizedHost
                     : payload.AllowedHost.Trim(),
+            ReferralWidgetUrl = LicenseReferralUrl.TryNormalize(payload.ReferralWidgetUrl),
             ImportedAtUtc = utcNow
         });
 

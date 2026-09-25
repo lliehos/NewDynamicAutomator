@@ -65,6 +65,16 @@ public partial class MainWindow : Window
                 allowedHost = normalizedHost;
             }
 
+            // Rejected rather than silently dropped: a link the vendor believes was signed into
+            // the licence but never was would only surface much later, inside the customer's panel.
+            string? referralUrl = null;
+            if (!string.IsNullOrWhiteSpace(ReferralUrl.Text))
+            {
+                referralUrl = LicenseReferralUrl.TryNormalize(ReferralUrl.Text.Trim());
+                if (referralUrl is null)
+                    throw new InvalidOperationException("لینک ویجت معرفی نامعتبر است (فقط http یا https).");
+            }
+
             var payload = new LicensePayload
             {
                 LicenseId = Guid.NewGuid().ToString("D"),
@@ -79,7 +89,8 @@ public partial class MainWindow : Window
                 AllowUpdates = AllowUpdates.IsChecked == true,
                 AllowLegacyMigration = AllowLegacyMigration.IsChecked == true,
                 UpdateServerUrl = string.IsNullOrWhiteSpace(UpdateUrl.Text) ? null : UpdateUrl.Text.Trim(),
-                AllowedHost = allowedHost
+                AllowedHost = allowedHost,
+                ReferralWidgetUrl = referralUrl
             };
 
             var privatePem = File.ReadAllText(PrivateKeyPath.Text.Trim());
