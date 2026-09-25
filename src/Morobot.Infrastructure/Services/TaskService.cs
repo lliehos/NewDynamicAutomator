@@ -72,11 +72,14 @@ public class TaskService
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
 
+        var lastPlays = await LoadLastPlayByTaskAsync(rows.Select(r => r.Id).ToList(), ct);
+
         return rows.Select(a =>
         {
             var (groups, steps) = GraphJsonHelper.CountNodes(a.GraphJson);
             var isOwner = a.CreatorUserId == userId;
             var canEdit = a.CanEdit || isOwner;
+            (DateTime AtUtc, string? UserName, int Count)? play = lastPlays.TryGetValue(a.Id, out var lp) ? lp : null;
             return new TaskListItemDto
             {
                 Id = a.Id,
@@ -86,6 +89,9 @@ public class TaskService
                 LastEditorUserName = a.LastEditorUserName,
                 DataUpdatedAtUtc = a.DataUpdatedAtUtc,
                 DataLastEditorUserName = a.DataLastEditorUserName,
+                LastPlayedAtUtc = play?.AtUtc,
+                LastPlayedByUserName = play?.UserName,
+                PlayCount = play?.Count ?? 0,
                 GroupCount = groups,
                 StepCount = steps,
                 DataSourceCount = a.DataSourceCount,
@@ -102,6 +108,98 @@ public class TaskService
                 SharedWithCount = a.SharedWithCount
             };
         }).ToList();
+    }
+
+    /// <summary>
+    /// Last play time, user and total count for each of the given tasks, keyed by task id.
+    ///
+    /// Reads the recorded PlayStarted events. The task id lives in DetailsJson, not in the
+    /// message text: the message is written for a human reading the log, and cutting an id out
+    /// of prose would break the first time the wording changes.
+    ///
+    /// Tasks with no play event are absent from the dictionary, which is the honest answer -
+    /// they have never been run - and the caller renders that as "never" rather than a date.
+    /// </summary>
+    private async Task<Dictionary<int, (DateTime AtUtc, string? UserName, int Count)>> LoadLastPlayByTaskAsync(
+        IReadOnlyList<int> taskIds, CancellationToken ct)
+    {
+        var result = new Dictionary<int, (DateTime, string?, int)>();
+        if (taskIds.Count == 0) return result;
+
+        // One query for the whole page rather than one per row.
+        var events = await _db.EventLogs.AsNoTracking()
+            .Where(e => e.Category == "Play" && e.EventType == "PlayStarted" && e.DetailsJson != null)
+            .Select(e => new { e.DetailsJson, e.CreatedAtUtc, e.UserName })
+            .ToListAsync(ct);
+
+        var wanted = new HashSet<int>(taskIds);
+        var grouped = new Dictionary<int, List<(DateTime AtUtc, string? UserName)>>();
+        foreach (var e in events)
+        {
+            int? taskId = null;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(e.DetailsJson!);
+                if (doc.RootElement.TryGetProperty("taskId", out var v))
+                {
+                    // Stored as a string by the hub, but accept a number too.
+                    taskId = v.ValueKind == System.Text.Json.JsonValueKind.Number
+                        ? v.GetInt32()
+                        : int.TryParse(v.GetString(), out var parsed) ? parsed : null;
+                }
+            }
+            catch { /* an unreadable row is skipped, not fatal */ }
+
+            if (taskId is not int id || !wanted.Contains(id)) continue;
+            if (!grouped.TryGetValue(id, out var list)) grouped[id] = list = new List<(DateTime, string?)>();
+            list.Add((e.CreatedAtUtc, e.UserName));
+        }
+
+        foreach (var (id, list) in grouped)
+        {
+            var latest = list.OrderByDescending(x => x.AtUtc).First();
+            result[id] = (latest.AtUtc, latest.UserName, list.Count);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// The recorded play starts for one task, newest first - the run history behind the
+    /// processes list's history button.
+    ///
+    /// Reads the same PlayStarted events the last-run column uses, so the button and the column
+    /// can never disagree. Limited to a page of entries: the list is there to answer "when and
+    /// how often", not to be an audit export.
+    /// </summary>
+    public async Task<List<TaskRunEntry>> ListRunsAsync(int taskId, int take = 50, CancellationToken ct = default)
+    {
+        var events = await _db.EventLogs.AsNoTracking()
+            .Where(e => e.Category == "Play" && e.EventType == "PlayStarted" && e.DetailsJson != null)
+            .OrderByDescending(e => e.CreatedAtUtc)
+            .Select(e => new { e.DetailsJson, e.CreatedAtUtc, e.UserName })
+            .ToListAsync(ct);
+
+        var runs = new List<TaskRunEntry>();
+        foreach (var e in events)
+        {
+            if (runs.Count >= take) break;
+            int? id = null;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(e.DetailsJson!);
+                if (doc.RootElement.TryGetProperty("taskId", out var v))
+                {
+                    id = v.ValueKind == System.Text.Json.JsonValueKind.Number
+                        ? v.GetInt32()
+                        : int.TryParse(v.GetString(), out var parsed) ? parsed : null;
+                }
+            }
+            catch { /* skip unreadable rows */ }
+
+            if (id != taskId) continue;
+            runs.Add(new TaskRunEntry { AtUtc = e.CreatedAtUtc, UserName = e.UserName });
+        }
+        return runs;
     }
 
     public async Task<List<TaskListItemDto>> ListAllForAdminAsync(CancellationToken ct = default)
@@ -129,9 +227,12 @@ public class TaskService
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
 
+        var adminLastPlays = await LoadLastPlayByTaskAsync(rows.Select(r => r.Id).ToList(), ct);
+
         return rows.Select(t =>
         {
             var (groups, steps) = GraphJsonHelper.CountNodes(t.GraphJson);
+            (DateTime AtUtc, string? UserName, int Count)? play = adminLastPlays.TryGetValue(t.Id, out var lp) ? lp : null;
             return new TaskListItemDto
             {
                 Id = t.Id,
@@ -141,6 +242,9 @@ public class TaskService
                 LastEditorUserName = t.LastEditorUserName,
                 DataUpdatedAtUtc = t.DataUpdatedAtUtc,
                 DataLastEditorUserName = t.DataLastEditorUserName,
+                LastPlayedAtUtc = play?.AtUtc,
+                LastPlayedByUserName = play?.UserName,
+                PlayCount = play?.Count ?? 0,
                 GroupCount = groups,
                 StepCount = steps,
                 DataSourceCount = t.DataSourceCount,

@@ -188,7 +188,8 @@
     "extSmartStillMissing": "هنوز Smart Recorder پیدا نشد — بارگذاری بسته‌نشده را برای مسیر هوشمند انجام دهید.",
     "extSmartConnected": "افزونهٔ Smart Recorder متصل شد.",
     "extPathCopied": "مسیر کپی شد — در Load unpacked همان را Paste/انتخاب کنید.",
-    "extPathCopyFail": "کپی نشد؛ مسیر را دستی از کادر بالا بردارید."
+    "extPathCopyFail": "کپی نشد؛ مسیر را دستی از کادر بالا بردارید.",
+    "colLastRun": "آخرین اجرا"
   },
   "login": {
     "title": "ورود",
@@ -833,7 +834,10 @@
     "deleteConfirm": "این فرآیند حذف شود؟ این کار قابل بازگشت نیست.",
     "deleted": "فرآیند حذف شد.",
     "processId": "شناسه فرآیند",
-    "serverKey": "کلید آینده سرور: کاربر + شناسه"
+    "serverKey": "کلید آینده سرور: کاربر + شناسه",
+    "neverRun": "هرگز اجرا نشده",
+    "runHistory": "تاریخچهٔ اجراها",
+    "runCount": "تعداد اجراها"
   },
   "live": {
     "taskCreated": "فرآیند جدید اضافه شد",

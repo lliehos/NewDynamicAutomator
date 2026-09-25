@@ -105,6 +105,38 @@
     return row.lastEditorUserName || row.lastEditor || "";
   }
 
+  /**
+   * Last run cell: the time and user of the most recent play, plus a button that opens the
+   * process's run history.
+   *
+   * A process that has never been run shows a dash and no history button, rather than an empty
+   * cell: run starts are recorded, so "no record" genuinely means "never run" and the button
+   * would open an empty list.
+   */
+  function formatLastRun(row) {
+    const when = formatCreatedAt(row.lastPlayedAtUtc || row.lastPlayedAt || null);
+    const who = String(row.lastPlayedByUserName || row.lastPlayedBy || "").trim();
+    const count = Number(row.playCount || 0);
+    if (when === "—") {
+      return `<span class="text-muted">${escapeHtml(t("tasks.neverRun"))}</span>`;
+    }
+    const parts = [`<div class="da-edit-meta-when">${escapeHtml(when)}</div>`];
+    if (who) parts.push(`<div class="da-edit-meta-user text-muted small">${escapeHtml(who)}</div>`);
+    const countLabel = count > 1
+      ? `<span class="da-run-count" title="${escapeHtml(t("tasks.runCount"))}">×${count}</span>`
+      : "";
+    const taskId = escapeHtml(String(row.id));
+    const historyTitle = escapeHtml(t("tasks.runHistory"));
+    return `<div class="da-last-run">
+      <div class="da-edit-meta">${parts.join("")}</div>
+      ${countLabel}
+      <button type="button" class="da-run-history-btn" data-run-history="${taskId}"
+              title="${historyTitle}" aria-label="${historyTitle}">
+        <i class="ti ti-history" aria-hidden="true"></i>
+      </button>
+    </div>`;
+  }
+
   function sharedUsersLabel(users, count) {
     const list = Array.isArray(users) ? users.map((u) => String(u || "").trim()).filter(Boolean) : [];
     if (list.length) return list.join(dateLocale().startsWith("fa") ? "، " : ", ");
@@ -454,14 +486,73 @@
     root?.querySelectorAll("[data-da-dl-excel]").forEach((btn) => {
       btn.addEventListener("click", () => downloadProcessExcel(btn.getAttribute("data-da-dl-excel"), btn));
     });
+  root?.querySelectorAll("[data-run-history]").forEach((btn) => {
+    btn.addEventListener("click", () => showRunHistory(btn.getAttribute("data-run-history")));
+  });
+}
+
+/**
+ * Open the recorded runs of one process.
+ *
+ * Fetched on click rather than shipped with the list: it is one request per process the user
+ * actually asks about, instead of one per row on every page load.
+ *
+ * Rendered as a small dialog rather than a route, so the user keeps their place in the list and
+ * can check several processes in a row. The markup is created on first use and reused after.
+ */
+async function showRunHistory(taskId) {
+  if (!taskId) return;
+  let entries = [];
+  try {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/runs`, { credentials: "same-origin" });
+    if (res.ok) entries = await res.json();
+  } catch (err) {
+    console.warn("[local-tasks] run history failed", err);
   }
 
-  function dataSourceSafeFileName(ds) {
-    const raw = (ds?.fileName && String(ds.fileName).replace(/\.(xlsx|xlsm|csv)$/i, ""))
-      || ds?.title
-      || "data-source";
-    return String(raw).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "data-source";
+  const list = Array.isArray(entries) ? entries : [];
+  const bodyHtml = list.length
+    ? `<ul class="da-run-history">${list.map((e) => {
+        const when = escapeHtml(formatCreatedAt(e.atUtc || e.AtUtc));
+        const who = escapeHtml(String(e.userName || e.UserName || "").trim() || "—");
+        return `<li class="da-run-history-item"><span class="da-run-history-when">${when}</span><span class="da-run-history-who">${who}</span></li>`;
+      }).join("")}</ul>`
+    : `<p class="da-run-history-empty text-muted">${escapeHtml(t("tasks.neverRun"))}</p>`;
+
+  let host = document.getElementById("da-run-history-modal");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "da-run-history-modal";
+    host.className = "da-run-history-modal";
+    host.hidden = true;
+    host.innerHTML = `
+      <div class="da-run-history-backdrop" data-run-history-close="1"></div>
+      <div class="da-run-history-box" role="dialog" aria-modal="true" aria-labelledby="da-run-history-title">
+        <div class="da-run-history-head">
+          <h5 id="da-run-history-title"></h5>
+          <button type="button" class="da-run-history-close" data-run-history-close="1" aria-label="${escapeHtml(t("common.close"))}">&times;</button>
+        </div>
+        <div class="da-run-history-body"></div>
+      </div>`;
+    document.body.appendChild(host);
+    host.querySelectorAll("[data-run-history-close]").forEach((el) => {
+      el.addEventListener("click", () => { host.hidden = true; });
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") host.hidden = true;
+    });
   }
+  host.querySelector("#da-run-history-title").textContent = t("tasks.runHistory");
+  host.querySelector(".da-run-history-body").innerHTML = bodyHtml;
+  host.hidden = false;
+}
+
+function dataSourceSafeFileName(ds) {
+  const raw = (ds?.fileName && String(ds.fileName).replace(/\.(xlsx|xlsm|csv)$/i, ""))
+    || ds?.title
+    || "data-source";
+  return String(raw).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "data-source";
+}
 
   /**
    * Download name of a source, which is the source's own name (title), not the file it was
@@ -707,7 +798,13 @@
             || String(o.updatedAtUtc || "") !== String(n.updatedAtUtc || "")
             || String(o.lastEditorUserName || "") !== String(n.lastEditorUserName || "")
             || String(o.dataUpdatedAtUtc || "") !== String(n.dataUpdatedAtUtc || "")
-            || String(o.dataLastEditorUserName || "") !== String(n.dataLastEditorUserName || "");
+            || String(o.dataLastEditorUserName || "") !== String(n.dataLastEditorUserName || "")
+            // The run fields must be compared here too. Without them a process whose only change
+            // is a new run looked unchanged, so the cached copy was kept and the Last run column
+            // went on showing "never run" for a process that had just been run.
+            || String(o.lastPlayedAtUtc || "") !== String(n.lastPlayedAtUtc || "")
+            || String(o.lastPlayedByUserName || "") !== String(n.lastPlayedByUserName || "")
+            || Number(o.playCount || 0) !== Number(n.playCount || 0);
         });
       // Silent write: avoid writeTasks → da-local-tasks → render → writeTasks loop.
       if (changed) writeTasks(toStore, { silent: true });
@@ -715,7 +812,7 @@
       if (body) {
         try {
           if (!toStore.length) {
-            body.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-6">${t("tasks.empty")}</td></tr>`;
+            body.innerHTML = `<tr><td colspan="11" class="text-center text-muted py-6">${t("tasks.empty")}</td></tr>`;
           } else {
             body.innerHTML = toStore.map((row) => {
               const { steps, groups, sources } = taskCounts(row);
@@ -729,6 +826,7 @@
         <td>${escapeHtml(row.createdBy)}</td>
         <td class="text-nowrap" data-flash="processEdit">${formatEditMeta(editMetaIso(row, "process"), editMetaUser(row, "process"))}</td>
         <td class="text-nowrap" data-flash="dataEdit">${formatEditMeta(editMetaIso(row, "data"), editMetaUser(row, "data"))}</td>
+        <td class="text-nowrap" data-flash="lastRun">${formatLastRun(row)}</td>
         <td data-flash="shared">${escapeHtml(sharedUsersLabel(row.sharedUsers, row.sharedWithCount))}</td>
         <td data-flash="groups">${groups}</td>
         <td data-flash="steps">${steps}</td>
@@ -742,7 +840,7 @@
           }
         } catch (err) {
           console.error("[local-tasks] rows render failed", err);
-          body.innerHTML = `<tr><td colspan="10" class="text-center text-danger py-6">${escapeHtml(String(err && err.message || err))}</td></tr>`;
+          body.innerHTML = `<tr><td colspan="11" class="text-center text-danger py-6">${escapeHtml(String(err && err.message || err))}</td></tr>`;
         }
       }
 
@@ -876,6 +974,12 @@
       lastEditorUserName: row.lastEditorUserName || "",
       dataUpdatedAtUtc: row.dataUpdatedAtUtc || null,
       dataLastEditorUserName: row.dataLastEditorUserName || "",
+      // Last-run fields, from the recorded play events. Mapped explicitly like everything else
+      // here - this is a whitelist, so a field the server sends but this list omits simply never
+      // reaches the row, which is what made the Last run column always read "never run".
+      lastPlayedAtUtc: row.lastPlayedAtUtc || null,
+      lastPlayedByUserName: row.lastPlayedByUserName || "",
+      playCount: row.playCount || 0,
       createdBy: row.ownerUserName || "",
       sharedUsers: [],
       sharedWithCount: row.sharedWithCount || 0,

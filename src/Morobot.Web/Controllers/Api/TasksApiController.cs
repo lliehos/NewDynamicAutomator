@@ -52,6 +52,17 @@ public class TasksApiController : ControllerBase
     public async Task<ActionResult<List<TaskListItemDto>>> List(CancellationToken ct)
         => Ok(await _tasks.ListForUserAsync(UserId, ct));
 
+    /// <summary>Recorded runs of one process, newest first, for the processes list's history button.</summary>
+    [HttpGet("{id:int}/runs")]
+    public async Task<ActionResult<List<TaskRunEntry>>> Runs(int id, CancellationToken ct)
+    {
+        // Authorisation goes through the normal list query: if the process is not visible to
+        // this user it will not be in their list, and the history is then simply empty.
+        var list = await _tasks.ListForUserAsync(UserId, ct);
+        if (list.All(t => t.Id != id)) return NotFound();
+        return Ok(await _tasks.ListRunsAsync(id, ct: ct));
+    }
+
     [HttpPost]
     public async Task<ActionResult<TaskListItemDto>> Create([FromBody] CreateTaskRequest request, CancellationToken ct)
     {

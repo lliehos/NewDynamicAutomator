@@ -120,10 +120,15 @@ var app = builder.Build();
             {
                 using var scope = log.CreateScope();
                 var events = scope.ServiceProvider.GetRequiredService<Morobot.Infrastructure.Services.EventLogService>();
+                // The task id also goes in DetailsJson: the message and path are for humans, and
+                // reading an id back out of either would be fragile. This is the field the
+                // process list queries to answer "when was this last run, and by whom".
+                var details = System.Text.Json.JsonSerializer.Serialize(new { taskId = info.TaskId });
                 await events.LogAsync(
                     "Info", "Play", "PlayStarted",
                     $"Task {info.TaskId} play started",
                     info.UserId, info.UserName,
+                    detailsJson: details,
                     path: $"/Panel/Tasks/Editor/{info.TaskId}");
             }
             catch

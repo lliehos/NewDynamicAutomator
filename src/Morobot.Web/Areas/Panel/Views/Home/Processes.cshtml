@@ -1,5 +1,5 @@
-@{
-    ViewData["Title"] = L["panel.processesTitle"] + " — " + L["brand.name"];
+﻿@{
+    ViewData["Title"] = L["panel.processesTitle"] + " â€” " + L["brand.name"];
 }
 
 <div class="da-home">
@@ -34,6 +34,7 @@
               <th data-i18n="panel.colCreator">@L["panel.colCreator"]</th>
               <th class="text-nowrap" data-i18n="panel.colProcessEdit">@L["panel.colProcessEdit"]</th>
               <th class="text-nowrap" data-i18n="panel.colDataEdit">@L["panel.colDataEdit"]</th>
+              <th class="text-nowrap" data-i18n="panel.colLastRun">@L["panel.colLastRun"]</th>
               <th data-i18n="panel.colShared">@L["panel.colShared"]</th>
               <th data-i18n="panel.colGroup">@L["panel.colGroup"]</th>
               <th data-i18n="panel.colAction">@L["panel.colAction"]</th>
@@ -42,7 +43,7 @@
             </tr>
           </thead>
           <tbody id="da-task-rows">
-            <tr><td colspan="10" class="text-center text-muted py-6" data-i18n="common.loading">@L["common.loading"]</td></tr>
+            <tr><td colspan="11" class="text-center text-muted py-6" data-i18n="common.loading">@L["common.loading"]</td></tr>
           </tbody>
         </table>
       </div>
@@ -65,11 +66,11 @@
   <div class="ds-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="da-portal-ds-title">
     <div class="ds-viewer-head">
       <div>
-        <h2 id="da-portal-ds-title">منبع داده</h2>
+        <h2 id="da-portal-ds-title">ظ…ظ†ط¨ط¹ ط¯ط§ط¯ظ‡</h2>
         <p class="ds-viewer-sub" id="da-portal-ds-sub"></p>
       </div>
       <div class="ds-viewer-head-actions">
-        <button type="button" class="btn btn-sm btn-label-secondary" data-portal-ds-close="1">بستن</button>
+        <button type="button" class="btn btn-sm btn-label-secondary" data-portal-ds-close="1">ط¨ط³طھظ†</button>
       </div>
     </div>
     <div class="ds-viewer-scroll">
@@ -102,7 +103,7 @@
 @section Scripts {
 <link rel="stylesheet" href="~/editor/flow.css?v=rename-ds-1" />
 <script src="~/js/task-share.js?v=2"></script>
-<script src="~/js/local-tasks.js?v=dl-name-1"></script>
+<script src="~/js/local-tasks.js?v=last-run-3"></script>
 <script>
   document.querySelectorAll("[data-portal-ds-close]").forEach((el) => {
     el.addEventListener("click", () => {

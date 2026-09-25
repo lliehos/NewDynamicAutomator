@@ -678,6 +678,91 @@ html.light-style {
   justify-content: flex-start;
 }
 
+/* ── Last run cell + run history dialog ── */
+.da-last-run {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+.da-last-run .da-edit-meta { flex: 0 1 auto; }
+.da-run-count {
+  font-size: .72rem;
+  padding: 0 .3rem;
+  border-radius: 999px;
+  background: var(--morobot-soft-2, var(--morobot-soft-2-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  white-space: nowrap;
+}
+.da-run-history-btn {
+  border: 0;
+  background: transparent;
+  color: var(--morobot-primary, var(--morobot-primary-default));
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: .4rem;
+  line-height: 1;
+}
+.da-run-history-btn:hover { background: var(--morobot-soft, var(--morobot-soft-default)); }
+.da-run-history-btn .ti { font-size: 1rem; }
+
+.da-run-history-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1080;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.da-run-history-modal[hidden] { display: none; }
+.da-run-history-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, .45);
+}
+.da-run-history-box {
+  position: relative;
+  background: #fff;
+  border-radius: .85rem;
+  width: min(30rem, calc(100vw - 2rem));
+  max-height: min(32rem, calc(100vh - 3rem));
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, .22);
+}
+.da-run-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  padding: .85rem 1rem;
+  border-bottom: 1px solid #eef0f4;
+}
+.da-run-history-head h5 { margin: 0; font-size: .98rem; }
+.da-run-history-close {
+  border: 0;
+  background: transparent;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #64748b;
+  padding: 0 .25rem;
+}
+.da-run-history-body { padding: .5rem 1rem 1rem; overflow-y: auto; }
+.da-run-history { list-style: none; margin: 0; padding: 0; }
+.da-run-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .45rem 0;
+  border-bottom: 1px dashed #eef0f4;
+  font-size: .86rem;
+}
+.da-run-history-item:last-child { border-bottom: 0; }
+.da-run-history-when { font-variant-numeric: tabular-nums; }
+.da-run-history-who { color: #64748b; }
+.da-run-history-empty { margin: .75rem 0; }
+
 .da-task-actions .ds-icon-btn,
 .da-task-actions-desk .ds-icon-btn {
   width: 32px;

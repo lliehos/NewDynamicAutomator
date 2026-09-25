@@ -26,6 +26,23 @@ public class TaskListItemDto
     /// <summary>Latest cell/metadata change on any linked library source (UTC).</summary>
     public DateTime? DataUpdatedAtUtc { get; set; }
     public string? DataLastEditorUserName { get; set; }
+
+    /// <summary>
+    /// When this process was last started and by whom, taken from the recorded play events.
+    /// Null when it has never been run, which is different from "run but we lost the record" -
+    /// play starts are written to the event log, so the absence means it really has not run.
+    /// </summary>
+    public DateTime? LastPlayedAtUtc { get; set; }
+    public string? LastPlayedByUserName { get; set; }
+    /// <summary>How many times this process has been started, from the same records.</summary>
+    public int PlayCount { get; set; }
+}
+
+/// <summary>One recorded run of a process, for the run-history list.</summary>
+public class TaskRunEntry
+{
+    public DateTime AtUtc { get; set; }
+    public string? UserName { get; set; }
 }
 
 public class CreateTaskRequest

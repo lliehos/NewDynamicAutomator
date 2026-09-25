@@ -188,7 +188,8 @@
     "extSmartStillMissing": "Smart Recorder still not found — Load unpacked with the smart path.",
     "extSmartConnected": "Smart Recorder connected.",
     "extPathCopied": "Path copied — paste/select it in Load unpacked.",
-    "extPathCopyFail": "Copy failed; copy the path from the box above manually."
+    "extPathCopyFail": "Copy failed; copy the path from the box above manually.",
+    "colLastRun": "Last run"
   },
   "login": {
     "title": "Sign in",
@@ -833,7 +834,10 @@
     "deleteConfirm": "Delete this process? This cannot be undone.",
     "deleted": "Process deleted.",
     "processId": "Process ID",
-    "serverKey": "Future server key: user + id"
+    "serverKey": "Future server key: user + id",
+    "neverRun": "Never run",
+    "runHistory": "Run history",
+    "runCount": "Number of runs"
   },
   "live": {
     "taskCreated": "New process added",
