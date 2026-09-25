@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 using Morobot.Contracts.Licensing;
 using Morobot.Infrastructure.Services;
 using Morobot.Web.Areas.Admin.Models;
@@ -75,7 +76,8 @@ public class BrandingController : Controller
         try
         {
             model.ShowReferralQrWidget = Request.Form["ShowReferralQrWidget"].Contains("true");
-            await _branding.SaveAsync(model, ct);
+            var userId = int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null;
+            await _branding.SaveAsync(model, userId, User.Identity?.Name, ct);
             _sync.SyncNow("branding-save");
             await _overlay.ApplyAllPackagesAsync(_sync, ct);
             TempData["Ok"] = _locale["admin.branding.saved"];

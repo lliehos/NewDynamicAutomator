@@ -472,7 +472,10 @@
       "authModeLocal": "کاربران سامانه (محلی)",
       "authModeLdap": "پوشهٔ سازمانی (LDAP)",
       "secretKeep": "برای تغییر مقدار جدید را وارد کنید؛ خالی = بدون تغییر",
-      "secretEmpty": "مقداری تنظیم نشده"
+      "secretEmpty": "مقداری تنظیم نشده",
+      "lastChangedBy": "آخرین تغییر:",
+      "neverChanged": "از زمان نصب تغییر نکرده است",
+      "unknownUser": "کاربر نامشخص"
     },
     "license": {
       "title": "لایسنس",

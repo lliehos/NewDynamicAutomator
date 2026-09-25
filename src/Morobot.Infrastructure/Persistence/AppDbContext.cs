@@ -86,6 +86,9 @@ public class AppDbContext : DbContext
             e.Property(x => x.LabelEn).HasMaxLength(120).IsRequired();
             e.Property(x => x.HintFa).HasMaxLength(500);
             e.Property(x => x.HintEn).HasMaxLength(500);
+            // Name is denormalised on purpose: the row must still say who changed it after that
+            // user is renamed or deleted, which a foreign key alone cannot express.
+            e.Property(x => x.LastChangedByUserName).HasMaxLength(80);
         });
 
         modelBuilder.Entity<DeploymentAnchor>(e =>

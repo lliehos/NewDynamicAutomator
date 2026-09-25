@@ -494,6 +494,29 @@ label { font-size: .9rem; }
   margin-top: .25rem;
 }
 
+/* Who last changed a setting, and when. Deliberately quieter than the hint above it: it is
+   reference information for an occasional question, not something to read on every visit. */
+.admin-settings-changed {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  margin-top: .35rem;
+  font-size: .76rem;
+  color: #94a3b8;
+}
+.admin-settings-changed i {
+  font-size: .9rem;
+  opacity: .8;
+}
+.admin-settings-changed strong {
+  color: #64748b;
+  font-weight: 600;
+}
+.admin-settings-changed.is-muted {
+  font-style: italic;
+  opacity: .75;
+}
+
 /* ── Dashboard ── */
 .admin-dash-intro {
   margin: 0 0 1rem;

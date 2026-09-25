@@ -472,7 +472,10 @@
       "authModeLocal": "System users (local)",
       "authModeLdap": "Organisational directory (LDAP)",
       "secretKeep": "Enter a new value to change it; blank = keep current",
-      "secretEmpty": "Not set yet"
+      "secretEmpty": "Not set yet",
+      "lastChangedBy": "Last changed by:",
+      "neverChanged": "Unchanged since setup",
+      "unknownUser": "unknown user"
     },
     "license": {
       "title": "License",

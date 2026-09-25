@@ -72,24 +72,62 @@ public sealed class BrandingService
     }
 
     public async Task SaveAsync(TenantBrandingDto model, CancellationToken ct = default)
+        => await SaveAsync(model, actorUserId: null, actorUserName: null, ct);
+
+    /// <summary>
+    /// Persist branding, recording who changed it.
+    /// </summary>
+    /// <remarks>
+    /// The actor is stored on the service for the duration of the call rather than threaded
+    /// through every <c>SetAsync</c>: branding writes around twenty keys one at a time, and
+    /// passing the same two arguments to each would bury the values being written. The service
+    /// is scoped per request, so the field cannot leak between users.
+    /// </remarks>
+    public async Task SaveAsync(
+        TenantBrandingDto model,
+        int? actorUserId,
+        string? actorUserName,
+        CancellationToken ct = default)
+    {
+        _actorUserId = actorUserId;
+        _actorUserName = actorUserName;
+        try
+        {
+            await SaveCoreAsync(model, ct);
+        }
+        finally
+        {
+            _actorUserId = null;
+            _actorUserName = null;
+        }
+    }
+
+    /// <summary>Actor for the current save; null for system-initiated writes (licence import).</summary>
+    private int? _actorUserId;
+    private string? _actorUserName;
+
+    private async Task SetTrackedAsync(string key, string value, CancellationToken ct)
+        => await _settings.SetAsync(key, value, _actorUserId, _actorUserName, ct);
+
+    private async Task SaveCoreAsync(TenantBrandingDto model, CancellationToken ct)
     {
         var state = await _license.GetRuntimeStateAsync(ct);
         if (!state.AllowsBranding)
             throw new InvalidOperationException("branding.error.notLicensed");
 
-        await _settings.SetAsync(SystemSettingKeys.BrandAppName, model.AppName, ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandTitle, model.BrandTitle, ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandOrganization, model.OrganizationName ?? "", ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandAppNameEn, model.AppNameEn ?? "", ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandAppNameFa, model.AppNameFa ?? "", ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandTitleEn, model.BrandTitleEn ?? "", ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandTitleFa, model.BrandTitleFa ?? "", ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandOrganizationEn, model.OrganizationNameEn ?? "", ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandOrganizationFa, model.OrganizationNameFa ?? "", ct);
+        await SetTrackedAsync(SystemSettingKeys.BrandAppName, model.AppName, ct);
+        await SetTrackedAsync(SystemSettingKeys.BrandTitle, model.BrandTitle, ct);
+        await SetTrackedAsync(SystemSettingKeys.BrandOrganization, model.OrganizationName ?? "", ct);
+        await SetTrackedAsync(SystemSettingKeys.BrandAppNameEn, model.AppNameEn ?? "", ct);
+        await SetTrackedAsync(SystemSettingKeys.BrandAppNameFa, model.AppNameFa ?? "", ct);
+        await SetTrackedAsync(SystemSettingKeys.BrandTitleEn, model.BrandTitleEn ?? "", ct);
+        await SetTrackedAsync(SystemSettingKeys.BrandTitleFa, model.BrandTitleFa ?? "", ct);
+        await SetTrackedAsync(SystemSettingKeys.BrandOrganizationEn, model.OrganizationNameEn ?? "", ct);
+        await SetTrackedAsync(SystemSettingKeys.BrandOrganizationFa, model.OrganizationNameFa ?? "", ct);
         if (!string.IsNullOrWhiteSpace(model.LogoUrl))
-            await _settings.SetAsync(SystemSettingKeys.BrandLogoPath, model.LogoUrl, ct);
+            await SetTrackedAsync(SystemSettingKeys.BrandLogoPath, model.LogoUrl, ct);
         if (!string.IsNullOrWhiteSpace(model.FaviconUrl))
-            await _settings.SetAsync(SystemSettingKeys.BrandFaviconPath, model.FaviconUrl, ct);
+            await SetTrackedAsync(SystemSettingKeys.BrandFaviconPath, model.FaviconUrl, ct);
         await SavePaletteAsync(model, ct);
     }
 
@@ -126,23 +164,23 @@ public sealed class BrandingService
 
     private async Task SavePaletteAsync(TenantBrandingDto model, CancellationToken ct)
     {
-        await _settings.SetAsync(SystemSettingKeys.BrandColorPrimary,
+        await SetTrackedAsync(SystemSettingKeys.BrandColorPrimary,
             BrandPaletteDefaults.NormalizeHex(model.ColorPrimary, BrandPaletteDefaults.Primary), ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandColorPrimaryDark,
+        await SetTrackedAsync(SystemSettingKeys.BrandColorPrimaryDark,
             BrandPaletteDefaults.NormalizeHex(model.ColorPrimaryDark, BrandPaletteDefaults.PrimaryDark), ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandColorPrimaryLight,
+        await SetTrackedAsync(SystemSettingKeys.BrandColorPrimaryLight,
             BrandPaletteDefaults.NormalizeHex(model.ColorPrimaryLight, BrandPaletteDefaults.PrimaryLight), ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandColorAccent,
+        await SetTrackedAsync(SystemSettingKeys.BrandColorAccent,
             BrandPaletteDefaults.NormalizeHex(model.ColorAccent, BrandPaletteDefaults.Accent), ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandColorSoft,
+        await SetTrackedAsync(SystemSettingKeys.BrandColorSoft,
             BrandPaletteDefaults.NormalizeHex(model.ColorSoft, BrandPaletteDefaults.Soft), ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandColorSoft2,
+        await SetTrackedAsync(SystemSettingKeys.BrandColorSoft2,
             BrandPaletteDefaults.NormalizeHex(model.ColorSoft2, BrandPaletteDefaults.Soft2), ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandColorInk,
+        await SetTrackedAsync(SystemSettingKeys.BrandColorInk,
             BrandPaletteDefaults.NormalizeHex(model.ColorInk, BrandPaletteDefaults.Ink), ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandColorBorderSubtle,
+        await SetTrackedAsync(SystemSettingKeys.BrandColorBorderSubtle,
             BrandPaletteDefaults.NormalizeHex(model.ColorBorderSubtle, BrandPaletteDefaults.BorderSubtle), ct);
-        await _settings.SetAsync(SystemSettingKeys.BrandReferralQrVisible,
+        await SetTrackedAsync(SystemSettingKeys.BrandReferralQrVisible,
             model.ShowReferralQrWidget ? "true" : "false", ct);
     }
 }

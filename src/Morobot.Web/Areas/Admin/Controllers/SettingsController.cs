@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using Morobot.Domain;
 using Morobot.Infrastructure.Persistence;
 using Morobot.Infrastructure.Services;
@@ -53,7 +54,10 @@ public class SettingsController : Controller
             // the bind password every time any other setting was saved.
             .Where(p => !(SystemSettingKeys.IsSensitiveForAdmin(p.Item1) && string.IsNullOrEmpty(p.Item2)))
             .ToList();
-        await _settings.SaveAsync(pairs, ct);
+        // Record who made the change so the settings list can show it and the audit log can
+        // answer it later; without the actor the history would be anonymous.
+        var userId = int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null;
+        await _settings.SaveAsync(pairs, userId, User.Identity?.Name, ct);
         TempData["Ok"] = _locale["admin.settings.saved"];
         return RedirectToAction(nameof(Index));
     }
