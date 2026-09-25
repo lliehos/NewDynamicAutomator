@@ -403,10 +403,21 @@ label { font-size: .9rem; }
 .admin-settings-grid {
   display: grid;
   gap: 1rem;
+  /* Cards keep their natural height instead of stretching to match the tallest one in
+     the row. Stretching left the short cards (auth, deployment) full of dead space and
+     forced every card to be as tall as the longest. */
+  align-items: start;
 }
 @media (min-width: 720px) {
   .admin-settings-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1200px) {
+  /* On a normal desktop the groups are narrow, so three fit across comfortably and the
+     page stops reading as two very wide columns. */
+  .admin-settings-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 .admin-settings-card {
