@@ -14,8 +14,6 @@ public class Process
     public int DelayBeforeMs { get; set; }
     public int DelayAfterMs { get; set; }
     public int? CreatorUserId { get; set; }
-    public DateTime? LastExecutedAtUtc { get; set; }
-    public int? LastExecuteUserId { get; set; }
 
     /// <summary>Full editor/player graph (nodes, edges, viewport). Linked sources hydrate into dataSources at load.</summary>
     public string? GraphJson { get; set; }

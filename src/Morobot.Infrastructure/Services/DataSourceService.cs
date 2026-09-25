@@ -1312,37 +1312,6 @@ public class DataSourceService
         return obj.ToJsonString(JsonOpts);
     }
 
-    private async Task EnsureGraphHasSourceSnapshotAsync(int processId, DataSource ds, bool makeDefault, CancellationToken ct)
-    {
-        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
-        if (process is null) return;
-        JsonObject obj;
-        try
-        {
-            obj = string.IsNullOrWhiteSpace(process.GraphJson)
-                ? new JsonObject { ["nodes"] = new JsonArray(), ["edges"] = new JsonArray() }
-                : (JsonNode.Parse(process.GraphJson) as JsonObject)
-                  ?? new JsonObject { ["nodes"] = new JsonArray(), ["edges"] = new JsonArray() };
-        }
-        catch
-        {
-            obj = new JsonObject { ["nodes"] = new JsonArray(), ["edges"] = new JsonArray() };
-        }
-
-        var arr = obj["dataSources"] as JsonArray ?? new JsonArray();
-        obj["dataSources"] = arr;
-        var exists = false;
-        foreach (var n in arr)
-        {
-            if (n is JsonObject o && o["id"]?.GetValue<int?>() == ds.Id) { exists = true; break; }
-        }
-        if (!exists) arr.Add(ToGraphNode(ds));
-        if (makeDefault) ApplyMaster(obj, ds.Id);
-        process.GraphJson = obj.ToJsonString(JsonOpts);
-        process.UpdatedAtUtc = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
-    }
-
     private async Task PatchSourceTitleInProcessGraphAsync(int processId, int dataSourceId, string title, CancellationToken ct)
     {
         var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
@@ -1408,39 +1377,6 @@ public class DataSourceService
         process.GraphJson = obj.ToJsonString(JsonOpts);
         process.UpdatedAtUtc = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
-    }
-
-    private async Task PatchMasterInGraphAsync(int processId, int? dataSourceId, CancellationToken ct)
-    {
-        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
-        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return;
-        JsonObject? obj;
-        try { obj = JsonNode.Parse(process.GraphJson) as JsonObject; }
-        catch { return; }
-        if (obj is null) return;
-        ApplyMaster(obj, dataSourceId);
-        process.GraphJson = obj.ToJsonString(JsonOpts);
-        process.UpdatedAtUtc = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
-    }
-
-    private static void ApplyMaster(JsonObject obj, int? dataSourceId)
-    {
-        if (dataSourceId is int id)
-            obj["dataSourceId"] = id;
-        else
-            obj.Remove("dataSourceId");
-        if (obj["nodes"] is not JsonArray nodes) return;
-        foreach (var n in nodes)
-        {
-            if (n is JsonObject no &&
-                string.Equals(no["kind"]?.GetValue<string>(), "start", StringComparison.OrdinalIgnoreCase))
-            {
-                if (dataSourceId is int mid) no["dataSourceId"] = mid;
-                else no.Remove("dataSourceId");
-                break;
-            }
-        }
     }
 
     private static void ClearIdIfMatch(JsonObject no, string prop, int id)
