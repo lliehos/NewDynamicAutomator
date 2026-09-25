@@ -550,6 +550,11 @@
           if (ds && newTitle) {
             ds.title = newTitle;
             renderDataSources();
+            // The process properties panel (shown when nothing is selected) prints the
+            // default source name too, so repaint it as well - otherwise the sidebar
+            // updates while the panel keeps showing the old name.
+            const selectedId = [...selected][0];
+            if (!selectedId || !nodeById(selectedId)) renderInspector();
           }
           // Server bumped Process.UpdatedAtUtc — refresh stamp without reloading diagram.
           if (/^\d+$/.test(String(taskId))) {
