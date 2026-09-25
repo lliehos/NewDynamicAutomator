@@ -840,6 +840,7 @@
     "record": "ضبط",
     "smart": "هوشمندسازی",
     "clone": "کپی فرآیند",
+    "cloneFailed": "کپی فرآیند انجام نشد.",
     "downloadJson": "دانلود JSON",
     "importJson": "بارگذاری JSON",
     "downloadMrbt": "دانلود .mrbt",

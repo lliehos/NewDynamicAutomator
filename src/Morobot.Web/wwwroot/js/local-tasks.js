@@ -363,6 +363,50 @@
     notifyHome(`کپی «${copy.title}» ساخته شد.`, "success");
   }
 
+  /**
+   * Copy a process, preferring the server.
+   *
+   * A server-backed process must be copied on the server: a browser-only copy existed on one
+   * machine, disappeared on the next sign-in, and never had its data-source links created (those
+   * live in their own table). Local-only processes keep the local path because they have no row.
+   */
+  async function cloneTaskById(id, btn) {
+    const tasks = readTasks();
+    const task = findTask(tasks, id);
+    const serverBacked = /^\d+$/.test(String(id));
+    if (!serverBacked) {
+      cloneTask(task);
+      return;
+    }
+
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/clone`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" }
+      });
+      if (!res.ok) {
+        let msg = t("tasks.cloneFailed") || "کپی فرآیند انجام نشد.";
+        try {
+          const body = await res.json();
+          if (body && body.message) msg = body.message;
+        } catch { /* keep the generic message */ }
+        notifyHome(msg, "error");
+        return;
+      }
+      const created = await res.json();
+      // Re-read the list from the server so the new row appears with the same shape as the rest
+      // (permissions, counts, last-run) rather than a hand-built entry that could drift.
+      scheduleRender();
+      notifyHome(`کپی «${(created && created.title) || ""}» ساخته شد.`, "success");
+    } catch (e) {
+      notifyHome(t("tasks.cloneFailed") || "کپی فرآیند انجام نشد.", "error");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function recordAllowed() {
     const e = window.DaEntitlements?.get?.();
     if (!e) return true;
@@ -458,10 +502,9 @@
       });
     });
     root?.querySelectorAll("[data-da-clone]").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const id = btn.getAttribute("data-da-clone");
-        const task = findTask(readTasks(), id);
-        cloneTask(task);
+        await cloneTaskById(id, btn);
       });
     });
     root?.querySelectorAll("input[data-da-import]").forEach((inp) => {

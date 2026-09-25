@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Morobot.Contracts.Auth;
 using Morobot.Contracts.Recordings;
 using Morobot.Contracts.Tasks;
+using Morobot.Domain.Entities;
 using Morobot.Infrastructure.Services;
 using Morobot.Web.Hubs;
 using Morobot.Web.Services;
@@ -112,6 +113,71 @@ public class TasksApiController : ControllerBase
                 ct: ct);
             return BadRequest(new { message = ex.Message, code = "limit" });
         }
+    }
+
+    /// <summary>
+    /// Copy a process on the server, including its graph and its linked data sources.
+    /// </summary>
+    /// <remarks>
+    /// POST, not GET: it creates a record. The new process is returned in the same shape as the
+    /// list endpoint so the caller can insert it into the list without a second round trip.
+    /// </remarks>
+    [HttpPost("{id:int}/clone")]
+    public async Task<ActionResult<TaskListItemDto>> Clone(int id, CancellationToken ct)
+    {
+        var entitlements = await _entitlements.ResolveWithCountsAsync(UserId, User, ct);
+        Process? copy;
+        try
+        {
+            copy = await _tasks.CloneAsync(UserId, id, newTitle: null, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // The copy is a new process, so it has to pass the same process-limit check as any
+            // other creation; a caller at their ceiling must get a clear refusal, not a 500.
+            await _events.LogAsync(
+                "Warn", "Task", "TaskCloneDenied",
+                ex.Message, UserId, User.Identity?.Name,
+                ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
+                path: $"/api/tasks/{id}/clone",
+                ct: ct);
+            return BadRequest(new { message = ex.Message, code = "limit" });
+        }
+
+        if (copy is null) return NotFound();
+
+        await _events.LogAsync(
+            "Audit", "Task", "TaskClone",
+            $"Cloned task #{id} into #{copy.Id}: {copy.Title}",
+            UserId, User.Identity?.Name,
+            ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
+            path: $"/api/tasks/{id}/clone",
+            ct: ct);
+
+        // Read the new row back through the list query so the returned permissions, counts and
+        // last-run fields are the same ones the list page would show for it.
+        var list = await _tasks.ListForUserAsync(UserId, ct);
+        var dto = list.FirstOrDefault(t => t.Id == copy.Id);
+        if (dto is not null)
+            await _catalog.TaskUpsertedAsync(dto, "created", User.Identity?.Name, ct);
+
+        return Ok(dto ?? new TaskListItemDto
+        {
+            Id = copy.Id,
+            Title = copy.Title,
+            CreatedAtUtc = copy.CreatedAtUtc,
+            UpdatedAtUtc = copy.UpdatedAtUtc,
+            IsOwner = true,
+            CanView = true,
+            CanEdit = true,
+            CanModify = true,
+            CanDelete = true,
+            CanExecute = true,
+            CanChangeDataSource = true,
+            CanShare = entitlements.CanShare && !entitlements.IsLocal,
+            DesignOrigin = copy.DesignOrigin.ToString(),
+            OwnerUserName = User.Identity?.Name
+        });
     }
 
     [HttpPut("{id:int}/title")]

@@ -840,6 +840,7 @@
     "record": "Record",
     "smart": "Smart learn",
     "clone": "Clone process",
+    "cloneFailed": "Could not clone the process.",
     "downloadJson": "Download JSON",
     "importJson": "Import JSON",
     "downloadMrbt": "Download .mrbt",

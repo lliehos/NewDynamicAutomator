@@ -324,6 +324,111 @@ public class TaskService
         return process;
     }
 
+    /// <summary>
+    /// Copy a process on the server: a new record with the graph and the linked sources.
+    /// </summary>
+    /// <remarks>
+    /// The copy is a server row, not a browser-side entry. Copying only in localStorage produced a
+    /// process that existed on one machine and vanished on the next sign-in, and its data-source
+    /// links — which live in their own table — were never created at all.
+    ///
+    /// The source rows are <b>shared, not duplicated</b>: links point at the same DataSources
+    /// records. Duplicating them would multiply a customer's data-source quota every time they
+    /// copied a process, and the library is meant to hold one row per real source. Editing the
+    /// source from either process therefore affects both, which is the existing behaviour for a
+    /// process that shares a source.
+    /// </remarks>
+    public async Task<Process?> CloneAsync(int userId, int taskId, string? newTitle, CancellationToken ct = default)
+    {
+        if (!await CanViewAsync(userId, taskId, ct)) return null;
+
+        var source = await _db.Processes.AsNoTracking()
+            .Include(p => p.DataSourceLinks)
+            .FirstOrDefaultAsync(p => p.Id == taskId, ct);
+        if (source is null) return null;
+
+        var title = string.IsNullOrWhiteSpace(newTitle) ? BuildCloneTitle(source.Title) : newTitle.Trim();
+        var copy = await CreateAsync(userId, new CreateTaskRequest
+        {
+            Title = title,
+            // The copy is manual work regardless of how the original was produced: it is no longer
+            // the artefact the recorder wrote.
+            DesignOrigin = nameof(TaskDesignOrigin.Manual)
+        }, entitlements: null, ct);
+
+        // Straight assignment, not a parse/re-serialise round trip: the graph is copied verbatim so
+        // nothing in an unfamiliar shape is lost, and only the identity fields that must not be
+        // shared are rewritten.
+        copy.GraphJson = RewriteGraphIdentity(source.GraphJson, copy.Id, title);
+        copy.DelayBeforeMs = source.DelayBeforeMs;
+        copy.DelayAfterMs = source.DelayAfterMs;
+        copy.UpdatedAtUtc = DateTime.UtcNow;
+        copy.LastEditorUserId = userId > 0 ? userId : null;
+
+        foreach (var link in source.DataSourceLinks)
+        {
+            _db.ProcessDataSources.Add(new ProcessDataSource
+            {
+                ProcessId = copy.Id,
+                DataSourceId = link.DataSourceId,
+                IsDefault = link.IsDefault,
+                SortOrder = link.SortOrder
+            });
+        }
+
+        await _db.SaveChangesAsync(ct);
+        return copy;
+    }
+
+    /// <summary>Name for a copy: "&lt;title&gt; (copy)", with a counter so repeated copies stay distinct.</summary>
+    private static string BuildCloneTitle(string? originalTitle)
+    {
+        var baseTitle = string.IsNullOrWhiteSpace(originalTitle) ? "فرآیند" : originalTitle.Trim();
+        return $"{baseTitle} (کپی)";
+    }
+
+    /// <summary>
+    /// Point a copied graph at its new process. Everything else is left byte-for-byte as stored.
+    /// </summary>
+    /// <remarks>
+    /// The taskId inside the graph is what the editor and the player use to identify the process,
+    /// so a copy that kept the original's id would save over the original.
+    /// </remarks>
+    private static string? RewriteGraphIdentity(string? graphJson, int newTaskId, string title)
+    {
+        if (string.IsNullOrWhiteSpace(graphJson)) return graphJson;
+        try
+        {
+            // Distinct from RecordingService.JsonOpts: this type does not inherit that field.
+            var opts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+            var obj = JsonNode.Parse(graphJson) as JsonObject;
+            if (obj is null) return graphJson;
+
+            // Some rows are stored as an envelope { title, graphJson }. Patch whichever level
+            // actually holds the graph so the copy is correct either way.
+            var target = obj["graphJson"] is JsonValue inner && inner.TryGetValue<string>(out var innerText)
+                ? JsonNode.Parse(innerText) as JsonObject
+                : obj;
+            if (target is null) return graphJson;
+
+            target["taskId"] = newTaskId;
+            target["title"] = title;
+
+            if (!ReferenceEquals(target, obj))
+            {
+                obj["graphJson"] = target.ToJsonString(opts);
+                obj["title"] = title;
+                return obj.ToJsonString(opts);
+            }
+            return target.ToJsonString(opts);
+        }
+        catch (JsonException)
+        {
+            // Unparseable graph: keep the bytes rather than losing the process.
+            return graphJson;
+        }
+    }
+
     public async Task<bool> DeleteAsync(int taskId, CancellationToken ct = default)
     {
         // ProcessDataSources links cascade; DataSources library rows are kept (independent entities).
