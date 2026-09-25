@@ -427,7 +427,9 @@
       "shortEvents": "Logs & audit",
       "shortSettings": "System parameters",
       "recentEvents": "Recent events",
-      "noEvents": "No events yet."
+      "noEvents": "No events yet.",
+      "growthTrend": "Growth trend",
+      "seriesDevices": "New devices"
     },
     "settings": {
       "title": "System settings",

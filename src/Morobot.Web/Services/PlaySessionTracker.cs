@@ -12,6 +12,14 @@ public sealed class PlaySessionInfo
 }
 
 /// <summary>Tracks processes currently being executed (play) across browsers.</summary>
+/// <remarks>
+/// Sessions are held in memory only, so this tracker knows what is running right now but not
+/// what ran yesterday. Anything that needs play <em>history</em> - the dashboard's activity
+/// trend, for example - has to come from somewhere durable, which is what <see cref="OnStarted"/>
+/// is for: the tracker reports the start and whoever owns the durable store (the event log)
+/// records it. Keeping the callback here rather than at each call site means a new way to start
+/// a play cannot forget to record it.
+/// </remarks>
 public class PlaySessionTracker
 {
     private readonly ConcurrentDictionary<string, PlaySessionInfo> _byTask =
@@ -19,12 +27,18 @@ public class PlaySessionTracker
     private readonly ConcurrentDictionary<string, byte> _abort =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Raised once each time a session is registered. Fired on the registering thread, so the
+    /// handler must not block; it is expected to hand off to a background write.
+    /// </summary>
+    public event Action<PlaySessionInfo>? OnStarted;
+
     public void Register(string taskId, string? userName, int? userId, string? connectionId)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return;
         var key = taskId.Trim();
         _abort.TryRemove(key, out _);
-        _byTask[key] = new PlaySessionInfo
+        var info = new PlaySessionInfo
         {
             TaskId = key,
             UserName = userName,
@@ -32,6 +46,11 @@ public class PlaySessionTracker
             ConnectionId = connectionId,
             StartedAtUtc = DateTime.UtcNow
         };
+        var isNewStart = !_byTask.ContainsKey(key);
+        _byTask[key] = info;
+        // Only on a genuine start: re-registering an already-running task (a reconnect, or the
+        // panel and the hub both claiming the same task) must not add a second history row.
+        if (isNewStart) OnStarted?.Invoke(info);
     }
 
     public void Unregister(string taskId)

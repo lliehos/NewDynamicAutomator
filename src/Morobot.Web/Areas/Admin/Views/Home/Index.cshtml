@@ -72,6 +72,25 @@
 
     <section class="admin-dash-section">
       <div class="admin-dash-section-head">
+        <h2><i class="ti ti-user-plus" aria-hidden="true"></i>@L["admin.dashboard.growthTrend"]</h2>
+        <span class="admin-field-hint">@L["admin.dashboard.last14Days"]</span>
+      </div>
+      @* Same 14-day window as the activity chart above, so the two can be read against each
+         other; both series come from real rows (Users.CreatedAtUtc, DeviceSessions.FirstSeenUtc). *@
+      <div class="admin-chart" id="admin-chart-growth"></div>
+      <script type="application/json" id="admin-chart-growth-data">
+        @Html.Raw(System.Text.Json.JsonSerializer.Serialize(new {
+          labels = Model.DailyActivity.Select(d => d.Label),
+          signups = Model.DailyActivity.Select(d => d.Signups),
+          devices = Model.DailyActivity.Select(d => d.NewDevices),
+          seriesSignups = L["admin.dashboard.statUsers"],
+          seriesDevices = L["admin.dashboard.seriesDevices"]
+        }))
+      </script>
+    </section>
+
+    <section class="admin-dash-section">
+      <div class="admin-dash-section-head">
         <h2><i class="ti ti-chart-bar" aria-hidden="true"></i>@L["admin.dashboard.planDistribution"]</h2>
         <a class="btn-admin secondary" asp-controller="Settings" asp-action="Index" title="@L["admin.hints.defaultRegisterPlan"]">
           <i class="ti ti-settings" aria-hidden="true"></i>

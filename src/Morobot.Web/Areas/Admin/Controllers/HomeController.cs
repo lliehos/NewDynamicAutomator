@@ -102,11 +102,13 @@ public class HomeController : Controller
             .Select(p => p.CreatedAtUtc)
             .ToListAsync(ct);
 
-        // Play sessions are held in memory only, so bucket the tracker's own timestamps.
-        var playsInWindow = _plays.ListPlaying()
-            .Where(p => p.StartedAtUtc >= windowStart)
-            .Select(p => p.StartedAtUtc)
-            .ToList();
+        // Play history comes from the event log, not from the live tracker. The tracker only
+        // holds sessions that are still running, so reading it here would have under-reported
+        // every past day and silently dropped any run that had already finished.
+        var playsInWindow = await _db.EventLogs.AsNoTracking()
+            .Where(e => e.Category == "Play" && e.EventType == "PlayStarted" && e.CreatedAtUtc >= windowStart)
+            .Select(e => e.CreatedAtUtc)
+            .ToListAsync(ct);
 
         var daily = new List<AdminDailyPoint>(windowDays);
         for (var d = 0; d < windowDays; d++)
@@ -128,6 +130,26 @@ public class HomeController : Controller
             .OrderByDescending(x => x.Count)
             .ToList();
 
+        // Two more real series over the same window, so the charts all share one time axis and
+        // one window (and therefore agree with each other and with the stat tiles above them).
+        var signupsInWindow = await _db.Users.AsNoTracking()
+            .Where(u => u.CreatedAtUtc >= windowStart)
+            .Select(u => u.CreatedAtUtc)
+            .ToListAsync(ct);
+
+        var devicesInWindow = await _db.DeviceSessions.AsNoTracking()
+            .Where(d => d.FirstSeenUtc >= windowStart)
+            .Select(d => d.FirstSeenUtc)
+            .ToListAsync(ct);
+
+        for (var d = 0; d < windowDays; d++)
+        {
+            var day = windowStart.AddDays(d);
+            var next = day.AddDays(1);
+            daily[d].Signups = signupsInWindow.Count(t => t >= day && t < next);
+            daily[d].NewDevices = devicesInWindow.Count(t => t >= day && t < next);
+        }
+
         var topOwners = await _db.Users.AsNoTracking()
             .Select(u => new AdminTopUser
             {
@@ -141,7 +163,8 @@ public class HomeController : Controller
             .ToListAsync(ct);
 
         var last7 = DateTime.UtcNow.Date.AddDays(-6);
-        var plays7d = _plays.ListPlaying().Count(p => p.StartedAtUtc >= last7);
+        // Same reasoning as playsInWindow: count recorded play starts, not live sessions.
+        var plays7d = playsInWindow.Count(t => t >= last7);
         var processes7d = processesInWindow.Count(t => t >= last7);
         var problemEvents7d = eventsInWindow.Count(e =>
             e.CreatedAtUtc >= last7 &&

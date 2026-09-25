@@ -99,6 +99,41 @@ builder.Services.AddHostedService<UpdateNotifyBackgroundService>();
 
 var app = builder.Build();
 
+// Record every play start in the durable event log.
+//
+// Play sessions themselves live in memory, so without this there is no history at all: the
+// dashboard's activity trend could only ever show sessions that happen to still be running, and
+// a finished run vanished from the chart. Writing a "Play" event at the moment of start gives
+// the trend a real series to read, and it reuses the existing event table rather than adding a
+// schema just for a chart.
+//
+// The handler is fired from the registering request thread, so the database write is handed to a
+// background task: a slow or failing write must not delay or fail the play it is describing.
+{
+    var plays = app.Services.GetRequiredService<Morobot.Web.Services.PlaySessionTracker>();
+    var log = app.Services.GetRequiredService<IServiceScopeFactory>();
+    plays.OnStarted += info =>
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = log.CreateScope();
+                var events = scope.ServiceProvider.GetRequiredService<Morobot.Infrastructure.Services.EventLogService>();
+                await events.LogAsync(
+                    "Info", "Play", "PlayStarted",
+                    $"Task {info.TaskId} play started",
+                    info.UserId, info.UserName,
+                    path: $"/Panel/Tasks/Editor/{info.TaskId}");
+            }
+            catch
+            {
+                // Analytics only: never let a logging failure surface to the caller.
+            }
+        });
+    };
+}
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Home/Error");

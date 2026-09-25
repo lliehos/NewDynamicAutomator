@@ -77,6 +77,34 @@
         stroke: { width: 2, colors: ["#fff"] }
       }).render();
     }
+
+    // Growth: new users and new devices per day. Its own chart rather than a fourth line on the
+    // activity chart, because those series are event counts in the hundreds while these are
+    // single digits - sharing an axis would flatten growth into a straight line at zero.
+    var growth = readData("admin-chart-growth-data");
+    var growthHost = document.getElementById("admin-chart-growth");
+    if (growth && growthHost && Array.isArray(growth.labels) && growth.labels.length) {
+      new ApexCharts(growthHost, {
+        chart: {
+          type: "bar",
+          height: 240,
+          fontFamily: font,
+          toolbar: { show: false },
+          animations: { enabled: false }
+        },
+        series: [
+          { name: growth.seriesSignups || "New users", data: growth.signups || [] },
+          { name: growth.seriesDevices || "New devices", data: growth.devices || [] }
+        ],
+        xaxis: { categories: growth.labels, tickAmount: Math.min(7, growth.labels.length) },
+        plotOptions: { bar: { columnWidth: "55%", borderRadius: 3 } },
+        colors: ["#6366f1", "#22c55e"],
+        legend: { position: "top", horizontalAlign: rtl ? "right" : "left" },
+        grid: { borderColor: "rgba(148,163,184,.25)" },
+        dataLabels: { enabled: false },
+        tooltip: { shared: true, intersect: false }
+      }).render();
+    }
   }
 
   if (document.readyState === "loading") {

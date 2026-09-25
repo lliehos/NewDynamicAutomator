@@ -37,6 +37,8 @@ public sealed class AdminDailyPoint
     public int Events { get; init; }
     public int Processes { get; init; }
     public int Plays { get; init; }
+    public int Signups { get; set; }
+    public int NewDevices { get; set; }
 }
 
 public sealed class AdminLevelStat

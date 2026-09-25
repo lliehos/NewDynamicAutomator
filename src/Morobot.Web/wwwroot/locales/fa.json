@@ -427,7 +427,9 @@
       "shortEvents": "لاگ و ممیزی",
       "shortSettings": "پارامترهای سامانه",
       "recentEvents": "رویدادهای اخیر",
-      "noEvents": "رویدادی ثبت نشده."
+      "noEvents": "رویدادی ثبت نشده.",
+      "growthTrend": "روند رشد",
+      "seriesDevices": "دستگاه‌های جدید"
     },
     "settings": {
       "title": "تنظیمات سامانه",
