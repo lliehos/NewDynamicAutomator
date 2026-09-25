@@ -617,7 +617,11 @@ public class DataSourcesApiController : ControllerBase
     {
         var result = await _sources.PatchCellAsync(UserId, id, req, ct);
         if (!result.Ok && result.Message == "forbidden") return Forbid();
-        if (!result.Ok && result.Conflict)
+        // Include the ceiling case explicitly: it is a refusal to grow the source, which the client
+        // must be able to tell apart from a plain validation failure so it can stop retrying and
+        // show the cap. Answering 400 here (falling through to the last branch) made that
+        // indistinguishable for a caller that only looks at the status code.
+        if (!result.Ok && (result.Conflict || result.Code == SourceLimitExceededException.Code))
             return Conflict(result);
         if (!result.Ok) return BadRequest(result);
 

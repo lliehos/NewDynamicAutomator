@@ -79,6 +79,8 @@ public class PatchDataSourceCellRequest
 public class PatchDataSourceCellResponse
 {
     public bool Ok { get; set; }
+    /// <summary>Machine-readable failure kind, e.g. <c>source-limit</c>. Null on success.</summary>
+    public string? Code { get; set; }
     public long DataRevision { get; set; }
     public long CellRevision { get; set; }
     public string CellValue { get; set; } = string.Empty;

@@ -474,6 +474,7 @@ const ENGINE_MSG = {
     "run.condMissingBranch": "شاخهٔ «{branch}» این شرط وصل نشده و مسیری برای ادامه وجود ندارد — اجرا متوقف شد.",
     "run.cellBusy": "سلول منبع هنوز آزاد نشده — چند ثانیه بعد دوباره تلاش کنید.",
     "run.cellSaveFailed": "ذخیرهٔ سلول روی سرور انجام نشد.",
+    "run.sourceLimitExceeded": "امکان درج در منبع نیست: سقف مجاز ردیف/حجم منبع پر شده است. سقف را از سطح کاربری یا لایسنس افزایش دهید.",
 
     "label.selector": "سلکتور",
     "label.targetSelector": "سلکتور هدف",
@@ -541,6 +542,7 @@ const ENGINE_MSG = {
     "run.condMissingBranch": "This condition has no \"{branch}\" branch wired and nowhere to continue — the run stopped.",
     "run.cellBusy": "Source cell is still locked — try again in a few seconds.",
     "run.cellSaveFailed": "Could not save the cell on the server.",
+    "run.sourceLimitExceeded": "Cannot insert into the source: its row/size ceiling is reached. Raise the plan or license ceiling.",
 
     "label.selector": "selector",
     "label.targetSelector": "target selector",
@@ -3096,6 +3098,15 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
         return { ok: true, body: res.body };
       }
       if (res?.error === "auth") return { ok: false, error: "auth" };
+      // A ceiling breach is permanent for this write — retrying cannot help, so stop at once and
+      // carry the server's message through instead of burning the whole wait budget.
+      if (res?.limit) {
+        return {
+          ok: false,
+          error: "source_limit",
+          message: res.message || res.body?.message || res.body?.Message || null
+        };
+      }
       // 409 conflict: adopt the server's current revision and retry immediately.
       if (res?.conflict) {
         const cur = res.body?.currentCellRevision ?? res.body?.CurrentCellRevision;
@@ -3184,6 +3195,16 @@ async function storeCapturedContent(step, graph, text, rowIndex) {
       emitDataSourceCellEvent(graph, ds, col, idx, "write", text, step?.title);
       const saved = await writeServerCellWait(ds, graph, idx, col, text);
       if (!saved.ok) {
+        // A ceiling breach is not a transient failure: report the server's own message (which names
+        // the row/byte cap and whether the license or the plan set it) instead of the generic
+        // "could not save", and do not pretend a retry would help.
+        if (saved.error === "source_limit") {
+          return {
+            ok: false,
+            error: saved.message || tv("run.sourceLimitExceeded"),
+            reason: "source_limit"
+          };
+        }
         return {
           ok: false,
           error: saved.error === "cell_write_timeout"

@@ -1370,8 +1370,15 @@ async function patchDataSourceCellMessage(message) {
       body: JSON.stringify(payload)
     });
     const body = await res.json().catch(() => ({}));
-    if (res.status === 409) return { ok: false, conflict: true, body };
     if (res.status === 401 || res.status === 403) return { ok: false, error: "auth" };
+    // A row/byte ceiling comes back as 409 with a distinct code, so this MUST be checked before the
+    // generic 409 branch. Treating it as a revision conflict would make the player adopt the
+    // server's revision and retry until the wait budget ran out, then blame a "busy" cell - hiding
+    // the fact that no amount of retrying can help.
+    if (body?.code === "source-limit") {
+      return { ok: false, limit: true, message: body.message || null, body };
+    }
+    if (res.status === 409) return { ok: false, conflict: true, body };
     if (!res.ok) return { ok: false, error: body.message || `http ${res.status}`, body };
     return { ok: true, body };
   } catch (e) {

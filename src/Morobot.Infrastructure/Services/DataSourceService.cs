@@ -451,6 +451,33 @@ public class DataSourceService
         var value = req.CellValue ?? "";
         var expectedRev = req.ExpectedCellRevision;
 
+        // A cell write that lands on a NEW row is exactly how "insert into the source" grows the
+        // table, so the row/byte ceiling has to be checked here too — otherwise the action could
+        // add rows one cell at a time past the cap the create/reload/add-rows paths enforce.
+        var (_, currentRows) = await GetDerivedCountersAsync(id, ct);
+        currentRows = Math.Max(currentRows, d.RowCount);
+        if (req.RowIndex >= currentRows)
+        {
+            var entitlements = await ResolveEntitlements(userId, ct);
+            var projectedRows = req.RowIndex + 1;
+            var storedBytes = await _db.DataSourceCells.AsNoTracking()
+                .Where(c => c.DataSourceId == id)
+                .SumAsync(c => (long?)c.CellValue.Length) ?? 0L;
+            // Values are stored as text; measuring the UTF-8 size is what the ceiling is stated in.
+            var projectedBytes = storedBytes + Encoding.UTF8.GetByteCount(value);
+            var error = EntitlementService.CheckSourceLimits(entitlements, projectedRows, projectedBytes);
+            if (error is not null)
+            {
+                return new PatchDataSourceCellResponse
+                {
+                    Ok = false,
+                    Code = SourceLimitExceededException.Code,
+                    Message = error,
+                    DataRevision = d.DataRevision
+                };
+            }
+        }
+
         // One shot, no server-side retry loop: the caller (player/editor) owns retry policy.
         // Retrying here while holding a transaction would keep a row lock alive and make
         // concurrent writers on *different* cells of the same source queue up.
