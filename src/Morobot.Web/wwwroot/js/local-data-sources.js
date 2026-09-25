@@ -51,6 +51,12 @@
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
   }
 
+  /**
+   * Rows requested per page. The viewer and the export both walk pages of this size, so a source
+   * with more rows than one response can carry is never silently truncated.
+   */
+  const SOURCE_PAGE_SIZE = 500;
+
   const ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
   const ICO_DL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.4-3.4 1.4 1.4L12 17l-4.8-5.8 1.4-1.4L11 13.2V3h1zM5 19h14v2H5v-2z"/></svg>`;
   const ICO_CLOUD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17.5 19H8a5 5 0 0 1-.7-9.95A6.5 6.5 0 0 1 20 12.5a3.5 3.5 0 0 1-2.5 6.5zM12 8v6.2l2.4-2.4 1.2 1.2L12 17l-3.6-3.999 1.2-1.2L11 14.2V8h1z"/></svg>`;
@@ -347,16 +353,66 @@
     downloadBlobFile(new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" }), `${dataSourceSafeFileName(ds)}.csv`);
   }
 
+  /**
+   * Read a source's current content straight from the server.
+   *
+   * Everything that shows or exports source data must go through this. The local cache is a
+   * snapshot taken when the page loaded (and the canvas list payload is a summary with no cell
+   * values at all), so exporting from it could hand the user yesterday's numbers. This walks the
+   * row endpoint in pages until the server says the source is exhausted, so a source larger than
+   * the page size is never silently truncated either.
+   */
+  async function fetchSourceContent(sourceId) {
+    const first = await fetch(`/api/datasources/${sourceId}/rows?from=0&count=${SOURCE_PAGE_SIZE}`,
+      { credentials: "same-origin" });
+    if (!first.ok) throw new Error(`rows ${first.status}`);
+    const head = await first.json();
+
+    const columns = head.columns || [];
+    const columnKeys = head.columnKeys || columns.map((c) => c.key);
+    const cells = [];
+    const pushRows = (rows) => {
+      for (const row of rows || []) {
+        for (const [k, v] of Object.entries(row.values || {})) {
+          cells.push({ key: k, index: row.rowIndex, cellValue: v });
+        }
+      }
+    };
+    pushRows(head.rows);
+
+    // Keep paging while the server reports more rows than we have collected.
+    let got = (head.rows || []).length;
+    const total = Number(head.rowCount) || got;
+    while (got < total) {
+      const next = await fetch(`/api/datasources/${sourceId}/rows?from=${got}&count=${SOURCE_PAGE_SIZE}`,
+        { credentials: "same-origin" });
+      if (!next.ok) break;
+      const page = await next.json();
+      const rows = page.rows || [];
+      if (!rows.length) break;
+      pushRows(rows);
+      got += rows.length;
+    }
+
+    return {
+      id: Number(sourceId),
+      title: head.title || "",
+      fileName: head.fileName,
+      columns,
+      columnKeys,
+      cells,
+      rowCount: Math.max(total, got),
+      columnCount: head.columnCount ?? columns.length,
+      dataRevision: head.dataRevision,
+      hexRevision: head.hexRevision
+    };
+  }
+
   async function downloadSource(taskId, sourceId, btn) {
     const entry = findEntry(taskId, sourceId);
-    if (!entry) {
+    const cached = entry?.ds || null;
+    if (!entry && !(Number(sourceId) > 0)) {
       notify("منبع پیدا نشد.", "error");
-      return;
-    }
-    const { ds } = entry;
-    const table = dataSourceTableRows(ds);
-    if (!table.colKeys.length) {
-      notify("این منبع ستونی برای دانلود ندارد.", "error");
       return;
     }
     if (btn) {
@@ -364,6 +420,24 @@
       btn.classList.add("is-busy");
     }
     try {
+      // Always export the server's current content, never the page-load snapshot.
+      let fresh;
+      try {
+        fresh = await fetchSourceContent(sourceId);
+      } catch {
+        fresh = cached;
+      }
+      const ds = fresh || cached;
+      if (!ds) {
+        notify("منبع پیدا نشد.", "error");
+        return;
+      }
+
+      const table = dataSourceTableRows(ds);
+      if (!table.colKeys.length) {
+        notify("این منبع ستونی برای دانلود ندارد.", "error");
+        return;
+      }
       const payload = {
         title: dataSourceDownloadName(ds),
         columns: table.columns.map((c) => ({ key: c.key, title: c.title })),
@@ -387,7 +461,7 @@
       notify(`فایل «${dataSourceDownloadName(ds)}.xlsx» دانلود شد.`, "success");
     } catch (e) {
       try {
-        downloadAsCsv(ds);
+        downloadAsCsv(cached || {});
         notify(`اکسل در دسترس نبود — CSV دانلود شد. ${e.message || ""}`.trim(), "info");
       } catch (e2) {
         notify(e.message || e2.message || "دانلود ناموفق بود.", "error");
@@ -880,41 +954,16 @@
     const sourceId = viewerState.sourceId;
     if (sourceId == null) return;
     try {
-      const [detail, page] = await Promise.all([
-        fetch(`/api/datasources/${sourceId}`, { credentials: "same-origin" }).then((r) => r.ok ? r.json() : null),
-        // The row page is the only response that carries per-cell revisions, which the inline
-        // editor needs for its optimistic-concurrency check.
-        fetch(`/api/datasources/${sourceId}/rows?from=0&count=2000`, { credentials: "same-origin" })
+      // fetchSourceContent walks every page and carries the per-cell revisions the inline editor
+      // needs for its optimistic-concurrency check, so one call serves both purposes.
+      const [fresh, page] = await Promise.all([
+        fetchSourceContent(sourceId),
+        fetch(`/api/datasources/${sourceId}/rows?from=0&count=${SOURCE_PAGE_SIZE}`, { credentials: "same-origin" })
           .then((r) => r.ok ? r.json() : null)
       ]);
-      if (!detail && !page) return;
-
-      const columns = detail?.columns || page?.columns || [];
-      const columnKeys = detail?.columnKeys || page?.columnKeys || columns.map((c) => c.key);
-
-      let cells = detail?.cells || [];
-      if (page?.rows?.length) {
-        // Prefer the row page: it is authoritative and its cells are what the grid renders.
-        cells = [];
-        for (const row of page.rows) {
-          for (const [k, v] of Object.entries(row.values || {})) {
-            cells.push({ key: k, index: row.rowIndex, cellValue: v });
-          }
-        }
-      }
-
-      viewerState.lastSource = {
-        id: Number(sourceId),
-        title: detail?.title || page?.title || "",
-        fileName: detail?.fileName,
-        columns,
-        columnKeys,
-        cells,
-        rowCount: page?.rowCount ?? detail?.rowCount ?? 0,
-        columnCount: page?.columnCount ?? detail?.columnCount ?? columns.length
-      };
       viewerState.cellRevisions = page?.cellRevisions || null;
-      renderViewerTable(viewerState.lastSource);
+      viewerState.lastSource = fresh;
+      renderViewerTable(fresh);
     } catch { /* leave the grid as-is */ }
   }
 

@@ -738,38 +738,64 @@ function dataSourceSafeFileName(ds) {
   // --- Grid editing on the processes page (same behaviour as the sources page) ----------------
   const processViewerState = { source: null, cellRevisions: null, editing: null };
 
+  /**
+   * Read a source's current content straight from the server, paging until it is exhausted.
+   *
+   * Showing or exporting from the local cache would display whatever was true when the page
+   * loaded, and the canvas list payload carries no cell values at all. Paging also means a source
+   * with more rows than one response can hold is never silently truncated.
+   */
+  async function fetchProcessSourceContent(sourceId) {
+    const PAGE = 500;
+    const first = await fetch(`/api/datasources/${sourceId}/rows?from=0&count=${PAGE}`, { credentials: "same-origin" });
+    if (!first.ok) throw new Error(`rows ${first.status}`);
+    const head = await first.json();
+
+    const columns = head.columns || [];
+    const cells = [];
+    const pushRows = (rows) => {
+      for (const row of rows || []) {
+        for (const [k, v] of Object.entries(row.values || {})) {
+          cells.push({ key: k, index: row.rowIndex, cellValue: v });
+        }
+      }
+    };
+    pushRows(head.rows);
+
+    let got = (head.rows || []).length;
+    const total = Number(head.rowCount) || got;
+    while (got < total) {
+      const next = await fetch(`/api/datasources/${sourceId}/rows?from=${got}&count=${PAGE}`, { credentials: "same-origin" });
+      if (!next.ok) break;
+      const page = await next.json();
+      const rows = page.rows || [];
+      if (!rows.length) break;
+      pushRows(rows);
+      got += rows.length;
+    }
+
+    return {
+      id: Number(sourceId),
+      title: head.title || "",
+      fileName: head.fileName,
+      columns,
+      columnKeys: head.columnKeys || columns.map((c) => c.key),
+      cells,
+      rowCount: Math.max(total, got),
+      columnCount: head.columnCount ?? columns.length,
+      cellRevisions: head.cellRevisions || null
+    };
+  }
+
   /** Re-read the open source from the server: the list payload is a summary without cell values. */
   async function refreshProcessViewer() {
     const sourceId = processViewerState.source?.id;
     if (!sourceId) return;
     try {
-      const [detail, page] = await Promise.all([
-        fetch(`/api/datasources/${sourceId}`, { credentials: "same-origin" }).then((r) => r.ok ? r.json() : null),
-        fetch(`/api/datasources/${sourceId}/rows?from=0&count=2000`, { credentials: "same-origin" })
-          .then((r) => r.ok ? r.json() : null)
-      ]);
-      if (!detail && !page) return;
-      const columns = detail?.columns || page?.columns || [];
-      let cells = detail?.cells || [];
-      if (page?.rows?.length) {
-        cells = [];
-        for (const row of page.rows) {
-          for (const [k, v] of Object.entries(row.values || {})) {
-            cells.push({ key: k, index: row.rowIndex, cellValue: v });
-          }
-        }
-      }
-      processViewerState.cellRevisions = page?.cellRevisions || null;
-      renderProcessViewerTable({
-        id: Number(sourceId),
-        title: detail?.title || page?.title || "",
-        fileName: detail?.fileName,
-        columns,
-        columnKeys: detail?.columnKeys || page?.columnKeys || columns.map((c) => c.key),
-        cells,
-        rowCount: page?.rowCount ?? detail?.rowCount ?? 0,
-        columnCount: page?.columnCount ?? detail?.columnCount ?? columns.length
-      });
+      const fresh = await fetchProcessSourceContent(sourceId);
+      processViewerState.cellRevisions = fresh.cellRevisions;
+      delete fresh.cellRevisions;
+      renderProcessViewerTable(fresh);
     } catch { /* keep the current grid */ }
   }
 
@@ -1003,7 +1029,15 @@ function dataSourceSafeFileName(ds) {
         notifyHome(t("tasks.noDataSource"), "warn");
         return;
       }
-      const ds = hit.ds;
+      // Export the server's current content, never the page-load snapshot: the canvas payload is a
+      // summary with no cell values, so downloading from it could hand the user stale numbers.
+      let ds = hit.ds;
+      const sourceId = Number(ds.id);
+      if (Number.isFinite(sourceId) && sourceId > 0) {
+        try {
+          ds = await fetchProcessSourceContent(sourceId);
+        } catch { /* fall back to the snapshot below */ }
+      }
       const table = dataSourceTableRows(ds);
       if (!table.colKeys.length) {
         notifyHome(t("tasks.noDataSource"), "warn");
