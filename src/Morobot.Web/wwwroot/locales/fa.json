@@ -104,6 +104,7 @@
     "navHome": "صفحه اصلی",
     "navProcesses": "فرآیندها",
     "navResources": "منابع",
+    "navTemplates": "قالب‌ها",
     "navSettings": "تنظیمات",
     "dashBrand": "{brand}",
     "dashTitle": "صفحه اصلی",
@@ -735,6 +736,11 @@
       "nationalId": "کد ملی",
       "plan": "پلن",
       "role": "نقش",
+      "roles": {
+        "User": "کاربر",
+        "ProcessManager": "مدیر فرآیند",
+        "Admin": "مدیر سیستم"
+      },
       "active": "فعال",
       "presence": "حضور",
       "online": "آنلاین",

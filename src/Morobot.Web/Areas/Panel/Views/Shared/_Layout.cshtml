@@ -7,6 +7,7 @@
   var isHome = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("Index", StringComparison.OrdinalIgnoreCase);
   var isProcesses = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("Processes", StringComparison.OrdinalIgnoreCase);
   var isSources = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("DataSources", StringComparison.OrdinalIgnoreCase);
+  var isTemplates = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("Templates", StringComparison.OrdinalIgnoreCase);
   var isSettings = ctrl.Equals("Settings", StringComparison.OrdinalIgnoreCase);
   var nextLang = L.IsRtl ? "en" : "fa";
   var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
@@ -108,6 +109,18 @@
               <div data-i18n="panel.navResources">@L["panel.navResources"]</div>
             </a>
           </li>
+          @* Templates are a management surface, so the entry point is shown only to the people who
+             may actually publish to them. An administrator gets in too, the same way they reach
+             everything else on this rail. *@
+          @if (User.IsInRole("Admin") || User.IsInRole("ProcessManager"))
+          {
+            <li class="menu-item @(isTemplates ? "active" : null)">
+              <a asp-area="Panel" asp-controller="Home" asp-action="Templates" class="menu-link">
+                <i class="menu-icon tf-icons ti ti-copy"></i>
+                <div data-i18n="panel.navTemplates">@L["panel.navTemplates"]</div>
+              </a>
+            </li>
+          }
           <li class="menu-item @(isSettings ? "active" : null)">
             <a asp-area="Panel" asp-controller="Settings" asp-action="Index" class="menu-link">
               <i class="menu-icon tf-icons ti ti-settings"></i>

@@ -104,6 +104,7 @@
     "navHome": "Home",
     "navProcesses": "Processes",
     "navResources": "Resources",
+    "navTemplates": "Templates",
     "navSettings": "Settings",
     "dashBrand": "{brand}",
     "dashTitle": "Home",
@@ -735,6 +736,11 @@
       "nationalId": "National ID",
       "plan": "Plan",
       "role": "Role",
+      "roles": {
+        "User": "User",
+        "ProcessManager": "Process manager",
+        "Admin": "Administrator"
+      },
       "active": "Active",
       "presence": "Presence",
       "online": "Online",

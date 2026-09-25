@@ -8,6 +8,7 @@ public static class ReservedUserNames
         "admin",
         "free",
         "pro",
+        "pm",
         "guest",
         "test",
         "local",

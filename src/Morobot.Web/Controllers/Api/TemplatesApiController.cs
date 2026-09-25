@@ -46,10 +46,37 @@ public class TemplatesApiController : ControllerBase
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
+    /// <summary>
+    /// True when the caller may shape the shared templates: an administrator, or the
+    /// <see cref="Morobot.Domain.Enums.UserRole.ProcessManager"/> role created for exactly this.
+    /// </summary>
+    private bool CanManage =>
+        User.IsInRole(nameof(Morobot.Domain.Enums.UserRole.Admin))
+        || User.IsInRole(nameof(Morobot.Domain.Enums.UserRole.ProcessManager));
+
     /// <summary>The templates a user may pick when creating a process.</summary>
     [HttpGet]
     public async Task<ActionResult<List<ProcessTemplateDto>>> List(CancellationToken ct)
-        => Ok(await _templates.ListAsync(includeInactive: false, ct));
+    {
+        var list = await _templates.ListAsync(includeInactive: false, ct);
+        // Stamped here rather than in the service: "may this caller manage templates" is a fact
+        // about the request's identity, which the service does not see.
+        foreach (var item in list) item.CanManage = CanManage;
+        return Ok(list);
+    }
+
+    /// <summary>
+    /// Every template including the retired ones, for the management page. Returned to managers
+    /// only: a retired template is still someone's decision, not something to show everyone.
+    /// </summary>
+    [HttpGet("all")]
+    public async Task<ActionResult<List<ProcessTemplateDto>>> ListAll(CancellationToken ct)
+    {
+        if (!CanManage) return Forbid();
+        var list = await _templates.ListAsync(includeInactive: true, ct);
+        foreach (var item in list) item.CanManage = true;
+        return Ok(list);
+    }
 
     private static readonly Dictionary<string, string> TemplateErrorMessages = new()
     {
@@ -72,6 +99,10 @@ public class TemplatesApiController : ControllerBase
     public async Task<ActionResult<ProcessTemplateDto>> CreateFromProcess(
         int processId, [FromBody] SaveTemplateRequest request, CancellationToken ct)
     {
+        // Publishing a template changes what other people's processes run, so it is a manager's
+        // act rather than any editor's. Ownership of the process is checked as well: a manager
+        // still may not turn someone else's private process into a shared skeleton.
+        if (!CanManage) return Forbid();
         if (!await _tasks.CanEditAsync(UserId, processId, ct)) return Forbid();
 
         var (ok, error, template) = await _templates.CreateFromProcessAsync(UserId, processId, request, ct);
@@ -92,6 +123,8 @@ public class TemplatesApiController : ControllerBase
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateTemplateRequest request, CancellationToken ct)
     {
+        if (!CanManage) return Forbid();
+
         var (ok, error, pushed) = await _templates.UpdateAsync(
             UserId, id, new SaveTemplateRequest
             {

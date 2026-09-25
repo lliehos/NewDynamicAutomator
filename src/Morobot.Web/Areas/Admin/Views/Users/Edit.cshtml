@@ -49,16 +49,11 @@
     </div>
     <div class="mb-3">
       <label class="form-label">@L["admin.users.role"]</label>
+      @* Enumerated rather than hard-coded, so adding a role to the enum is enough to offer it. *@
       <select name="role" class="form-select">
-        @if (Model.Role == Morobot.Domain.Enums.UserRole.User)
+        @foreach (var r in Enum.GetValues<Morobot.Domain.Enums.UserRole>())
         {
-          <option value="User" selected>User</option>
-          <option value="Admin">Admin</option>
-        }
-        else
-        {
-          <option value="User">User</option>
-          <option value="Admin" selected>Admin</option>
+          <option value="@r" selected="@(r == Model.Role)">@L["admin.users.roles." + r]</option>
         }
       </select>
     </div>

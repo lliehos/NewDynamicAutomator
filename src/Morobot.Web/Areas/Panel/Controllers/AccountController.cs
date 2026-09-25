@@ -146,6 +146,7 @@ public class AccountController : Controller
             Password = name.Equals("guest", StringComparison.OrdinalIgnoreCase) ? "Guest123!"
                 : name.Equals("free", StringComparison.OrdinalIgnoreCase) ? "Free123!"
                 : name.Equals("pro", StringComparison.OrdinalIgnoreCase) ? "Pro123!"
+                : name.Equals("pm", StringComparison.OrdinalIgnoreCase) ? "Pm123!"
                 : name.Equals("admin", StringComparison.OrdinalIgnoreCase) ? "Admin123!"
                 : "Guest123!",
             Device = new DeviceFingerprintDto

@@ -33,9 +33,12 @@
     </div>
     <div class="mb-2">
       <label>@L["admin.users.role"]</label>
+      @* Enumerated rather than hard-coded, so adding a role to the enum is enough to offer it. *@
       <select name="role" class="form-select">
-        <option value="User" selected>User</option>
-        <option value="Admin">Admin</option>
+        @foreach (var r in Enum.GetValues<Morobot.Domain.Enums.UserRole>())
+        {
+          <option value="@r" selected="@(r == Morobot.Domain.Enums.UserRole.User)">@L["admin.users.roles." + r]</option>
+        }
       </select>
     </div>
     <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "isActive", Label = L["admin.users.active"], Checked = true, Id = "isActiveCreate", Hint = L["admin.hints.userActive"] }' />

@@ -82,7 +82,7 @@
           Tooltip = tip
         }' />
       </td>
-      <td>@u.Role</td>
+      <td>@L["admin.users.roles." + u.Role]</td>
       <td>@((isFa ? u.Plan?.NameFa : u.Plan?.NameEn) ?? "—")</td>
       <td class="text-center"><span class="admin-count-badge">@(processCounts.TryGetValue(u.Id, out var pc) ? pc : 0)</span></td>
       <td class="text-center"><span class="admin-count-badge">@(sourceCounts.TryGetValue(u.Id, out var sc) ? sc : 0)</span></td>

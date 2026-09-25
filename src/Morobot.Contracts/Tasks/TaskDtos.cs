@@ -65,6 +65,12 @@ public class ProcessTemplateDto
     public int AttachedProcessCount { get; set; }
     public int GroupCount { get; set; }
     public int StepCount { get; set; }
+    /// <summary>
+    /// Whether the caller may create, publish or retire templates. Everyone may still *use* a
+    /// template; this only governs shaping the shared skeletons, so the management actions can be
+    /// hidden rather than shown and then refused.
+    /// </summary>
+    public bool CanManage { get; set; }
 }
 
 /// <summary>Create a template from an existing process, or publish an edit to an existing one.</summary>

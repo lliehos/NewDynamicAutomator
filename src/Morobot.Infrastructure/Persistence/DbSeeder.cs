@@ -409,6 +409,11 @@ public static class DbSeeder
         await EnsureUser("admin", "Admin123!", "مدیر", "سیستم", UserRole.Admin, proPlan);
         await EnsureUser("free", "Free123!", "کاربر", "رایگان", UserRole.User, freePlan);
         await EnsureUser("pro", "Pro123!", "کاربر", "حرفه‌ای", UserRole.User, proPlan);
+        // A demo process manager. The role exists to own the shared templates without being a full
+        // administrator, and without an account that carries it there is no way to try that path —
+        // every other seeded user is a plain user or the administrator. Given the Pro plan because
+        // template work is part of the Pro feature set.
+        await EnsureUser("pm", "Pm123!", "کاربر", "مدیر فرآیند", UserRole.ProcessManager, proPlan);
         await db.SaveChangesAsync();
 
         // Owner shares already have full ACL on create; no CanModify backfill after Canvas-first.
