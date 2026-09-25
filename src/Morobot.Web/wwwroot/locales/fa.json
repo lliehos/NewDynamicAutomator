@@ -478,6 +478,7 @@
       "fieldValidityFrom": "شروع دوره",
       "validityBannerTitle": "اعتبار لایسنس",
       "validityBannerAction": "مدیریت لایسنس",
+      "expiringSoon": "کمتر از یک ماه مانده — برای تمدید اقدام کنید",
       "fieldLicenseValidUntil": "پایان لایسنس (سند)",
       "fieldMaxUsers": "سقف کاربر فعال",
       "fieldActiveUsers": "کاربران فعال",

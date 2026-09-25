@@ -479,6 +479,7 @@
       "fieldValidityFrom": "Period started",
       "validityBannerTitle": "License validity",
       "validityBannerAction": "Manage license",
+      "expiringSoon": "Less than a month left — renew now",
       "fieldLicenseValidUntil": "License document expiry",
       "fieldMaxUsers": "Active user cap",
       "fieldActiveUsers": "Active users",

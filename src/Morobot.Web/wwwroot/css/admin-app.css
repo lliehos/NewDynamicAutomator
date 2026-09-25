@@ -191,8 +191,17 @@ textarea.form-control,
   color: #0f766e;
   border: 1px solid #99f6e4;
 }
+/* Licence inside its last month: a distinct orange, so it reads as "act soon" and is not
+   mistaken for either the calm green of a healthy licence or the red of an expired one. */
+.admin-alert.is-expiring {
+  background: #ffedd5;
+  color: #c2410c;
+  border: 1px solid #fdba74;
+}
+.admin-alert.is-expiring .admin-license-strip-expiring { font-weight: 700; }
 .admin-alert.is-error .ti,
 .admin-alert.is-warn .ti,
+.admin-alert.is-expiring .ti,
 .admin-alert.is-ok .ti { margin-inline-end: .35rem; vertical-align: -2px; }
 .admin-license-strip {
   display: flex;

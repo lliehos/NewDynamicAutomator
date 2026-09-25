@@ -25,7 +25,13 @@
     <span class="admin-license-strip-sep">·</span>
     <span>@string.Format(L["admin.license.daysRemaining"], n)</span>
   }
-  @if (mode == nameof(LicenseRuntimeMode.Restricted) || (days is int x && x <= 0))
+  @if (Model.IsExpiringSoon)
+  {
+    @* Still valid, but inside the last month - say so, because the colour alone is easy to miss. *@
+    <span class="admin-license-strip-sep">·</span>
+    <span class="admin-license-strip-expiring"><i class="ti ti-alert-triangle" aria-hidden="true"></i> @L["admin.license.expiringSoon"]</span>
+  }
+  @if (mode == nameof(LicenseRuntimeMode.Restricted) || (days is int x && x <= 0) || Model.IsExpiringSoon)
   {
     <span class="admin-license-strip-sep">·</span>
     <a asp-area="Admin" asp-controller="License" asp-action="Index">@L["admin.license.validityBannerAction"]</a>
