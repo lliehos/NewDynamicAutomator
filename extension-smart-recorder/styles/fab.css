@@ -1,8 +1,12 @@
 .da-smart-root {
   position: fixed !important;
-  left: 18px !important;
-  right: auto !important;
-  bottom: 18px !important;
+  /* left/bottom are only the starting corner: the script writes an inline left+top once the
+     user drags the FAB, and an inline style cannot beat !important. Keeping the declaration
+     here without !important lets the drag win while still giving a sane default. */
+  left: 18px;
+  right: auto;
+  bottom: 18px;
+  top: auto;
   z-index: 2147483647 !important;
   display: flex !important;
   flex-direction: column !important;
@@ -10,6 +14,30 @@
   gap: 10px !important;
   pointer-events: none !important;
   font-family: Tahoma, sans-serif !important;
+  /* The FAB is dragged with the pointer; without this the browser starts a text selection or
+     a native drag of the logo image instead. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.da-smart-root.is-dragging {
+  cursor: grabbing;
+}
+.da-smart-root.is-dragging .da-smart-logo-btn img,
+.da-smart-root.is-dragging .da-smart-save {
+  pointer-events: none;
+}
+/* A movable grab area should look movable. */
+.da-smart-root .da-smart-logo-btn {
+  cursor: grab;
+}
+.da-smart-root.is-dragging .da-smart-logo-btn {
+  cursor: grabbing;
+}
+.da-smart-root img {
+  -webkit-user-drag: none;
+  user-drag: none;
+  pointer-events: none;
 }
 .da-smart-root[hidden] {
   display: none !important;

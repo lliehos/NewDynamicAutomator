@@ -44,10 +44,160 @@
   const logoBtn = root.querySelector("#da-smart-toggle");
   const saveBtn = root.querySelector("#da-smart-save");
 
+  /**
+   * Let the user move the FAB out of the way, and remember where they put it.
+   *
+   * The FAB sits over the page being recorded, and on many sites that corner holds a real
+   * control. The position is kept in chrome.storage.local so it survives navigation between
+   * pages of the same session, not just a single page load.
+   *
+   * Stored as a distance from one horizontal edge and one vertical edge with the fractions
+   * (0..1) of the space available, rather than absolute pixels. A page can be narrower than
+   * the one the position was chosen on - a resized window, a different tab - and pixels would
+   * put the FAB off-screen. Fractions keep it at the same relative spot and it is clamped back
+   * inside the viewport on every restore.
+   */
+  const FAB_POS_KEY = "fabPosition";
+  const DRAG_THRESHOLD = 4; // px of movement before a press counts as a drag, not a click
+
+  let dragState = null;
+
+  function viewportSize() {
+    return {
+      w: window.innerWidth || document.documentElement.clientWidth || 0,
+      h: window.innerHeight || document.documentElement.clientHeight || 0
+    };
+  }
+
+  /** Apply a stored {x, y} fraction pair, clamped so the FAB is always fully on screen. */
+  function applyStoredPosition(pos) {
+    const { w, h } = viewportSize();
+    const rect = root.getBoundingClientRect();
+    const fabW = rect.width || 56;
+    const fabH = rect.height || 56;
+    const margin = 18;
+
+    if (!pos || typeof pos.fx !== "number" || typeof pos.fy !== "number") return;
+    const fx = Math.min(1, Math.max(0, pos.fx));
+    const fy = Math.min(1, Math.max(0, pos.fy));
+
+    const usableX = Math.max(0, w - fabW - margin * 2);
+    const usableY = Math.max(0, h - fabH - margin * 2);
+    const left = margin + usableX * fx;
+    const top = margin + usableY * fy;
+
+    Object.assign(root.style, {
+      left: `${Math.round(left)}px`,
+      top: `${Math.round(top)}px`,
+      right: "auto",
+      bottom: "auto"
+    });
+  }
+
+  async function restorePosition() {
+    try {
+      const stored = await chrome.storage.local.get(FAB_POS_KEY);
+      applyStoredPosition(stored && stored[FAB_POS_KEY]);
+    } catch { /* keep the default corner */ }
+  }
+
+  async function savePosition() {
+    const { w, h } = viewportSize();
+    const rect = root.getBoundingClientRect();
+    const margin = 18;
+    const usableX = Math.max(1, w - rect.width - margin * 2);
+    const usableY = Math.max(1, h - rect.height - margin * 2);
+    const pos = {
+      fx: Math.min(1, Math.max(0, (rect.left - margin) / usableX)),
+      fy: Math.min(1, Math.max(0, (rect.top - margin) / usableY))
+    };
+    try { await chrome.storage.local.set({ [FAB_POS_KEY]: pos }); } catch { /* best effort */ }
+  }
+
+  root.addEventListener("pointerdown", (ev) => {
+    // Only the primary button, and never from the save button: that one is a plain action.
+    if (ev.button !== 0) return;
+    if (ev.target.closest("#da-smart-save")) return;
+    const rect = root.getBoundingClientRect();
+    dragState = {
+      pointerId: ev.pointerId,
+      startX: ev.clientX,
+      startY: ev.clientY,
+      originLeft: rect.left,
+      originTop: rect.top,
+      moved: false
+    };
+    // Keeps receiving move events even if the pointer leaves the element.
+    root.setPointerCapture?.(ev.pointerId);
+  });
+
+  root.addEventListener("pointermove", (ev) => {
+    if (!dragState || ev.pointerId !== dragState.pointerId) return;
+    const dx = ev.clientX - dragState.startX;
+    const dy = ev.clientY - dragState.startY;
+    if (!dragState.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+    if (!dragState.moved) {
+      dragState.moved = true;
+      root.classList.add("is-dragging");
+    }
+    ev.preventDefault();
+
+    const { w, h } = viewportSize();
+    const rect = root.getBoundingClientRect();
+    const maxLeft = Math.max(0, w - rect.width);
+    const maxTop = Math.max(0, h - rect.height);
+    const left = Math.min(maxLeft, Math.max(0, dragState.originLeft + dx));
+    const top = Math.min(maxTop, Math.max(0, dragState.originTop + dy));
+
+    Object.assign(root.style, {
+      left: `${Math.round(left)}px`,
+      top: `${Math.round(top)}px`,
+      right: "auto",
+      bottom: "auto"
+    });
+  });
+
+  function endDrag(ev) {
+    if (!dragState || (ev && ev.pointerId !== dragState.pointerId)) return;
+    const wasDrag = dragState.moved;
+    dragState = null;
+    root.classList.remove("is-dragging");
+    if (wasDrag) {
+      savePosition();
+      // Stop the click that follows the release from also toggling the FAB, which would look
+      // like the drag had triggered Stop/thinking-complete by accident.
+      root.addEventListener("click", (clickEv) => {
+        clickEv.preventDefault();
+        clickEv.stopPropagation();
+      }, { capture: true, once: true });
+    }
+  }
+
+  root.addEventListener("pointerup", endDrag);
+  root.addEventListener("pointercancel", endDrag);
+
+  // A window resize can invalidate the fractions, so re-apply them rather than leaving the FAB
+  // where it happens to be.
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(async () => {
+      try {
+        const stored = await chrome.storage.local.get(FAB_POS_KEY);
+        applyStoredPosition(stored && stored[FAB_POS_KEY]);
+      } catch { /* ignore */ }
+    }, 150);
+  });
+
+  restorePosition();
+
   function applyLabels() {
     const label = tr(logoBtn.classList.contains("save-ready") ? "fab.learningComplete" : "fab.stopThinking");
-    logoBtn.title = label;
-    logoBtn.setAttribute("aria-label", label);
+    // The action and the drag hint are both true of the same button, so the tooltip says both:
+    // the click's meaning, then how to move it out of the way.
+    const withHint = `${label} — ${tr("fab.dragHint")}`;
+    logoBtn.title = withHint;
+    logoBtn.setAttribute("aria-label", withHint);
     const saveLabel = tr("fab.save");
     saveBtn.title = saveLabel;
     saveBtn.setAttribute("aria-label", saveLabel);

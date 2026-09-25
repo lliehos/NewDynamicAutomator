@@ -24,6 +24,7 @@
       "fab.learningComplete": "یادگیری کامل شد",
       "fab.save": "ذخیره",
       "fab.markAlt": "مروبات",
+      "fab.dragHint": "برای جابجایی بکشید",
       // portal status messages
       "portal.notInstalled": "افزونهٔ Smart Recorder نصب نیست.",
       "portal.noTask": "فرآیند هدف مشخص نیست.",
@@ -43,6 +44,7 @@
       "fab.learningComplete": "Learning complete",
       "fab.save": "Save",
       "fab.markAlt": "Morobot",
+      "fab.dragHint": "Drag to move",
       "portal.notInstalled": "The Smart Recorder extension is not installed.",
       "portal.noTask": "The target process is not specified.",
       "portal.started": "Smart processing of process #{id} started — the mark stops thinking.",
