@@ -3838,6 +3838,9 @@
     if (isActionNode(n) && n.isActive === false) g.classList.add("node-inactive");
     const validity = validateNode(n);
     if (!validity.ok) g.classList.add("node-invalid");
+    // An orphan is not invalid — it is well-formed but unreachable, so the run will never
+    // reach it. Marked separately and more quietly than an error, in grey.
+    if (isOrphanNode(n)) g.classList.add("node-orphan");
     const fill = n.kind === "start" ? startFill(n)
       : n.kind === "group" ? "#fff"
       : n.kind === "condition" ? COND_FILL
@@ -5762,6 +5765,54 @@
     return t;
   }
 
+  /**
+   * Ids reachable from the root start node, following the same edges the player walks
+   * (action/start → next, condition → success or fail or next, group → its inner start and
+   * then its own next; contains/parent links are followed because a group's children arrive
+   * through the group).
+   *
+   * Mirrors collectReachableFromStart in the player, so what the editor greys out is exactly
+   * what the run will skip. Recomputed on demand rather than cached, because it is only asked
+   * for while drawing and the graph is small.
+   *
+   * Returns null when there is no root start node. "Nothing is reachable" and "there is no
+   * entry point to measure from" are different answers, and treating the second as the first
+   * would grey out the whole canvas on a graph that simply has no start yet.
+   */
+  function reachableNodeIds() {
+    const rootStart = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
+    if (!rootStart) return null;
+
+    const byId = new Map((graph.nodes || []).map((n) => [n.id, n]));
+    const seen = new Set();
+    const queue = [rootStart.id];
+    while (queue.length) {
+      const id = queue.shift();
+      if (!id || seen.has(id)) continue;
+      const node = byId.get(id);
+      if (!node) continue;
+      seen.add(id);
+      for (const e of graph.edges || []) {
+        if (e.from !== id) continue;
+        if (e.kind === "contains" || e.kind === "parent") queue.push(e.to);
+        else if (node.kind === "condition") {
+          if (e.kind === "success" || e.kind === "fail" || e.kind === "next") queue.push(e.to);
+        } else if (e.kind === "next") queue.push(e.to);
+      }
+    }
+    return seen;
+  }
+
+  /** True when this node exists on the canvas but no path from start ever reaches it. */
+  function isOrphanNode(n) {
+    if (!n) return false;
+    // The root start is the origin of the walk, so it is never orphaned by definition.
+    if (n.kind === "start" && !n.groupNodeId) return false;
+    const reachable = reachableNodeIds();
+    if (!reachable) return false; // no entry point to judge against
+    return !reachable.has(n.id);
+  }
+
   /** Leaf validity (no group-container recursion). */
   function validateNodeLeaf(n) {
     if (!n) return { ok: true, reasons: [] };
@@ -5805,6 +5856,7 @@
     if (!g || !n) return;
     const v = validateNode(n);
     g.classList.toggle("node-invalid", !v.ok);
+    g.classList.toggle("node-orphan", isOrphanNode(n));
     const shape = g.querySelector(":scope > rect, :scope > polygon");
     if (shape) {
       const stroke = v.ok ? defaultStrokeFor(n) : validityStrokeFor(n);

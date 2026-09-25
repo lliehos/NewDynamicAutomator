@@ -3456,13 +3456,57 @@ function collectPlaySteps(graph, opts = {}) {
   const entry = resolvePlayEntryId(graph, opts);
   if (entry) walk(entry, 0);
 
+  // Last resort: if the walk found nothing and this is not a group play, fall back to every
+  // action in root scope. "Every action" means every action REACHABLE from the start node,
+  // not every action on the canvas: a node with no path from start is never executed by
+  // executeFlow, so counting it here would promise steps that will not run.
   if (steps.length === 0 && !opts.groupNodeId) {
-    // Last resort: every action in root scope (no groupNodeId); inactive still counted for logs.
+    const reachable = collectReachableFromStart(graph);
     for (const n of graph.nodes || []) {
-      if (isActionNode(n) && !n.groupNodeId) steps.push(n);
+      if (isActionNode(n) && !n.groupNodeId && (!reachable || reachable.has(n.id))) steps.push(n);
     }
   }
   return steps;
+}
+
+/**
+ * Ids of every node reachable from the root start node, following the same edges executeFlow
+ * walks (start/action → next, condition → success or next, group → inner start/contains and
+ * then its own next).
+ *
+ * Returns null when there is no root start node, because then there is no entry point to
+ * measure reachability from and the caller should keep its previous "assume everything"
+ * behaviour rather than silently collecting nothing.
+ */
+function collectReachableFromStart(graph) {
+  const nodes = new Map((graph.nodes || []).map((n) => [n.id, n]));
+  const edges = graph.edges || [];
+  const rootStart = (graph.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
+  if (!rootStart) return null;
+
+  const reachable = new Set();
+  const queue = [rootStart.id];
+  while (queue.length) {
+    const id = queue.shift();
+    if (!id || reachable.has(id)) continue;
+    const node = nodes.get(id);
+    if (!node) continue;
+    reachable.add(id);
+
+    // Containment is a structural link, not a flow link, but a group's children are reachable
+    // through the group, so it is followed here.
+    for (const e of edges) {
+      if (e.from !== id) continue;
+      if (e.kind === "contains" || e.kind === "parent") { queue.push(e.to); continue; }
+      if (node.kind === "condition") {
+        // Both branches can run depending on the result.
+        if (e.kind === "success" || e.kind === "fail" || e.kind === "next") queue.push(e.to);
+      } else {
+        if (e.kind === "next") queue.push(e.to);
+      }
+    }
+  }
+  return reachable;
 }
 
 /** Expand group iterations from group-start repeat settings (Loops / DataSource / Elements). */

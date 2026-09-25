@@ -473,6 +473,25 @@ rect.flow-marquee{pointer-events:none}
 #flow-svg g.node.node-invalid.node-on > polygon{
   stroke-width:3.2;
 }
+/* Unreachable node: no path from start, so the run never reaches it.
+   Deliberately quieter than node-invalid — nothing is wrong with the node itself, and it is
+   not an error the user must fix, only something the run will skip. Grey + a dotted outline,
+   no animation, so it never competes with the red blink of a real error. */
+#flow-svg g.node.node-orphan > rect,
+#flow-svg g.node.node-orphan > polygon{
+  opacity:.55;
+  stroke-dasharray:2 3;
+}
+#flow-svg g.node.node-orphan .node-label,
+#flow-svg g.node.node-orphan text{
+  fill:#94a3b8;
+}
+/* A selected orphan must still look selected. */
+#flow-svg g.node.node-orphan.node-on > rect,
+#flow-svg g.node.node-orphan.node-on > polygon{
+  opacity:.85;
+  stroke-width:3.2;
+}
 .insp-color-row{
   display:flex;
   align-items:center;
