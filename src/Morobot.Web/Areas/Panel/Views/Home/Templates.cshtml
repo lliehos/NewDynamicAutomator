@@ -1,0 +1,130 @@
+@{
+    ViewData["Title"] = L["panel.templates"] + " — " + L["brand.name"];
+}
+
+@* Template management. The table is built client-side from /api/templates so it follows the same
+   live-update path the processes list uses, instead of being a second, server-rendered copy of the
+   same data that could drift from it. *@
+<div class="da-home">
+  <header class="da-home-head">
+    <div>
+      <div class="da-home-brand" data-i18n="brand.name">@L["brand.name"]</div>
+      <h4 class="da-home-title mb-0" data-i18n="panel.templates">@L["panel.templates"]</h4>
+      <p class="da-home-sub mb-0" data-i18n="panel.templateManageSub">@L["panel.templateManageSub"]</p>
+    </div>
+    <a class="btn btn-label-primary d-none d-md-inline-flex align-items-center gap-1"
+       href="@Url.Action("Processes", "Home", new { area = "Panel" })">
+      <i class="ti ti-arrow-left"></i>
+      <span data-i18n="panel.processesTitle">@L["panel.processesTitle"]</span>
+    </a>
+  </header>
+
+  <div class="card mb-0">
+    <div class="table-responsive">
+      <table class="table mb-0">
+        <thead>
+          <tr>
+            <th data-i18n="panel.colTitle">@L["panel.colTitle"]</th>
+            <th data-i18n="panel.templateVersion">@L["panel.templateVersion"]</th>
+            <th data-i18n="panel.templateSteps">@L["panel.templateSteps"]</th>
+            <th data-i18n="panel.templateAttached">@L["panel.templateAttached"]</th>
+            <th class="text-nowrap" data-i18n="panel.templateUpdated">@L["panel.templateUpdated"]</th>
+            <th data-i18n="panel.templateCreator">@L["panel.templateCreator"]</th>
+            <th class="text-nowrap" data-i18n="panel.colOps">@L["panel.colOps"]</th>
+          </tr>
+        </thead>
+        <tbody id="da-tpl-rows">
+          <tr><td colspan="7" class="text-center text-muted py-6" data-i18n="common.loading">@L["common.loading"]</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="da-tpl-info-modal" tabindex="-1" aria-labelledby="da-tpl-info-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header border-0 pb-0">
+        <h5 class="modal-title" id="da-tpl-info-title"></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="@L["common.cancel"]"></button>
+      </div>
+      <div class="modal-body pt-2">
+        <p class="da-tpl-info-desc mb-3" id="da-tpl-info-desc"></p>
+        <dl class="da-tpl-info-grid" id="da-tpl-info-grid"></dl>
+        <div class="alert alert-info d-flex gap-2 mb-0" role="note">
+          <i class="ti ti-info-circle mt-1" aria-hidden="true"></i>
+          <span data-i18n="panel.templateInfoNote">@L["panel.templateInfoNote"]</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-label-secondary" data-bs-dismiss="modal" data-i18n="common.close">@L["common.close"]</button>
+        <button type="button" class="btn btn-primary" id="da-tpl-info-use" data-i18n="panel.templateUse">@L["panel.templateUse"]</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+@section Scripts {
+<script src="~/js/local-templates.js?v=tpl-1"></script>
+<script>
+  // Render the management table. Uses the same /api/templates feed the picker menu reads, so the
+  // counts here and the counts in the menu can never disagree.
+  (function () {
+    function t(key, vars) {
+      return (window.DaI18n && DaI18n.t) ? DaI18n.t(key, vars) : key;
+    }
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"'`]/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
+    }
+    function dateLocale() {
+      return (window.DaI18n && DaI18n.culture === "en") ? "en-US" : "fa-IR";
+    }
+    function fmt(iso) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? "—"
+        : d.toLocaleString(dateLocale(), { year: "numeric", month: "2-digit", day: "2-digit" });
+    }
+
+    async function load() {
+      const body = document.getElementById("da-tpl-rows");
+      if (!body) return;
+      try {
+        const rows = await (await fetch("/api/templates", { credentials: "same-origin" })).json();
+        if (!rows || !rows.length) {
+          body.innerHTML = `<tr><td colspan="7" class="text-center text-muted py-6">${esc(t("panel.templateNone"))}</td></tr>`;
+          return;
+        }
+        body.innerHTML = rows.map((r) => `
+          <tr>
+            <td>
+              <div class="fw-semibold">${esc(r.title)}</div>
+              ${r.description ? `<div class="text-muted small">${esc(r.description)}</div>` : ""}
+            </td>
+            <td>${esc(String(r.version || 1))}</td>
+            <td>${esc(String(r.stepCount || 0))}</td>
+            <td>${esc(String(r.attachedProcessCount || 0))}</td>
+            <td class="text-nowrap">${esc(fmt(r.updatedAtUtc))}</td>
+            <td>${esc(r.creatorUserName || "—")}</td>
+            <td class="text-nowrap">
+              <button type="button" class="btn btn-sm btn-label-primary da-tpl-view" data-tpl-id="${esc(String(r.id))}">
+                <i class="ti ti-info-circle"></i>
+              </button>
+            </td>
+          </tr>`).join("");
+      } catch (err) {
+        body.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-6">${esc(String(err && err.message || err))}</td></tr>`;
+      }
+    }
+
+    document.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".da-tpl-view");
+      if (btn && window.DaTemplates) window.DaTemplates.openInfo(btn.getAttribute("data-tpl-id"));
+    });
+
+    document.addEventListener("DOMContentLoaded", load);
+    if (document.readyState !== "loading") load();
+  })();
+</script>
+}

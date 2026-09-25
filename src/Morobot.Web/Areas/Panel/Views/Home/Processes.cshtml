@@ -14,6 +14,16 @@
       <i class="ti ti-plus"></i>
       <span class="da-home-create-label" data-i18n="panel.createProcess">@L["panel.createProcess"]</span>
     </button>
+    <div class="dropdown d-none d-md-inline-flex">
+      <button class="btn btn-label-primary dropdown-toggle" type="button"
+              id="da-tpl-menu-btn" data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="ti ti-copy"></i>
+        <span data-i18n="panel.templates">@L["panel.templates"]</span>
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end da-tpl-menu" id="da-tpl-menu" aria-labelledby="da-tpl-menu-btn">
+        <li><span class="dropdown-item-text text-muted small" data-i18n="common.loading">@L["common.loading"]</span></li>
+      </ul>
+    </div>
   </header>
 
   <div class="da-tasks-panel" id="da-tasks-panel">
@@ -30,6 +40,7 @@
           <thead>
             <tr>
               <th data-i18n="panel.colTitle">@L["panel.colTitle"]</th>
+              <th data-i18n="panel.colTemplate">@L["panel.colTemplate"]</th>
               <th class="text-nowrap" data-i18n="panel.colCreated">@L["panel.colCreated"]</th>
               <th data-i18n="panel.colCreator">@L["panel.colCreator"]</th>
               <th class="text-nowrap" data-i18n="panel.colProcessEdit">@L["panel.colProcessEdit"]</th>
@@ -43,7 +54,7 @@
             </tr>
           </thead>
           <tbody id="da-task-rows">
-            <tr><td colspan="11" class="text-center text-muted py-6" data-i18n="common.loading">@L["common.loading"]</td></tr>
+            <tr><td colspan="12" class="text-center text-muted py-6" data-i18n="common.loading">@L["common.loading"]</td></tr>
           </tbody>
         </table>
       </div>
@@ -100,10 +111,56 @@
   </div>
 </div>
 
+@* Template info: what a template is for, what it contains, and how to act on it. Opened from the
+   template menu and from the template cell of a process row, so the same facts are one click away
+   from either place a template is mentioned. *@
+<div class="modal fade" id="da-tpl-info-modal" tabindex="-1" aria-labelledby="da-tpl-info-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header border-0 pb-0">
+        <h5 class="modal-title" id="da-tpl-info-title"></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="@L["common.cancel"]"></button>
+      </div>
+      <div class="modal-body pt-2">
+        <p class="da-tpl-info-desc mb-3" id="da-tpl-info-desc"></p>
+        <dl class="da-tpl-info-grid" id="da-tpl-info-grid"></dl>
+        <div class="alert alert-info d-flex gap-2 mb-0" role="note">
+          <i class="ti ti-info-circle mt-1" aria-hidden="true"></i>
+          <span data-i18n="panel.templateInfoNote">@L["panel.templateInfoNote"]</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-label-secondary" data-bs-dismiss="modal" data-i18n="common.close">@L["common.close"]</button>
+        <button type="button" class="btn btn-primary" id="da-tpl-info-use" data-i18n="panel.templateUse">@L["panel.templateUse"]</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+@* Detach confirmation. Detaching is a decision rather than a toggle — the process stops receiving
+   the template's later fixes — so it is confirmed in words instead of a silent menu click. *@
+<div class="modal fade" id="da-tpl-detach-modal" tabindex="-1" aria-labelledby="da-tpl-detach-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header border-0 pb-0">
+        <h5 class="modal-title" id="da-tpl-detach-title" data-i18n="panel.templateDetachTitle">@L["panel.templateDetachTitle"]</h5>
+      </div>
+      <div class="modal-body">
+        <p class="mb-0" id="da-tpl-detach-body"></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-label-secondary" data-bs-dismiss="modal" data-i18n="common.cancel">@L["common.cancel"]</button>
+        <button type="button" class="btn btn-danger" id="da-tpl-detach-confirm" data-i18n="panel.templateDetach">@L["panel.templateDetach"]</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 @section Scripts {
 <link rel="stylesheet" href="~/editor/flow.css?v=grid-inline-1" />
 <script src="~/js/task-share.js?v=perms-edit-1"></script>
-<script src="~/js/local-tasks.js?v=grid-inline-1"></script>
+<script src="~/js/local-tasks.js?v=tpl-col-1"></script>
+<script src="~/js/local-templates.js?v=tpl-1"></script>
 <script>
   document.querySelectorAll("[data-portal-ds-close]").forEach((el) => {
     el.addEventListener("click", () => {

@@ -66,6 +66,10 @@ public class TaskService
                 a.CanDelete,
                 a.CanExecute,
                 a.CanChangeDataSource,
+                a.Process.TemplateId,
+                TemplateTitle = a.Process.Template != null ? a.Process.Template.Title : null,
+                a.Process.TemplateVersion,
+                CurrentTemplateVersion = a.Process.Template != null ? (int?)a.Process.Template.Version : null,
                 SharedWithCount = a.Process.Shares.Count(x => x.UserId != a.Process.CreatorUserId),
                 DataSourceCount = a.Process.DataSourceLinks.Count
             })
@@ -105,7 +109,12 @@ public class TaskService
                 CanShare = canSharePlan && (isOwner || canEdit),
                 DesignOrigin = a.DesignOrigin.ToString(),
                 OwnerUserName = a.OwnerUserName,
-                SharedWithCount = a.SharedWithCount
+                SharedWithCount = a.SharedWithCount,
+                TemplateId = a.TemplateId,
+                TemplateTitle = a.TemplateTitle,
+                // Behind means the template has published since this process last inherited it.
+                TemplateBehind = a.CurrentTemplateVersion is int currentVersion
+                                 && (a.TemplateVersion ?? 0) < currentVersion
             };
         }).ToList();
     }
@@ -222,7 +231,11 @@ public class TaskService
                     .OrderByDescending(l => l.DataSource!.UpdatedAtUtc)
                     .Select(l => l.DataSource!.LastEditor != null ? l.DataSource.LastEditor.UserName : null)
                     .FirstOrDefault(),
-                DataSourceCount = t.DataSourceLinks.Count
+                DataSourceCount = t.DataSourceLinks.Count,
+                t.TemplateId,
+                TemplateTitle = t.Template != null ? t.Template.Title : null,
+                t.TemplateVersion,
+                CurrentTemplateVersion = t.Template != null ? (int?)t.Template.Version : null
             })
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
@@ -250,7 +263,11 @@ public class TaskService
                 DataSourceCount = t.DataSourceCount,
                 CanModify = true,
                 DesignOrigin = t.DesignOrigin.ToString(),
-                OwnerUserName = t.OwnerUserName
+                OwnerUserName = t.OwnerUserName,
+                TemplateId = t.TemplateId,
+                TemplateTitle = t.TemplateTitle,
+                TemplateBehind = t.CurrentTemplateVersion is int adminCurrentVersion
+                                 && (t.TemplateVersion ?? 0) < adminCurrentVersion
             };
         }).ToList();
     }

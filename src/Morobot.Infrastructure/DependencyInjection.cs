@@ -52,6 +52,7 @@ public static class DependencyInjection
         services.AddScoped<DiagramSettingsService>();
         services.AddScoped<TaskService>();
         services.AddScoped<TaskShareService>();
+        services.AddScoped<TemplateService>();
         services.AddScoped<RecordingService>();
         services.AddScoped<DataSourceService>();
         services.AddScoped<LegacyImportService>();

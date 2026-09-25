@@ -1027,3 +1027,64 @@ html.light-style {
     background: #f3f2f8;
   }
 }
+
+/* ── Templates: table chip, menu items, info grid ──
+   The chip is a link plus a small unlink button: opening the template's info and detaching from
+   it are different intentions, and a single click target would make one of them accidental. */
+.da-tpl-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  max-width: 100%;
+}
+.da-tpl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  padding: .12rem .5rem;
+  border-radius: 999px;
+  background: var(--morobot-soft, #eef4f2);
+  color: var(--morobot-primary-dark, #283937);
+  font-size: .76rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--morobot-border-subtle, rgba(191, 211, 188, .7));
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.da-tpl-chip:hover { background: var(--morobot-soft-2, #e2ece9); }
+.da-tpl-chip .ti { font-size: .85rem; flex-shrink: 0; }
+/* Behind the template: the row is usable but stale, so it is amber rather than red. */
+.da-tpl-chip.is-behind {
+  background: #fef9c3;
+  color: #a16207;
+  border-color: #fde68a;
+}
+.da-tpl-chip-detach {
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  padding: 0 .15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.da-tpl-chip-detach:hover { color: #dc2626; }
+.da-tpl-chip-detach .ti { font-size: .9rem; }
+
+.da-tpl-menu { min-width: 15rem; }
+.da-tpl-menu-item { display: flex; flex-direction: column; align-items: flex-start; gap: .1rem; }
+.da-tpl-menu-title { font-weight: 600; }
+.da-tpl-menu-sub { font-size: .72rem; color: #64748b; }
+
+.da-tpl-info-desc { color: #475569; line-height: 1.7; }
+.da-tpl-info-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: .35rem 1rem;
+  margin: 0 0 1rem;
+  font-size: .86rem;
+}
+.da-tpl-info-grid dt { color: #64748b; font-weight: 600; }
+.da-tpl-info-grid dd { margin: 0; color: #334155; }

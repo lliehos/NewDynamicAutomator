@@ -25,4 +25,14 @@ public class HomeController : Controller
         ViewData["Title"] = "منابع";
         return View();
     }
+
+    /// <summary>
+    /// Template management. The list itself is fetched from /api/templates by the page, so this
+    /// only renders the shell — the same split the processes page uses.
+    /// </summary>
+    public IActionResult Templates()
+    {
+        ViewData["Title"] = "قالب‌ها";
+        return View();
+    }
 }

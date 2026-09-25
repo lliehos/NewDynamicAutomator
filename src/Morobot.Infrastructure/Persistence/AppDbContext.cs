@@ -14,6 +14,7 @@ public class AppDbContext : DbContext
     public DbSet<PlanPrice> PlanPrices => Set<PlanPrice>();
     public DbSet<Process> Processes => Set<Process>();
     public DbSet<ProcessShare> ProcessShares => Set<ProcessShare>();
+    public DbSet<ProcessTemplate> ProcessTemplates => Set<ProcessTemplate>();
     public DbSet<DataSource> DataSources => Set<DataSource>();
     public DbSet<DataSourceCell> DataSourceCells => Set<DataSourceCell>();
     public DbSet<ProcessDataSource> ProcessDataSources => Set<ProcessDataSource>();
@@ -170,6 +171,28 @@ public class AppDbContext : DbContext
             e.HasOne(x => x.LastEditor)
                 .WithMany()
                 .HasForeignKey(x => x.LastEditorUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // A process attached to a template inherits its graph, so the link must not silently
+            // vanish. Deleting a template that still has processes on it is refused, forcing the
+            // author to detach them deliberately instead of losing the link by accident.
+            e.HasOne(x => x.Template)
+                .WithMany(x => x.Processes)
+                .HasForeignKey(x => x.TemplateId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => x.TemplateId);
+        });
+
+        modelBuilder.Entity<ProcessTemplate>(e =>
+        {
+            e.ToTable("ProcessTemplates");
+            e.Property(x => x.Title).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Description).HasMaxLength(1000);
+            e.Property(x => x.GraphJson);
+            e.HasIndex(x => x.Title);
+            e.HasOne(x => x.Creator)
+                .WithMany()
+                .HasForeignKey(x => x.CreatorUserId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 

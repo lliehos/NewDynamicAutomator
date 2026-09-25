@@ -193,6 +193,9 @@
   const ICO_DL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.4-3.4 1.4 1.4L12 17l-4.8-5.8 1.4-1.4L11 13.2V3h1zM5 19h14v2H5v-2z"/></svg>`;
   const ICO_UP = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 21V10.8l3.4 3.4 1.4-1.4L12 7l-4.8 5.8 1.4 1.4L11 10.8V21h1zM5 3h14v2H5V3z"/></svg>`;
   const ICO_CLONE = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 7h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm-3 3H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1H8a3 3 0 0 0-3 3v7z"/></svg>`;
+  // "Make a template from this" — a dashed outline around a copy, to read as "the skeleton of a
+  // process" rather than as the plain duplicate the clone button already means.
+  const ICO_COPY = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 3h7l5 5v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm7 1.5V8h3.5L14 4.5zM4 7h1v13h10v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/></svg>`;
   const ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
   const ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
   const ICO_XLSX = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm1 7V3.5L19.5 9H15zM8.2 18l2.3-3.2L8.3 12h1.7l1.4 2.1L12.8 12H14.4l-2.2 2.8L14.5 18h-1.7l-1.5-2.2L9.9 18H8.2z"/></svg>`;
@@ -441,6 +444,9 @@
       ${dataBtns}
       ${iconBtn("", t("tasks.clone"), ICO_CLONE, `data-da-clone="${tid}"`)}
       ${iconBtn("", t("tasks.downloadMrbt"), ICO_DL, `data-da-download="${tid}"`)}
+      ${task.templateId
+        ? ""
+        : iconBtn("", t("tasks.makeTemplate"), ICO_COPY, `data-da-make-template="${tid}" data-task-title="${ttitle}"`)}
       <label class="ds-icon-btn da-import-btn" title="${t("tasks.importMrbt")}" aria-label="${t("tasks.importMrbt")}">
         ${ICO_UP}
         <input type="file" accept=".mrbt,application/octet-stream,application/json,.json" data-da-import="${tid}" hidden />
@@ -528,6 +534,20 @@
     });
     root?.querySelectorAll("[data-da-dl-excel]").forEach((btn) => {
       btn.addEventListener("click", () => downloadProcessExcel(btn.getAttribute("data-da-dl-excel"), btn));
+    });
+    // Turn a process into a template. The post and the notifying live in local-templates.js, so the
+    // table stays out of the template rules and only has to hand over the id and the title.
+    root?.querySelectorAll("[data-da-make-template]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (window.DaTemplates && typeof DaTemplates.makeFromProcess === "function") {
+          DaTemplates.makeFromProcess(
+            btn.getAttribute("data-da-make-template"),
+            btn.getAttribute("data-task-title") || ""
+          );
+          return;
+        }
+        notifyHome(t("tasks.templateNotAvailable") || "ساخت قالب در دسترس نیست.", "warn");
+      });
     });
   root?.querySelectorAll("[data-run-history]").forEach((btn) => {
     btn.addEventListener("click", () => showRunHistory(btn.getAttribute("data-run-history")));
@@ -1092,7 +1112,12 @@ function dataSourceSafeFileName(ds) {
             // went on showing "never run" for a process that had just been run.
             || String(o.lastPlayedAtUtc || "") !== String(n.lastPlayedAtUtc || "")
             || String(o.lastPlayedByUserName || "") !== String(n.lastPlayedByUserName || "")
-            || Number(o.playCount || 0) !== Number(n.playCount || 0);
+            || Number(o.playCount || 0) !== Number(n.playCount || 0)
+            // Template columns too: attaching, detaching or a template publish all change what the
+            // row should show, and without these the cached copy kept the stale template chip.
+            || String(o.templateId || "") !== String(n.templateId || "")
+            || String(o.templateTitle || "") !== String(n.templateTitle || "")
+            || Boolean(o.templateBehind) !== Boolean(n.templateBehind);
         });
       // Silent write: avoid writeTasks → da-local-tasks → render → writeTasks loop.
       if (changed) writeTasks(toStore, { silent: true });
@@ -1100,16 +1125,38 @@ function dataSourceSafeFileName(ds) {
       if (body) {
         try {
           if (!toStore.length) {
-            body.innerHTML = `<tr><td colspan="11" class="text-center text-muted py-6">${t("tasks.empty")}</td></tr>`;
+            body.innerHTML = `<tr><td colspan="12" class="text-center text-muted py-6">${t("tasks.empty")}</td></tr>`;
           } else {
             body.innerHTML = toStore.map((row) => {
               const { steps, groups, sources } = taskCounts(row);
               const tid = escapeHtml(String(row.id));
+              const tplCell = row.templateId
+                ? `<span class="da-tpl-wrap">
+                     <a href="#" class="da-tpl-chip${row.templateBehind ? " is-behind" : ""}"
+                        data-tpl-id="${escapeHtml(String(row.templateId))}"
+                        data-task-id="${tid}"
+                        data-task-title="${escapeHtml(row.title || "")}"
+                        title="${escapeHtml(row.templateBehind ? t("tasks.templateBehind") : t("tasks.templateCurrent"))}">
+                       <i class="ti ti-copy" aria-hidden="true"></i>
+                       <span>${escapeHtml(row.templateTitle || "")}</span>
+                       ${row.templateBehind ? '<i class="ti ti-alert-triangle" aria-hidden="true"></i>' : ""}
+                     </a>
+                     <button type="button" class="da-tpl-chip-detach"
+                             data-tpl-id="${escapeHtml(String(row.templateId))}"
+                             data-task-id="${tid}"
+                             data-task-title="${escapeHtml(row.title || "")}"
+                             title="${escapeHtml(t("panel.templateDetach"))}"
+                             aria-label="${escapeHtml(t("panel.templateDetach"))}">
+                       <i class="ti ti-unlink" aria-hidden="true"></i>
+                     </button>
+                   </span>`
+                : `<span class="text-muted">—</span>`;
               return `<tr data-task-id="${tid}">
         <td>
           <div class="fw-semibold" data-flash="title">${escapeHtml(row.title)}</div>
           <span class="da-task-id" title="${escapeHtml(t("tasks.serverKey"))}">${tid}</span>
         </td>
+        <td class="text-nowrap" data-flash="template">${tplCell}</td>
         <td class="text-nowrap">${escapeHtml(formatCreatedAt(row.createdAt))}</td>
         <td>${escapeHtml(row.createdBy)}</td>
         <td class="text-nowrap" data-flash="processEdit">${formatEditMeta(editMetaIso(row, "process"), editMetaUser(row, "process"))}</td>
@@ -1128,7 +1175,7 @@ function dataSourceSafeFileName(ds) {
           }
         } catch (err) {
           console.error("[local-tasks] rows render failed", err);
-          body.innerHTML = `<tr><td colspan="11" class="text-center text-danger py-6">${escapeHtml(String(err && err.message || err))}</td></tr>`;
+          body.innerHTML = `<tr><td colspan="12" class="text-center text-danger py-6">${escapeHtml(String(err && err.message || err))}</td></tr>`;
         }
       }
 
