@@ -137,7 +137,7 @@ Morobot از **SQL Server** به‌عنوان موتور دیتابیس استف
 
 ```json
 "ConnectionStrings": {
-  "Default": "Server=SQLHOST\\INSTANCE;Database=MorobotV3;User Id=morobot;Password=***;TrustServerCertificate=True;MultipleActiveResultSets=true"
+  "Default": "Server=SQLHOST\\INSTANCE;Database=MorobotDb;User Id=morobot;Password=***;TrustServerCertificate=True;MultipleActiveResultSets=true"
 }
 ```
 

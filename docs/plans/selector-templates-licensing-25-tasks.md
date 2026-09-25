@@ -71,8 +71,9 @@
 
 - **UI دوزبانه:** کلیدها در `src/Morobot.Web/wwwroot/locales/{fa,en}.json`. کلید تکراری در
   یک سطح، کلید قبلی را سایه می‌اندازد.
-- **دیتابیس:** `Server=.;Database=MorobotV3;Trusted_Connection=True;TrustServerCertificate=True`.
-  کوئری: `sqlcmd -S . -d MorobotV3 -E -C -Q "..." -W -s "|"`.
+- **دیتابیس:** `Server=.;Database=MorobotDb;Trusted_Connection=True;TrustServerCertificate=True`.
+  کوئری: `sqlcmd -S . -d MorobotDb -E -C -Q "..." -W -s "|"`. (نام قبلی `MorobotV3` بود؛ در کار #24
+  تغییر کرد.)
 - **پورت dev:** `http://localhost:7200`. ورود: `pro`/`Pro123!` (پنل)، `admin`/`Admin123!` (ادمین).
   ورود یک‌کلیکی dev: `/Panel/Account/DevLogin?userName=pro|admin|free|guest`
   (فقط کاربران seed‌شده؛ **باید اول خروج کرد** چون کوکی ادمین قدیمی ریدایرکت می‌کند).

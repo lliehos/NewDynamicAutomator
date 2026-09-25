@@ -120,7 +120,7 @@ dotnet run --project src\Morobot.LicenseTool -- sign `
   --allowed-host "automation.customer.ir" `
   --trial-days 3 `
   --allow-updates true `
-  --db-connection "Server=...;Database=MorobotV3;..." `
+  --db-connection "Server=...;Database=MorobotDb;..." `
   -o C:\temp\license.morobot
 
 # verify
@@ -280,7 +280,7 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 ```json
 {
   "ConnectionStrings": {
-    "Default": "Server=...;Database=MorobotV3;..."
+    "Default": "Server=...;Database=MorobotDb;..."
   },
   "Morobot": {
     "DeploymentMode": "Enterprise",
