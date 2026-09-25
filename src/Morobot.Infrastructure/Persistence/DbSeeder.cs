@@ -232,8 +232,123 @@ public static class DbSeeder
         await Upsert(SystemSettingKeys.BrandColorBorderSubtle, BrandPaletteDefaults.BorderSubtle, "Branding", "حاشیه ملایم", "Subtle border", null, null);
         await Upsert(SystemSettingKeys.BrandReferralQrVisible, "true", "Branding", "ویجت QR معرفی", "Referral QR widget", "پیش‌فرض: نمایش", "Default: visible");
 
-        await Upsert(SystemSettingKeys.LicensedDatabaseConnection, "", "Deployment", "Connection string (license)", "Connection string (license)", "توسط لایسنس امضاشده تنظیم می‌شود.", "Set by signed license.");
-        await Upsert(SystemSettingKeys.PendingConnectionRestart, "", "Deployment", "نیاز به راه‌اندازی مجدد", "Restart required", null, null);
+        await Upsert(
+            SystemSettingKeys.DiagramStepStroke,
+            "#ff9f43",
+            "Diagram",
+            "رنگ خط اقدام",
+            "Action stroke colour",
+            "رنگ حاشیهٔ نودهای اقدام در دیاگرام.",
+            "Outline colour of action nodes in the diagram.");
+
+        await Upsert(
+            SystemSettingKeys.DiagramStepFill,
+            "#fff8f0",
+            "Diagram",
+            "رنگ پس‌زمینه اقدام",
+            "Action fill colour",
+            "رنگ داخل نودهای اقدام.",
+            "Interior colour of action nodes.");
+
+        await Upsert(
+            SystemSettingKeys.DiagramConditionStroke,
+            "#8b9098",
+            "Diagram",
+            "رنگ خط شرط",
+            "Condition stroke colour",
+            "رنگ حاشیهٔ نودهای شرط.",
+            "Outline colour of condition nodes.");
+
+        await Upsert(
+            SystemSettingKeys.DiagramConditionFill,
+            "#eceff2",
+            "Diagram",
+            "رنگ پس‌زمینه شرط",
+            "Condition fill colour",
+            "رنگ داخل نودهای شرط.",
+            "Interior colour of condition nodes.");
+
+        await Upsert(
+            SystemSettingKeys.DiagramGroupStroke,
+            "#9b92f8",
+            "Diagram",
+            "رنگ خط گروه",
+            "Group stroke colour",
+            "رنگ حاشیهٔ نودهای گروه.",
+            "Outline colour of group nodes.");
+
+        await Upsert(
+            SystemSettingKeys.DiagramHighlightColor,
+            "#ea5455",
+            "Diagram",
+            "رنگ هایلایت المان",
+            "Element highlight colour",
+            "رنگی که پلیر هنگام اجرا دور المان صفحه می‌کشد.",
+            "Colour the player draws around the page element while running.");
+
+        await Upsert(
+            SystemSettingKeys.DiagramSelectorLineWidth,
+            "2",
+            "Diagram",
+            "پهنای خط سلکتور",
+            "Selector line width",
+            "ضخامت کادر هایلایت پلیر (پیکسل).",
+            "Thickness of the player's highlight box, in pixels.");
+
+        await Upsert(
+            SystemSettingKeys.DiagramStepDelayMs,
+            "0",
+            "Diagram",
+            "فاصلهٔ پیش‌فرض مراحل",
+            "Default step delay",
+            "مکث پیش‌فرض بین دو اقدام (میلی‌ثانیه) در فرآیندهای جدید.",
+            "Default pause between two actions, in milliseconds, for new processes.");
+
+        await Upsert(
+            SystemSettingKeys.DiagramLoopBackLimit,
+            "100",
+            "Diagram",
+            "حداکثر بازگشت حلقه",
+            "Max loop-back visits",
+            "پیش‌فرض سقف بازگشت حلقه در فرآیندهای جدید (۱ تا ۱۰۰۰).",
+            "Default loop-back ceiling for new processes (1 to 1000).");
+
+        await Upsert(
+            SystemSettingKeys.DiagramIgnorePlayError,
+            "true",
+            "Diagram",
+            "چشم‌پوشی از خطای اجرا",
+            "Ignore run errors",
+            "پیش‌فرض جدید: ادامهٔ اجرا وقتی یک اقدام شکست می‌خورد.",
+            "New-process default: keep going when an action fails.");
+
+        // Per-colour switches. Default ON so an upgraded install keeps the colours above.
+        await Upsert(SystemSettingKeys.DiagramStepStrokeEnabled, "true", "Diagram",
+            "اعمال رنگ خط اقدام", "Apply action stroke",
+            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
+            "Off = use the built-in diagram default (the stored value is kept).");
+        await Upsert(SystemSettingKeys.DiagramStepFillEnabled, "true", "Diagram",
+            "اعمال رنگ پس‌زمینه اقدام", "Apply action fill",
+            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
+            "Off = use the built-in diagram default (the stored value is kept).");
+        await Upsert(SystemSettingKeys.DiagramConditionStrokeEnabled, "true", "Diagram",
+            "اعمال رنگ خط شرط", "Apply condition stroke",
+            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
+            "Off = use the built-in diagram default (the stored value is kept).");
+        await Upsert(SystemSettingKeys.DiagramConditionFillEnabled, "true", "Diagram",
+            "اعمال رنگ پس‌زمینه شرط", "Apply condition fill",
+            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
+            "Off = use the built-in diagram default (the stored value is kept).");
+        await Upsert(SystemSettingKeys.DiagramGroupStrokeEnabled, "true", "Diagram",
+            "اعمال رنگ خط گروه", "Apply group stroke",
+            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
+            "Off = use the built-in diagram default (the stored value is kept).");
+        await Upsert(SystemSettingKeys.DiagramHighlightColorEnabled, "true", "Diagram",
+            "اعمال رنگ هایلایت", "Apply highlight colour",
+            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
+            "Off = use the built-in diagram default (the stored value is kept).");
+
+        await Upsert(SystemSettingKeys.LicensedDatabaseConnection, "", "Deployment", "Connection string (license)", "Connection string (license)", "توسط لایسنس امضاشده تنظیم می‌شود.", "Set by signed license.");        await Upsert(SystemSettingKeys.PendingConnectionRestart, "", "Deployment", "نیاز به راه‌اندازی مجدد", "Restart required", null, null);
 
         await db.SaveChangesAsync();
     }

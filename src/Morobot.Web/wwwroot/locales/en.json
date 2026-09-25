@@ -466,6 +466,10 @@
         "branding": {
           "title": "Branding",
           "desc": "Brand identity; edited from the Branding page."
+        },
+        "diagram": {
+          "title": "Diagram",
+          "desc": "Appearance and run defaults for new processes. Each colour has an on/off switch: turning one off applies the built-in diagram default while keeping the stored value."
         }
       },
       "notSetYet": "Not set yet",
@@ -475,7 +479,8 @@
       "secretEmpty": "Not set yet",
       "lastChangedBy": "Last changed by:",
       "neverChanged": "Unchanged since setup",
-      "unknownUser": "unknown user"
+      "unknownUser": "unknown user",
+      "diagramColorSwitch": "Apply"
     },
     "license": {
       "title": "License",

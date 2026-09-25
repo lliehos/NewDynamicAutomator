@@ -30,7 +30,7 @@
       <a href="#settings-group-@key" class="admin-settings-toc-item">
         <i class="ti @SystemSettingKeys.SettingGroupInfo.IconOf(group.Key)" aria-hidden="true"></i>
         <span>@L["admin.settings.groups." + key + ".title"]</span>
-        <span class="admin-settings-toc-count">@group.Count()</span>
+        <span class="admin-settings-toc-count">@Model.VisibleCount(group)</span>
       </a>
     }
   </nav>
@@ -45,7 +45,7 @@
         <h3>
           <i class="ti @SystemSettingKeys.SettingGroupInfo.IconOf(group.Key)" aria-hidden="true"></i>
           <span>@gtitle</span>
-          <span class="admin-settings-card-count">@group.Count()</span>
+          <span class="admin-settings-card-count">@Model.VisibleCount(group)</span>
         </h3>
         @if (!string.IsNullOrWhiteSpace(gdesc) && !gdesc.StartsWith("admin.settings.groups."))
         {
@@ -54,11 +54,23 @@
 
         @foreach (var s in group)
         {
+          // An enable switch is not a setting of its own: it is rendered next to the colour it
+          // controls, below. Rendering it again here would put two controls with the same name in
+          // the form, and both would post.
+          if (SystemSettingKeys.DiagramColorPairs.Any(p => p.EnabledSwitch == s.Key)) continue;
           var hint = isFa ? s.HintFa : s.HintEn;
           var label = isFa ? s.LabelFa : s.LabelEn;
           var readOnly = SystemSettingKeys.IsReadOnlyForAdmin(s.Key);
           var isSecret = SystemSettingKeys.IsSensitiveForAdmin(s.Key);
           var secretSet = isSecret && !string.IsNullOrWhiteSpace(s.Value);
+          // A colour setting with an enable switch beside it. The switch lives in the same form
+          // so both travel together, and the colour input stays usable while the switch is off —
+          // that is what makes "turn it off to compare, turn it back on" possible without retyping.
+          var isColour = SystemSettingKeys.ColourKeys.Contains(s.Key);
+          var hasSwitch = SystemSettingKeys.DiagramColorPairs.Any(p => p.Setting == s.Key);
+          var switchKey = hasSwitch ? SystemSettingKeys.DiagramColorPairs.First(p => p.Setting == s.Key).EnabledSwitch : null;
+          var switchOn = switchKey is not null && Model.Settings.Any(x => x.Key == switchKey
+            && (string.Equals(x.Value, "true", StringComparison.OrdinalIgnoreCase) || x.Value == "1"));
           <div class="admin-settings-field">
             <label class="admin-label" for="setting_@s.Key">
               <span>@label</span>
@@ -108,6 +120,30 @@
                      value="" autocomplete="new-password"
                      placeholder="@(secretSet ? L["admin.settings.secretKeep"] : L["admin.settings.secretEmpty"])" />
             }
+            else if (isColour)
+            {
+              @* A colour input plus a text box: the picker for choosing, the text box so a value
+                 can be pasted or read exactly. Both write the same setting, and the text box is
+                 what actually posts, so an owner who types an unsupported value keeps it rather
+                 than having the picker silently discard it. *@
+              <div class="admin-settings-colour-row">
+                <input class="admin-settings-colour-picker" type="color"
+                       id="picker_@s.Key" value="@(string.IsNullOrWhiteSpace(s.Value) ? "#000000" : s.Value)"
+                       data-colour-for="setting_@s.Key"
+                       aria-label="@label" />
+                <input class="form-control admin-settings-colour-text" type="text"
+                       id="setting_@s.Key" name="setting_@s.Key" value="@s.Value"
+                       spellcheck="false" autocomplete="off" />
+                @if (switchKey is not null)
+                {
+                  <label class="admin-settings-colour-switch" title="@L["admin.settings.diagramColorSwitch"]">
+                    <input type="hidden" name="setting_@switchKey" value="false" />
+                    <input type="checkbox" name="setting_@switchKey" value="true" @(switchOn ? "checked" : null) />
+                    <span>@L["admin.settings.diagramColorSwitch"]</span>
+                  </label>
+                }
+              </div>
+            }
             else
             {
               <input class="form-control" id="setting_@s.Key" name="setting_@s.Key" value="@s.Value" />
@@ -150,3 +186,28 @@
     </button>
   </div>
 </form>
+
+<script>
+  // Keep each colour picker and its text box in step. The text box is the one that posts, so
+  // choosing in the picker fills it in rather than the two drifting apart; typing a value moves
+  // the picker when it is a colour the picker can represent, and is otherwise left alone so the
+  // typed value survives.
+  (function () {
+    document.querySelectorAll('.admin-settings-colour-picker').forEach(function (picker) {
+      var textId = picker.getAttribute('data-colour-for');
+      var text = textId ? document.getElementById(textId) : null;
+      if (!text) return;
+
+      picker.addEventListener('input', function () {
+        text.value = picker.value;
+      });
+
+      var syncText = function () {
+        var v = (text.value || '').trim();
+        if (/^#[0-9a-fA-F]{6}$/.test(v)) picker.value = v;
+      };
+      text.addEventListener('input', syncText);
+      text.addEventListener('change', syncText);
+    });
+  })();
+</script>

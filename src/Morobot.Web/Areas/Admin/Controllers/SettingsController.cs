@@ -46,7 +46,11 @@ public class SettingsController : Controller
     {
         var pairs = form.Keys
             .Where(k => k.StartsWith("setting_", StringComparison.OrdinalIgnoreCase))
-            .Select(k => (k["setting_".Length..], form[k].ToString() ?? ""))
+            // A hidden "false" plus a checkbox "true" of the same name is the standard HTML way to
+            // send a boolean. The browser posts both when the box is ticked, so reading the whole
+            // value would yield "false,true" — take the last entry, which is the checkbox's own
+            // value when present and the hidden one otherwise.
+            .Select(k => (k["setting_".Length..], LastValue(form, k)))
             // Defence in depth: ignore branding keys even if a crafted form posts them.
             .Where(p => !SystemSettingKeys.IsBrandingOwned(p.Item1))
             // A blank secret means "leave it alone", not "erase it". The page cannot show the
@@ -60,6 +64,22 @@ public class SettingsController : Controller
         await _settings.SaveAsync(pairs, userId, User.Identity?.Name, ct);
         TempData["Ok"] = _locale["admin.settings.saved"];
         return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// The value a control actually submitted. One name can appear several times in a form — the
+    /// hidden-plus-checkbox boolean pattern above is the common case — and the last occurrence is
+    /// the control the user interacted with, so that is the one that wins.
+    /// </summary>
+    private static string LastValue(IFormCollection form, string key)
+    {
+        var values = form[key];
+        for (var i = values.Count - 1; i >= 0; i--)
+        {
+            var v = values[i];
+            if (!string.IsNullOrEmpty(v)) return v;
+        }
+        return "";
     }
 
     [HttpPost]

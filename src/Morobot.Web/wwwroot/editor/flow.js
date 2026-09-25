@@ -119,6 +119,50 @@
   }
 
   const DEFAULT_HIGHLIGHT_COLOR = "#ea5455";
+
+  /**
+   * Admin → Settings → Diagram defaults, supplied by the server.
+   *
+   * Applied only where a graph has no value of its own. A process saved before the setting was
+   * changed must keep looking the way its author saved it; a default that overwrote stored
+   * values would silently restyle every existing process the moment an admin tried a colour.
+   * Absent or unusable entries leave the compiled-in defaults below in charge.
+   */
+  const diagramDefaults = (() => {
+    const raw = (typeof window !== "undefined" && window.__DA_DIAGRAM_DEFAULTS__) || {};
+    const hex = (v) => {
+      const s = String(v == null ? "" : v).trim();
+      if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
+      if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+        const r = s[1], g = s[2], b = s[3];
+        return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+      }
+      return null;
+    };
+    const int = (v, min, max) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return null;
+      const i = Math.floor(n);
+      return i >= min && i <= max ? i : null;
+    };
+    const num = (v, min, max) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= min && n <= max ? n : null;
+    };
+    return {
+      stepStroke: hex(raw.stepStroke),
+      stepFill: hex(raw.stepFill),
+      conditionStroke: hex(raw.conditionStroke),
+      conditionFill: hex(raw.conditionFill),
+      groupStroke: hex(raw.groupStroke),
+      highlightColor: hex(raw.highlightColor),
+      selectorLineWidth: num(raw.selectorLineWidth, 1, 12),
+      stepDelayMs: int(raw.stepDelayMs, 0, 60000),
+      loopBackLimit: int(raw.loopBackLimit, 1, 1000),
+      ignorePlayError: typeof raw.ignorePlayError === "boolean" ? raw.ignorePlayError : null
+    };
+  })();
+
   function normalizeHighlightColor(v) {
     const s = String(v || "").trim();
     if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
@@ -126,7 +170,7 @@
       const r = s[1], g = s[2], b = s[3];
       return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
     }
-    return DEFAULT_HIGHLIGHT_COLOR;
+    return diagramDefaults.highlightColor || DEFAULT_HIGHLIGHT_COLOR;
   }
 
   /**
@@ -135,7 +179,7 @@
    * engine's own clamp (resolveLoopBackLimit) so the UI never promises a value the engine
    * would refuse.
    */
-  const DEFAULT_LOOP_BACK_LIMIT = 100;
+  const DEFAULT_LOOP_BACK_LIMIT = diagramDefaults.loopBackLimit ?? 100;
   const MAX_LOOP_BACK_LIMIT = 1000;
   function clampLoopBackLimit(raw) {
     const n = Number(raw);
@@ -145,7 +189,9 @@
 
   let graph = {
     nodes: [], edges: [], viewport: { x: 40, y: 40, zoom: 1 }, title: "",
-    dataSources: [], delayBeforeMs: 0, delayAfterMs: 0, stepDelayMs: 0, loopBackLimit: 100,
+    dataSources: [], delayBeforeMs: 0, delayAfterMs: 0,
+    stepDelayMs: diagramDefaults.stepDelayMs ?? 0,
+    loopBackLimit: DEFAULT_LOOP_BACK_LIMIT,
     highlightColor: DEFAULT_HIGHLIGHT_COLOR, canModify: true
   };
   let selected = new Set();
@@ -431,6 +477,10 @@
   }
 
   function emptyShell() {
+    // A brand-new process takes the admin's Diagram defaults; an existing one keeps whatever it
+    // was saved with (see diagramDefaults above).
+    const newStepDelay = diagramDefaults.stepDelayMs ?? 0;
+    const newIgnorePlayError = diagramDefaults.ignorePlayError ?? true;
     graph = {
       taskId: stableTaskId(taskId),
       title: t("editor.nodes.localProcess"),
@@ -439,17 +489,17 @@
       viewport: { x: 40, y: 40, zoom: 1 },
       nodes: [{
         id: "start", kind: "start", title: t("editor.nodes.start"), x: 40, y: 220,
-        repeatSourceType: "None", loopCount: 1, moveLoop: false, stepDelayMs: 0,
+        repeatSourceType: "None", loopCount: 1, moveLoop: false, stepDelayMs: newStepDelay,
         loopBackLimit: DEFAULT_LOOP_BACK_LIMIT,
-        ignorePlayError: true, highlightColor: DEFAULT_HIGHLIGHT_COLOR
+        ignorePlayError: newIgnorePlayError, highlightColor: DEFAULT_HIGHLIGHT_COLOR
       }],
       edges: [],
       dataSources: [],
       delayBeforeMs: 0,
       delayAfterMs: 0,
-      stepDelayMs: 0,
+      stepDelayMs: newStepDelay,
       loopBackLimit: DEFAULT_LOOP_BACK_LIMIT,
-      ignorePlayError: true,
+      ignorePlayError: newIgnorePlayError,
       highlightColor: DEFAULT_HIGHLIGHT_COLOR,
       repeatSourceType: "None"
     };
@@ -2276,13 +2326,15 @@
     return String(text || "اقدام").trim() || "اقدام";
   }
 
-  const STEP_STROKE = "#ff9f43";
-  const STEP_FILL = "#fff8f0";
+  const STEP_STROKE = diagramDefaults.stepStroke || "#ff9f43";
+  const STEP_FILL = diagramDefaults.stepFill || "#fff8f0";
   /** Action with ignoreError ON — fill leans green */
   const STEP_STROKE_IGNORE = "#28c76f";
   const STEP_FILL_IGNORE = "#e8f6ee";
-  const COND_STROKE = "#8b9098";
-  const COND_FILL = "#eceff2";
+  const COND_STROKE = diagramDefaults.conditionStroke || "#8b9098";
+  const COND_FILL = diagramDefaults.conditionFill || "#eceff2";
+  /** Group node outline; was a literal inside makeCloneButton. */
+  const GROUP_STROKE = diagramDefaults.groupStroke || "#9b92f8";
   /** Root process start — strong green (ignorePlayError ON / default) */
   const START_FILL_ROOT = "#159a55";
   const START_STROKE_ROOT = "#0d7a40";
@@ -4086,7 +4138,7 @@
     const x = kind === "condition" ? 4 : 5;
     const y = Math.max(5, h - size - 5);
     const tone = kind === "group" ? "group" : kind === "condition" ? "condition" : "action";
-    const color = tone === "group" ? "#9b92f8"
+    const color = tone === "group" ? GROUP_STROKE
       : tone === "condition" ? COND_STROKE
       : STEP_STROKE;
     const btn = el("g", {

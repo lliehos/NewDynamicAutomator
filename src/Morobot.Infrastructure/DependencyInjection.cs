@@ -49,6 +49,7 @@ public static class DependencyInjection
         services.AddScoped<EntitlementService>();
         services.AddScoped<EventLogService>();
         services.AddScoped<SystemSettingsService>();
+        services.AddScoped<DiagramSettingsService>();
         services.AddScoped<TaskService>();
         services.AddScoped<TaskShareService>();
         services.AddScoped<RecordingService>();

@@ -55,6 +55,79 @@ public static class SystemSettingKeys
     /// <summary>"true" when the connection must use TLS (ldaps or StartTLS).</summary>
     public const string LdapUseTls = "LdapUseTls";
 
+    // ── Diagram defaults ──
+    // The editor's colours and play defaults were compiled into flow.js, so changing how every
+    // new process looks meant a code change and a redeploy. They are settings now: the editor
+    // reads them as the starting point for a graph that has no value of its own.
+
+    /// <summary>Stroke colour for an action (step) node.</summary>
+    public const string DiagramStepStroke = "DiagramStepStroke";
+    /// <summary>Fill colour for an action (step) node.</summary>
+    public const string DiagramStepFill = "DiagramStepFill";
+    /// <summary>Stroke colour for a condition node.</summary>
+    public const string DiagramConditionStroke = "DiagramConditionStroke";
+    /// <summary>Fill colour for a condition node.</summary>
+    public const string DiagramConditionFill = "DiagramConditionFill";
+    /// <summary>Stroke colour for a group node.</summary>
+    public const string DiagramGroupStroke = "DiagramGroupStroke";
+    /// <summary>Highlight colour used when the player marks an element on the page.</summary>
+    public const string DiagramHighlightColor = "DiagramHighlightColor";
+    /// <summary>Stroke width of the selector outline drawn while playing.</summary>
+    public const string DiagramSelectorLineWidth = "DiagramSelectorLineWidth";
+    /// <summary>Default pause between two steps, in milliseconds.</summary>
+    public const string DiagramStepDelayMs = "DiagramStepDelayMs";
+    /// <summary>Default maximum times a node may be revisited before a loop is declared stuck.</summary>
+    public const string DiagramLoopBackLimit = "DiagramLoopBackLimit";
+    /// <summary>Default for "continue the run even if an action fails".</summary>
+    public const string DiagramIgnorePlayError = "DiagramIgnorePlayError";
+
+    /// <summary>
+    /// Per-colour override switches. Each colour above is only applied when its switch is on;
+    /// with the switch off the diagram falls back to the built-in default while the stored
+    /// colour is left untouched. That distinction is the point: an admin trying a palette can
+    /// turn one colour off to compare it, then back on, without losing the value they typed.
+    /// </summary>
+    public const string DiagramStepStrokeEnabled = "DiagramStepStrokeEnabled";
+    public const string DiagramStepFillEnabled = "DiagramStepFillEnabled";
+    public const string DiagramConditionStrokeEnabled = "DiagramConditionStrokeEnabled";
+    public const string DiagramConditionFillEnabled = "DiagramConditionFillEnabled";
+    public const string DiagramGroupStrokeEnabled = "DiagramGroupStrokeEnabled";
+    public const string DiagramHighlightColorEnabled = "DiagramHighlightColorEnabled";
+
+    /// <summary>Keys owned by the Diagram group, in the order the editor reads them.</summary>
+    public static readonly IReadOnlyList<(string Setting, string EnabledSwitch)> DiagramColorPairs = new[]
+    {
+        (DiagramStepStroke, DiagramStepStrokeEnabled),
+        (DiagramStepFill, DiagramStepFillEnabled),
+        (DiagramConditionStroke, DiagramConditionStrokeEnabled),
+        (DiagramConditionFill, DiagramConditionFillEnabled),
+        (DiagramGroupStroke, DiagramGroupStrokeEnabled),
+        (DiagramHighlightColor, DiagramHighlightColorEnabled),
+    };
+
+    /// <summary>
+    /// Settings holding a hex colour. Admin → Settings renders these with a colour picker; the
+    /// set is declared here rather than sniffed from the value so a colour that happens to be
+    /// empty still gets the right control.
+    /// </summary>
+    public static readonly IReadOnlySet<string> ColourKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        DiagramStepStroke,
+        DiagramStepFill,
+        DiagramConditionStroke,
+        DiagramConditionFill,
+        DiagramGroupStroke,
+        DiagramHighlightColor,
+        BrandColorPrimary,
+        BrandColorPrimaryDark,
+        BrandColorPrimaryLight,
+        BrandColorAccent,
+        BrandColorSoft,
+        BrandColorSoft2,
+        BrandColorInk,
+        BrandColorBorderSubtle,
+    };
+
     /// <summary>
     /// Keys owned by Admin → Branding. Admin → Settings must NOT list these: both pages read and
     /// write the same rows, so exposing them in two places let a stale Settings form silently
@@ -132,6 +205,7 @@ public static class SystemSettingKeys
     {
         new SettingGroupInfo("Auth", "auth", "ti-shield-lock", 10),
         new SettingGroupInfo("Updates", "updates", "ti-refresh", 20),
+        new SettingGroupInfo("Diagram", "diagram", "ti-hierarchy", 25),
         new SettingGroupInfo("Deployment", "deployment", "ti-server-cog", 30),
         new SettingGroupInfo("Branding", "branding", "ti-palette", 40)
     };

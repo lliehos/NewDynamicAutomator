@@ -19,6 +19,7 @@ public class TasksController : Controller
     private readonly PlaySessionTracker _plays;
     private readonly CatalogLiveService _catalog;
     private readonly EntitlementService _entitlements;
+    private readonly DiagramSettingsService _diagram;
 
     public TasksController(
         TaskService tasks,
@@ -26,13 +27,15 @@ public class TasksController : Controller
         IHubContext<PlayDataHub> playHub,
         PlaySessionTracker plays,
         CatalogLiveService catalog,
-        EntitlementService entitlements)
+        EntitlementService entitlements,
+        DiagramSettingsService diagram)
     {
         _tasks = tasks;
         _dataSources = dataSources;
         _playHub = playHub;
         _plays = plays;
         _catalog = catalog;
+        _diagram = diagram;
         _entitlements = entitlements;
     }
 
@@ -71,7 +74,7 @@ public class TasksController : Controller
     }
 
     [HttpGet]
-    public IActionResult Editor(string id)
+    public async Task<IActionResult> Editor(string id, CancellationToken ct = default)
     {
         ViewBag.TaskId = id ?? "";
         ViewBag.CanModify = true;
@@ -79,6 +82,10 @@ public class TasksController : Controller
         ViewBag.EntitlementsJson = System.Text.Json.JsonSerializer.Serialize(
             EntitlementService.FromClaims(User),
             new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+        // Diagram defaults come from Admin → Settings so an admin can change how every new
+        // process looks without a code change. Property names are already lower-camel in the DTO.
+        ViewBag.DiagramDefaultsJson = System.Text.Json.JsonSerializer.Serialize(
+            await _diagram.GetAsync(ct));
         return View();
     }
 
