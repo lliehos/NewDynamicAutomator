@@ -578,6 +578,23 @@ public class DataSourcesApiController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>Remove one row from a source (used by the grid and the DeleteRow action).</summary>
+    [HttpDelete("{id:int}/rows/{rowIndex:int}")]
+    public async Task<IActionResult> DeleteRow(int id, int rowIndex, CancellationToken ct)
+    {
+        var result = await _sources.DeleteRowAsync(UserId, id, rowIndex, ct);
+        if (!result.Ok)
+            return result.Code switch
+            {
+                "notfound" => NotFound(),
+                "forbidden" => Forbid(),
+                "row-not-found" => NotFound(result),
+                _ => BadRequest(result)
+            };
+        await BroadcastSourceShapeAsync(id, result, "row_deleted", ct);
+        return Ok(result);
+    }
+
     /// <summary>Tell clients + connected editors that a source's shape (columns/rows) changed.</summary>
     private async Task BroadcastSourceShapeAsync(
         int dataSourceId, Morobot.Contracts.DataSources.DataSourceStructureResponse result, string reason, CancellationToken ct)

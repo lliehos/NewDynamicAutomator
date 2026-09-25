@@ -41,8 +41,9 @@ function stepNeedsSelector(actionType) {
   const at = actionType || "";
   if (at === "WaitTime" || at === "NoAction" || at === "Breakpoint") return false;
   if (stepIsUrlAction(at)) return false;
-  // SetMemory only writes to the variable table and never touches the page.
-  if (at === "SetMemory") return false;
+  // SetMemory/GetMemory only touch the variable table and DeleteRow only touches the server store,
+  // so none of them acts on the page and demanding a selector would make them unauthorable.
+  if (at === "SetMemory" || at === "GetMemory" || at === "DeleteRow") return false;
   return true;
 }
 
@@ -2471,6 +2472,52 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
       });
     }
     return { ok: true, memorySet: { name, value: value == null ? "" : String(value) } };
+  }
+
+  // Reads a variable into the step's value. Like SetMemory this never touches the page, so it
+  // returns before the selector plumbing — a selector here would be meaningless.
+  if (actionType === "GetMemory") {
+    const name = String(step.memoryVariableName || "").trim();
+    if (!name) {
+      return onUnexpected(runMode, {
+        taskId, stepId: step.entityId, reason: "missing_memory_name",
+        expectedSelector: null, actualUrl: null
+      });
+    }
+    const stored = await chrome.storage.local.get("playMemory").catch(() => ({}));
+    const mem = stored?.playMemory;
+    const vars = (mem && mem.schema === PLAY_MEMORY_SCHEMA ? mem.vars : null) || {};
+    // A variable that was never written reads as empty rather than failing: "not set yet" is a
+    // normal state for a first iteration, and failing here would stop a run that is otherwise fine.
+    return { ok: true, memoryGet: { name, value: vars[name] == null ? "" : String(vars[name]) } };
+  }
+
+  // Removes one row from a library data source. The server owns the store, so this is a plain
+  // request; the row is picked with the same pointer vocabulary the inspector offers.
+  if (actionType === "DeleteRow") {
+    const dsId = Number(step.dataSourceId || step.saveDataSourceId || 0);
+    if (!dsId) {
+      return onUnexpected(runMode, {
+        taskId, stepId: step.entityId, reason: "missing_source",
+        expectedSelector: null, actualUrl: null
+      });
+    }
+    const pointer = resolveDedicatedRow({ ...step, dedicatedRow: true }, graph, {
+      groupRow: rowIndex, parentRow: rowIndex, loopIndex, groupIndex: loopIndex
+    });
+    const targetRow = pointer != null ? pointer : (Number(rowIndex) || 0);
+    const removed = await chrome.runtime.sendMessage({
+      type: "deleteDataSourceRow", dataSourceId: dsId, rowIndex: targetRow
+    }).catch(() => null);
+    if (!removed?.ok) {
+      return onUnexpected(runMode, {
+        taskId, stepId: step.entityId,
+        reason: removed?.limit ? "source_limit" : (removed?.error || "delete_row_failed"),
+        expectedSelector: null, actualUrl: null
+      }, removed?.message || null);
+    }
+    appendPlayLog("info", `ردیف ${targetRow} از منبع ${dsId} حذف شد`);
+    return { ok: true, rowDeleted: { dataSourceId: dsId, rowIndex: targetRow } };
   }
 
   // A deliberate wait for an element to exist: no state requirements, and the wait

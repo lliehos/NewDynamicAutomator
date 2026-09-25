@@ -1225,6 +1225,85 @@ public class DataSourceService
         };
     }
 
+    /// <summary>
+    /// Remove one row from a library source and close the gap so no row index is left missing.
+    ///
+    /// Shifting the following rows up is deliberate: the row-page query drives the row count from the
+    /// highest index present, so leaving a hole would keep reporting rows past the real end and make
+    /// the grid show blanks. Blank rows are materialised as empty cells, so "remove the row" means
+    /// removing every cell of that row, not just one value.
+    /// </summary>
+    public async Task<DataSourceStructureResponse> DeleteRowAsync(
+        int userId, int id, int rowIndex, CancellationToken ct = default)
+    {
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+        var (_, rowCount) = await GetDerivedCountersAsync(id, ct);
+        rowCount = Math.Max(rowCount, entity.RowCount);
+        if (rowIndex < 0 || rowIndex >= rowCount)
+        {
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "row-not-found",
+                DataSourceId = id,
+                Message = $"ردیف {rowIndex} در این منبع وجود ندارد (تعداد ردیف‌ها: {rowCount})."
+            };
+        }
+
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var toRemove = await _db.DataSourceCells
+                .Where(c => c.DataSourceId == id && c.RowIndex == rowIndex)
+                .ToListAsync(ct);
+            if (toRemove.Count > 0) _db.DataSourceCells.RemoveRange(toRemove);
+
+            // Shift the rows after it up by one, from the gap upward so no two rows collide on the
+            // (DataSourceId, RowIndex, ColumnKey) key.
+            var after = await _db.DataSourceCells
+                .Where(c => c.DataSourceId == id && c.RowIndex > rowIndex)
+                .OrderBy(c => c.RowIndex)
+                .ToListAsync(ct);
+            foreach (var cell in after) cell.RowIndex -= 1;
+
+            var newRowCount = rowCount - 1;
+            entity.RowCount = newRowCount;
+            entity.DataRevision += 1;
+            entity.UpdatedAtUtc = DateTime.UtcNow;
+            StampDataEditor(entity, userId);
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+            return new DataSourceStructureResponse
+            {
+                Ok = true,
+                DataSourceId = entity.Id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList(),
+                ColumnCount = columns.Count,
+                RowCount = newRowCount,
+                DataRevision = entity.DataRevision
+            };
+        }
+        catch (Exception ex)
+        {
+            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+            _log.LogWarning(ex, "Delete row {Row} from source {Ds} failed", rowIndex, id);
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "error",
+                DataSourceId = id,
+                Message = "حذف ردیف انجام نشد — دوباره تلاش کنید."
+            };
+        }
+    }
+
     /// <summary>Re-stamp every linked process graph with this source's current shape.</summary>
     private async Task RefreshLinkedProcessSnapshotsAsync(DataSource entity, CancellationToken ct)
     {

@@ -27,12 +27,19 @@
       DoubleClick: t("editor.actions.DoubleClick"),
       RightClick: t("editor.actions.RightClick"),
       Hover: t("editor.actions.Hover"),
+      Hold: t("editor.actions.Hold"),
+      AlertAccept: t("editor.actions.AlertAccept"),
       Enter: t("editor.actions.Enter"),
       InputContent: t("editor.actions.InputContent"),
+      ClearContent: t("editor.actions.ClearContent"),
+      SelectOption: t("editor.actions.SelectOption"),
       InsertContent: t("editor.actions.InsertContent"),
       LoadContent: t("editor.actions.LoadContent"),
       SaveContent: t("editor.actions.SaveContent"),
       TakeContent: t("editor.actions.TakeContent"),
+      DeleteRow: t("editor.actions.DeleteRow"),
+      SetMemory: t("editor.actions.SetMemory"),
+      GetMemory: t("editor.actions.GetMemory"),
       GoToUrl: t("editor.actions.GoToUrl"),
       NewPage: t("editor.actions.NewPage"),
       CloseFirstTab: t("editor.actions.CloseFirstTab"),
@@ -40,13 +47,48 @@
       WaitTime: t("editor.actions.WaitTime"),
       WaitForLoading: t("editor.actions.WaitForLoading"),
       Refresh: t("editor.actions.Refresh"),
-      ClearContent: t("editor.actions.ClearContent"),
-      FocusElement: t("editor.actions.FocusElement"),
-      ScrollIntoView: t("editor.actions.ScrollIntoView"),
-      SelectOption: t("editor.actions.SelectOption"),
-      PressKey: t("editor.actions.PressKey"),
-      WaitForElement: t("editor.actions.WaitForElement"),
-      SetMemory: t("editor.actions.SetMemory")
+      ScrollPage: t("editor.actions.ScrollPage"),
+      Breakpoint: t("editor.actions.Breakpoint"),
+      RemoveElements: t("editor.actions.RemoveElements"),
+      LoadCaptcha: t("editor.actions.LoadCaptcha")
+    };
+  }
+
+  /**
+   * One-line description per action, shown under the type picker so the user knows what it does.
+   * Also drives a warning when a stored step uses an action this build does not know.
+   */
+  function actionDescriptions() {
+    return {
+      NoAction: t("editor.actionDesc.NoAction"),
+      Click: t("editor.actionDesc.Click"),
+      DoubleClick: t("editor.actionDesc.DoubleClick"),
+      RightClick: t("editor.actionDesc.RightClick"),
+      Hover: t("editor.actionDesc.Hover"),
+      Hold: t("editor.actionDesc.Hold"),
+      AlertAccept: t("editor.actionDesc.AlertAccept"),
+      Enter: t("editor.actionDesc.Enter"),
+      InputContent: t("editor.actionDesc.InputContent"),
+      ClearContent: t("editor.actionDesc.ClearContent"),
+      SelectOption: t("editor.actionDesc.SelectOption"),
+      InsertContent: t("editor.actionDesc.InsertContent"),
+      LoadContent: t("editor.actionDesc.LoadContent"),
+      SaveContent: t("editor.actionDesc.SaveContent"),
+      TakeContent: t("editor.actionDesc.TakeContent"),
+      DeleteRow: t("editor.actionDesc.DeleteRow"),
+      SetMemory: t("editor.actionDesc.SetMemory"),
+      GetMemory: t("editor.actionDesc.GetMemory"),
+      GoToUrl: t("editor.actionDesc.GoToUrl"),
+      NewPage: t("editor.actionDesc.NewPage"),
+      CloseFirstTab: t("editor.actionDesc.CloseFirstTab"),
+      CloseLastTab: t("editor.actionDesc.CloseLastTab"),
+      WaitTime: t("editor.actionDesc.WaitTime"),
+      WaitForLoading: t("editor.actionDesc.WaitForLoading"),
+      Refresh: t("editor.actionDesc.Refresh"),
+      ScrollPage: t("editor.actionDesc.ScrollPage"),
+      Breakpoint: t("editor.actionDesc.Breakpoint"),
+      RemoveElements: t("editor.actionDesc.RemoveElements"),
+      LoadCaptcha: t("editor.actionDesc.LoadCaptcha")
     };
   }
 
@@ -97,12 +139,19 @@
     }
   }
 
-  // ACTION_LABELS is now dynamically generated via actionLabels() for i18n
+  // The action list is the DOMAIN enum (ActionType) — the same names the extensions switch on and
+  // the same ones stored in GraphJson. Members the old list invented (FocusElement, ScrollIntoView,
+  // PressKey, WaitForElement) never existed in the enum, so a step using one would have been dead on
+  // the page; they are gone. Everything the enum declares is listed, so nothing is unreachable.
   const ACTIONS = [
-    "NoAction","Click","DoubleClick","RightClick","Hover","Enter",
-    "InputContent","InsertContent","LoadContent","SaveContent","TakeContent",
-    "GoToUrl","NewPage","CloseFirstTab","CloseLastTab","WaitTime","WaitForLoading","Refresh",
-    "ClearContent","FocusElement","ScrollIntoView","SelectOption","PressKey","WaitForElement","SetMemory"
+    "NoAction", "Click", "DoubleClick", "RightClick", "Hover", "Hold",
+    "Enter", "InputContent", "ClearContent", "SelectOption",
+    "InsertContent", "LoadContent", "SaveContent", "TakeContent",
+    "DeleteRow", "SetMemory", "GetMemory",
+    "GoToUrl", "NewPage", "Refresh", "ScrollPage",
+    "CloseFirstTab", "CloseLastTab",
+    "WaitTime", "WaitForLoading",
+    "AlertAccept", "Breakpoint", "RemoveElements", "LoadCaptcha"
   ];
 
   function isActionNode(n) {
@@ -5524,6 +5573,11 @@
           } else {
             n.specificRowIndex = null;
           }
+          // DeleteRow shows its own index field for a specific row; keep the two in step.
+          const delIdx = document.getElementById("insp-delete-row-idx");
+          if (delIdx && n.actionType === "DeleteRow") {
+            delIdx.style.display = inp.value === "SpecificRow" ? "" : "none";
+          }
           renderInspector();
           return;
         } else if (k === "specificRowIndex") {
@@ -5743,8 +5797,7 @@
       "Click", "DoubleClick", "RightClick", "Hover", "Enter",
       "InputContent", "InsertContent", "LoadContent",
       "WaitForLoading",
-      "ClearContent", "FocusElement", "ScrollIntoView", "SelectOption",
-      "PressKey", "WaitForElement"
+      "ClearContent", "SelectOption"
     ].includes(at);
   }
 
@@ -5762,7 +5815,7 @@
     return [
       "InputContent", "InsertContent", "LoadContent",
       "WaitTime", "GoToUrl", "Navigate", "NewPage",
-      "SelectOption", "SetMemory", "PressKey"
+      "SelectOption", "SetMemory", "GetMemory"
     ].includes(actionType || "");
   }
 
@@ -6404,7 +6457,9 @@
     const disabledAttr = active ? "" : "disabled";
 
     let body = field("عنوان", "title", n.title) +
-      `<div class="insp-field"><label>نوع اقدام</label><select data-k="actionType" ${disabledAttr}>${optActions(at)}</select></div>` +
+      `<div class="insp-field"><label>${esc(t("editor.actionTypeLabel") || "نوع اقدام")}</label><select data-k="actionType" ${disabledAttr}>${optActions(at)}</select></div>` +
+      // A short "what this does" line under the picker, so the user can choose without guessing.
+      actionDescriptionHtml(at) +
       actionAliasHint(at);
 
     if (at === "NewPage") {
@@ -6585,34 +6640,44 @@
       </div>`;
     }
 
-    // PressKey: which key is sent to the focused element.
-    if (n.actionType === "PressKey") {
-      const key = n.keyName || "Enter";
-      html += `<div class="insp-field"><label>${t("editor.actions.keyName")}</label>
-        <select data-k="keyName">
-          ${["Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Backspace", "Delete", "Space"]
-            .map((k) => `<option value="${k}" ${key === k ? "selected" : ""}>${k}</option>`).join("")}
-        </select>
-        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.keyNameHint")}</p>
-      </div>`;
-    }
-
-    // WaitForElement: how long to keep polling before the step is considered failed.
-    if (n.actionType === "WaitForElement") {
-      const maxMs = Number(n.waitMaxMs) > 0 ? Number(n.waitMaxMs) : 15000;
-      html += `<div class="insp-field"><label>${t("editor.actions.waitMaxMs")}</label>
-        <input type="number" min="0" step="100" data-k="waitMaxMs" value="${esc(maxMs)}" />
-        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.waitForElementHint")}</p>
-      </div>`;
-    }
-
-    // SetMemory: the variable name the resolved value is written to.
+    // ناوبری: سوئیچ انتظار برای تکمیل بارگذاری + سقف انتظار (فقط وقتی روشن است).
+    if (isUrl) {
     if (n.actionType === "SetMemory") {
       html += `<div class="insp-field"><label>${t("editor.actions.memoryName")}</label>
         <input data-k="memoryVariableName" list="mem-var-list" value="${esc(n.memoryVariableName || "")}" placeholder="${esc(t("editor.actions.memoryNamePlaceholder"))}" />
         <datalist id="mem-var-list">${memNames.map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
         <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.setMemoryHint")}</p>
       </div>`;
+    }
+
+    // GetMemory: reads a variable into the step's value without touching the page.
+    if (n.actionType === "GetMemory") {
+      html += `<div class="insp-field"><label>${t("editor.actions.memoryName")}</label>
+        <input data-k="memoryVariableName" list="mem-var-list" value="${esc(n.memoryVariableName || "")}" placeholder="${esc(t("editor.actions.memoryNamePlaceholder"))}" />
+        <datalist id="mem-var-list">${memNames.map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.getMemoryHint")}</p>
+      </div>`;
+    }
+
+    // DeleteRow: which row of which source is removed.
+    if (n.actionType === "DeleteRow") {
+      const dsOpts = processDataSourceOptions(n.dataSourceId);
+      html += `<div class="insp-field"><label>${t("editor.actions.deleteRowSource")}</label>
+          <select data-k="dataSourceId"><option value="">— ${t("editor.actions.pickSource")} —</option>${dsOpts}</select>
+        </div>
+        <div class="insp-field"><label>${t("editor.actions.deleteRowTarget")}</label>
+          <select data-k="rowIndexType">
+            <option value="CurrentLoop" ${(n.rowIndexType || "CurrentLoop") === "CurrentLoop" ? "selected" : ""}>${esc(t("editor.row.currentLoop") || "ردیف حلقهٔ فعلی")}</option>
+            <option value="LastRow" ${n.rowIndexType === "LastRow" ? "selected" : ""}>${esc(t("editor.row.lastRow") || "آخرین ردیف منبع")}</option>
+            <option value="FirstRow" ${n.rowIndexType === "FirstRow" ? "selected" : ""}>${esc(t("editor.row.firstRow") || "اولین ردیف منبع")}</option>
+            <option value="SpecificRow" ${n.rowIndexType === "SpecificRow" ? "selected" : ""}>${esc(t("editor.row.specificRow") || "یک ردیف مشخص")}</option>
+          </select>
+        </div>
+        <div class="insp-field" id="insp-delete-row-idx" style="${n.rowIndexType === "SpecificRow" ? "" : "display:none"}">
+          <label>${esc(t("editor.row.specificIndex") || "شماره ردیف")}</label>
+          <input type="number" min="0" data-k="specificRowIndex" value="${esc(n.specificRowIndex == null ? 0 : n.specificRowIndex)}" />
+        </div>
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.deleteRowHint")}</p>`;
     }
 
     // ناوبری: سوئیچ انتظار برای تکمیل بارگذاری + سقف انتظار (فقط وقتی روشن است).
@@ -7814,6 +7879,23 @@
     // page default (which is RTL because the product is Persian-first).
     const dir = isFaUi() ? "rtl" : "ltr";
     return `<p class="palette-hint insp-alias-hint" dir="${dir}">${esc(head)}${names}${esc(tail)}</p>`;
+  }
+
+  /**
+   * The "what this action does" line shown under the type picker.
+   *
+   * When the stored value is not one this build knows, the picker would otherwise show a bare
+   * identifier with no explanation - exactly the case a user needs explained, so say so instead of
+   * rendering nothing.
+   */
+  function actionDescriptionHtml(at) {
+    const desc = actionDescriptions()[at];
+    const dir = isFaUi() ? "rtl" : "ltr";
+    if (!desc) {
+      const unknown = t("editor.actionDesc.unknown", { name: at }) || `اقدام ناشناخته «${at}»`;
+      return `<p class="palette-hint insp-action-desc" dir="${dir}" style="color:#ea5455">${esc(unknown)}</p>`;
+    }
+    return `<p class="palette-hint insp-action-desc" dir="${dir}">${esc(desc)}</p>`;
   }
   function esc(s) {
     return String(s ?? "").replace(/[&<>"'`]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
