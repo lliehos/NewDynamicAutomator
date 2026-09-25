@@ -1,7 +1,50 @@
+/**
+ * Resolve once a smart session is active, or after a short timeout.
+ *
+ * Uses the same `smartStateChanged` broadcast the background already sends, with a few polls as a
+ * safety net (the broadcast can be missed if the background was still starting the session when
+ * this script ran). Returns as soon as the FAB exists, so a second injection does not double-wait.
+ */
+function waitForActiveSession(maxMs = 6000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    // Declared with let above finish() and assigned below: finish() can be called from the
+    // listener before the timer is created, so it must tolerate a null handle.
+    let poll = null;
+    let timer = null;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      try { chrome.runtime.onMessage.removeListener(onMessage); } catch { /* ignore */ }
+      if (poll) clearInterval(poll);
+      if (timer) clearTimeout(timer);
+      resolve();
+    };
+
+    const onMessage = (message) => {
+      if (message?.type === "smartStateChanged" && (message.active || message.learningComplete)) {
+        finish();
+      }
+    };
+    try { chrome.runtime.onMessage.addListener(onMessage); } catch { /* ignore */ }
+
+    poll = setInterval(async () => {
+      if (document.getElementById("da-smart-fab")) { finish(); return; }
+      const state = await chrome.runtime.sendMessage({ type: "getSmartState" }).catch(() => ({}));
+      if (state?.active || state?.learningComplete) finish();
+    }, 200);
+
+    timer = setTimeout(finish, maxMs);
+  });
+}
+
 /** Smart Recorder FAB — only when a smart session is active (injected by background). */
 (async function initSmartFab() {
   if (window !== window.top) return;
-  if (window.__daSmartFabInit || document.getElementById("da-smart-fab")) return;
+  // Already mounted — nothing to do. Note this checks the DOM, not a flag set early: the flag used
+  // to be set before the session was known, which made a later re-injection a no-op.
+  if (document.getElementById("da-smart-fab")) return;
 
   // Load the shared strings first so the FAB is created already in the right language.
   if (window.DaRecI18n) {
@@ -16,8 +59,16 @@
 
   // Do not mount on ordinary play/record pages — only during an active smart session.
   const boot = await chrome.runtime.sendMessage({ type: "getSmartState" }).catch(() => ({}));
-  if (!boot?.active && !boot?.learningComplete) return;
+  if (!boot?.active && !boot?.learningComplete) {
+    // The session may not exist yet: the background injects this script while it is still creating
+    // the session on the portal, and on a blank tab there is no later navigation to re-trigger it.
+    // Wait for the state to turn active, then mount — this is what makes the FAB appear immediately
+    // in a blank recording tab instead of only after the address changes.
+    await waitForActiveSession();
+    if (document.getElementById("da-smart-fab")) return;
+  }
 
+  if (window.__daSmartFabInit) return;
   window.__daSmartFabInit = true;
 
   const markUrl = chrome.runtime.getURL("icons/mark.svg");

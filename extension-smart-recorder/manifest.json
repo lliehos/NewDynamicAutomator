@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "__MSG_extDesc__",
   "default_locale": "fa",
   "permissions": ["storage", "cookies", "scripting", "webNavigation", "tabs", "activeTab", "windows"],
@@ -11,7 +11,8 @@
     "http://127.0.0.1/*",
     "https://127.0.0.1/*",
     "http://*/*",
-    "https://*/*"
+    "https://*/*",
+    "about:blank"
   ],
   "icons": {
     "16": "icons/icon16.png",
@@ -36,6 +37,7 @@
       "matches": ["http://*/*", "https://*/*"],
       "js": ["content/selector.js", "content/capture.js"],
       "all_frames": true,
+      "match_about_blank": true,
       "run_at": "document_idle"
     },
     {

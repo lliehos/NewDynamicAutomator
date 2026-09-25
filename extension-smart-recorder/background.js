@@ -228,7 +228,6 @@ async function startSmartSession(message = {}) {
       error: ping.error || "سرور در دسترس نیست (404)."
     };
   }
-
   let created;
   try {
     created = await apiFetch("/api/smart-learning/sessions", {
@@ -262,6 +261,13 @@ async function startSmartSession(message = {}) {
   });
   contextQueue = [];
   await broadcastSmartState();
+  // Re-inject now that smartActive is true.
+  //
+  // The first injection above runs before the session exists, so fab.js sees smartActive === false
+  // and correctly declines to mount. Nothing would then re-inject it on a blank tab: about:blank
+  // has already reached "complete", and the user is told not to change the address, so no further
+  // navigation event ever arrives. Injecting again here is what makes the FAB appear immediately.
+  if (tabId) await injectSmartFab(tabId);
   return { ok: true, sessionId, tabId, taskId };
 }
 
@@ -373,7 +379,13 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   const { smartActive, smartTabId } = await chrome.storage.local.get(["smartActive", "smartTabId"]);
   if (!smartActive || !smartTabId || tabId !== smartTabId) return;
-  if (changeInfo.status === "complete") {
+
+  // "complete" only covers fully loaded documents. A blank tab never reports it again after the
+  // first load, and a same-document (hash/SPA) navigation never reports it at all — which is why
+  // the FAB could vanish on a page the user was told not to navigate away from. Re-inject whenever
+  // the tab reports a new URL, and also on a completed load, and let fab.js dedupe.
+  const urlChanged = typeof changeInfo.url === "string";
+  if (changeInfo.status === "complete" || urlChanged) {
     injectSmartFab(tabId).catch(() => {});
   }
 });
