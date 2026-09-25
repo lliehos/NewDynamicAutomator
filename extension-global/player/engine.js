@@ -426,6 +426,8 @@ const ENGINE_MSG = {
     "ds.pickMissing": "منبع داده انتخاب نشده",
     "ds.colMissing": "ستون منبع داده انتخاب نشده",
 
+    "play.dynSelectorResolved": "سلکتور پویا «{title}» (ردیف {row}) → {selector}",
+
     "act.constantSaveEmpty": "مقدار ثابت ذخیره خالی است",
     "act.memSourceMissing": "متغیر منبع حافظه مشخص نیست",
     "act.sysTypeMissing": "نوع مقدار پیشفرض سیستم مشخص نیست",
@@ -490,6 +492,8 @@ const ENGINE_MSG = {
     "sel.attrDynColMissing": "Dynamic {label} attribute column is not set",
     "ds.pickMissing": "No data source selected",
     "ds.colMissing": "No data source column selected",
+
+    "play.dynSelectorResolved": "Dynamic selector \"{title}\" (row {row}) -> {selector}",
 
     "act.constantSaveEmpty": "Constant value to save is empty",
     "act.memSourceMissing": "Source memory variable is not set",
@@ -2327,6 +2331,8 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   const resolvedSelector = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0);
   const resolvedUrl = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { preferUrl: true });
 
+  logDynamicSelectorResolution(step, resolvedSelector, rowIndex ?? 0);
+
   if (actionType === "CloseFirstTab" || actionType === "CloseLastTab") {
     return closeWindowTab(tabId, actionType === "CloseFirstTab" ? "first" : "last");
   }
@@ -2572,6 +2578,35 @@ async function runCaptureStep(tabId, taskId, step, runMode, graph, rowIndex, fra
     }, store.error);
   }
   return { ok: true, text, captured: true };
+}
+
+/**
+ * Log the selector a dynamic step actually resolved to.
+ *
+ * When a selector is built from data (a source cell or a captured value) the raw
+ * `selectorValue` in the graph is only a template, so the play log used to show nothing
+ * about which element the run really targeted. If the step then failed, there was no way
+ * to tell which row's value produced the selector, or what it looked like. This logs the
+ * template, the resolved selector and the row, so a failure can be traced back.
+ *
+ * Nothing is logged for ordinary static selectors, which are already visible in the graph.
+ */
+function logDynamicSelectorResolution(step, resolvedSelector, rowIndex) {
+  if (!step || !resolvedSelector) return;
+  const valueKey = "selectorValue";
+  const raw = String(step[valueKey] || "");
+  const hasLegacy = /\{\{[^}]+\}\}/.test(raw);
+  const hasPh = raw.includes(DYN_SEL_PLACEHOLDER);
+  if (!step.selectorIsDynamic && !hasLegacy && !hasPh) return;
+  // A template that resolved to itself adds no information.
+  if (raw === resolvedSelector && !step.selectorIsDynamic) return;
+
+  const title = step.title || step.actionType || "";
+  appendPlayLog("info", tv("play.dynSelectorResolved", {
+    title,
+    row: Number(rowIndex) + 1,
+    selector: resolvedSelector
+  }));
 }
 
 function resolveDynamicSelector(step, graph, rowIndex, opts = {}) {
