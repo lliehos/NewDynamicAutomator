@@ -1,0 +1,31 @@
+# Morobot — shared editor/encoding conventions
+#
+# Why this file exists: parts of this project carry Persian (فارسی) text. That text is only
+# safe when files are written as UTF-8 WITHOUT a byte-order mark. A BOM at the start of a
+# file is invisible in an editor but is made of real bytes, and a handful of consumers here
+# (Chrome's extension manifest parser, strict JSON readers, some bundlers) treat it as data:
+# the first key is then unreadable and non-ASCII text shows up as '?'.
+#
+# Do not set `charset = utf-8-bom` anywhere in this repository.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.cs]
+indent_size = 4
+
+[*.{csproj,props,targets,sln}]
+indent_size = 2
+
+[*.json]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
