@@ -337,6 +337,21 @@ rect.flow-marquee{pointer-events:none}
   white-space:pre-wrap;
   word-break:break-all;
 }
+/*
+ * Technical fields (selector, URL, JSON, ids, colours, numbers) are marked dir=ltr by
+ * fieldDir() in flow.js. `dir` alone does not left-align a narrow input in every browser,
+ * so pin the alignment and keep the value on one visual line.
+ */
+.insp-field input[dir="ltr"],
+.insp-field textarea[dir="ltr"]{
+  text-align:left;
+  direction:ltr;
+  unicode-bidi:plaintext;
+}
+.insp-field input[dir="ltr"]{
+  font-family:ui-monospace,"Cascadia Code",Consolas,monospace;
+  font-size:12px;
+}
 .insp-field input[type="checkbox"],
 .insp-field input[type="radio"]{
   width:auto;

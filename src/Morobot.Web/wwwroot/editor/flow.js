@@ -1899,6 +1899,15 @@
 
   function bindProcessProps() {
     inspector.querySelectorAll("[data-task-k]").forEach((inp) => {
+      // Same direction rule as the node inspector: numbers and the colour go LTR so a
+      // hex value or a numeric field is not mirrored in the Persian UI.
+      if (inp.tagName === "INPUT") {
+        const k = inp.dataset.taskK;
+        const textLike = ["text", "search", "url", "number", ""].includes(inp.type);
+        if (k && textLike) inp.setAttribute("dir", fieldDir(k));
+      }
+    });
+    inspector.querySelectorAll("[data-task-k]").forEach((inp) => {
       const apply = () => {
         const k = inp.dataset.taskK;
         if (k === "title") {
@@ -5237,6 +5246,19 @@
       inspector.innerHTML = field("عنوان", "title", n.title);
     }
     inspector.querySelectorAll("[data-k]").forEach((inp) => {
+      // Set the writing direction from the field's own key, so a selector/URL/JSON/number is
+      // LTR even in the Persian UI. Applied here rather than at each call site because this
+      // loop already sees every inspector field, including ones added later.
+      if (inp.tagName === "INPUT" || inp.tagName === "TEXTAREA") {
+        const k = inp.dataset.k;
+        // Any text-like control qualifies: <textarea> reports type "textarea", so the
+        // type check has to allow it explicitly, and checkboxes/radios/colours keep theirs.
+        const textLike = inp.tagName === "TEXTAREA"
+          || ["text", "search", "url", "number", "email", ""].includes(inp.type);
+        if (k && textLike) {
+          inp.setAttribute("dir", fieldDir(k));
+        }
+      }
       const apply = () => {
         const k = inp.dataset.k;
         if (inp.type === "checkbox") {
@@ -7350,7 +7372,7 @@
   }
 
   function field(label, key, val) {
-    return `<div class="insp-field"><label>${label}</label><input data-k="${key}" value="${esc(val)}" /></div>`;
+    return `<div class="insp-field"><label>${label}</label><input data-k="${key}" ${dirAttr(key)} value="${esc(val)}" /></div>`;
   }
   function opt(list, cur) {
     return list.map((x) => `<option value="${esc(x)}" ${String(cur) === x ? "selected" : ""}>${esc(x)}</option>`).join("");
@@ -7362,6 +7384,40 @@
   }
   function esc(s) {
     return String(s ?? "").replace(/[&<>"'`]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
+  }
+
+  /**
+   * Direction for an input, chosen by what the field holds rather than by the UI language.
+   *
+   * In a right-to-left UI every input inherits RTL, which is wrong for values that are not
+   * prose: a CSS selector, a URL, JSON, a memory-variable name, a colour or a number. Rendered
+   * RTL the punctuation jumps to the wrong end and the value looks scrambled even though the
+   * stored text is fine. Those fields are marked ltr; everything else (a step title, a label)
+   * stays rtl so Persian reads correctly.
+   *
+   * The set is keyed on `data-k`, which is how every editor field is identified.
+   */
+  const LTR_FIELD_KEYS = new Set([
+    "selectorValue", "equalSelectorValue", "framePathJson", "elementValue",
+    "keyName", "memoryVariableName", "dynamicSourceColumnName",
+    "saveColumnName", "constantEqualValue",
+    "highlightColor", "url", "value", "waitMaxMs", "selectorWaitMs",
+    "loopCount", "loopBackLimit", "stepDelayMs", "delayBeforeMs", "delayAfterMs",
+    "systemClockFormat"
+  ]);
+  /** Keys that hold a free-text label the user reads, so they follow the UI direction. */
+  const RTL_FIELD_KEYS = new Set(["title", "label", "attributeName"]);
+
+  function fieldDir(key) {
+    if (RTL_FIELD_KEYS.has(key)) return "rtl";
+    if (LTR_FIELD_KEYS.has(key)) return "ltr";
+    // Numbers, colours and known-technical suffixes default to ltr; anything else is prose.
+    if (/(Ms|Color|Json|Id)$/.test(key || "")) return "ltr";
+    return "rtl";
+  }
+  function dirAttr(key) {
+    const d = fieldDir(key);
+    return `dir="${d}"${d === "ltr" ? ' data-ltr="1"' : ""}`;
   }
 
   function selectNode(id, additive) {
