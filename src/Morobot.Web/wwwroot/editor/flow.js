@@ -5990,6 +5990,23 @@
       }
     }
 
+    // Each branch of a condition must lead somewhere. Without this the run reaches the
+    // condition, finds no edge for the branch it needs, and stops — which reads as the
+    // engine "giving up for no reason". Caught here so it is visible before running.
+    const outs = (graph.edges || []).filter((e) => e.from === n.id);
+    const hasBranchEdges = outs.some((e) => e.kind === "success" || e.kind === "fail");
+    if (hasBranchEdges) {
+      if (!outs.some((e) => e.kind === "success")) {
+        reasons.push("شاخهٔ «موفق» (success) این شرط وصل نشده");
+      }
+      if (!outs.some((e) => e.kind === "fail")) {
+        reasons.push("شاخهٔ «ناموفق» (fail) این شرط وصل نشده");
+      }
+    } else if (!outs.some((e) => e.kind === "next")) {
+      // No branch edges and no `next`: the condition is a dead end.
+      reasons.push("هیچ خروجی‌ای از این شرط وصل نشده (نه success، نه fail، نه بعدی)");
+    }
+
     return { ok: reasons.length === 0, reasons };
   }
 

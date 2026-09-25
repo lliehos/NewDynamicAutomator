@@ -277,7 +277,7 @@ function validateActionNodeForPlay(n) {
   return { ok: reasons.length === 0, reasons };
 }
 
-function validateConditionNodeForPlay(n) {
+function validateConditionNodeForPlay(n, graph) {
   const reasons = [];
   const ct = n.conditionType || "None";
   if (!ct || ct === "None") {
@@ -351,6 +351,18 @@ function validateConditionNodeForPlay(n) {
     }
   }
 
+  // Each branch of a condition must lead somewhere. Without this the walk reaches the
+  // condition, finds no edge for the branch it needs, and stops — which reads as the engine
+  // giving up for no reason. Checked before the run so the author sees it up front.
+  const outs = ((graph && graph.edges) || []).filter((e) => e.from === n.id);
+  const hasBranchEdges = outs.some((e) => e.kind === "success" || e.kind === "fail");
+  if (hasBranchEdges) {
+    if (!outs.some((e) => e.kind === "success")) reasons.push(tv("cond.noSuccessEdge"));
+    if (!outs.some((e) => e.kind === "fail")) reasons.push(tv("cond.noFailEdge"));
+  } else if (!outs.some((e) => e.kind === "next")) {
+    reasons.push(tv("cond.noAnyEdge"));
+  }
+
   return { ok: reasons.length === 0, reasons };
 }
 
@@ -381,7 +393,7 @@ function validateStartNodeForPlay(n, graph) {
 function validateNodeLeafForPlay(n, graph) {
   if (!n) return { ok: true, reasons: [] };
   if (isActionNode(n)) return validateActionNodeForPlay(n);
-  if (n.kind === "condition") return validateConditionNodeForPlay(n);
+  if (n.kind === "condition") return validateConditionNodeForPlay(n, graph);
   if (n.kind === "start") return validateStartNodeForPlay(n, graph);
   return { ok: true, reasons: [] };
 }
@@ -436,6 +448,9 @@ const ENGINE_MSG = {
     "cond.userTimeBadFormat": "فرمت زمان سیستم کاربر نامعتبر است (مجاز: HH:mm یا HH:mm:ss)",
     "cond.memCompareMissing": "متغیر حافظه مقایسه مشخص نیست",
     "cond.sysCompareMissing": "نوع مقدار پیشفرض مقایسه مشخص نیست",
+    "cond.noSuccessEdge": "شاخهٔ «موفق» (success) این شرط وصل نشده",
+    "cond.noFailEdge": "شاخهٔ «ناموفق» (fail) این شرط وصل نشده",
+    "cond.noAnyEdge": "هیچ خروجی‌ای از این شرط وصل نشده (نه success، نه fail، نه بعدی)",
 
     "start.loopBad": "تعداد تکرار حلقه نامعتبر است",
     "start.dsMissing": "منبع پیشفرض برای تکرار مشخص نشده",
@@ -452,6 +467,9 @@ const ENGINE_MSG = {
     "run.notSelect": "المان انتخابی یک لیست کشویی (select) نیست.",
     "run.optionNotFound": "گزینه‌ای با مقدار «{v}» در لیست پیدا نشد.",
     "run.waitElementTimeout": "المان تا پایان مهلت ظاهر نشد: {sel}",
+    "run.condNoFailBranch": "شاخهٔ «ناموفق» (fail) این شرط وصل نشده و مسیری برای ادامه وجود ندارد — اجرا متوقف شد. برای حلقه، شاخهٔ fail را به مرحلهٔ تکراری وصل کنید.",
+    "run.condNoSuccessBranch": "شاخهٔ «موفق» (success) این شرط وصل نشده و مسیری برای ادامه وجود ندارد — اجرا متوقف شد.",
+    "run.condMissingBranch": "شاخهٔ «{branch}» این شرط وصل نشده و مسیری برای ادامه وجود ندارد — اجرا متوقف شد.",
     "run.cellBusy": "سلول منبع هنوز آزاد نشده — چند ثانیه بعد دوباره تلاش کنید.",
     "run.cellSaveFailed": "ذخیرهٔ سلول روی سرور انجام نشد.",
 
@@ -495,6 +513,9 @@ const ENGINE_MSG = {
     "cond.userTimeBadFormat": "User system time format is invalid (expected HH:mm or HH:mm:ss)",
     "cond.memCompareMissing": "Comparison memory variable is not set",
     "cond.sysCompareMissing": "Comparison system value type is not set",
+    "cond.noSuccessEdge": "This condition's \"success\" branch is not wired",
+    "cond.noFailEdge": "This condition's \"fail\" branch is not wired",
+    "cond.noAnyEdge": "This condition has no outgoing edge (no success, fail or next)",
 
     "start.loopBad": "Loop repeat count is invalid",
     "start.dsMissing": "No default data source selected for the repeat",
@@ -511,6 +532,9 @@ const ENGINE_MSG = {
     "run.notSelect": "The target element is not a dropdown (select).",
     "run.optionNotFound": "No option with the value \"{v}\" was found in the list.",
     "run.waitElementTimeout": "The element did not appear before the deadline: {sel}",
+    "run.condNoFailBranch": "This condition has no \"fail\" branch wired and nowhere to continue — the run stopped. For a loop, wire the fail branch to the repeating step.",
+    "run.condNoSuccessBranch": "This condition has no \"success\" branch wired and nowhere to continue — the run stopped.",
+    "run.condMissingBranch": "This condition has no \"{branch}\" branch wired and nowhere to continue — the run stopped.",
     "run.cellBusy": "Source cell is still locked — try again in a few seconds.",
     "run.cellSaveFailed": "Could not save the cell on the server.",
 
@@ -1594,8 +1618,58 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         ok: true,
         detail: pass ? "شاخه success" : "شاخه fail"
       });
-      const e = flowEdge(edges, cur, pass ? ["success", "next"] : ["fail", "next"]);
-      const nextId = e?.to || null;
+      // Resolve the outgoing edge. A condition has two logical branches (success / fail)
+      // and each must be wired by the author. Falling back from a missing branch to the
+      // generic `next` edge is what previously let a condition take the WRONG path: an
+      // unwired `fail` silently followed whatever `next` pointed at, so a failed check ran
+      // the success work. A `next` edge is therefore only honoured when the condition has
+      // no success/fail edges at all, which is a condition used as a plain sequential step.
+      const hasBranchEdges = edges.some(
+        (x) => x.from === cur && (x.kind === "success" || x.kind === "fail")
+      );
+      const wanted = pass ? "success" : "fail";
+      const e = flowEdge(edges, cur, hasBranchEdges ? [wanted] : ["next"]);
+
+      if (!e) {
+        // Nothing to follow: either the branch we need is unwired, or the condition is a
+        // terminal node. Either way the run cannot continue, and ending silently is what
+        // made this look like the engine "stopping for no reason".
+        const label = node.title || node.id;
+        if (hasBranchEdges) {
+          const other = pass ? "fail" : "success";
+          appendPlayLog(
+            "warn",
+            `شرط «${label}»: نتیجهٔ ${pass ? "موفق" : "ناموفق"} شد ولی شاخهٔ «${wanted}» وصل نشده ` +
+            `(شاخهٔ «${other}» وصل است) — اجرا متوقف شد.`
+          );
+          playStatus.lastError = tv("run.condMissingBranch", {
+            branch: pass ? "موفق" : "ناموفق"
+          });
+        } else {
+          appendPlayLog("warn", `شرط «${label}»: ${tv(
+            pass ? "run.condNoSuccessBranch" : "run.condNoFailBranch"
+          )}`);
+          playStatus.lastError = tv(
+            pass ? "run.condNoSuccessBranch" : "run.condNoFailBranch"
+          );
+        }
+        appendPlayResult({
+          t: Date.now(),
+          loop: loopIndex,
+          loopTotal,
+          rowIndex,
+          step: stepOrdinal,
+          stepTotal: playStatus.stepTotal,
+          title: node.title || "شرط",
+          actionType: "Condition",
+          ok: false,
+          severity: "error",
+          detail: `شاخهٔ ${wanted} وصل نشده`
+        });
+        break;
+      }
+
+      const nextId = e.to || null;
       await delayAfterNode(graph, nextId);
       await paceLoopBack(graph, nextId, visitCounts, loopBackLimit);
       cur = nextId;
