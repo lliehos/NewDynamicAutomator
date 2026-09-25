@@ -1,3 +1,4 @@
+using Morobot.Contracts.Auth;
 using Morobot.Infrastructure.Identity;
 using Morobot.Infrastructure.Options;
 using Morobot.Infrastructure.Persistence;
@@ -43,6 +44,8 @@ public static class DependencyInjection
             resolvedContentRoot,
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<OfflineUpdateService>>()));
         services.AddScoped<AuthService>();
+        services.AddScoped<AuthModeResolver>();
+        services.AddScoped<ILdapAuthenticator, LdapAuthenticator>();
         services.AddScoped<EntitlementService>();
         services.AddScoped<EventLogService>();
         services.AddScoped<SystemSettingsService>();

@@ -424,6 +424,43 @@ html.light-style {
   font-size: 1.45rem;
 }
 
+/* Sign-in method indicator on the login page.
+   Rendered as pills that look like tabs but are not interactive: the method is chosen by an
+   administrator, so the control must not suggest the visitor can switch it. `cursor: default`
+   and the muted inactive pill make that clear. */
+.morobot-login-mode-tabs {
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+}
+
+.morobot-login-mode-tabs .nav-link {
+  border-radius: 999px;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.75rem;
+  cursor: default;
+  color: var(--morobot-ink, var(--morobot-ink-default));
+  opacity: 0.65;
+}
+
+.morobot-login-mode-tabs .nav-link.active {
+  opacity: 1;
+  font-weight: 600;
+  color: #fff;
+  background: var(--morobot-primary, var(--morobot-primary-default));
+}
+
+.morobot-login-mode-hint {
+  color: var(--morobot-ink, var(--morobot-ink-default));
+  opacity: 0.8;
+}
+
+.morobot-login-mode-fallback {
+  color: var(--morobot-ink, var(--morobot-ink-default));
+  opacity: 0.65;
+}
+
 .da-source-actions {
   display: inline-flex;
   gap: 2px;

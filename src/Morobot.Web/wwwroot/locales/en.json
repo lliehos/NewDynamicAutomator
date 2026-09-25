@@ -207,7 +207,14 @@
     "password": "Password",
     "submit": "Sign in",
     "toRegister": "No account? Register",
-    "backSite": "Back to {brand} site"
+    "backSite": "Back to {brand} site",
+    "errorLdapUnavailable": "The directory server could not be reached. Contact your administrator.",
+    "errorLdapMisconfigured": "Directory sign-in is selected but not fully configured. Contact your administrator.",
+    "tabLocal": "System users",
+    "tabLdap": "Directory users (LDAP)",
+    "modeLocalHint": "Sign in with your user name and password for this system.",
+    "modeLdapHint": "Sign in with your organisational directory credentials.",
+    "adminFallbackNote": "An administrator can always sign in with their local password."
   },
   "register": {
     "title": "Register",
@@ -461,7 +468,11 @@
           "desc": "Brand identity; edited from the Branding page."
         }
       },
-      "notSetYet": "Not set yet"
+      "notSetYet": "Not set yet",
+      "authModeLocal": "System users (local)",
+      "authModeLdap": "Organisational directory (LDAP)",
+      "secretKeep": "Enter a new value to change it; blank = keep current",
+      "secretEmpty": "Not set yet"
     },
     "license": {
       "title": "License",

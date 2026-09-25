@@ -11,21 +11,26 @@ public class AccountController : Controller
 {
     private readonly AuthService _auth;
     private readonly IWebHostEnvironment _env;
+    private readonly AuthModeResolver _authMode;
 
-    public AccountController(AuthService auth, IWebHostEnvironment env)
+    public AccountController(AuthService auth, IWebHostEnvironment env, AuthModeResolver authMode)
     {
         _auth = auth;
         _env = env;
+        _authMode = authMode;
     }
 
     [HttpGet]
     [AllowAnonymous]
-    public IActionResult Login(string? returnUrl = null)
+    public async Task<IActionResult> Login(string? returnUrl = null, CancellationToken ct = default)
     {
         if (User.Identity?.IsAuthenticated == true)
             return RedirectToAction("Index", "Home", new { area = "Panel" });
         ViewBag.ReturnUrl = returnUrl;
         ViewBag.Error = TempData["LoginError"];
+        // The page announces which sign-in method is active, so a user is not left guessing why
+        // their directory password was refused (or why a local one was accepted).
+        ViewBag.AuthMode = await _authMode.GetModeAsync(ct);
         return View();
     }
 

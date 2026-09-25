@@ -57,6 +57,8 @@
           var hint = isFa ? s.HintFa : s.HintEn;
           var label = isFa ? s.LabelFa : s.LabelEn;
           var readOnly = SystemSettingKeys.IsReadOnlyForAdmin(s.Key);
+          var isSecret = SystemSettingKeys.IsSensitiveForAdmin(s.Key);
+          var secretSet = isSecret && !string.IsNullOrWhiteSpace(s.Value);
           <div class="admin-settings-field">
             <label class="admin-label" for="setting_@s.Key">
               <span>@label</span>
@@ -95,6 +97,16 @@
                   <code>@roText</code>
                 }
               </div>
+            }
+            else if (isSecret)
+            {
+              @* Deliberately empty and never round-tripped: printing the stored secret into the
+                 page would hand it to anyone who can open developer tools, so the field starts
+                 blank with a placeholder saying what happens if it is left that way. Saving an
+                 empty value keeps the stored secret (see SettingsController). *@
+              <input class="form-control" type="password" id="setting_@s.Key" name="setting_@s.Key"
+                     value="" autocomplete="new-password"
+                     placeholder="@(secretSet ? L["admin.settings.secretKeep"] : L["admin.settings.secretEmpty"])" />
             }
             else
             {

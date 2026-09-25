@@ -27,6 +27,8 @@ public class AuthService
     private readonly SystemSettingsService _settings;
     private readonly LicenseService _license;
     private readonly DeploymentBindingService _deploymentBinding;
+    private readonly AuthModeResolver _authMode;
+    private readonly ILdapAuthenticator _ldap;
     private readonly PasswordHasher<AppUser> _hasher = new();
 
     public AuthService(
@@ -36,7 +38,9 @@ public class AuthService
         EventLogService events,
         SystemSettingsService settings,
         LicenseService license,
-        DeploymentBindingService deploymentBinding)
+        DeploymentBindingService deploymentBinding,
+        AuthModeResolver authMode,
+        ILdapAuthenticator ldap)
     {
         _db = db;
         _config = config;
@@ -45,6 +49,8 @@ public class AuthService
         _settings = settings;
         _license = license;
         _deploymentBinding = deploymentBinding;
+        _authMode = authMode;
+        _ldap = ldap;
     }
 
     public async Task<(LoginResponse? ok, string? errorKey)> RegisterAsync(
@@ -202,18 +208,67 @@ public class AuthService
         var user = await _db.Users
             .Include(u => u.Plan)
             .FirstOrDefaultAsync(u => u.UserName == request.UserName, ct);
-        if (user is null || !user.IsActive)
-            return (null, "login.errorInvalid");
 
-        var result = _hasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
-        if (result == PasswordVerificationResult.Failed)
-            return (null, "login.errorInvalid");
+        // The directory, when configured, decides whether the password is right. The local row is
+        // still consulted first because it supplies the role and plan: a user the directory accepts
+        // but that has no row here would have no permissions, so the lookup must happen either way.
+        var mode = await _authMode.GetModeAsync(ct);
+        var password = request.Password ?? "";
+        if (mode == AuthMode.Ldap && user is { IsActive: true, Role: UserRole.Admin }
+            && !string.IsNullOrEmpty(password)
+            && _hasher.VerifyHashedPassword(user, user.PasswordHash, password)
+               != PasswordVerificationResult.Failed)
+        {
+            // Break-glass path, and the reason it is safe: switching to a directory must not be able
+            // to lock the administrator out of the very page that switches back. The local password
+            // of an Admin is therefore always honoured. It is bounded to the Admin role — ordinary
+            // accounts get no such bypass — and the bypass is logged so a use of it is visible.
+            await _events.LogAsync("Warning", "Auth", "LoginAdminLocalFallback",
+                $"Administrator {user.UserName} signed in with the local password while LDAP mode is active.",
+                user.Id, user.UserName, ipAddress: ip, ct: ct);
+        }
+        else if (mode == AuthMode.Ldap)
+        {
+            var options = await _authMode.GetLdapOptionsAsync(ct);
+            if (!options.IsUsable)
+            {
+                // Directory sign-in was selected but not configured. Refusing here is the safe
+                // reading: falling back to local passwords for everyone would silently accept
+                // credentials the administrator believes are no longer valid.
+                await _events.LogAsync("Error", "Auth", "LdapMisconfigured",
+                    "Sign-in rejected: LDAP mode is active but the directory settings are incomplete.",
+                    user?.Id, user?.UserName, ipAddress: ip, ct: ct);
+                return (null, "login.errorLdapMisconfigured");
+            }
 
-        if (!await _deploymentBinding.IsUserUsableAsync(user, ct))
+            if (user is null || !user.IsActive)
+                return (null, "login.errorInvalid");
+
+            var ldapResult = await _ldap.AuthenticateAsync(options, request.UserName, password, ct);
+            if (ldapResult == LdapAuthResult.Unavailable)
+                return (null, "login.errorLdapUnavailable");
+            if (ldapResult != LdapAuthResult.Success)
+                return (null, "login.errorInvalid");
+
+            await _events.LogAsync("Audit", "Auth", "LoginLdap",
+                $"Directory login: {user.UserName}",
+                user.Id, user.UserName, ipAddress: ip, ct: ct);
+        }
+        else
+        {
+            if (user is null || !user.IsActive)
+                return (null, "login.errorInvalid");
+
+            var result = _hasher.VerifyHashedPassword(user, user.PasswordHash, password);
+            if (result == PasswordVerificationResult.Failed)
+                return (null, "login.errorInvalid");
+        }
+
+        if (!await _deploymentBinding.IsUserUsableAsync(user!, ct))
             return (null, "login.errorDeploymentBinding");
 
         // One Local/guest identity per machine (blocks multi-browser guest hopping).
-        if (user.Plan is not null && PasswordPolicy.IsLocal(user.Plan.Code))
+        if (user!.Plan is not null && PasswordPolicy.IsLocal(user.Plan.Code))
         {
             var machine = EventLogService.NormalizeMachineFingerprint(request.Device);
             var existingLocalUserId = await _events.FindLocalUserIdByMachineAsync(machine, ct);
@@ -224,12 +279,15 @@ public class AuthService
         await _events.UpsertDeviceSessionAsync(user.Id, user.UserName, request.Device, ip, ct);
         var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
         var token = CreateToken(user, entitlements);
-        await _events.LogAsync(
-            "Audit", "Auth", "LoginServer",
-            $"Server login: {user.UserName}",
-            user.Id, user.UserName,
-            fingerprintHash: EventLogService.NormalizeFingerprint(request.Device),
-            ipAddress: ip, ct: ct);
+        if (mode != AuthMode.Ldap)
+        {
+            await _events.LogAsync(
+                "Audit", "Auth", "LoginServer",
+                $"Server login: {user.UserName}",
+                user.Id, user.UserName,
+                fingerprintHash: EventLogService.NormalizeFingerprint(request.Device),
+                ipAddress: ip, ct: ct);
+        }
 
         return (new LoginResponse
         {

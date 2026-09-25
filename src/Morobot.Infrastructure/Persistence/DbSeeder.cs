@@ -1,3 +1,4 @@
+using Morobot.Contracts.Auth;
 using Morobot.Contracts.Licensing;
 using Morobot.Domain;
 using Morobot.Domain.Entities;
@@ -121,6 +122,78 @@ public static class DbSeeder
             "Default registration plan",
             "کد پلن فعال برای کاربران جدید (مثلاً Free)",
             "Active plan code assigned to new registrations (e.g. Free)");
+
+        await Upsert(
+            SystemSettingKeys.AuthMode,
+            nameof(AuthMode.Local),
+            "Auth",
+            "روش احراز هویت",
+            "Authentication method",
+            "Local = کاربران همین سامانه · Ldap = پوشهٔ سازمانی (Active Directory یا OpenLDAP)",
+            "Local = users of this system · Ldap = an organisational directory (Active Directory or OpenLDAP)");
+
+        await Upsert(
+            SystemSettingKeys.LdapHost,
+            "",
+            "Auth",
+            "هاست پوشه (LDAP)",
+            "Directory host (LDAP)",
+            "نام یا IP سرور پوشه؛ بدون http و بدون پورت. فقط وقتی روش احراز هویت Ldap است استفاده می‌شود.",
+            "Host name or IP of the directory; no scheme, no port. Used only when the method is Ldap.");
+
+        await Upsert(
+            SystemSettingKeys.LdapPort,
+            "",
+            "Auth",
+            "پورت پوشه (LDAP)",
+            "Directory port (LDAP)",
+            "خالی = پورت پیش‌فرض بر اساس TLS (389 یا 636).",
+            "Blank = the conventional port for the transport (389 or 636).");
+
+        await Upsert(
+            SystemSettingKeys.LdapBaseDn,
+            "",
+            "Auth",
+            "Base DN",
+            "Base DN",
+            "مثال: DC=corp,DC=local — نقطهٔ شروع جست‌وجو در پوشه.",
+            "For example DC=corp,DC=local — where searches in the directory start.");
+
+        await Upsert(
+            SystemSettingKeys.LdapBindDn,
+            "",
+            "Auth",
+            "Bind DN",
+            "Bind DN",
+            "حساب سرویس برای اتصال به پوشه (در صورت عدم اجازهٔ اتصال ناشناس).",
+            "Service account used to reach the directory when anonymous binding is not allowed.");
+
+        await Upsert(
+            SystemSettingKeys.LdapBindPassword,
+            "",
+            "Auth",
+            "رمز Bind",
+            "Bind password",
+            "رمز حساب سرویس. برای امنیت به‌صورت پوشیده نمایش داده می‌شود؛ خالی گذاشتن یعنی بدون تغییر.",
+            "Service-account password. Shown masked for safety; leaving it blank keeps the stored value.");
+
+        await Upsert(
+            SystemSettingKeys.LdapUserTemplate,
+            "{0}",
+            "Auth",
+            "قالب نام کاربری",
+            "User-name template",
+            "چگونه نام کاربری به نام ورود تبدیل شود. مثال: {0}@corp.local یا CN={0},OU=People,DC=corp,DC=local",
+            "How the typed user name becomes a sign-in name. For example {0}@corp.local or CN={0},OU=People,DC=corp,DC=local");
+
+        await Upsert(
+            SystemSettingKeys.LdapUseTls,
+            "false",
+            "Auth",
+            "استفاده از TLS",
+            "Use TLS",
+            "برای LDAPS یا StartTLS فعال کنید. بدون TLS رمز به‌صورت متن ساده روی شبکه می‌رود.",
+            "Enable for LDAPS or StartTLS. Without TLS the password crosses the network in the clear.");
 
         await Upsert(
             SystemSettingKeys.UpdateServerUrl,

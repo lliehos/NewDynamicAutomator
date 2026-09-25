@@ -48,6 +48,10 @@ public class SettingsController : Controller
             .Select(k => (k["setting_".Length..], form[k].ToString() ?? ""))
             // Defence in depth: ignore branding keys even if a crafted form posts them.
             .Where(p => !SystemSettingKeys.IsBrandingOwned(p.Item1))
+            // A blank secret means "leave it alone", not "erase it". The page cannot show the
+            // current value back, so it always submits blank; treating that as a clear would wipe
+            // the bind password every time any other setting was saved.
+            .Where(p => !(SystemSettingKeys.IsSensitiveForAdmin(p.Item1) && string.IsNullOrEmpty(p.Item2)))
             .ToList();
         await _settings.SaveAsync(pairs, ct);
         TempData["Ok"] = _locale["admin.settings.saved"];

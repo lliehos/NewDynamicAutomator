@@ -5,6 +5,12 @@
     var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
     var errKey = ViewBag.Error as string;
     var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+    var authMode = ViewBag.AuthMode as Morobot.Contracts.Auth.AuthMode? ?? Morobot.Contracts.Auth.AuthMode.Local;
+    var isLdap = authMode == Morobot.Contracts.Auth.AuthMode.Ldap;
+    // Two methods exist, but the page shows the active one rather than an interactive switch:
+    // offering a tab the visitor cannot choose between would imply they may pick, and the method
+    // is an administrative decision, not a per-visit preference.
+    var autocomplete = isLdap ? "off" : "current-password";
 }
 
 <div class="card">
@@ -25,6 +31,26 @@
     {
       <div class="alert alert-danger small" data-i18n="@errKey">@L[errKey]</div>
     }
+    <div class="morobot-login-mode mb-4">
+      <ul class="nav nav-pills nav-justified morobot-login-mode-tabs" role="tablist">
+        <li class="nav-item" role="presentation">
+          <span class="nav-link @(isLdap ? null : "active")" role="tab"
+                aria-selected="@(isLdap ? "false" : "true")"
+                data-i18n="login.tabLocal">@L["login.tabLocal"]</span>
+        </li>
+        <li class="nav-item" role="presentation">
+          <span class="nav-link @(isLdap ? "active" : null)" role="tab"
+                aria-selected="@(isLdap ? "true" : "false")"
+                data-i18n="login.tabLdap">@L["login.tabLdap"]</span>
+        </li>
+      </ul>
+      <p class="morobot-login-mode-hint small mb-0 mt-2"
+         data-i18n="@(isLdap ? "login.modeLdapHint" : "login.modeLocalHint")">@L[isLdap ? "login.modeLdapHint" : "login.modeLocalHint"]</p>
+      @if (isLdap)
+      {
+        <p class="morobot-login-mode-fallback small mb-0" data-i18n="login.adminFallbackNote">@L["login.adminFallbackNote"]</p>
+      }
+    </div>
     <div class="alert alert-info small mb-4" role="note">
       <div class="fw-semibold mb-1" data-i18n="login.guideTitle">@L["login.guideTitle"]</div>
       <div data-i18n="login.guideGuest">@L["login.guideGuest"]</div>
@@ -39,7 +65,7 @@
       </div>
       <div class="mb-6">
         <label class="form-label" for="password" data-i18n="login.password">@L["login.password"]</label>
-        <input class="form-control" type="password" id="password" name="password" value="" autocomplete="current-password" />
+        <input class="form-control" type="password" id="password" name="password" value="" autocomplete="@autocomplete" />
       </div>
       <button class="btn btn-primary d-grid w-100" type="submit" data-i18n="login.submit">@L["login.submit"]</button>
     </form>

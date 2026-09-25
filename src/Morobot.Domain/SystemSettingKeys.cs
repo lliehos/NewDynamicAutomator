@@ -32,6 +32,30 @@ public static class SystemSettingKeys
     public const string BrandReferralQrVisible = "BrandReferralQrVisible";
 
     /// <summary>
+    /// Which identity store signs users in. "Local" = the built-in user table (the only option
+    /// before this existed, so it is the default and an untouched install keeps behaving). "Ldap"
+    /// = an external directory; the local table then keeps the roles and plan data while the
+    /// directory decides who may sign in.
+    /// </summary>
+    public const string AuthMode = "AuthMode";
+    /// <summary>Directory host name or IP, without a scheme or port.</summary>
+    public const string LdapHost = "LdapHost";
+    public const string LdapPort = "LdapPort";
+    /// <summary>Base DN searches start from, e.g. "DC=corp,DC=local".</summary>
+    public const string LdapBaseDn = "LdapBaseDn";
+    /// <summary>Bind DN used to search the directory when anonymous binding is not allowed.</summary>
+    public const string LdapBindDn = "LdapBindDn";
+    /// <summary>
+    /// Bind password. Sensitive: the settings page shows it masked and leaving the field untouched
+    /// keeps the stored value, so re-saving the form cannot blank a working configuration.
+    /// </summary>
+    public const string LdapBindPassword = "LdapBindPassword";
+    /// <summary>Template that turns the typed user name into a DN, e.g. "{0}@corp.local".</summary>
+    public const string LdapUserTemplate = "LdapUserTemplate";
+    /// <summary>"true" when the connection must use TLS (ldaps or StartTLS).</summary>
+    public const string LdapUseTls = "LdapUseTls";
+
+    /// <summary>
     /// Keys owned by Admin → Branding. Admin → Settings must NOT list these: both pages read and
     /// write the same rows, so exposing them in two places let a stale Settings form silently
     /// overwrite branding (or vice versa). Branding values are also licence-gated and need the
@@ -83,6 +107,21 @@ public static class SystemSettingKeys
     /// <summary>True when the value is system-managed and must not be edited from the settings form.</summary>
     public static bool IsReadOnlyForAdmin(string? key) =>
         !string.IsNullOrWhiteSpace(key) && ReadOnlyForAdmin.Contains(key);
+
+    /// <summary>
+    /// Keys whose value is a secret. Admin → Settings never renders these back to the browser (a
+    /// secret written into the page is one screenshot, one proxy log or one shared screen away
+    /// from leaking), and an empty submission keeps the stored value rather than clearing it, so
+    /// re-saving the form to change an unrelated field cannot silently break directory sign-in.
+    /// </summary>
+    public static readonly IReadOnlySet<string> SensitiveForAdmin = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        LdapBindPassword
+    };
+
+    /// <summary>True when the value is a secret that must not be rendered back to the browser.</summary>
+    public static bool IsSensitiveForAdmin(string? key) =>
+        !string.IsNullOrWhiteSpace(key) && SensitiveForAdmin.Contains(key);
 
     /// <summary>
     /// How each settings group is presented on Admin → Settings: display order plus the locale key
