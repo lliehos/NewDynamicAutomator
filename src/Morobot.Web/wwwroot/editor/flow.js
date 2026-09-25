@@ -2977,6 +2977,10 @@
 
   function render() {
     const inGroup = !!editingGroupId;
+    // Every graph mutation is followed by a render, so this is the one place the loop-warning
+    // cache has to be dropped. Doing it here rather than at each of the ~30 call sites that
+    // add or remove edges means a new call site cannot forget to.
+    invalidateLoopWarning();
     // Full toolbox at every scope (root + inside groups)
     if (paletteRoot) paletteRoot.hidden = false;
     if (paletteGroup) paletteGroup.hidden = true;
@@ -3019,6 +3023,33 @@
         ? `طراح گروه «${nodeById(editingGroupId)?.title || ""}» — گروه / شرط / اقدام مثل سطح فرآیند`
         : "گروه→شرط(OR)+گروه/اقدام · شرط→موفق/شکست · اقدام ۱ ورودی و ۱ خروجی · کادر نارنجی اقدام";
     }
+    warnOnExitlessLoops();
+  }
+
+  /**
+   * Tell the user, once per render, that a loop on the canvas cannot end on its own.
+   *
+   * Shown as a warning rather than an error and it does not block play: the player does stop
+   * such a loop, using its visit budget, and some graphs are built this way on purpose while
+   * being edited. The message names the loop's entry node so the user knows where to look.
+   *
+   * The status line is updated every render, but the toast only fires when the set of loop
+   * nodes actually changes. render() runs on every drag frame, and a notification per frame
+   * would be unusable.
+   */
+  let lastLoopWarnKey = "";
+  function warnOnExitlessLoops() {
+    const loops = findUnconditionalCycles();
+    if (!loops.length) {
+      lastLoopWarnKey = "";
+      return;
+    }
+    const names = loops.slice(0, 3).map((n) => `«${n.title || nodeKindLabel(n)}»`).join("، ");
+    const more = loops.length > 3 ? t("editor.loopWarn.more", { n: loops.length - 3 }) : "";
+    const key = loops.map((n) => n.id).sort().join("|");
+    if (key === lastLoopWarnKey) return;
+    lastLoopWarnKey = key;
+    setStatus(t("editor.loopWarn.message", { list: names + more }), "warn");
   }
 
   /** Keep tip hit-zones under node groups so out-ports win overlapping clicks. */
@@ -3841,6 +3872,9 @@
     // An orphan is not invalid — it is well-formed but unreachable, so the run will never
     // reach it. Marked separately and more quietly than an error, in grey.
     if (isOrphanNode(n)) g.classList.add("node-orphan");
+    // A node inside a loop that has no exit can only be escaped by the visit budget, which
+    // ends the run with an error, so it is called out like a fault.
+    if (unconditionalCycleIds().has(n.id)) g.classList.add("node-loop-no-exit");
     const fill = n.kind === "start" ? startFill(n)
       : n.kind === "group" ? "#fff"
       : n.kind === "condition" ? COND_FILL
@@ -7597,6 +7631,114 @@
       if (n.kind === "group") return false; // groups mirror descendants; leaf check is enough
       return !validateNodeLeaf(n).ok;
     });
+  }
+
+  /**
+   * Cycles in the flow edges, reported as the list of nodes that take part in one.
+   *
+   * A cycle is not itself a bug: the supported way to loop is a condition that eventually
+   * takes the fail branch out. What is a bug is a cycle with no way out, which the player can
+   * only escape by exhausting its visit budget (resolveLoopBackLimit), after which the run
+   * stops with an error. That is worth saying while the graph is being built, not at play time.
+   *
+   * "No way out" is judged per strongly connected component: if any node inside a component
+   * has an edge leaving it (to a node outside the component), the loop has an exit and is not
+   * reported. A condition whose success stays inside the loop but whose fail leaves it counts
+   * as an exit, because that is how the intended loop shape is drawn.
+   *
+   * Uses an iterative Tarjan, so a deep canvas cannot overflow the stack.
+   * Returns [] when there are no cycles, and also when there is no node in the cycle at all.
+   */
+  function findUnconditionalCycles() {
+    const nodes = graph?.nodes || [];
+    const edges = (graph?.edges || []).filter((e) => e.kind !== "contains" && e.kind !== "parent");
+    if (!nodes.length) return [];
+
+    const adj = new Map();
+    const allIds = new Set(nodes.map((n) => n.id));
+    for (const n of nodes) adj.set(n.id, []);
+    for (const e of edges) {
+      if (!allIds.has(e.from) || !allIds.has(e.to)) continue;
+      adj.get(e.from).push(e.to);
+    }
+
+    // Tarjan's SCC, iterative.
+    let index = 0;
+    const idx = new Map();
+    const low = new Map();
+    const onStack = new Set();
+    const stack = [];
+    const components = [];
+
+    for (const root of allIds) {
+      if (idx.has(root)) continue;
+      const work = [{ v: root, i: 0 }];
+      idx.set(root, index); low.set(root, index); index++;
+      stack.push(root); onStack.add(root);
+
+      while (work.length) {
+        const frame = work[work.length - 1];
+        const neighbours = adj.get(frame.v) || [];
+        if (frame.i < neighbours.length) {
+          const w = neighbours[frame.i++];
+          if (!idx.has(w)) {
+            idx.set(w, index); low.set(w, index); index++;
+            stack.push(w); onStack.add(w);
+            work.push({ v: w, i: 0 });
+          } else if (onStack.has(w)) {
+            low.set(frame.v, Math.min(low.get(frame.v), idx.get(w)));
+          }
+        } else {
+          work.pop();
+          if (work.length) {
+            const parent = work[work.length - 1];
+            low.set(parent.v, Math.min(low.get(parent.v), low.get(frame.v)));
+          }
+          if (low.get(frame.v) === idx.get(frame.v)) {
+            const comp = [];
+            let w;
+            do { w = stack.pop(); onStack.delete(w); comp.push(w); } while (w !== frame.v);
+            components.push(comp);
+          }
+        }
+      }
+    }
+
+    // A component is a cycle when it has more than one node, or a single node with a self-edge.
+    const selfEdges = new Set(edges.filter((e) => e.from === e.to).map((e) => e.from));
+    const loops = components.filter((c) =>
+      c.length > 1 || (c.length === 1 && selfEdges.has(c[0]))
+    );
+
+    const reported = [];
+    for (const comp of loops) {
+      const members = new Set(comp);
+      // Does anything in this loop lead out of it?
+      const hasExit = comp.some((id) => (adj.get(id) || []).some((to) => !members.has(to)));
+      if (hasExit) continue;
+      for (const id of comp) {
+        const n = nodeById(id);
+        if (n) reported.push(n);
+      }
+    }
+    return reported;
+  }
+
+  /**
+   * Set of node ids in an exit-less loop, memoised for the current draw.
+   *
+   * findUnconditionalCycles walks the whole graph, and it is asked about once per node while
+   * rendering, so the answer is cached and invalidated whenever the graph is replaced or an
+   * edge changes (see invalidateLoopWarning).
+   */
+  let loopWarningIdsCache = null;
+  function invalidateLoopWarning() {
+    loopWarningIdsCache = null;
+  }
+  function unconditionalCycleIds() {
+    if (loopWarningIdsCache) return loopWarningIdsCache;
+    loopWarningIdsCache = new Set(findUnconditionalCycles().map((n) => n.id));
+    return loopWarningIdsCache;
   }
 
   /** Human label for a node kind, used in the validation report. */

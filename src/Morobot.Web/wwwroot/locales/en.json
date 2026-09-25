@@ -1305,6 +1305,10 @@
       "other": "Other",
       "saved": "Connection added.",
       "edgeDesc": "{kind} edge from \"{from}\" to \"{to}\"."
+    },
+    "loopWarn": {
+      "message": "A loop on the canvas has no way out: {list} - it has no exit condition, so the run only stops when it hits the \"max loop-back visits\" limit.",
+      "more": " and {n} more nodes"
     }
   }
 }

@@ -492,6 +492,23 @@ rect.flow-marquee{pointer-events:none}
   opacity:.85;
   stroke-width:3.2;
 }
+/* Node inside a loop with no exit. Distinct from both the red of an error and the grey of an
+   orphan: the shape itself is fine, but the loop it sits in cannot finish on its own. Amber,
+   with a slow pulse, so it reads as a caution rather than a fault. */
+#flow-svg g.node.node-loop-no-exit > rect,
+#flow-svg g.node.node-loop-no-exit > polygon{
+  stroke:#d97706;
+  stroke-dasharray:6 3;
+  animation:da-loop-warn-pulse 2s ease-in-out infinite;
+}
+@keyframes da-loop-warn-pulse{
+  0%,100%{stroke-opacity:1}
+  50%{stroke-opacity:.4}
+}
+@media (prefers-reduced-motion: reduce){
+  #flow-svg g.node.node-loop-no-exit > rect,
+  #flow-svg g.node.node-loop-no-exit > polygon{ animation:none; }
+}
 .insp-color-row{
   display:flex;
   align-items:center;
