@@ -250,6 +250,60 @@
   });
   document.getElementById("da-create-local")?.addEventListener("click", createAndOpen);
 
+  /**
+   * Refresh the cached copy of every server-backed process graph.
+   *
+   * The dashboard summarises sources out of each task's graph, and the cached graph can
+   * be stale: it may predate a server-side repair (for example a data-source name that
+   * was saved with mangled characters). Pulling the canvas back down keeps the dashboard
+   * in step with the server, which is the source of truth here.
+   */
+  async function refreshServerGraphs() {
+    if (typeof fetch !== "function") return;
+    let rows;
+    try {
+      const res = await fetch("/api/tasks", { credentials: "same-origin" });
+      if (!res.ok) return;
+      rows = await res.json();
+    } catch {
+      return;
+    }
+    const serverIds = (rows || [])
+      .map((r) => String(r.id ?? "").trim())
+      .filter((id) => /^\d+$/.test(id));
+    if (!serverIds.length) return;
+
+    const byId = new Map(readTasks().map((t) => [String(t.id), t]));
+    let changed = false;
+    await Promise.all(serverIds.map(async (id) => {
+      try {
+        const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/canvas`, { credentials: "same-origin" });
+        if (!res.ok) return;
+        const canvas = await res.json();
+        if (!canvas || !Array.isArray(canvas.nodes)) return;
+        const prev = byId.get(id) || { id };
+        const next = {
+          ...prev,
+          id,
+          title: canvas.title || prev.title,
+          graph: canvas,
+          stepCount: canvas.nodes.filter((n) => n.kind === "action" || n.kind === "step").length,
+          groupCount: canvas.nodes.filter((n) => n.kind === "group").length,
+          dataSourceCount: Array.isArray(canvas.dataSources) ? canvas.dataSources.length : prev.dataSourceCount
+        };
+        // Only rewrite when something the dashboard reads actually moved.
+        if (JSON.stringify(prev.graph?.dataSources || null) !== JSON.stringify(canvas.dataSources || null)
+            || String(prev.title || "") !== String(next.title || "")) {
+          byId.set(id, next);
+          changed = true;
+        }
+      } catch { /* keep the cached copy */ }
+    }));
+
+    if (!changed) return;
+    writeTasks([...byId.values()], { silent: true });
+  }
+
   function scheduleRender() {
     const run = () => {
       if (window.DaSecureStore && typeof DaSecureStore.whenReady === "function") {
@@ -265,11 +319,18 @@
     }
   }
 
+  /** Reconcile from the server first, then paint — so a repaired graph shows immediately. */
+  function scheduleRefreshAndRender() {
+    refreshServerGraphs()
+      .catch(() => { /* offline — render whatever is cached */ })
+      .then(scheduleRender);
+  }
+
   window.addEventListener("da-local-tasks", () => scheduleRender());
   document.addEventListener("da:locale", () => scheduleRender());
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", scheduleRender);
+    document.addEventListener("DOMContentLoaded", scheduleRefreshAndRender);
   } else {
-    scheduleRender();
+    scheduleRefreshAndRender();
   }
 })();

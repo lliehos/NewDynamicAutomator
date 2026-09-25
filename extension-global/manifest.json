@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Morobot Global",
+  "name": "__MSG_extName__",
   "version": "2.0.0",
-  "description": "Morobot — ضبط، اجرا و سلکتور در یک افزونه",
+  "description": "__MSG_extDesc__",
+  "default_locale": "fa",
   "permissions": [
     "storage",
     "cookies",
@@ -34,7 +35,7 @@
   "devtools_page": "devtools.html",
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Morobot Global — مروبات",
+    "default_title": "__MSG_actionTitle__",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

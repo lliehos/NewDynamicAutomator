@@ -1,0 +1,11 @@
+{
+  "extName": {
+    "message": "Morobot Smart Recorder"
+  },
+  "extDesc": {
+    "message": "Process automation — smart capture tab + soft API (Microsoft LM later)"
+  },
+  "actionTitle": {
+    "message": "Smart Recorder — Morobot"
+  }
+}

@@ -14,12 +14,13 @@
   <body>
     <h4>
       <img src="icons/mark.svg" width="22" height="22" alt="" style="border-radius:5px" />
-      Smart Recorder
+      <span data-i18n="app.title">Smart Recorder</span>
     </h4>
     <div id="status" class="muted">...</div>
-    <button id="refresh">Refresh</button>
-    <button id="stop" hidden>Stop thinking</button>
-    <p class="muted">Start from the process list. Logo on the page stops thinking. No logs.</p>
+    <button id="refresh" data-i18n="popup.refresh">Refresh</button>
+    <button id="stop" data-i18n="popup.stop" hidden>Stop thinking</button>
+    <p class="muted" data-i18n="popup.hint">Start from the process list. Logo on the page stops thinking. No logs.</p>
+    <script src="lib/rec-i18n.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

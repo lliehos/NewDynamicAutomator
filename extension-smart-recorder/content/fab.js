@@ -3,6 +3,11 @@
   if (window !== window.top) return;
   if (window.__daSmartFabInit || document.getElementById("da-smart-fab")) return;
 
+  // Load the shared strings first so the FAB is created already in the right language.
+  if (window.DaRecI18n) {
+    try { await window.DaRecI18n.init(); } catch { /* fall back to defaults */ }
+  }
+
   try {
     const { portalBase } = await chrome.storage.local.get("portalBase");
     const base = String(portalBase || "https://localhost:7201").replace(/\/$/, "");
@@ -16,6 +21,8 @@
   window.__daSmartFabInit = true;
 
   const markUrl = chrome.runtime.getURL("icons/mark.svg");
+  const i18n = window.DaRecI18n;
+  const tr = (key) => (i18n ? i18n.t(key) : key);
   const root = document.createElement("div");
   root.className = "da-smart-root";
   root.id = "da-smart-fab";
@@ -25,7 +32,7 @@
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>
     </button>
     <button type="button" class="da-smart-logo-btn" id="da-smart-toggle" title="Stop thinking" aria-label="Stop thinking">
-      <img src="${markUrl}" width="56" height="56" alt="Morobot" />
+      <img src="${markUrl}" width="56" height="56" alt="${tr("fab.markAlt")}" />
     </button>
   `;
   document.documentElement.appendChild(root);
@@ -37,6 +44,18 @@
   const logoBtn = root.querySelector("#da-smart-toggle");
   const saveBtn = root.querySelector("#da-smart-save");
 
+  function applyLabels() {
+    const label = tr(logoBtn.classList.contains("save-ready") ? "fab.learningComplete" : "fab.stopThinking");
+    logoBtn.title = label;
+    logoBtn.setAttribute("aria-label", label);
+    const saveLabel = tr("fab.save");
+    saveBtn.title = saveLabel;
+    saveBtn.setAttribute("aria-label", saveLabel);
+    const img = logoBtn.querySelector("img");
+    if (img) img.alt = tr("fab.markAlt");
+    if (i18n) root.setAttribute("dir", i18n.dir());
+  }
+
   async function refresh() {
     const state = await chrome.runtime.sendMessage({ type: "getSmartState" }).catch(() => ({}));
     const active = !!state.active;
@@ -44,8 +63,7 @@
     root.hidden = !active && !learningComplete;
     logoBtn.classList.toggle("thinking", active && !learningComplete);
     logoBtn.classList.toggle("save-ready", learningComplete);
-    logoBtn.title = learningComplete ? "Learning complete" : "Stop thinking";
-    logoBtn.setAttribute("aria-label", logoBtn.title);
+    applyLabels();
     if (learningComplete) {
       saveBtn.hidden = false;
       saveBtn.classList.add("show");
@@ -77,6 +95,7 @@
       refresh();
     }
   });
+  if (i18n) i18n.onChange(() => applyLabels());
 
   refresh();
 })();

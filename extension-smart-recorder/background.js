@@ -186,7 +186,7 @@ async function injectSmartFab(tabId, attempt = 0) {
     }).catch(() => {});
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["content/selector.js", "content/capture.js", "content/fab.js"]
+      files: ["lib/rec-i18n.js", "content/selector.js", "content/capture.js", "content/fab.js"]
     });
     await broadcastSmartState();
     return true;
