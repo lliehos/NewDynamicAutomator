@@ -39,6 +39,36 @@
   user-drag: none;
   pointer-events: none;
 }
+/* Gesture guide. Sits above the FAB, is click-to-dismiss, and must never swallow a page click
+   it happens to overlap, so only the box itself is interactive. */
+.da-smart-guide {
+  max-width: 260px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #f8fafc;
+  font-size: 11px;
+  line-height: 1.7;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.da-smart-guide[hidden] { display: none !important; }
+.da-smart-guide-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.da-smart-guide-keys { white-space: nowrap; }
+.da-smart-guide kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  font-family: inherit;
+  font-size: 10px;
+}
+.da-smart-guide-text { opacity: 0.92; }
 .da-smart-root[hidden] {
   display: none !important;
 }

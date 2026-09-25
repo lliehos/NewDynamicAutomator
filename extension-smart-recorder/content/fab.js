@@ -28,6 +28,16 @@
   root.id = "da-smart-fab";
   root.hidden = true;
   root.innerHTML = `
+    <div class="da-smart-guide" id="da-smart-guide" hidden>
+      <span class="da-smart-guide-line">
+        <span class="da-smart-guide-keys"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>${tr("fab.guideClick")}</kbd></span>
+        <span class="da-smart-guide-text" data-guide="condition"></span>
+      </span>
+      <span class="da-smart-guide-line">
+        <span class="da-smart-guide-keys"><kbd>${tr("fab.guideClick")}</kbd></span>
+        <span class="da-smart-guide-text" data-guide="action"></span>
+      </span>
+    </div>
     <button type="button" class="da-smart-save" id="da-smart-save" title="Save" aria-label="Save" hidden>
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>
     </button>
@@ -43,6 +53,39 @@
 
   const logoBtn = root.querySelector("#da-smart-toggle");
   const saveBtn = root.querySelector("#da-smart-save");
+  const guide = root.querySelector("#da-smart-guide");
+
+  /**
+   * Show/hide the gesture guide.
+   *
+   * There is no other way to discover that Ctrl+Shift+click marks a condition - nothing in the
+   * page hints at it - so the guide appears while a session is active and can be collapsed.
+   * The choice is remembered so a user who has read it once is not shown it on every page.
+   */
+  const GUIDE_KEY = "fabGuideHidden";
+  let guideHidden = false;
+
+  async function restoreGuidePref() {
+    try {
+      const stored = await chrome.storage.local.get(GUIDE_KEY);
+      guideHidden = !!(stored && stored[GUIDE_KEY]);
+    } catch { /* show the guide by default */ }
+    applyGuideVisibility();
+  }
+
+  function applyGuideVisibility() {
+    const active = !root.hidden;
+    guide.hidden = !active || guideHidden;
+  }
+
+  guide.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    guideHidden = true;
+    applyGuideVisibility();
+    try { await chrome.storage.local.set({ [GUIDE_KEY]: true }); } catch { /* best effort */ }
+  });
+  guide.addEventListener("pointerdown", (ev) => ev.stopPropagation());
 
   /**
    * Let the user move the FAB out of the way, and remember where they put it.
@@ -190,6 +233,7 @@
   });
 
   restorePosition();
+  restoreGuidePref();
 
   function applyLabels() {
     const label = tr(logoBtn.classList.contains("save-ready") ? "fab.learningComplete" : "fab.stopThinking");
@@ -203,6 +247,15 @@
     saveBtn.setAttribute("aria-label", saveLabel);
     const img = logoBtn.querySelector("img");
     if (img) img.alt = tr("fab.markAlt");
+    // The guide is the only place the gesture is documented, so it has to follow the language
+    // like everything else.
+    const condText = guide.querySelector('[data-guide="condition"]');
+    const actionText = guide.querySelector('[data-guide="action"]');
+    if (condText) condText.textContent = tr("fab.guideCondition");
+    if (actionText) actionText.textContent = tr("fab.guideAction");
+    const condKeys = guide.querySelectorAll(".da-smart-guide-keys");
+    if (condKeys[1]) condKeys[1].querySelector("kbd").textContent = tr("fab.guideClick");
+    guide.title = tr("fab.guideToggle");
     if (i18n) root.setAttribute("dir", i18n.dir());
   }
 
@@ -214,6 +267,7 @@
     logoBtn.classList.toggle("thinking", active && !learningComplete);
     logoBtn.classList.toggle("save-ready", learningComplete);
     applyLabels();
+    applyGuideVisibility();
     if (learningComplete) {
       saveBtn.hidden = false;
       saveBtn.classList.add("show");

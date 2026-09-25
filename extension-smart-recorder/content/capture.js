@@ -88,6 +88,29 @@ function emit(kind, extra) {
 document.addEventListener("click", (ev) => {
   if (!allowed() || isFromSmartFab(ev.target)) return;
   const el = ev.target instanceof Element ? ev.target : ev.target?.parentElement;
+
+  // Ctrl+Shift+click marks the element as a CONDITION rather than an action: "this step should
+  // check the element, not click it". The modifiers are already carried on the plain click, but
+  // they are only meaningful together, and a gesture the user chose deliberately deserves its
+  // own kind - the learner would otherwise have to guess whether a modified click was intent or
+  // an accident (Ctrl+click, for one, is an ordinary "open in new tab" on many sites).
+  const isConditionMark = ev.ctrlKey && ev.shiftKey;
+  if (isConditionMark) {
+    emit("condition", {
+      button: ev.button,
+      ctrlKey: true,
+      shiftKey: true,
+      metaKey: ev.metaKey,
+      altKey: ev.altKey,
+      clientX: ev.clientX,
+      clientY: ev.clientY,
+      markedAs: "condition",
+      target: describeElement(el)
+    });
+    // The plain click is still emitted: the element really was clicked, and dropping the event
+    // would lose the fact that the user interacted with it at all.
+  }
+
   emit("click", {
     button: ev.button,
     detail: ev.detail,
@@ -95,6 +118,7 @@ document.addEventListener("click", (ev) => {
     ctrlKey: ev.ctrlKey,
     metaKey: ev.metaKey,
     shiftKey: ev.shiftKey,
+    isConditionMark,
     clientX: ev.clientX,
     clientY: ev.clientY,
     target: describeElement(el)
