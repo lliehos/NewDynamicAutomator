@@ -75,6 +75,16 @@ public class TaskListItemDto
 
     /// <summary>The mother process's id, so the list can link straight to it.</summary>
     public int? SourceProcessId { get; set; }
+
+    /// <summary>
+    /// For a MOTHER: how many child processes are attached to the template built from it.
+    /// </summary>
+    /// <remarks>
+    /// Deleting the mother deletes that template and detaches these children, and the count is the
+    /// only part of that the user cannot see from the row. Reported here so a delete confirmation can
+    /// state it without a second round-trip per row.
+    /// </remarks>
+    public int TemplateChildCount { get; set; }
 }
 
 /// <summary>One template in the template menus, with the counts the picker shows.</summary>

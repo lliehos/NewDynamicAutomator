@@ -253,7 +253,11 @@ public class TaskService
                     ? t.Template.SourceProcess.Title : null,
                 // Same reasoning as the user list: the mother is found through the template's
                 // source link, because the mother itself holds no TemplateId.
-                IsTemplateSource = t.SourceOfTemplate != null
+                IsTemplateSource = t.SourceOfTemplate != null,
+                // For a mother: how many children its template holds. Deleting the mother deletes
+                // that template and detaches them, and this is the number the admin must be warned
+                // about — so it is projected with the row rather than fetched per delete click.
+                TemplateChildCount = t.SourceOfTemplate != null ? t.SourceOfTemplate.Processes.Count : 0
             })
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
@@ -288,7 +292,8 @@ public class TaskService
                 SourceProcessTitle = t.SourceProcessTitle,
                 TemplateBehind = t.CurrentTemplateVersion is int adminCurrentVersion
                                  && (t.TemplateVersion ?? 0) < adminCurrentVersion,
-                IsTemplateSource = t.IsTemplateSource
+                IsTemplateSource = t.IsTemplateSource,
+                TemplateChildCount = t.TemplateChildCount
             };
         }).ToList();
     }
@@ -484,14 +489,87 @@ public class TaskService
         }
     }
 
-    public async Task<bool> DeleteAsync(int taskId, CancellationToken ct = default)
+    /// <summary>
+    /// What deleting this process would take with it, so the caller can warn before it happens.
+    /// </summary>
+    /// <remarks>
+    /// A MOTHER is not an ordinary process: it is the source of a template, and that template holds
+    /// every child built on it. Deleting the mother deletes the template too (the template has no
+    /// meaning without the process that owns its structure), and the children are detached so each
+    /// keeps the graph it has right now. None of that is visible from the row being deleted, so the
+    /// count is reported first and the UI must confirm it.
+    ///
+    /// Reported as one object rather than separate lookups so the delete and its warning cannot
+    /// disagree about what is about to happen.
+    /// </remarks>
+    public async Task<(bool isMother, int templateId, string? templateTitle, int childCount)> GetDeleteImpactAsync(
+        int taskId, CancellationToken ct = default)
+    {
+        var template = await _db.ProcessTemplates.AsNoTracking()
+            .Where(t => t.SourceProcessId == taskId)
+            .Select(t => new { t.Id, t.Title })
+            .FirstOrDefaultAsync(ct);
+        if (template is null) return (false, 0, null, 0);
+
+        // Children = attached processes other than the mother itself, which never carries a
+        // TemplateId but is guarded for anyway so the count cannot be inflated.
+        var childCount = await _db.Processes.CountAsync(
+            p => p.TemplateId == template.Id && p.Id != taskId, ct);
+
+        return (true, template.Id, template.Title, childCount);
+    }
+
+    /// <summary>
+    /// Delete a process. When it is a template's MOTHER the template is deleted with it.
+    /// </summary>
+    /// <remarks>
+    /// The template only exists to hold the structure the mother owns, so leaving it behind would
+    /// strand a skeleton that can never be republished (its source is gone) while its children keep
+    /// claiming to follow it — the state the old code produced with a plain <c>SetNull</c>. Deleting
+    /// both together, and detaching the children to their current graph, is the only outcome that
+    /// leaves the data coherent.
+    ///
+    /// The children are detached explicitly rather than left to the foreign key: their
+    /// <c>TemplateId</c> points at a row that is about to disappear, and <c>Restrict</c> on that
+    /// relation would refuse the delete outright. Detaching first is what makes the delete possible
+    /// and is also what the user is being warned about.
+    ///
+    /// Returns how many children were detached, or -1 when the process was not found.
+    /// </remarks>
+    public async Task<int> DeleteAsync(int taskId, CancellationToken ct = default)
     {
         // ProcessDataSources links cascade; DataSources library rows are kept (independent entities).
         var process = await _db.Processes.FirstOrDefaultAsync(t => t.Id == taskId, ct);
-        if (process is null) return false;
+        if (process is null) return -1;
+
+        var detached = 0;
+
+        // Take the template down with the mother, and cut the children loose first so the delete can
+        // proceed at all (Process.TemplateId is Restrict).
+        var template = await _db.ProcessTemplates
+            .FirstOrDefaultAsync(t => t.SourceProcessId == taskId, ct);
+        if (template is not null)
+        {
+            var children = await _db.Processes
+                .Where(p => p.TemplateId == template.Id && p.Id != taskId)
+                .ToListAsync(ct);
+            foreach (var child in children)
+            {
+                child.TemplateId = null;
+                child.TemplateVersion = null;
+                child.UpdatedAtUtc = DateTime.UtcNow;
+            }
+            detached = children.Count;
+
+            // Break the mother -> template link before removing the mother, so the delete no longer
+            // depends on the FK behaviour to sort it out.
+            template.SourceProcessId = null;
+            _db.ProcessTemplates.Remove(template);
+        }
+
         _db.Processes.Remove(process);
         await _db.SaveChangesAsync(ct);
-        return true;
+        return detached;
     }
 
     public async Task<bool> CanModifyAsync(int userId, int taskId, CancellationToken ct = default)

@@ -374,24 +374,66 @@ public class TasksApiController : ControllerBase
         return Ok(new { ok = true, updatedAtUtc = newUpdated });
     }
 
+    /// <summary>
+    /// What deleting this process would also remove, so the UI can warn before it does.
+    /// </summary>
+    /// <remarks>
+    /// A mother carries a template and that template carries the children, none of which is visible
+    /// from the row itself. Asking first is the only way the confirmation can state the real cost.
+    /// </remarks>
+    [HttpGet("{id:int}/delete-impact")]
+    public async Task<IActionResult> DeleteImpact(int id, CancellationToken ct)
+    {
+        if (!await _tasks.CanDeleteAsync(UserId, id, ct)) return Forbid();
+        var (isMother, templateId, templateTitle, childCount) = await _tasks.GetDeleteImpactAsync(id, ct);
+        return Ok(new { isMother, templateId, templateTitle, childCount });
+    }
+
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
         if (!await _tasks.CanDeleteAsync(UserId, id, ct))
             return Forbid();
         var recipients = await _catalog.ResolveAccessUserIdsAsync(id, ct);
-        var ok = await _tasks.DeleteAsync(id, ct);
+
+        // Read the impact BEFORE the delete: afterwards the template is gone and there is nothing
+        // left to describe, but the log and the response still need the real numbers.
+        var (isMother, templateId, templateTitle, childCount) = await _tasks.GetDeleteImpactAsync(id, ct);
+
+        var detached = await _tasks.DeleteAsync(id, ct);
+        var ok = detached >= 0;
         if (ok)
         {
             await _catalog.TaskDeletedAsync(id, recipients, User.Identity?.Name, ct);
             await _events.LogAsync(
                 "Audit", "Task", "TaskDelete",
-                $"Deleted task #{id}",
+                isMother
+                    ? $"Deleted task #{id} (mother); deleted template #{templateId} and detached {detached} child(ren)"
+                    : $"Deleted task #{id}",
                 UserId, User.Identity?.Name,
                 path: $"/api/tasks/{id}",
                 ct: ct);
+
+            // The detached children changed, so anything watching the list has to re-read them —
+            // each lost its template chip the moment the template went away.
+            if (detached > 0)
+            {
+                foreach (var row in (await _tasks.ListForUserAsync(UserId, ct))
+                    .Where(r => r.TemplateId is null && !r.IsTemplateSource))
+                {
+                    await _catalog.TaskUpsertedAsync(row, "updated", User.Identity?.Name, ct);
+                }
+            }
+
+            return Ok(new
+            {
+                ok = true,
+                deletedTemplateId = isMother ? templateId : (int?)null,
+                deletedTemplateTitle = isMother ? templateTitle : null,
+                detachedProcesses = detached
+            });
         }
-        return ok ? NoContent() : NotFound();
+        return NotFound();
     }
 
     private static string StripCanvasMeta(System.Text.Json.JsonElement body)

@@ -422,6 +422,7 @@
       "playingBy": "Playing by {user}",
       "delete": "Delete",
       "deleteConfirm": "Delete this process?",
+      "deleteMotherConfirm": "Warning: this process is the mother. Deleting it also deletes the template built from it, and {count} child process(es) become independent. Continue?",
       "empty": "No processes yet.",
       "stopped": "Stopped"
     },
@@ -974,6 +975,9 @@
     "importConfirm": "Replace the process content with \"{name}\"?",
     "importDetachConfirm": "Replace the process content with \"{name}\"?\n\nWarning: this process was created from template \"{template}\". Loading the file makes its structure its own and permanently detaches it from the mother process — no later template change will reach it again.",
     "imported": "Process \"{title}\" was updated from the file.",
+    "deleteMother": "Delete mother process",
+    "deleteMotherConfirm": "Warning: this process is the mother, and template \"{template}\" belongs to it. Deleting it deletes the template too, and {count} child process(es) become independent — no later change will reach them. Each child keeps the version it has now. Continue?",
+    "deletedMotherDone": "The mother process and template \"{template}\" were deleted, and {count} child process(es) became independent.",
     "recordChildDisabled": "This process was created from a template, so it cannot be recorded. Edit the mother process to change its structure.",
     "templateInfoUnavailable": "Template details are not available.",
     "fromTemplate": "From template: {name}"

@@ -530,27 +530,73 @@
     root?.querySelectorAll("[data-da-del]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = btn.getAttribute("data-da-del");
+        const row = findTask(readTasks(), id);
+        const isServerRow = /^\d+$/.test(String(id));
+
+        /**
+         * Ask the server what this delete would take with it before saying anything.
+         *
+         * A MOTHER is not just a row: it owns a template, and the template holds every child built
+         * on it. Deleting the mother therefore deletes the template too and detaches those children
+         * — none of which is visible from the row being deleted. Reading the impact first is what
+         * lets the confirmation state the real cost instead of a generic "are you sure".
+         *
+         * Fetched lazily, only when the button is actually pressed, so the process list does not pay
+         * for a lookup per row on every render.
+         */
+        let impact = null;
+        if (isServerRow) {
+          try {
+            const res = await fetch(`/api/tasks/${id}/delete-impact`, { credentials: "same-origin" });
+            if (res.ok) impact = await res.json();
+          } catch { /* the warning is best-effort; the delete itself is still guarded */ }
+        }
+
+        const message = impact && impact.isMother && impact.childCount > 0
+          ? t("tasks.deleteMotherConfirm", {
+              template: impact.templateTitle || "—",
+              count: impact.childCount
+            })
+          : (t("tasks.deleteConfirm") || "این فرآیند حذف شود؟");
+
         const ok = window.DaNotify
-          ? await DaNotify.confirm(t("tasks.deleteConfirm") || "این فرآیند حذف شود؟", {
-              title: t("tasks.delete"),
+          ? await DaNotify.confirm(message, {
+              title: impact && impact.isMother ? t("tasks.deleteMother") : t("tasks.delete"),
               danger: true,
               okText: t("tasks.delete")
             })
           : false;
         if (!ok) return;
         try {
-          if (/^\d+$/.test(String(id))) {
+          let detached = 0;
+          let deletedTemplate = null;
+          if (isServerRow) {
             const res = await fetch(`/api/tasks/${id}`, { method: "DELETE", credentials: "same-origin" });
             if (!res.ok && res.status !== 204) {
               const body = await res.json().catch(() => ({}));
               notifyHome(body.message || t("share.error") || "حذف ناموفق بود.", "error");
               return;
             }
+            // 200 carries the cascade detail; 204 is the pre-existing shape and means "plain delete".
+            if (res.status === 200) {
+              const body = await res.json().catch(() => ({}));
+              detached = Number(body.detachedProcesses) || 0;
+              deletedTemplate = body.deletedTemplateTitle || null;
+            }
           }
           const next = readTasks().filter((x) => !taskIdEq(x.id, id));
           writeTasks(next);
           render(next);
-          notifyHome(t("tasks.deleted") || "فرآیند حذف شد.", "success");
+          // Report the real consequence, not just "deleted": when a mother goes, the template goes
+          // with it and its children are cut loose, and the user is owed that confirmation.
+          if (detached > 0) {
+            notifyHome(t("tasks.deletedMotherDone", {
+              template: deletedTemplate || "—",
+              count: detached
+            }), "success");
+          } else {
+            notifyHome(t("tasks.deleted") || "فرآیند حذف شد.", "success");
+          }
         } catch (e) {
           notifyHome(String(e.message || e), "error");
         }

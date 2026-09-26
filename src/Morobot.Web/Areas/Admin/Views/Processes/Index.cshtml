@@ -46,7 +46,12 @@
         </span>
       </td>
       <td>
-        <form method="post" asp-action="Delete" asp-route-id="@t.Id" onsubmit="return confirm('@L["admin.processes.deleteConfirm"]');">
+        @* Deleting a MOTHER also deletes the template built from it and detaches its children, so
+           the confirmation names that instead of asking a generic "are you sure". *@
+        <form method="post" asp-action="Delete" asp-route-id="@t.Id"
+              onsubmit="return confirm('@(t.IsTemplateSource && t.TemplateChildCount > 0
+                ? L.T("admin.processes.deleteMotherConfirm", ("count", t.TemplateChildCount.ToString()))
+                : L["admin.processes.deleteConfirm"])');">
           @Html.AntiForgeryToken()
           <button type="submit" class="btn-admin danger">@L["admin.processes.delete"]</button>
         </form>
