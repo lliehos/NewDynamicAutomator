@@ -800,6 +800,33 @@ html.light-style {
 .da-run-history-who { color: #64748b; }
 .da-run-history-empty { margin: .75rem 0; }
 
+/* Process details dialog: the facts that used to be four separate table columns. */
+.da-details-list { margin: 0; }
+.da-details-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .5rem 0;
+  border-bottom: 1px dashed #eef0f4;
+  font-size: .88rem;
+}
+.da-details-row:last-child { border-bottom: 0; }
+.da-details-row dt {
+  color: #64748b;
+  font-weight: 500;
+  flex: 0 0 auto;
+}
+.da-details-row dd {
+  margin: 0;
+  text-align: end;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* The nested edit-meta blocks already carry their own alignment. */
+.da-details-row dd .da-edit-meta { text-align: end; }
+.da-details-row dd .da-last-run { justify-content: flex-end; }
+
 .da-task-actions .ds-icon-btn,
 .da-task-actions-desk .ds-icon-btn {
   width: 32px;

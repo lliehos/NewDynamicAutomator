@@ -199,6 +199,7 @@
   const ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
   const ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
   const ICO_XLSX = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm1 7V3.5L19.5 9H15zM8.2 18l2.3-3.2L8.3 12h1.7l1.4 2.1L12.8 12H14.4l-2.2 2.8L14.5 18h-1.7l-1.5-2.2L9.9 18H8.2z"/></svg>`;
+  const ICO_INFO = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 3.2a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8zM13.4 17h-2.8v-1.3l.7-.3V10.8l-.7-.3V9.2h2.1v6.2l.7.3V17z"/></svg>`;
 
   function iconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
@@ -438,6 +439,7 @@
       : "";
     return `
       ${iconLink("is-edit", t("tasks.edit"), `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_EDIT)}
+      ${iconBtn("is-info", t("tasks.details"), ICO_INFO, `data-da-details="${tid}"`)}
       ${iconBtn("is-play", t("tasks.play"), ICO_PLAY, `data-da-action="play-task-menu" data-task-id="${tid}" aria-haspopup="menu"`)}
       ${iconBtn("is-rec", recTip, ICO_REC, recExtra)}
       ${smartBtn}
@@ -552,6 +554,9 @@
   root?.querySelectorAll("[data-run-history]").forEach((btn) => {
     btn.addEventListener("click", () => showRunHistory(btn.getAttribute("data-run-history")));
   });
+  root?.querySelectorAll("[data-da-details]").forEach((btn) => {
+    btn.addEventListener("click", () => showProcessDetails(btn.getAttribute("data-da-details")));
+  });
 }
 
 /**
@@ -608,6 +613,67 @@ async function showRunHistory(taskId) {
   host.querySelector("#da-run-history-title").textContent = t("tasks.runHistory");
   host.querySelector(".da-run-history-body").innerHTML = bodyHtml;
   host.hidden = false;
+}
+
+/**
+ * Show the process's registration and last-edit details in a dialog.
+ *
+ * These four facts (who/when it was created, who/when the process and its data were last edited)
+ * used to be four columns of the list, which pushed the columns that get scanned — run, shared
+ * users, group/action/source counts — off to the right and made the table need horizontal
+ * scrolling on an ordinary laptop. They are reference information, not something you compare
+ * across rows, so they live behind a button instead.
+ *
+ * The row is read from the already-loaded list, so this opens with no request.
+ */
+function showProcessDetails(taskId) {
+  const id = String(taskId ?? "").trim();
+  if (!id) return;
+  const row = readTasks().map(normalizeTask).find((r) => String(r.id) === id);
+  if (!row) return;
+
+  const rows = [
+    ["panel.colTitle", escapeHtml(row.title || "—")],
+    ["panel.colCreated", escapeHtml(formatCreatedAt(row.createdAt))],
+    ["panel.colCreator", escapeHtml(String(row.createdBy || "").trim() || "—")],
+    ["panel.colProcessEdit", formatEditMeta(editMetaIso(row, "process"), editMetaUser(row, "process"))],
+    ["panel.colDataEdit", formatEditMeta(editMetaIso(row, "data"), editMetaUser(row, "data"))],
+    ["panel.colLastRun", formatLastRun(row)]
+  ];
+
+  const bodyHtml = `<dl class="da-details-list">${rows.map(([key, value]) => `
+    <div class="da-details-row">
+      <dt>${escapeHtml(t(key))}</dt>
+      <dd>${value}</dd>
+    </div>`).join("")}</dl>`;
+
+  let host = document.getElementById("da-process-details-modal");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "da-process-details-modal";
+    host.className = "da-run-history-modal";
+    host.hidden = true;
+    host.innerHTML = `
+      <div class="da-run-history-backdrop" data-details-close="1"></div>
+      <div class="da-run-history-box" role="dialog" aria-modal="true" aria-labelledby="da-process-details-title">
+        <div class="da-run-history-head">
+          <h5 id="da-process-details-title"></h5>
+          <button type="button" class="da-run-history-close" data-details-close="1" aria-label="${escapeHtml(t("common.close"))}">&times;</button>
+        </div>
+        <div class="da-run-history-body"></div>
+      </div>`;
+    document.body.appendChild(host);
+    host.querySelectorAll("[data-details-close]").forEach((el) => {
+      el.addEventListener("click", () => { host.hidden = true; });
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") host.hidden = true;
+    });
+  }
+  host.querySelector("#da-process-details-title").textContent = t("tasks.details");
+  host.querySelector(".da-run-history-body").innerHTML = bodyHtml;
+  host.hidden = false;
+  bindTaskActions(host);
 }
 
 function dataSourceSafeFileName(ds) {
@@ -1153,10 +1219,7 @@ function dataSourceSafeFileName(ds) {
           <span class="da-task-id" title="${escapeHtml(t("tasks.processId"))}">${escapeHtml(String(row.id))}</span>
         </div>
         <ul class="da-task-card-meta">
-          <li><i class="ti ti-calendar"></i><span>${escapeHtml(formatCreatedAt(row.createdAt))}</span></li>
-          <li><i class="ti ti-user"></i><span>${escapeHtml(row.createdBy)}</span></li>
-          <li><i class="ti ti-edit"></i><span>${formatEditMeta(editMetaIso(row, "process"), editMetaUser(row, "process"))}</span></li>
-          <li><i class="ti ti-database"></i><span>${formatEditMeta(editMetaIso(row, "data"), editMetaUser(row, "data"))}</span></li>
+          <li><i class="ti ti-clock"></i><span>${formatLastRun(row)}</span></li>
           <li><i class="ti ti-users"></i><span>${escapeHtml(sharedUsersLabel(row.sharedUsers, row.sharedWithCount))}</span></li>
         </ul>
         <div class="da-task-stats">
@@ -1226,7 +1289,7 @@ function dataSourceSafeFileName(ds) {
       if (body) {
         try {
           if (!toStore.length) {
-            body.innerHTML = `<tr><td colspan="12" class="text-center text-muted py-6">${t("tasks.empty")}</td></tr>`;
+            body.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-6">${t("tasks.empty")}</td></tr>`;
           } else {
             body.innerHTML = toStore.map((row) => {
               const { steps, groups, sources } = taskCounts(row);
@@ -1258,10 +1321,6 @@ function dataSourceSafeFileName(ds) {
           <span class="da-task-id" title="${escapeHtml(t("tasks.serverKey"))}">${tid}</span>
         </td>
         <td class="text-nowrap" data-flash="template">${tplCell}</td>
-        <td class="text-nowrap">${escapeHtml(formatCreatedAt(row.createdAt))}</td>
-        <td>${escapeHtml(row.createdBy)}</td>
-        <td class="text-nowrap" data-flash="processEdit">${formatEditMeta(editMetaIso(row, "process"), editMetaUser(row, "process"))}</td>
-        <td class="text-nowrap" data-flash="dataEdit">${formatEditMeta(editMetaIso(row, "data"), editMetaUser(row, "data"))}</td>
         <td class="text-nowrap" data-flash="lastRun">${formatLastRun(row)}</td>
         <td data-flash="shared">${escapeHtml(sharedUsersLabel(row.sharedUsers, row.sharedWithCount))}</td>
         <td data-flash="groups">${groups}</td>
@@ -1276,7 +1335,7 @@ function dataSourceSafeFileName(ds) {
           }
         } catch (err) {
           console.error("[local-tasks] rows render failed", err);
-          body.innerHTML = `<tr><td colspan="12" class="text-center text-danger py-6">${escapeHtml(String(err && err.message || err))}</td></tr>`;
+          body.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-6">${escapeHtml(String(err && err.message || err))}</td></tr>`;
         }
       }
 

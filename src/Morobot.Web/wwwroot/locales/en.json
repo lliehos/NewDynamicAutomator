@@ -932,6 +932,7 @@
     "neverRun": "Never run",
     "runHistory": "Run history",
     "runCount": "Number of runs",
+    "details": "Process details",
     "templateBehind": "The template has been updated — refresh the process to apply it.",
     "templateCurrent": "Currently in step with the latest template version.",
     "makeTemplate": "Create a template from this process",
