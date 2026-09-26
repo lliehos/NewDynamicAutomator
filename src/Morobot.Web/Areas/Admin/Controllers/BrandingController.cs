@@ -14,6 +14,7 @@ public class BrandingController : Controller
 {
     private readonly BrandingService _branding;
     private readonly LicenseService _license;
+    private readonly DiagramSettingsService _diagram;
     private readonly IWebHostEnvironment _env;
     private readonly ILocaleService _locale;
     private readonly ExtensionSyncService _sync;
@@ -22,6 +23,7 @@ public class BrandingController : Controller
     public BrandingController(
         BrandingService branding,
         LicenseService license,
+        DiagramSettingsService diagram,
         IWebHostEnvironment env,
         ILocaleService locale,
         ExtensionSyncService sync,
@@ -29,6 +31,7 @@ public class BrandingController : Controller
     {
         _branding = branding;
         _license = license;
+        _diagram = diagram;
         _env = env;
         _locale = locale;
         _sync = sync;
@@ -54,8 +57,15 @@ public class BrandingController : Controller
     public async Task<IActionResult> Index(TenantBrandingDto model, IFormFile? logoFile, IFormFile? faviconFile, CancellationToken ct)
     {
         var runtime = await _license.GetRuntimeStateAsync(ct);
+        var userId = int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null;
+
+        // Diagram colours are NOT a licensed feature — the editor reads them on every install — so
+        // they are saved before the licence gate below, which only guards the branding identity
+        // (name, logo, favicon, palette). Without this split, an unlicensed install could not save
+        // the colour it is entitled to change, and the gate would have silently swallowed it.
         if (!runtime.AllowsBranding)
         {
+            await _branding.SaveDiagramColorsAsync(model, userId, User.Identity?.Name, ct);
             TempData["Danger"] = _locale["admin.branding.notLicensed"];
             return RedirectToAction("Index", "License");
         }
@@ -75,8 +85,10 @@ public class BrandingController : Controller
 
         try
         {
-            model.ShowReferralQrWidget = Request.Form["ShowReferralQrWidget"].Contains("true");
-            var userId = int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null;
+            // Only the referral-QR switch still posts hidden+checkbox; the diagram colours no longer
+            // carry a switch at all (reset-to-default replaced them, see ResetColor).
+            model.ShowReferralQrWidget = ReadSwitch(Request.Form, "ShowReferralQrWidget");
+
             await _branding.SaveAsync(model, userId, User.Identity?.Name, ct);
             _sync.SyncNow("branding-save");
             await _overlay.ApplyAllPackagesAsync(_sync, ct);
@@ -88,6 +100,64 @@ public class BrandingController : Controller
         }
 
         return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// The diagram defaults exactly as the editor receives them.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so the colour editor can be checked against what flow.js will actually be handed —
+    /// a colour that saves but never reaches the payload would look correct on this page and change
+    /// nothing on the canvas.
+    /// </remarks>
+    [HttpGet]
+    public async Task<IActionResult> DiagramDefaults(CancellationToken ct)
+        => Json(await _diagram.GetAsync(ct));
+
+    /// <summary>
+    /// Restore one diagram colour to the value the product ships.
+    /// </summary>
+    /// <remarks>
+    /// This replaces the per-colour "apply" switches. A switch made every colour mean two settings
+    /// and left the editor wondering which won; resetting writes the shipped value into the one
+    /// setting, so the page simply shows the restored colour.
+    ///
+    /// Not licence-gated: the diagram colours are not a licensed feature, so an unlicensed install
+    /// can still restore them.
+    /// </remarks>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ResetColor(string key, CancellationToken ct)
+    {
+        var userId = int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null;
+        var done = await _branding.ResetDiagramColorAsync(key, userId, User.Identity?.Name, ct);
+        if (!done) return NotFound();
+
+        // Answer the restored value so the page can update the picker in place, without a reload
+        // that would lose any other edit the administrator has open.
+        var fallback = Morobot.Domain.SystemSettingKeys.DiagramColorDefault(key);
+        return Json(new { ok = true, key, value = fallback });
+    }
+
+    /// <summary>
+    /// The value a switch actually submitted.
+    /// </summary>
+    /// <remarks>
+    /// A hidden "false" plus a checkbox "true" of the same name is the standard HTML way to send a
+    /// boolean, and the browser posts BOTH when the box is ticked. The LAST entry is the control the
+    /// user interacted with, so that is the one that decides. Letting model binding pick instead
+    /// would take the first — the hidden "false" — and turn the switch off whatever the user did.
+    /// </remarks>
+    private static bool ReadSwitch(IFormCollection form, string name)
+    {
+        var values = form[name];
+        for (var i = values.Count - 1; i >= 0; i--)
+        {
+            var v = values[i];
+            if (string.IsNullOrEmpty(v)) continue;
+            return v is "true" or "True" or "1" or "on" or "yes";
+        }
+        return false;
     }
 
     private async Task<string> SaveBrandFileAsync(IFormFile file, string prefix, CancellationToken ct)

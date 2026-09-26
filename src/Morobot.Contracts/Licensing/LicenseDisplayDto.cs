@@ -67,6 +67,19 @@ public sealed class TenantBrandingDto
     public string ColorInk { get; set; } = BrandPaletteDefaults.Ink;
     public string ColorBorderSubtle { get; set; } = BrandPaletteDefaults.BorderSubtle;
 
+    /// <summary>
+    /// Diagram colours — the palette the flow editor draws with, and the outline the player draws
+    /// around a page element while running.
+    /// </summary>
+    /// <remarks>
+    /// These live on the branding page rather than the settings page: they are colours, and every
+    /// other colour the tenant can change is already here. The colour list itself is
+    /// <c>SystemSettingKeys.DiagramColors</c> — that is the single source of truth for which
+    /// colours exist, what they ship as, and what "reset to default" restores. This dictionary is
+    /// keyed by setting key so adding a colour there is enough to have it show up, save and reset.
+    /// </remarks>
+    public Dictionary<string, string> DiagramColors { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Panel referral QR widget (morobot.ir). Enterprise can disable when licensed.</summary>
     public bool ShowReferralQrWidget { get; set; } = true;
 

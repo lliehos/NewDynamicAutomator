@@ -192,11 +192,67 @@
           <label class="admin-label" for="@f.Id">@L[f.Key]</label>
           <div class="admin-color-row">
             <input type="color" class="form-control form-control-color" id="@f.Id" name="@f.Id" value="@f.Val" data-hex-pair="@f.Id" />
-            <input type="text" class="form-control admin-color-hex" id="@(f.Id)-hex" value="@f.Val" maxlength="7" data-hex-pair="@f.Id" aria-label="@L[f.Key]" />
+            <input type="text" class="form-control admin-color-hex" id="@(f.Id)-hex" value="@f.Val" maxlength="7" data-hex-pair="@f.Id" dir="ltr" aria-label="@L[f.Key]" />
           </div>
         </div>
       }
     </div>
+  </div>
+
+  <div class="admin-settings-card">
+    <h3><i class="ti ti-palette" aria-hidden="true"></i>@L["admin.branding.diagramColorsTitle"]</h3>
+    <p class="admin-field-hint mb-3">@L["admin.branding.diagramColorsIntro"]</p>
+
+    @* Every colour the diagram draws with comes from SystemSettingKeys.DiagramColors — one list,
+       so a colour added there appears, saves and resets with no change to this view.
+       Section boundaries are derived from the catalogue's own order rather than hard-coded indices,
+       so adding a colour to a section cannot silently drop the last one of the previous section.
+       There is no "apply" switch any more: a switch made each colour mean two settings and left
+       the editor guessing which won. The reset icon puts the shipped value back instead. *@
+    @{
+      var all = Morobot.Domain.SystemSettingKeys.DiagramColors;
+      var colourSections = new[]
+      {
+        (Title: L["admin.branding.diagramGroupNodes"], From: 0, To: 6),
+        (Title: L["admin.branding.diagramGroupStates"], From: 6, To: 12),
+        (Title: L["admin.branding.diagramGroupEdges"], From: 12, To: 16),
+        // Everything after the edges is canvas/chrome — expressed as an open end so the last
+        // section can never be truncated by an out-of-date index.
+        (Title: L["admin.branding.diagramGroupCanvas"], From: 16, To: all.Count)
+      };
+    }
+    @foreach (var colourSection in colourSections)
+    {
+      var slice = all.Skip(colourSection.From).Take(colourSection.To - colourSection.From).ToList();
+      if (slice.Count == 0) continue;
+      <h4 class="admin-branding-subhead">@colourSection.Title</h4>
+      <div class="admin-color-grid">
+        @foreach (var c in slice)
+        {
+          var val = Model.DiagramColors.TryGetValue(c.Key, out var stored) ? stored : c.DefaultValue;
+          var label = isFa ? c.LabelFa : c.LabelEn;
+          <div class="admin-color-field" data-color-field="@c.Key">
+            <label class="admin-label" for="@c.Key">@label</label>
+            <div class="admin-color-row">
+              <input type="color" class="form-control form-control-color" id="@c.Key" name="DiagramColors[@c.Key]"
+                     value="@val" data-hex-pair="@c.Key" />
+              @* dir="ltr" is load-bearing: a hex value is a left-to-right token, and inside the RTL
+                 page the browser reorders it, so "#e8f6ee" renders as "e8f6ee#". Same for the
+                 picker's own swatch order. *@
+              <input type="text" class="form-control admin-color-hex" id="@(c.Key)-hex" value="@val"
+                     maxlength="7" data-hex-pair="@c.Key" dir="ltr" aria-label="@label" />
+              @* Reset to the shipped value. A button rather than a link so it posts with the
+                 anti-forgery token and works without JavaScript doing the formatting. *@
+              <button type="button" class="admin-color-reset" data-color-reset="@c.Key"
+                      data-color-default="@c.DefaultValue"
+                      title="@L["admin.branding.diagramReset"]" aria-label="@L["admin.branding.diagramReset"]">
+                <i class="ti ti-rotate-clockwise" aria-hidden="true"></i>
+              </button>
+            </div>
+          </div>
+        }
+      </div>
+    }
   </div>
 
   <div class="admin-settings-card">
@@ -390,6 +446,69 @@
       el.addEventListener("change", function () { setActivePreset(null); });
     });
   }
+})();
+
+/**
+ * Reset-to-default for each diagram colour.
+ *
+ * Writes the shipped value straight into the two inputs and saves it immediately, so the colour the
+ * editor will use and the colour on screen are the same thing the moment the button is pressed. The
+ * previous design used an "apply" switch per colour, which left the stored value and the effective
+ * value able to disagree — the switch was the reason a colour could look changed but not be used.
+ *
+ * Saving right away (rather than waiting for the page's Save button) is deliberate: a reset is a
+ * single, unambiguous intent, and making the admin remember to save afterwards is how a reset gets
+ * silently lost.
+ */
+(function () {
+  var buttons = document.querySelectorAll("[data-color-reset]");
+  if (!buttons.length) return;
+
+  function setPair(key, value) {
+    var color = document.getElementById(key);
+    var hex = document.getElementById(key + "-hex");
+    if (color) color.value = value;
+    if (hex) hex.value = value;
+  }
+
+  buttons.forEach(function (btn) {
+    btn.addEventListener("click", async function () {
+      var key = btn.getAttribute("data-color-reset");
+      var fallback = btn.getAttribute("data-color-default");
+
+      btn.disabled = true;
+      try {
+        var token = document.querySelector('input[name="__RequestVerificationToken"]');
+        var body = new URLSearchParams();
+        body.append("key", key);
+        if (token) body.append("__RequestVerificationToken", token.value);
+
+        var res = await fetch("/Admin/Branding/ResetColor", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: body
+        });
+        if (!res.ok) throw new Error("reset failed: " + res.status);
+
+        var data = await res.json().catch(function () { return null; });
+        // Trust the server's answer when it gives one; fall back to the value rendered on the
+        // button so the control still updates if the response shape ever changes.
+        setPair(key, (data && data.value) || fallback);
+        var field = document.querySelector('[data-color-field="' + key + '"]');
+        if (field) {
+          field.classList.add("is-reset");
+          window.setTimeout(function () { field.classList.remove("is-reset"); }, 900);
+        }
+      } catch (e) {
+        // Leave the inputs untouched on failure: showing a colour that was not saved is worse than
+        // showing the old one and letting the admin try again.
+        if (window.DaNotify && DaNotify.error) DaNotify.error(String(e.message || e));
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
 })();
 </script>
 }

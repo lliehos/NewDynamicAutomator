@@ -527,7 +527,11 @@
         },
         "diagram": {
           "title": "Diagram",
-          "desc": "Appearance and run defaults for new processes. Each colour has an on/off switch: turning one off applies the built-in diagram default while keeping the stored value."
+          "desc": "Appearance and run defaults for new processes. Each colour has an on/off switch: turning one off applies the built-in diagram default while keeping the stored value.",
+          "defaults": "Diagram defaults",
+          "defaultsDesc": "The values a new process starts from. Colours live under Branding → Diagram colours.",
+          "errors": "Ignore-error defaults",
+          "errorsDesc": "The start node and inner nodes have separate switches; these are the starting state of each in a new process."
         }
       },
       "notSetYet": "Not set yet",
@@ -653,7 +657,22 @@
       "colorBorderSubtle": "Subtle border",
       "referralQr": "Product referral (QR)",
       "referralQrHint": "QR button at bottom-left of user panel — links to morobot.ir",
-      "referralQrShow": "Show referral QR widget in user panel"
+      "referralQrShow": "Show referral QR widget in user panel",
+      "diagramColors": "Diagram colours",
+      "diagramColorsIntro": "Colours of the process editor nodes, and the outline the player draws while running. Each colour has its own apply switch; with it off the diagram uses its built-in default and the stored value is kept.",
+      "diagramApply": "Apply this colour",
+      "diagramStepStroke": "Action stroke",
+      "diagramStepFill": "Action fill",
+      "diagramConditionStroke": "Condition stroke",
+      "diagramConditionFill": "Condition fill",
+      "diagramGroupStroke": "Group stroke",
+      "diagramHighlight": "Element highlight",
+      "diagramColorsTitle": "Diagram colours",
+      "diagramGroupNodes": "Nodes",
+      "diagramGroupStates": "States",
+      "diagramGroupEdges": "Edges",
+      "diagramGroupCanvas": "Canvas and text",
+      "diagramReset": "Reset to default"
     },
     "updates": {
       "title": "Software updates",

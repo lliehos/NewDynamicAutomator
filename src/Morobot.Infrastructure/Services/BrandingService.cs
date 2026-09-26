@@ -129,6 +129,7 @@ public sealed class BrandingService
         if (!string.IsNullOrWhiteSpace(model.FaviconUrl))
             await SetTrackedAsync(SystemSettingKeys.BrandFaviconPath, model.FaviconUrl, ct);
         await SavePaletteAsync(model, ct);
+        await SaveDiagramColorsAsync(model, ct);
     }
 
     private async Task ApplyPaletteFromSettingsAsync(TenantBrandingDto dto, CancellationToken ct)
@@ -160,6 +161,92 @@ public sealed class BrandingService
         var qrRaw = await _settings.GetAsync(SystemSettingKeys.BrandReferralQrVisible, "true", ct);
         dto.ShowReferralQrWidget = !string.Equals(qrRaw, "false", StringComparison.OrdinalIgnoreCase)
                                    && qrRaw != "0";
+
+        await ApplyDiagramColorsAsync(dto, ct);
+    }
+
+    /// <summary>
+    /// Read every diagram colour into the model, falling back to the shipped default.
+    /// </summary>
+    /// <remarks>
+    /// The list of colours comes from <c>SystemSettingKeys.DiagramColors</c>, so a colour added
+    /// there is read, rendered and saved with no change here. The shipped default is the fallback
+    /// rather than an empty string, which is what makes the reset button on the page restore a real
+    /// colour instead of clearing the field.
+    /// </remarks>
+    private async Task ApplyDiagramColorsAsync(TenantBrandingDto dto, CancellationToken ct)
+    {
+        foreach (var color in SystemSettingKeys.DiagramColors)
+        {
+            var raw = await _settings.GetAsync(color.Key, color.DefaultValue, ct);
+            dto.DiagramColors[color.Key] = BrandPaletteDefaults.NormalizeHex(raw, color.DefaultValue);
+        }
+    }
+
+    /// <summary>Persist every diagram colour, normalising each to a usable hex.</summary>
+    private async Task SaveDiagramColorsAsync(TenantBrandingDto model, CancellationToken ct)
+    {
+        foreach (var color in SystemSettingKeys.DiagramColors)
+        {
+            model.DiagramColors.TryGetValue(color.Key, out var submitted);
+            await SetTrackedAsync(color.Key, BrandPaletteDefaults.NormalizeHex(submitted, color.DefaultValue), ct);
+        }
+    }
+
+    /// <summary>
+    /// Restore one colour to the value the product ships.
+    /// </summary>
+    /// <remarks>
+    /// This is what replaced the old per-colour "apply" switches. Instead of a second setting that
+    /// decided whether the first one was honoured, the stored value itself is put back — one source
+    /// of truth, and the admin sees the restored colour rather than a switch flipping.
+    /// Returns false when the key is not a diagram colour, so the caller can answer 404 rather than
+    /// silently writing a row for a key that does not exist.
+    /// </remarks>
+    public async Task<bool> ResetDiagramColorAsync(
+        string key, int? actorUserId, string? actorUserName, CancellationToken ct = default)
+    {
+        var fallback = SystemSettingKeys.DiagramColorDefault(key);
+        if (fallback is null) return false;
+
+        _actorUserId = actorUserId;
+        _actorUserName = actorUserName;
+        try
+        {
+            await SetTrackedAsync(key, fallback, ct);
+        }
+        finally
+        {
+            _actorUserId = null;
+            _actorUserName = null;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Save ONLY the diagram colours, with change tracking.
+    /// </summary>
+    /// <remarks>
+    /// The branding page is licence-gated but the diagram colours are not a licensed feature, so
+    /// the controller calls this one on the unlicensed path instead of dropping the whole save.
+    /// </remarks>
+    public async Task SaveDiagramColorsAsync(
+        TenantBrandingDto model,
+        int? actorUserId,
+        string? actorUserName,
+        CancellationToken ct = default)
+    {
+        _actorUserId = actorUserId;
+        _actorUserName = actorUserName;
+        try
+        {
+            await SaveDiagramColorsAsync(model, ct);
+        }
+        finally
+        {
+            _actorUserId = null;
+            _actorUserName = null;
+        }
     }
 
     private async Task SavePaletteAsync(TenantBrandingDto model, CancellationToken ct)

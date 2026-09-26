@@ -21,10 +21,35 @@ public sealed class DiagramDefaultsDto
     [JsonPropertyName("conditionFill")] public string? ConditionFill { get; set; }
     [JsonPropertyName("groupStroke")] public string? GroupStroke { get; set; }
     [JsonPropertyName("highlightColor")] public string? HighlightColor { get; set; }
+
+    // Node state colours — were hard-coded in the editor.
+    [JsonPropertyName("startFill")] public string? StartFill { get; set; }
+    [JsonPropertyName("startStroke")] public string? StartStroke { get; set; }
+    [JsonPropertyName("startWarnFill")] public string? StartWarnFill { get; set; }
+    [JsonPropertyName("startWarnStroke")] public string? StartWarnStroke { get; set; }
+    [JsonPropertyName("stepIgnoreStroke")] public string? StepIgnoreStroke { get; set; }
+    [JsonPropertyName("stepIgnoreFill")] public string? StepIgnoreFill { get; set; }
+
+    // Edge colours.
+    [JsonPropertyName("edgeNext")] public string? EdgeNext { get; set; }
+    [JsonPropertyName("edgeSuccess")] public string? EdgeSuccess { get; set; }
+    [JsonPropertyName("edgeFail")] public string? EdgeFail { get; set; }
+    [JsonPropertyName("edgeParent")] public string? EdgeParent { get; set; }
+
+    // Canvas / chrome.
+    [JsonPropertyName("canvasEdge")] public string? CanvasEdge { get; set; }
+    [JsonPropertyName("labelColor")] public string? LabelColor { get; set; }
+    [JsonPropertyName("mutedLabel")] public string? MutedLabel { get; set; }
+
     [JsonPropertyName("selectorLineWidth")] public double? SelectorLineWidth { get; set; }
     [JsonPropertyName("stepDelayMs")] public int? StepDelayMs { get; set; }
     [JsonPropertyName("loopBackLimit")] public int? LoopBackLimit { get; set; }
+
+    /// <summary>Root start node's process-level "continue after a failed step".</summary>
     [JsonPropertyName("ignorePlayError")] public bool? IgnorePlayError { get; set; }
+
+    /// <summary>An inner node's own "ignore this step's error". Stored as <c>ignoreError</c>.</summary>
+    [JsonPropertyName("nodeIgnoreError")] public bool? NodeIgnoreError { get; set; }
 }
 
 /// <summary>Reads and validates the diagram defaults.</summary>
@@ -45,24 +70,14 @@ public sealed class DiagramSettingsService
     {
         var dto = new DiagramDefaultsDto();
 
-        foreach (var (setting, enabledSwitch) in SystemSettingKeys.DiagramColorPairs)
+        // Every colour is always sent, never null-when-unset. The editor falls back to its own
+        // constant when a field is missing, so leaving one out would make the admin page and the
+        // editor disagree about what "the default" is. A stored value that is not a usable hex
+        // falls back to the shipped default rather than being dropped.
+        foreach (var color in SystemSettingKeys.DiagramColors)
         {
-            // A colour is only offered when its switch is on AND the stored value is a usable
-            // hex. A switch left on over a value someone typed badly must not put an invalid
-            // colour into the editor, where it would surface as an invisible node.
-            if (!await IsSwitchOnAsync(enabledSwitch, ct)) continue;
-            var hex = HexOrNull(await _settings.GetAsync(setting, "", ct));
-            if (hex is null) continue;
-
-            switch (setting)
-            {
-                case SystemSettingKeys.DiagramStepStroke: dto.StepStroke = hex; break;
-                case SystemSettingKeys.DiagramStepFill: dto.StepFill = hex; break;
-                case SystemSettingKeys.DiagramConditionStroke: dto.ConditionStroke = hex; break;
-                case SystemSettingKeys.DiagramConditionFill: dto.ConditionFill = hex; break;
-                case SystemSettingKeys.DiagramGroupStroke: dto.GroupStroke = hex; break;
-                case SystemSettingKeys.DiagramHighlightColor: dto.HighlightColor = hex; break;
-            }
+            var hex = HexOrDefault(await _settings.GetAsync(color.Key, color.DefaultValue, ct), color.DefaultValue);
+            AssignColor(dto, color.EditorField, hex);
         }
 
         var width = await _settings.GetAsync(SystemSettingKeys.DiagramSelectorLineWidth, "", ct);
@@ -80,18 +95,56 @@ public sealed class DiagramSettingsService
         var ignore = await _settings.GetAsync(SystemSettingKeys.DiagramIgnorePlayError, "", ct);
         if (!string.IsNullOrWhiteSpace(ignore)) dto.IgnorePlayError = IsTrue(ignore);
 
+        var nodeIgnore = await _settings.GetAsync(SystemSettingKeys.DiagramNodeIgnoreError, "", ct);
+        if (!string.IsNullOrWhiteSpace(nodeIgnore)) dto.NodeIgnoreError = IsTrue(nodeIgnore);
+
         return dto;
+    }
+
+    /// <summary>Write a resolved colour onto the matching editor field.</summary>
+    private static void AssignColor(DiagramDefaultsDto dto, string editorField, string hex)
+    {
+        switch (editorField)
+        {
+            case "stepStroke": dto.StepStroke = hex; break;
+            case "stepFill": dto.StepFill = hex; break;
+            case "conditionStroke": dto.ConditionStroke = hex; break;
+            case "conditionFill": dto.ConditionFill = hex; break;
+            case "groupStroke": dto.GroupStroke = hex; break;
+            case "highlightColor": dto.HighlightColor = hex; break;
+            case "startFill": dto.StartFill = hex; break;
+            case "startStroke": dto.StartStroke = hex; break;
+            case "startWarnFill": dto.StartWarnFill = hex; break;
+            case "startWarnStroke": dto.StartWarnStroke = hex; break;
+            case "stepIgnoreStroke": dto.StepIgnoreStroke = hex; break;
+            case "stepIgnoreFill": dto.StepIgnoreFill = hex; break;
+            case "edgeNext": dto.EdgeNext = hex; break;
+            case "edgeSuccess": dto.EdgeSuccess = hex; break;
+            case "edgeFail": dto.EdgeFail = hex; break;
+            case "edgeParent": dto.EdgeParent = hex; break;
+            case "canvasEdge": dto.CanvasEdge = hex; break;
+            case "labelColor": dto.LabelColor = hex; break;
+            case "mutedLabel": dto.MutedLabel = hex; break;
+        }
     }
 
     /// <summary>Clamp to the range the engine honours, so the UI never promises a value it will not use.</summary>
     public static int ClampLoopBackLimit(int value) =>
         Math.Clamp(value, MinLoopBackLimit, MaxLoopBackLimit);
 
-    private async Task<bool> IsSwitchOnAsync(string key, CancellationToken ct)
-        => IsTrue(await _settings.GetAsync(key, "true", ct));
-
     private static bool IsTrue(string? raw) =>
         string.Equals(raw?.Trim(), "true", StringComparison.OrdinalIgnoreCase) || raw?.Trim() == "1";
+
+    /// <summary>
+    /// The stored colour when it is a usable hex, otherwise the shipped default.
+    /// </summary>
+    /// <remarks>
+    /// A colour is always resolved to something drawable. The previous behaviour skipped an invalid
+    /// value entirely, which left the editor on its own constant — so the admin page showed the bad
+    /// value while the canvas showed a different one, and neither said so.
+    /// </remarks>
+    public static string HexOrDefault(string? raw, string fallback) =>
+        HexOrNull(raw) ?? HexOrNull(fallback) ?? "#000000";
 
     /// <summary>
     /// Accept only a 3- or 6-digit hex colour and return it in six-digit lower-case form.

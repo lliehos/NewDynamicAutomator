@@ -12,12 +12,12 @@ public sealed class AdminSettingsViewModel
     /// How many fields a group actually renders.
     /// </summary>
     /// <remarks>
-    /// Not the raw row count. An enable switch is drawn next to the colour it controls rather than
-    /// as a field of its own, and superseded rows (the legacy AuthMode) are not drawn at all, so
-    /// counting either would tell the reader there is more to review than they can see.
+    /// Not the raw row count. Superseded rows (the legacy AuthMode) are not drawn at all, and the
+    /// retired per-colour diagram switches are filtered out of the page, so counting either would
+    /// tell the reader there is more to review than they can see.
     /// </remarks>
     public int VisibleCount(IEnumerable<SystemSetting> group)
         => group.Count(s =>
-            !SystemSettingKeys.DiagramColorPairs.Any(p => p.EnabledSwitch == s.Key)
-            && !SystemSettingKeys.IsSuperseded(s.Key));
+            !SystemSettingKeys.IsSuperseded(s.Key)
+            && !SystemSettingKeys.IsRetiredDiagramSwitch(s.Key));
 }

@@ -1256,6 +1256,50 @@ label { font-size: .9rem; }
   font-family: ui-monospace, monospace;
   font-size: .85rem;
 }
+
+/* Reset-to-default button beside each colour. Replaces the old per-colour "apply" switch: one
+   click restores the shipped value instead of a second setting deciding whether the first counts. */
+.admin-color-reset {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  padding: 0;
+  border: 1px solid var(--morobot-border-subtle, #e6e4f0);
+  border-radius: .4rem;
+  background: transparent;
+  color: var(--morobot-ink, #4b465c);
+  cursor: pointer;
+  transition: background-color .15s, color .15s, border-color .15s;
+}
+.admin-color-reset:hover:not(:disabled) {
+  background: var(--morobot-soft, #f4f2fb);
+  border-color: var(--morobot-primary, #7367f0);
+  color: var(--morobot-primary, #7367f0);
+}
+.admin-color-reset:disabled { opacity: .5; cursor: default; }
+.admin-color-reset i { font-size: 1.05rem; line-height: 1; }
+
+/* Brief confirmation that a colour was restored, so the click is not silent when the colour
+   happens to already equal the default and nothing visibly moves. */
+.admin-color-field.is-reset .admin-color-row { animation: admin-color-reset-flash .9s ease-out; }
+@keyframes admin-color-reset-flash {
+  0%   { box-shadow: 0 0 0 2px var(--morobot-primary, #7367f0); border-radius: .4rem; }
+  100% { box-shadow: 0 0 0 2px transparent; border-radius: .4rem; }
+}
+
+/* Sub-headings inside a branded card, used to group the diagram colours. */
+.admin-branding-subhead {
+  margin: 1.1rem 0 .5rem;
+  font-size: .82rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--morobot-muted-label, #9a96a8);
+}
+.admin-branding-subhead:first-of-type { margin-top: 0; }
 .admin-switch-line {
   display: flex;
   align-items: center;

@@ -314,36 +314,39 @@ public static class DbSeeder
             SystemSettingKeys.DiagramIgnorePlayError,
             "true",
             "Diagram",
-            "چشم‌پوشی از خطای اجرا",
-            "Ignore run errors",
-            "پیش‌فرض جدید: ادامهٔ اجرا وقتی یک اقدام شکست می‌خورد.",
-            "New-process default: keep going when an action fails.");
+            "پیش‌فرض چشم‌پوشی از خطا (نود شروع)",
+            "Ignore errors by default (start node)",
+            "وضعیت پیش‌فرض کلید «چشم‌پوشی از خطای اجرا» روی نود شروع، در فرآیندهای جدید. با روشن بودن، اجرا پس از خطای یک اقدام متوقف نمی‌شود.",
+            "Starting state of the start node's \"ignore run errors\" switch in a new process. When on, a failed action does not stop the run.");
 
-        // Per-colour switches. Default ON so an upgraded install keeps the colours above.
-        await Upsert(SystemSettingKeys.DiagramStepStrokeEnabled, "true", "Diagram",
-            "اعمال رنگ خط اقدام", "Apply action stroke",
-            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
-            "Off = use the built-in diagram default (the stored value is kept).");
-        await Upsert(SystemSettingKeys.DiagramStepFillEnabled, "true", "Diagram",
-            "اعمال رنگ پس‌زمینه اقدام", "Apply action fill",
-            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
-            "Off = use the built-in diagram default (the stored value is kept).");
-        await Upsert(SystemSettingKeys.DiagramConditionStrokeEnabled, "true", "Diagram",
-            "اعمال رنگ خط شرط", "Apply condition stroke",
-            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
-            "Off = use the built-in diagram default (the stored value is kept).");
-        await Upsert(SystemSettingKeys.DiagramConditionFillEnabled, "true", "Diagram",
-            "اعمال رنگ پس‌زمینه شرط", "Apply condition fill",
-            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
-            "Off = use the built-in diagram default (the stored value is kept).");
-        await Upsert(SystemSettingKeys.DiagramGroupStrokeEnabled, "true", "Diagram",
-            "اعمال رنگ خط گروه", "Apply group stroke",
-            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
-            "Off = use the built-in diagram default (the stored value is kept).");
-        await Upsert(SystemSettingKeys.DiagramHighlightColorEnabled, "true", "Diagram",
-            "اعمال رنگ هایلایت", "Apply highlight colour",
-            "خاموش = رنگ پیش‌فرض دیاگرام استفاده شود (مقدار ذخیره‌شده پاک نمی‌شود).",
-            "Off = use the built-in diagram default (the stored value is kept).");
+        await Upsert(
+            SystemSettingKeys.DiagramNodeIgnoreError,
+            "true",
+            "Diagram",
+            "پیش‌فرض چشم‌پوشی از خطا (نودهای داخلی)",
+            "Ignore errors by default (inner nodes)",
+            "وضعیت پیش‌فرض کلید «چشم‌پوشی از خطای این اقدام» روی نودهای داخلی. از نود شروع جدا است: می‌توان اجرا را ادامه داد ولی خطای هر اقدام جداگانه ثبت شود.",
+            "Starting state of an inner node's \"ignore this step's error\" switch. Separate from the start node: the run may continue while each action's failure is still reported.");
+
+        // The per-colour "apply" switches are gone. They let an administrator compare a colour
+        // against the built-in default without retyping it, but they also made every colour mean
+        // two settings and left the editor to decide which won. The branding page now has a
+        // reset-to-default action per colour; any row an older install still has is deleted by the
+        // cleanup and filtered out of the page (see SystemSettingKeys.RetiredDiagramColorSwitches).
+
+        // Every diagram colour is seeded from the one catalogue, so a colour added there arrives
+        // with its shipped default and a value the reset button can restore.
+        foreach (var color in SystemSettingKeys.DiagramColors)
+        {
+            await Upsert(
+                color.Key,
+                color.DefaultValue,
+                color.Group,
+                color.LabelFa,
+                color.LabelEn,
+                null,
+                null);
+        }
 
         await Upsert(SystemSettingKeys.LicensedDatabaseConnection, "", "Deployment", "Connection string (license)", "Connection string (license)", "توسط لایسنس امضاشده تنظیم می‌شود.", "Set by signed license.");        await Upsert(SystemSettingKeys.PendingConnectionRestart, "", "Deployment", "نیاز به راه‌اندازی مجدد", "Restart required", null, null);
 

@@ -223,6 +223,7 @@
       const n = Number(v);
       return Number.isFinite(n) && n >= min && n <= max ? n : null;
     };
+    const bool = (v) => (typeof v === "boolean" ? v : null);
     return {
       stepStroke: hex(raw.stepStroke),
       stepFill: hex(raw.stepFill),
@@ -230,10 +231,30 @@
       conditionFill: hex(raw.conditionFill),
       groupStroke: hex(raw.groupStroke),
       highlightColor: hex(raw.highlightColor),
+      // Node state colours — used to be hard-coded here, so an admin could restyle an action node
+      // but not a start node, and an "ignored" action was indistinguishable.
+      startFill: hex(raw.startFill),
+      startStroke: hex(raw.startStroke),
+      startWarnFill: hex(raw.startWarnFill),
+      startWarnStroke: hex(raw.startWarnStroke),
+      stepIgnoreStroke: hex(raw.stepIgnoreStroke),
+      stepIgnoreFill: hex(raw.stepIgnoreFill),
+      // Edge colours.
+      edgeNext: hex(raw.edgeNext),
+      edgeSuccess: hex(raw.edgeSuccess),
+      edgeFail: hex(raw.edgeFail),
+      edgeParent: hex(raw.edgeParent),
+      // Canvas / chrome.
+      canvasEdge: hex(raw.canvasEdge),
+      labelColor: hex(raw.labelColor),
+      mutedLabel: hex(raw.mutedLabel),
       selectorLineWidth: num(raw.selectorLineWidth, 1, 12),
       stepDelayMs: int(raw.stepDelayMs, 0, 60000),
       loopBackLimit: int(raw.loopBackLimit, 1, 1000),
-      ignorePlayError: typeof raw.ignorePlayError === "boolean" ? raw.ignorePlayError : null
+      ignorePlayError: bool(raw.ignorePlayError),
+      // A new INNER node's own "ignore this step's error" — a different switch from the start
+      // node's, even though the two share a label in the inspector.
+      nodeIgnoreError: bool(raw.nodeIgnoreError)
     };
   })();
 
@@ -2549,23 +2570,31 @@
   const STEP_STROKE = diagramDefaults.stepStroke || "#ff9f43";
   const STEP_FILL = diagramDefaults.stepFill || "#fff8f0";
   /** Action with ignoreError ON — fill leans green */
-  const STEP_STROKE_IGNORE = "#28c76f";
-  const STEP_FILL_IGNORE = "#e8f6ee";
+  const STEP_STROKE_IGNORE = diagramDefaults.stepIgnoreStroke || "#28c76f";
+  const STEP_FILL_IGNORE = diagramDefaults.stepIgnoreFill || "#e8f6ee";
   const COND_STROKE = diagramDefaults.conditionStroke || "#8b9098";
   const COND_FILL = diagramDefaults.conditionFill || "#eceff2";
   /** Group node outline; was a literal inside makeCloneButton. */
   const GROUP_STROKE = diagramDefaults.groupStroke || "#9b92f8";
   /** Root process start — strong green (ignorePlayError ON / default) */
-  const START_FILL_ROOT = "#159a55";
-  const START_STROKE_ROOT = "#0d7a40";
+  const START_FILL_ROOT = diagramDefaults.startFill || "#159a55";
+  const START_STROKE_ROOT = diagramDefaults.startStroke || "#0d7a40";
   /** Root start when ignorePlayError is OFF — lean orange */
-  const START_FILL_ROOT_WARN = "#e8943a";
-  const START_STROKE_ROOT_WARN = "#c66f18";
-  /** Nested group start — softer / faded green */
-  const START_FILL_NESTED = "#b7e5c8";
-  const START_STROKE_NESTED = "#7bc99a";
-  const START_FILL_NESTED_WARN = "#ffe0c2";
-  const START_STROKE_NESTED_WARN = "#e0a060";
+  const START_FILL_ROOT_WARN = diagramDefaults.startWarnFill || "#e8943a";
+  const START_STROKE_ROOT_WARN = diagramDefaults.startWarnStroke || "#c66f18";
+  /** Nested group start — softer / faded green. Derived from the root start colours so a custom
+     start colour stays recognisable in a group instead of clashing with a hard-coded green. */
+  function fadeForNested(hex) {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || ""));
+    if (!m) return hex;
+    // Mix 50% toward white: the nested start reads as the same family but visibly lighter.
+    const mix = (c) => Math.round((parseInt(c, 16) + 255) / 2).toString(16).padStart(2, "0");
+    return `#${mix(m[1])}${mix(m[2])}${mix(m[3])}`;
+  }
+  const START_FILL_NESTED = fadeForNested(START_FILL_ROOT);
+  const START_STROKE_NESTED = fadeForNested(START_STROKE_ROOT);
+  const START_FILL_NESTED_WARN = fadeForNested(START_FILL_ROOT_WARN);
+  const START_STROKE_NESTED_WARN = fadeForNested(START_STROKE_ROOT_WARN);
 
   function startIgnoresPlayError(n) {
     return n?.ignorePlayError !== false;
@@ -2603,13 +2632,18 @@
     return stepIgnoresError(n) ? STEP_STROKE_IGNORE : STEP_STROKE;
   }
 
+  /** Faint line for an unwired port, and the two label tones — all admin-settable. */
+  const CANVAS_EDGE = diagramDefaults.canvasEdge || "#e4e1f5";
+  const LABEL_COLOR = diagramDefaults.labelColor || "#4b465c";
+  const MUTED_LABEL_COLOR = diagramDefaults.mutedLabel || "#9a96a8";
+
   function defaultStrokeFor(n) {
-    if (!n) return "#e4e1f5";
+    if (!n) return CANVAS_EDGE;
     if (n.kind === "start") return startStroke(n);
-    if (n.kind === "group") return "#9b92f8";
+    if (n.kind === "group") return GROUP_STROKE;
     if (isActionNode(n)) return stepStroke(n);
     if (n.kind === "condition") return COND_STROKE;
-    return "#e4e1f5";
+    return CANVAS_EDGE;
   }
 
   /** Slightly deeper tone of a hex stroke — used as the “strong” end of the invalid blink. */
@@ -2770,14 +2804,14 @@
         {
           text: titleLine,
           size: titleFs,
-          fill: "#4b465c",
+          fill: LABEL_COLOR,
           weight: "700",
           leading: 0
         },
         {
           text: groupMetaText(n.id),
           size: 11,
-          fill: "#9a96a8",
+          fill: MUTED_LABEL_COLOR,
           weight: "400",
           leading: metaGap + 13
         }
@@ -3820,11 +3854,27 @@
     return `M ${a.x} ${a.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${b.x} ${b.y}`;
   }
 
+  /** Edge colours, all admin-settable. The selected variant darkens the configured colour rather
+     than being a separate setting: selection is a transient UI state, not a brand decision. */
+  const EDGE_NEXT = diagramDefaults.edgeNext || "#7367f0";
+  const EDGE_SUCCESS = diagramDefaults.edgeSuccess || "#28c76f";
+  const EDGE_FAIL = diagramDefaults.edgeFail || "#ea5455";
+  const EDGE_PARENT = diagramDefaults.edgeParent || "#00cfe8";
+
+  /** Darken a hex colour by mixing toward black, so selection stays in the same hue family. */
+  function darken(hex, amount) {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || ""));
+    if (!m) return hex;
+    const dim = (c) => Math.round(parseInt(c, 16) * (1 - amount)).toString(16).padStart(2, "0");
+    return `#${dim(m[1])}${dim(m[2])}${dim(m[3])}`;
+  }
+
   function edgeColor(kind, selected) {
-    if (kind === "success") return selected ? "#0f9f4f" : "#28c76f";
-    if (kind === "fail") return selected ? "#c62828" : "#ea5455";
-    if (kind === "parent") return selected ? "#0095a8" : "#00cfe8";
-    return selected ? "#4a3fd6" : "#7367f0";
+    const base = kind === "success" ? EDGE_SUCCESS
+      : kind === "fail" ? EDGE_FAIL
+      : kind === "parent" ? EDGE_PARENT
+      : EDGE_NEXT;
+    return selected ? darken(base, 0.3) : base;
   }
 
   function selectEdge(edgeId) {
@@ -4263,7 +4313,7 @@
           : n.kind === "start" ? (n.groupNodeId ? h / 2 + 4 : 32)
           : h / 2 + fontSize * 0.35,
         "text-anchor": labelAnchor,
-        fill: n.kind === "start" ? startLabelFill(n) : "#4b465c",
+        fill: n.kind === "start" ? startLabelFill(n) : LABEL_COLOR,
         "font-size": fontSize,
         "font-family": "Vazirmatn, Tahoma"
       });
@@ -5204,7 +5254,9 @@
       title: opts.title || `اقدام ${siblings.length + 1}`,
       actionType: opts.actionType || "Click",
       isActive: true,
-      ignoreError: true,
+      // The admin's inner-node default (Admin → Settings → Ignore-error defaults). Distinct from
+      // the start node's process-level flag, which lives on the root start node instead.
+      ignoreError: diagramDefaults.nodeIgnoreError ?? true,
       framePathJson: "[]",
       x: opts.x ?? 120,
       y: opts.y ?? (100 + siblings.length * 48)
@@ -6663,7 +6715,7 @@
 
   function stepInspectorHtml(n) {
     if (n.isActive == null) n.isActive = true;
-    if (n.ignoreError == null) n.ignoreError = true;
+    if (n.ignoreError == null) n.ignoreError = diagramDefaults.nodeIgnoreError ?? true;
     const active = n.isActive !== false;
     const at = n.actionType || "Click";
     const ignoreError = n.ignoreError !== false;

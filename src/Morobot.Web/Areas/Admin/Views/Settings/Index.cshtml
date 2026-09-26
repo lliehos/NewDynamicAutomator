@@ -41,23 +41,41 @@
       var gkey = SystemSettingKeys.SettingGroupInfo.LocaleKeyOf(group.Key);
       var gtitle = L["admin.settings.groups." + gkey + ".title"];
       var gdesc = L["admin.settings.groups." + gkey + ".desc"];
-      <section class="admin-settings-card" id="settings-group-@gkey">
+      // The Diagram group is split into two cards so the page says what each value is FOR:
+      // "behaviour defaults" are numbers and one flag that a new process starts from, while the
+      // ignore-error pair are the defaults for the two switches that share that name in the
+      // editor. Colours are not here at all — they are on Admin → Branding.
+      var isDiagram = string.Equals(group.Key, "Diagram", StringComparison.OrdinalIgnoreCase);
+      var cards = isDiagram
+        ? new[]
+          {
+            (Key: "diagramDefaults", Title: L["admin.settings.groups.diagram.defaults"],
+             Desc: L["admin.settings.groups.diagram.defaultsDesc"],
+             Rows: group.Where(s => !SystemSettingKeys.IsIgnoreErrorDefault(s.Key)).ToList()),
+            (Key: "diagramErrors", Title: L["admin.settings.groups.diagram.errors"],
+             Desc: L["admin.settings.groups.diagram.errorsDesc"],
+             Rows: group.Where(s => SystemSettingKeys.IsIgnoreErrorDefault(s.Key)).ToList())
+          }
+        : new[] { (Key: gkey, Title: gtitle, Desc: gdesc, Rows: group.ToList()) };
+      @foreach (var card in cards.Where(c => c.Rows.Count > 0))
+      {
+        var gkey2 = card.Key;
+        gtitle = card.Title;
+        gdesc = card.Desc;
+        var rows = card.Rows;
+      <section class="admin-settings-card" id="settings-group-@gkey2">
         <h3>
           <i class="ti @SystemSettingKeys.SettingGroupInfo.IconOf(group.Key)" aria-hidden="true"></i>
           <span>@gtitle</span>
-          <span class="admin-settings-card-count">@Model.VisibleCount(group)</span>
+          <span class="admin-settings-card-count">@Model.VisibleCount(rows)</span>
         </h3>
         @if (!string.IsNullOrWhiteSpace(gdesc) && !gdesc.StartsWith("admin.settings.groups."))
         {
           <p class="admin-settings-card-desc">@gdesc</p>
         }
 
-        @foreach (var s in group)
+        @foreach (var s in rows)
         {
-          // An enable switch is not a setting of its own: it is rendered next to the colour it
-          // controls, below. Rendering it again here would put two controls with the same name in
-          // the form, and both would post.
-          if (SystemSettingKeys.DiagramColorPairs.Any(p => p.EnabledSwitch == s.Key)) continue;
           // The legacy single-value auth row is superseded by the two switches below. Leaving it
           // on the page would offer a second, contradictory way to choose the same thing.
           if (s.Key == SystemSettingKeys.AuthMode) continue;
@@ -66,20 +84,12 @@
           var readOnly = SystemSettingKeys.IsReadOnlyForAdmin(s.Key);
           var isSecret = SystemSettingKeys.IsSensitiveForAdmin(s.Key);
           var secretSet = isSecret && !string.IsNullOrWhiteSpace(s.Value);
-          // A colour setting with an enable switch beside it. The switch lives in the same form
-          // so both travel together, and the colour input stays usable while the switch is off —
-          // that is what makes "turn it off to compare, turn it back on" possible without retyping.
-          var isColour = SystemSettingKeys.ColourKeys.Contains(s.Key);
-          var hasSwitch = SystemSettingKeys.DiagramColorPairs.Any(p => p.Setting == s.Key);
-          var switchKey = hasSwitch ? SystemSettingKeys.DiagramColorPairs.First(p => p.Setting == s.Key).EnabledSwitch : null;
-          var switchOn = switchKey is not null && Model.Settings.Any(x => x.Key == switchKey
-            && (string.Equals(x.Value, "true", StringComparison.OrdinalIgnoreCase) || x.Value == "1"));
           // The two sign-in switches: rendered as checkboxes, and the LDAP-only fields below are
           // hidden while the LDAP switch is off (the server keeps them intact either way).
           var isAuthSwitch = s.Key is SystemSettingKeys.AuthLocalEnabled or SystemSettingKeys.AuthLdapEnabled;
           var authSwitchOn = string.Equals(s.Value, "true", StringComparison.OrdinalIgnoreCase) || s.Value == "1";
-          // Any other plain flag (currently just "use TLS") also gets a switch rather than a text
-          // box, so a mistyped value cannot read as "off".
+          // Any other plain flag (use TLS, the two ignore-error defaults) also gets a switch rather
+          // than a text box, so a mistyped value cannot read as "off".
           var isBooleanSwitch = !isAuthSwitch && SystemSettingKeys.IsBoolean(s.Key);
           var boolSwitchOn = string.Equals(s.Value, "true", StringComparison.OrdinalIgnoreCase) || s.Value == "1";
           var isLdapField = SystemSettingKeys.IsLdapOnly(s.Key);
@@ -175,32 +185,11 @@
                      value="" autocomplete="new-password"
                      placeholder="@(secretSet ? L["admin.settings.secretKeep"] : L["admin.settings.secretEmpty"])" />
             }
-            else if (isColour)
-            {
-              @* A colour input plus a text box: the picker for choosing, the text box so a value
-                 can be pasted or read exactly. Both write the same setting, and the text box is
-                 what actually posts, so an owner who types an unsupported value keeps it rather
-                 than having the picker silently discard it. *@
-              <div class="admin-settings-colour-row">
-                <input class="admin-settings-colour-picker" type="color"
-                       id="picker_@s.Key" value="@(string.IsNullOrWhiteSpace(s.Value) ? "#000000" : s.Value)"
-                       data-colour-for="setting_@s.Key"
-                       aria-label="@label" />
-                <input class="form-control admin-settings-colour-text" type="text"
-                       id="setting_@s.Key" name="setting_@s.Key" value="@s.Value"
-                       spellcheck="false" autocomplete="off" />
-                @if (switchKey is not null)
-                {
-                  <label class="admin-settings-colour-switch" title="@L["admin.settings.diagramColorSwitch"]">
-                    <input type="hidden" name="setting_@switchKey" value="false" />
-                    <input type="checkbox" name="setting_@switchKey" value="true" @(switchOn ? "checked" : null) />
-                    <span>@L["admin.settings.diagramColorSwitch"]</span>
-                  </label>
-                }
-              </div>
-            }
             else
             {
+              @* No colour branch: every colour, diagram included, is edited on Admin → Branding,
+                 where it has a picker, a hex box and a reset. Rendering one here too would give the
+                 same row two editors and let a stale Settings form overwrite a fresh palette. *@
               <input class="form-control" id="setting_@s.Key" name="setting_@s.Key" value="@s.Value" />
             }
 
@@ -232,6 +221,7 @@
           </div>
         }
       </section>
+      }
     }
   </div>
 

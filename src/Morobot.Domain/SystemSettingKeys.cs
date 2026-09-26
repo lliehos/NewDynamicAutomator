@@ -65,7 +65,9 @@ public static class SystemSettingKeys
     {
         AuthLocalEnabled,
         AuthLdapEnabled,
-        LdapUseTls
+        LdapUseTls,
+        DiagramIgnorePlayError,
+        DiagramNodeIgnoreError
     };
 
     /// <summary>True when the setting is a plain on/off flag.</summary>
@@ -183,14 +185,72 @@ public static class SystemSettingKeys
     public const string DiagramGroupStroke = "DiagramGroupStroke";
     /// <summary>Highlight colour used when the player marks an element on the page.</summary>
     public const string DiagramHighlightColor = "DiagramHighlightColor";
+
+    // ── Node state colours ──
+    // These were hard-coded inside the editor, so an administrator could restyle action and
+    // condition nodes but not a start node, and could not distinguish an "ignored" action at all.
+    /// <summary>Fill of the root start node while it ignores play errors (the healthy default).</summary>
+    public const string DiagramStartFill = "DiagramStartFill";
+    /// <summary>Stroke of the root start node while it ignores play errors.</summary>
+    public const string DiagramStartStroke = "DiagramStartStroke";
+    /// <summary>Fill of the root start node when it stops the run on an error.</summary>
+    public const string DiagramStartWarnFill = "DiagramStartWarnFill";
+    /// <summary>Stroke of the root start node when it stops the run on an error.</summary>
+    public const string DiagramStartWarnStroke = "DiagramStartWarnStroke";
+    /// <summary>Stroke of an action node whose own error is ignored.</summary>
+    public const string DiagramStepIgnoreStroke = "DiagramStepIgnoreStroke";
+    /// <summary>Fill of an action node whose own error is ignored.</summary>
+    public const string DiagramStepIgnoreFill = "DiagramStepIgnoreFill";
+
+    // ── Edge colours ──
+    /// <summary>Colour of an ordinary "next" connection.</summary>
+    public const string DiagramEdgeNextColor = "DiagramEdgeNextColor";
+    /// <summary>Colour of a condition's success branch.</summary>
+    public const string DiagramEdgeSuccessColor = "DiagramEdgeSuccessColor";
+    /// <summary>Colour of a condition's failure branch.</summary>
+    public const string DiagramEdgeFailColor = "DiagramEdgeFailColor";
+    /// <summary>Colour of a group's containment connection.</summary>
+    public const string DiagramEdgeParentColor = "DiagramEdgeParentColor";
+
+    // ── Canvas / chrome ──
+    /// <summary>Faint line drawn for an unwired port.</summary>
+    public const string DiagramCanvasEdgeColor = "DiagramCanvasEdgeColor";
+    /// <summary>Colour of a node's title text.</summary>
+    public const string DiagramLabelColor = "DiagramLabelColor";
+    /// <summary>Colour of secondary text inside a node.</summary>
+    public const string DiagramMutedLabelColor = "DiagramMutedLabelColor";
     /// <summary>Stroke width of the selector outline drawn while playing.</summary>
     public const string DiagramSelectorLineWidth = "DiagramSelectorLineWidth";
     /// <summary>Default pause between two steps, in milliseconds.</summary>
     public const string DiagramStepDelayMs = "DiagramStepDelayMs";
     /// <summary>Default maximum times a node may be revisited before a loop is declared stuck.</summary>
     public const string DiagramLoopBackLimit = "DiagramLoopBackLimit";
-    /// <summary>Default for "continue the run even if an action fails".</summary>
+
+    /// <summary>
+    /// Default for the ROOT START node's "continue the run even if an action fails".
+    /// </summary>
+    /// <remarks>
+    /// The start node is the process-level switch: the engine's <c>resolveIgnorePlayError</c> reads
+    /// it first, and it decides whether a failed step aborts the whole run or just moves to the next
+    /// loop index. The editor's own default has always been ON (see <c>resolveIgnorePlayError</c> and
+    /// the start-node inspector), so this setting only changes the starting point for a NEW process.
+    /// </remarks>
     public const string DiagramIgnorePlayError = "DiagramIgnorePlayError";
+
+    /// <summary>
+    /// Default for a new INNER node's "ignore this step's error".
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="DiagramIgnorePlayError"/> on purpose. They are two different
+    /// switches that happen to share a name in the UI:
+    /// <list type="bullet">
+    /// <item>the START node's flag is the process-level policy — did the run survive a failure;</item>
+    /// <item>an inner node's <c>ignoreError</c> is per-step — was THIS step allowed to fail.</item>
+    /// </list>
+    /// One admin setting could not express both: an install that wants "keep going but tell me which
+    /// step broke" needs the start flag on and the inner default off.
+    /// </remarks>
+    public const string DiagramNodeIgnoreError = "DiagramNodeIgnoreError";
 
     /// <summary>
     /// Per-colour override switches. Each colour above is only applied when its switch is on;
@@ -205,7 +265,16 @@ public static class SystemSettingKeys
     public const string DiagramGroupStrokeEnabled = "DiagramGroupStrokeEnabled";
     public const string DiagramHighlightColorEnabled = "DiagramHighlightColorEnabled";
 
-    /// <summary>Keys owned by the Diagram group, in the order the editor reads them.</summary>
+    /// <summary>
+    /// Keys owned by the Diagram group, in the order the editor reads them.
+    /// </summary>
+    /// <remarks>
+    /// The per-colour "apply" switches that used to sit beside these are gone. They existed so an
+    /// admin could compare a colour against the built-in default without retyping it, but that made
+    /// every colour mean two settings and left the editor guessing which one won. A reset-to-default
+    /// action does the same job in one click with one source of truth, so the switches were replaced
+    /// by <see cref="DiagramColors"/> (with the shipped value on each entry) plus the reset endpoint.
+    /// </remarks>
     public static readonly IReadOnlyList<(string Setting, string EnabledSwitch)> DiagramColorPairs = new[]
     {
         (DiagramStepStroke, DiagramStepStrokeEnabled),
@@ -217,27 +286,129 @@ public static class SystemSettingKeys
     };
 
     /// <summary>
-    /// Settings holding a hex colour. Admin → Settings renders these with a colour picker; the
+    /// Every colour the diagram draws with, together with the value the product ships.
+    /// </summary>
+    /// <remarks>
+    /// The list is the single source of truth for three things: which colour fields the admin page
+    /// renders, what "reset to default" restores, and what the editor falls back to when a value is
+    /// missing. Keeping the shipped default here rather than inline in the editor is what makes the
+    /// reset button honest — it restores exactly the value an untouched install would use.
+    ///
+    /// The six "node" colours were settings before; the rest were hard-coded inside flow.js, so an
+    /// administrator could change the node palette but not a start node or an edge. They are all
+    /// settings now.
+    /// </remarks>
+    public static readonly IReadOnlyList<DiagramColorInfo> DiagramColors = new[]
+    {
+        // ── Node colours ──
+        new DiagramColorInfo(DiagramStepStroke, "#ff9f43", "stepStroke", "Diagram", "رنگ خط اقدام", "Action stroke"),
+        new DiagramColorInfo(DiagramStepFill, "#fff8f0", "stepFill", "Diagram", "رنگ پس‌زمینه اقدام", "Action fill"),
+        new DiagramColorInfo(DiagramConditionStroke, "#8b9098", "conditionStroke", "Diagram", "رنگ خط شرط", "Condition stroke"),
+        new DiagramColorInfo(DiagramConditionFill, "#eceff2", "conditionFill", "Diagram", "رنگ پس‌زمینه شرط", "Condition fill"),
+        new DiagramColorInfo(DiagramGroupStroke, "#9b92f8", "groupStroke", "Diagram", "رنگ خط گروه", "Group stroke"),
+        new DiagramColorInfo(DiagramHighlightColor, "#ea5455", "highlightColor", "Diagram", "رنگ هایلایت المان", "Element highlight"),
+        // ── Node state colours (were hard-coded in flow.js) ──
+        new DiagramColorInfo(DiagramStartFill, "#159a55", "startFill", "Diagram", "رنگ نود شروع", "Start node fill"),
+        new DiagramColorInfo(DiagramStartStroke, "#0d7a40", "startStroke", "Diagram", "رنگ خط نود شروع", "Start node stroke"),
+        new DiagramColorInfo(DiagramStartWarnFill, "#e8943a", "startWarnFill", "Diagram", "رنگ نود شروع (خطا)", "Start node fill (errors on)"),
+        new DiagramColorInfo(DiagramStartWarnStroke, "#c66f18", "startWarnStroke", "Diagram", "رنگ خط نود شروع (خطا)", "Start node stroke (errors on)"),
+        new DiagramColorInfo(DiagramStepIgnoreStroke, "#28c76f", "stepIgnoreStroke", "Diagram", "رنگ خط اقدام چشم‌پوشی‌شده", "Ignored action stroke"),
+        new DiagramColorInfo(DiagramStepIgnoreFill, "#e8f6ee", "stepIgnoreFill", "Diagram", "رنگ پس‌زمینه اقدام چشم‌پوشی‌شده", "Ignored action fill"),
+        // ── Edge colours ──
+        new DiagramColorInfo(DiagramEdgeNextColor, "#7367f0", "edgeNext", "Diagram", "رنگ اتصال عادی", "Normal edge"),
+        new DiagramColorInfo(DiagramEdgeSuccessColor, "#28c76f", "edgeSuccess", "Diagram", "رنگ اتصال موفقیت", "Success edge"),
+        new DiagramColorInfo(DiagramEdgeFailColor, "#ea5455", "edgeFail", "Diagram", "رنگ اتصال شکست", "Failure edge"),
+        new DiagramColorInfo(DiagramEdgeParentColor, "#00cfe8", "edgeParent", "Diagram", "رنگ اتصال گروه", "Group edge"),
+        // ── Canvas / chrome ──
+        new DiagramColorInfo(DiagramCanvasEdgeColor, "#e4e1f5", "canvasEdge", "Diagram", "رنگ لبهٔ خالی", "Empty port edge"),
+        new DiagramColorInfo(DiagramLabelColor, "#4b465c", "labelColor", "Diagram", "رنگ متن نود", "Node label text"),
+        new DiagramColorInfo(DiagramMutedLabelColor, "#9a96a8", "mutedLabel", "Diagram", "رنگ متن کم‌رنگ", "Muted label text"),
+    };
+
+    /// <summary>Where a key sits in <see cref="DiagramColors"/>, or -1 when it is not a diagram colour.</summary>
+    public static int DiagramColorIndex(string? key) =>
+        key is null ? -1
+        : DiagramColors.ToList().FindIndex(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>True when the key is one of the diagram colours.</summary>
+    public static bool IsDiagramColor(string? key) => DiagramColorIndex(key) >= 0;
+
+    /// <summary>The shipped default for a diagram colour, or null when the key is not one.</summary>
+    public static string? DiagramColorDefault(string? key)
+    {
+        var i = DiagramColorIndex(key);
+        return i < 0 ? null : DiagramColors[i].DefaultValue;
+    }
+
+    /// <summary>One diagram colour: its setting key, shipped default, editor field name and labels.</summary>
+    public sealed record DiagramColorInfo(
+        string Key, string DefaultValue, string EditorField, string Group, string LabelFa, string LabelEn);
+
+    /// <summary>
+    /// Colour keys that used to control whether a colour was applied. Retired — the reset-to-default
+    /// action replaces them — but named here so the settings page can filter out and delete any rows
+    /// an older install still has.
+    /// </summary>
+    public static readonly IReadOnlyList<string> RetiredDiagramColorSwitches = new[]
+    {
+        DiagramStepStrokeEnabled,
+        DiagramStepFillEnabled,
+        DiagramConditionStrokeEnabled,
+        DiagramConditionFillEnabled,
+        DiagramGroupStrokeEnabled,
+        DiagramHighlightColorEnabled
+    };
+
+    /// <summary>True when a key is one of the retired per-colour apply switches.</summary>
+    public static bool IsRetiredDiagramSwitch(string? key) =>
+        !string.IsNullOrWhiteSpace(key)
+        && RetiredDiagramColorSwitches.Contains(key, StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// The two "ignore error" defaults, which the settings page shows in their own card.
+    /// </summary>
+    /// <remarks>
+    /// They are separated from the rest of the Diagram group because they answer a different
+    /// question: the others are numbers a new process starts from, while these two are the starting
+    /// state of two different switches in the editor that happen to share a label. Grouping them
+    /// makes that distinction visible instead of hiding it in a list of unrelated settings.
+    /// </remarks>
+    public static readonly IReadOnlyList<string> IgnoreErrorDefaults = new[]
+    {
+        DiagramIgnorePlayError,
+        DiagramNodeIgnoreError
+    };
+
+    /// <summary>True when the key is one of the two ignore-error defaults.</summary>
+    public static bool IsIgnoreErrorDefault(string? key) =>
+        !string.IsNullOrWhiteSpace(key)
+        && IgnoreErrorDefaults.Contains(key, StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// Every diagram colour, plus the retired switches, as one set. Used to keep these off
+    /// Admin → Settings, where they would otherwise duplicate Admin → Branding.
+    /// </summary>
+    public static readonly IReadOnlySet<string> DiagramColorOwnedKeys =
+        new HashSet<string>(
+            DiagramColors.Select(c => c.Key).Concat(RetiredDiagramColorSwitches),
+            StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Settings holding a hex colour. Admin → Branding renders these with a colour picker; the
     /// set is declared here rather than sniffed from the value so a colour that happens to be
     /// empty still gets the right control.
     /// </summary>
-    public static readonly IReadOnlySet<string> ColourKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        DiagramStepStroke,
-        DiagramStepFill,
-        DiagramConditionStroke,
-        DiagramConditionFill,
-        DiagramGroupStroke,
-        DiagramHighlightColor,
-        BrandColorPrimary,
-        BrandColorPrimaryDark,
-        BrandColorPrimaryLight,
-        BrandColorAccent,
-        BrandColorSoft,
-        BrandColorSoft2,
-        BrandColorInk,
-        BrandColorBorderSubtle,
-    };
+    public static readonly IReadOnlySet<string> ColourKeys = new HashSet<string>(
+        DiagramColors.Select(c => c.Key).Concat(new[]
+        {
+            BrandColorPrimary,
+            BrandColorPrimaryDark,
+            BrandColorPrimaryLight,
+            BrandColorAccent,
+            BrandColorSoft,
+            BrandColorSoft2,
+            BrandColorInk,
+            BrandColorBorderSubtle,
+        }),
+        StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Keys owned by Admin → Branding. Admin → Settings must NOT list these: both pages read and
@@ -245,6 +416,12 @@ public static class SystemSettingKeys
     /// overwrite branding (or vice versa). Branding values are also licence-gated and need the
     /// dedicated editor with its colour pickers and image uploads.
     /// </summary>
+    /// <remarks>
+    /// The diagram colours and their apply switches are included: they are colours, so they belong
+    /// with the rest of the palette on the branding page rather than scattered through the Diagram
+    /// group on Settings. Listing them here is what removes them from Settings — a key can only be
+    /// rendered by the page that owns it.
+    /// </remarks>
     public static readonly IReadOnlySet<string> BrandingOwned = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         BrandAppName,
@@ -267,7 +444,7 @@ public static class SystemSettingKeys
         BrandColorInk,
         BrandColorBorderSubtle,
         BrandReferralQrVisible
-    };
+    }.Concat(DiagramColorOwnedKeys).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>True when the key belongs to a page other than Admin → Settings.</summary>
     public static bool IsBrandingOwned(string? key) =>
@@ -353,6 +530,10 @@ public static class SystemSettingKeys
     {
         new SettingGroupInfo("Auth", "auth", "ti-shield-lock", 10),
         new SettingGroupInfo("Updates", "updates", "ti-refresh", 20),
+        // "Diagram" stays, but it is no longer about colour: the colours and their apply switches
+        // moved to Admin → Branding (see BrandingOwned). What is left here are the editor's
+        // non-colour defaults — selector line width, step delay, loop-back limit, ignore-errors —
+        // which are behaviour, not branding, so they belong on the settings page.
         new SettingGroupInfo("Diagram", "diagram", "ti-hierarchy", 25),
         new SettingGroupInfo("Deployment", "deployment", "ti-server-cog", 30),
         new SettingGroupInfo("Branding", "branding", "ti-palette", 40)
