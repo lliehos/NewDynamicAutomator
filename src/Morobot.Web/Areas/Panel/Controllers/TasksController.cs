@@ -78,7 +78,24 @@ public class TasksController : Controller
     {
         ViewBag.TaskId = id ?? "";
         ViewBag.CanModify = true;
+        ViewBag.ChildOfTemplate = false;
+        ViewBag.TemplateTitle = "";
         ViewBag.LocalMode = false;
+
+        // A process that came from a template is a CHILD of that template: it may only edit the
+        // parameters of its start node, because every other node/edge is a projection of the
+        // mother process and gets overwritten on each cascade. Tell the editor so it can lock
+        // the canvas down and show the "derived from template X" banner.
+        if (int.TryParse(id, out var processId))
+        {
+            var child = await _tasks.GetTemplateOriginAsync(UserId, processId, ct);
+            if (child is { } origin)
+            {
+                ViewBag.ChildOfTemplate = true;
+                ViewBag.TemplateTitle = origin.TemplateTitle;
+            }
+        }
+
         ViewBag.EntitlementsJson = System.Text.Json.JsonSerializer.Serialize(
             EntitlementService.FromClaims(User),
             new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });

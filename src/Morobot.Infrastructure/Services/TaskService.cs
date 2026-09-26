@@ -539,6 +539,43 @@ public class TaskService
         return hit?.json;
     }
 
+    /// <summary>
+    /// If this process was created from a template it is that template's CHILD, and the editor has
+    /// to open in restricted mode: the diagram is read-only apart from the start node's own
+    /// parameters (data source, border colour, repeat mode/range, delay, loop limits), because
+    /// every other node and edge is a projection of the mother process that the cascade will
+    /// overwrite on the next publish.
+    ///
+    /// Returns <c>null</c> for an ordinary process, so the caller can simply check for a value.
+    /// </summary>
+    /// <remarks>
+    /// The MOTHER process is deliberately not reported as a child. It also carries a
+    /// <c>TemplateId</c> pointing at the template made from it, so a plain "has a template id"
+    /// test would lock the very process an author is supposed to edit. The mother is recognised by
+    /// being the template's <c>SourceProcessId</c>, and it must never be treated as its own child —
+    /// a cascade would otherwise overwrite the graph the template was authored from.
+    /// </remarks>
+    public async Task<(int TemplateId, string TemplateTitle)?> GetTemplateOriginAsync(
+        int userId, int taskId, CancellationToken ct = default)
+    {
+        if (!await CanViewAsync(userId, taskId, ct))
+            return null;
+
+        var row = await _db.Processes.AsNoTracking()
+            .Where(t => t.Id == taskId && t.TemplateId != null)
+            .Select(t => new
+            {
+                TemplateId = t.TemplateId!.Value,
+                Title = t.Template != null ? t.Template.Title : null,
+                // True when this process is the process the template was built from.
+                IsSource = t.Template != null && t.Template.SourceProcessId == t.Id
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (row is null || row.IsSource) return null;
+        return (row.TemplateId, row.Title ?? "");
+    }
+
     public async Task<(bool ok, string? error, DateTime? updatedAtUtc)> UpdateTitleAsync(
         int userId, int taskId, string? title, CancellationToken ct = default)
     {

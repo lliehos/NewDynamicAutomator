@@ -22,6 +22,7 @@ namespace Morobot.Web.Controllers.Api;
 public class TasksApiController : ControllerBase
 {
     private readonly TaskService _tasks;
+    private readonly TemplateService _templates;
     private readonly EntitlementService _entitlements;
     private readonly EventLogService _events;
     private readonly IHubContext<CanvasHub> _canvasHub;
@@ -31,6 +32,7 @@ public class TasksApiController : ControllerBase
 
     public TasksApiController(
         TaskService tasks,
+        TemplateService templates,
         EntitlementService entitlements,
         EventLogService events,
         IHubContext<CanvasHub> canvasHub,
@@ -39,6 +41,7 @@ public class TasksApiController : ControllerBase
         PlaySessionTracker plays)
     {
         _tasks = tasks;
+        _templates = templates;
         _entitlements = entitlements;
         _events = events;
         _canvasHub = canvasHub;
@@ -305,6 +308,25 @@ public class TasksApiController : ControllerBase
         if (!ok && error == "conflict")
             return Conflict(new { message = "Process was changed elsewhere.", code = "conflict", updatedAtUtc = newUpdated });
         if (!ok) return BadRequest(new { message = error, code = "limit" });
+
+        // Cascade half two: if this process is the source of a template, publish its new graph on to
+        // the template and from there to every child. The children keep their own start-node
+        // parameters (data source, border colour, repeat mode/range) — that is what makes them
+        // useful — while everything else follows the mother.
+        //
+        // Failures here must not lose the mother's save, so the cascade is best-effort: the mother's
+        // own graph is already committed by SaveCanvasJsonAsync above and its version is synced
+        // inside the call.
+        var (cascadedToTemplate, pushedToChildren) = await _templates.PushMotherGraphToTemplateAsync(id, json, UserId, ct);
+        if (cascadedToTemplate)
+        {
+            await _events.LogAsync(
+                "Audit", "Template", "TemplateCascade",
+                $"Mother #{id} saved; template refreshed and pushed to {pushedToChildren} child(ren)",
+                UserId, User.Identity?.Name,
+                path: $"/api/tasks/{id}/canvas",
+                ct: ct);
+        }
 
         if (forceSave && _plays.IsPlaying(taskKey))
         {

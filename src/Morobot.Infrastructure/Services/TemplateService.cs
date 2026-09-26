@@ -135,11 +135,21 @@ public class TemplateService
         _db.ProcessTemplates.Add(template);
         await _db.SaveChangesAsync(ct);
 
-        process.TemplateId = template.Id;
-        process.TemplateVersion = template.Version;
-        process.UpdatedAtUtc = DateTime.UtcNow;
-        process.LastEditorUserId = userId > 0 ? userId : null;
-        await _db.SaveChangesAsync(ct);
+        // The source process is the MOTHER, not a child of its own template. Linking it back via
+        // TemplateId would make it its own template's child — which would open the mother's editor
+        // in child mode and, worse, let a cascade overwrite the very graph the template was made
+        // from. The relation is recorded once, on the template side (SourceProcessId); the mother
+        // finds its template by that column. So `TemplateId` deliberately stays null here.
+        //
+        // Clear anything an older build left behind: before this guard existed the source was
+        // linked as its own child, and that stale row would otherwise keep the mother locked.
+        if (process.TemplateId == template.Id)
+        {
+            process.TemplateId = null;
+            process.TemplateVersion = null;
+            process.UpdatedAtUtc = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
 
         return (true, null, template);
     }
@@ -323,6 +333,40 @@ public class TemplateService
             .Select(p => new { p.TemplateId })
             .FirstOrDefaultAsync(ct);
         return process?.TemplateId;
+    }
+
+    /// <summary>
+    /// The other half of the cascade: after the MOTHER process is saved, copy its new graph into the
+    /// template made from it and push that on to the template's children.
+    /// </summary>
+    /// <remarks>
+    /// Without this the template is a snapshot taken the day it was created, and every later edit to
+    /// the mother would live only on the mother — children would never see it. Saving the mother is
+    /// the moment the author expresses the new intent, so the template is refreshed here and the
+    /// children follow in the same transaction.
+    ///
+    /// Returns (whether a template was found, how many children were updated). The caller owns
+    /// <c>SaveChanges</c> so the mother's graph, the template and all the children move together.
+    /// </remarks>
+    public async Task<(bool found, int pushed)> PushMotherGraphToTemplateAsync(
+        int processId, string motherGraphJson, int userId, CancellationToken ct = default)
+    {
+        var template = await _db.ProcessTemplates
+            .FirstOrDefaultAsync(t => t.SourceProcessId == processId, ct);
+        if (template is null) return (false, 0);
+
+        template.GraphJson = motherGraphJson;
+        template.Version += 1;
+        template.UpdatedAtUtc = DateTime.UtcNow;
+
+        var pushed = await PushGraphToChildrenAsync(template, motherGraphJson, userId, ct);
+
+        // The mother already holds this graph (it is the source of the push), so bring its recorded
+        // version up to date but do not re-merge it into itself.
+        var mother = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (mother is not null) mother.TemplateVersion = template.Version;
+
+        return (true, pushed);
     }
 
     /// <summary>

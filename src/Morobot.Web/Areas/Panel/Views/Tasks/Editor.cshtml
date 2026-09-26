@@ -23,6 +23,7 @@
   <link rel="stylesheet" href="~/css/da-cropper.css?v=1" />
   <link rel="stylesheet" href="~/css/da-avatar.css?v=1" />
   <link rel="stylesheet" href="~/editor/flow.css?v=repeat-range-1" />
+  <link rel="stylesheet" href="~/editor/flow-child.css?v=3" />
   <style>
     html, body { margin: 0; direction: @dir; }
     html.flow-rtl, html.flow-rtl body { font-family: Vazirmatn, Tahoma, sans-serif; }
@@ -30,7 +31,7 @@
   </style>
 </head>
 <body>
-  <div class="flow-shell" id="flow-app" data-task-id="@ViewBag.TaskId" data-user-id="@(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "")" data-can-modify="@(ViewBag.CanModify == true ? "true" : "false")" data-local-mode="@(ViewBag.LocalMode == true ? "true" : "false")">
+  <div class="flow-shell" id="flow-app" data-task-id="@ViewBag.TaskId" data-user-id="@(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "")" data-can-modify="@(ViewBag.CanModify == true ? "true" : "false")" data-local-mode="@(ViewBag.LocalMode == true ? "true" : "false")" data-child-of-template="@(ViewBag.ChildOfTemplate == true ? "true" : "false")" data-template-title="@ViewBag.TemplateTitle">
     <div class="flow-mobile-scrim" id="flow-mobile-scrim" hidden></div>
     <div class="flow-ribbon">
       <a class="btn-flow btn-ghost btn-with-ico" href="@Url.Action("Index","Home", new { area = "Panel" })" data-i18n-title="editor.ribbon.home" title="@L["editor.ribbon.home"]">
@@ -217,6 +218,6 @@
   <script src="~/js/extension-gate.js?v=plan-1"></script>
   <script src="~/js/da-switch.js?v=1"></script>
   <script src="~/js/da-cropper.js?v=1"></script>
-  <script src="~/editor/flow.js?v=root-start-repair-1"></script>
+  <script src="~/editor/flow.js?v=child-mode-2"></script>
 </body>
 </html>

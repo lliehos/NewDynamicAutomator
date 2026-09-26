@@ -98,6 +98,31 @@
   const pathSeg = location.pathname.split("/").filter(Boolean).pop() || "";
   const taskId = /^\d+$/.test(pathSeg) ? pathSeg : (app.dataset.taskId || "");
   const canModify = app.dataset.canModify === "true";
+  /**
+   * Child mode — this process was created from a template, so it is a projection of the mother
+   * process behind that template. Every node and edge (and the data-source *structure*) belongs
+   * to the mother and is rewritten by the cascade on each publish, so the canvas is locked down:
+   * no adding, cloning, deleting, re-wiring or re-property-ing of nodes. The single exception is
+   * the process-level start node, whose own parameters (data source, border colour, repeat mode
+   * and range, step delay, loop limits, ...) really do belong to this child.
+   *
+   * `canModify` stays true for the child when the user has edit rights, because editing the start
+   * node still has to be allowed; `structLocked` is the narrower "the graph shape is frozen" flag
+   * and the node-level guards test that instead.
+   */
+  const isChildOfTemplate = app.dataset.childOfTemplate === "true";
+  const templateTitle = String(app.dataset.templateTitle || "").trim();
+  const structLocked = isChildOfTemplate;
+  /** True when this node is the process-level start (not a group's internal start). */
+  function isRootStart(n) {
+    return !!n && (n.kind === "start" || n.kind === "gstart") && !n.groupNodeId;
+  }
+  /** Child mode: only the root start node may be edited (when the user may edit at all). */
+  function canEditNode(n) {
+    if (!canModify) return false;
+    if (structLocked) return isRootStart(n);
+    return true;
+  }
   const isLocalMode = false; // server is source of truth for all plans
   /** Keep UUID/string process ids — Number(uuid) becomes NaN and corrupts saves. */
   function stableTaskId(id) {
@@ -1345,7 +1370,7 @@
   }
 
   async function renameDiagramNode(n) {
-    if (!canModify || !n || n.kind === "start") return;
+    if (!canModify || structLocked || !n || n.kind === "start") return;
     const current = n.title || "";
     const next = await promptRename(current, "editor.insp.title", "editor.ribbon.renamePrompt");
     if (next == null || next === current) return;
@@ -2154,13 +2179,20 @@
 
   function processPropsHtml() {
     const disabled = canModify ? "" : "disabled";
+    /**
+     * Child mode keeps this panel live — the start node's parameters (step gap, loop limit,
+     * selector/border colour, repeat mode + range) are the child's OWN values and the cascade
+     * deliberately preserves them. The process title stays read-only though: it names the
+     * child, and renaming it from inside its own diagram would let the list drift.
+     */
+    const titleDisabled = canModify && !structLocked ? "" : "disabled";
     const start = processStart();
     const rst = start?.repeatSourceType || graph.repeatSourceType || "None";
     const master = (graph.dataSources || []).find((d) => Number(d.id) === Number(masterDataSourceId()));
     const count = (graph.dataSources || []).length;
     return `
       <div class="insp-field"><label>${t("editor.insp.title")}</label>
-        <input data-task-k="title" value="${esc(graph.title || "")}" ${disabled} /></div>
+        <input data-task-k="title" value="${esc(graph.title || "")}" ${titleDisabled} /></div>
       <div class="insp-field">
         <label>${t("editor.insp.stepGapMs")}</label>
         <input type="number" min="0" step="50" data-task-k="stepDelayMs" value="${Number(start?.stepDelayMs ?? graph.stepDelayMs) || 0}" ${disabled} />
@@ -2887,6 +2919,13 @@
       setStatus(t("editor.status.notModifiable"), "warn");
       return false;
     }
+    // Child mode: layout is a structural rewrite of the mother's diagram, and the child's copy
+    // would be thrown away on the next cascade. Refuse with an explanation rather than silently
+    // re-arranging the canvas.
+    if (structLocked) {
+      setStatus(t("editor.child.locked"), "warn");
+      return false;
+    }
     const nodes = scopedNodes();
     if (nodes.length < 2) {
       setStatus(t("editor.status.stepsHint", { steps: nodes.length }), "warn");
@@ -3224,9 +3263,14 @@
     // add or remove edges means a new call site cannot forget to.
     invalidateLoopWarning();
     // Full toolbox at every scope (root + inside groups)
-    if (paletteRoot) paletteRoot.hidden = false;
+    // Child mode: nothing may be added to the graph, so the stencil palette is pointless —
+    // hide it rather than show boxes whose drag-and-drop is silently refused.
+    if (paletteRoot) {
+      paletteRoot.hidden = structLocked;
+      paletteRoot.classList.toggle("is-locked", structLocked);
+    }
     if (paletteGroup) paletteGroup.hidden = true;
-    ensurePaletteStencils();
+    if (!structLocked) ensurePaletteStencils();
     updateBackButton();
     document.getElementById("palette-ds")?.remove();
     document.getElementById("ds-panel")?.remove();
@@ -3829,7 +3873,8 @@
 
   /** Begin tip grab; actual retarget starts only after drag threshold. */
   function armTipRetarget(e, startAnchor, ev) {
-    if (!canModify) return;
+    // Child mode: re-wiring the graph is a structural change and belongs to the mother.
+    if (!canModify || structLocked) return;
     ev.stopPropagation();
     ev.preventDefault();
     tipDrag = {
@@ -3846,7 +3891,7 @@
   }
 
   function startRetargetEdge(e, startAnchor, ev, alreadyMoved = true) {
-    if (!canModify) return;
+    if (!canModify || structLocked) return;
     selected.clear();
     selectedEdgeId = e.id;
     updatePlaySelectionBtn();
@@ -3881,7 +3926,7 @@
   /** Move an existing edge's tip to a new target node. */
   function retargetEdge(edgeId, newToId) {
     const e = graph.edges.find((x) => x.id === edgeId);
-    if (!e || !canModify) return false;
+    if (!e || !canModify || structLocked) return false;
     if (String(newToId) === String(e.from)) {
       setStatus(t("editor.status.linkCycle"), "warn");
       return false;
@@ -3993,7 +4038,7 @@
       if (nearOutPort(ev)) return; // let the port (above) own the gesture
       ev.stopPropagation();
       ev.preventDefault();
-      if (canModify && nearTip(ev)) {
+      if (canModify && !structLocked && nearTip(ev)) {
         armTipRetarget(e, p1, ev);
         return;
       }
@@ -4154,10 +4199,11 @@
       g.insertBefore(tip, g.firstChild);
     }
     // Buttons first (lower paint layer); titles appended after so they sit above.
-    if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify) {
+    // Child mode: the graph shape belongs to the mother, so no clone/rename affordances.
+    if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify && !structLocked) {
       g.appendChild(makeCloneButton(w, h, n.kind === "condition" ? "condition" : n.kind === "group" ? "group" : "action"));
     }
-    if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify) {
+    if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify && !structLocked) {
       g.appendChild(makeRenameButton(w, h, n.kind === "condition" ? "condition" : n.kind === "group" ? "group" : "action"));
     }
     let label = n.title;
@@ -4397,7 +4443,7 @@
    * Groups also copy their direct children and internal edges.
    */
   function cloneDiagramNode(src) {
-    if (!canModify) return;
+    if (!canModify || structLocked) return;
     if (!src || (src.kind !== "group" && src.kind !== "condition" && !isActionNode(src))) return;
 
     const copy = deepClonePlain(src);
@@ -4471,7 +4517,7 @@
 
   /** Empty group (no action/condition) → action in place; keep id & outer edges. */
   function convertGroupToAction(g) {
-    if (!canModify || !g || g.kind !== "group") return false;
+    if (!canModify || structLocked || !g || g.kind !== "group") return false;
     if (!groupCanConvertToAction(g.id)) return false;
 
     const start = scopeStart(g.id);
@@ -4497,13 +4543,13 @@
 
   /** Action → wrap in a new group; rewire outer edges; link start→action inside. */
   function convertActionToGroup(action) {
-    if (!canModify || !isActionNode(action)) return false;
+    if (!canModify || structLocked || !isActionNode(action)) return false;
     return convertActionsToGroup([action]);
   }
 
   /** One or more actions (same scope) → new group; outer edges rewired; start→entry. */
   function convertActionsToGroup(actions) {
-    if (!canModify || !actions?.length) return false;
+    if (!canModify || structLocked || !actions?.length) return false;
     const list = actions.filter(isActionNode);
     if (!list.length) return false;
 
@@ -4597,6 +4643,13 @@
 
   function showCtx(x, y, n) {
     if (!ctxMenu || !n) return;
+    /**
+     * Child mode: the entries that reshape the graph are disabled, but "props" and the
+     * read-only run/check actions stay, and the start node keeps its own menu so its
+     * parameters remain reachable. `shapeLocked` therefore means "locked AND not the
+     * process-level start" — i.e. exactly what must not be touched.
+     */
+    const shapeLocked = structLocked && !isRootStart(n);
     ctxMenu.hidden = false;
     ctxMenu.style.left = `${x}px`;
     ctxMenu.style.top = `${y}px`;
@@ -4620,21 +4673,25 @@
       items.push({
         act: "lift-children",
         label: "انتقال فرزندان به این سطح",
-        disabled: !canModify || childN === 0,
-        title: !canModify
-          ? "فقط مشاهده"
-          : (childN
-            ? "همهٔ فرزندان گروه به همین سطح می‌آیند و گروه خالی می‌ماند"
-            : "گروه فرزندی ندارد")
+        disabled: !canModify || shapeLocked || childN === 0,
+        title: shapeLocked
+          ? t("editor.child.locked")
+          : !canModify
+            ? "فقط مشاهده"
+            : (childN
+              ? "همهٔ فرزندان گروه به همین سطح می‌آیند و گروه خالی می‌ماند"
+              : "گروه فرزندی ندارد")
       });
       const canConv = groupCanConvertToAction(n.id);
       items.push({
         act: "to-action",
         label: "تبدیل به مرحله",
-        disabled: !canModify || !canConv,
-        title: !canModify
-          ? "فقط مشاهده"
-          : (canConv ? "گروه خالی را به اقدام تبدیل می‌کند" : "گروه حاوی شرط یا اقدام است")
+        disabled: !canModify || shapeLocked || !canConv,
+        title: shapeLocked
+          ? t("editor.child.locked")
+          : !canModify
+            ? "فقط مشاهده"
+            : (canConv ? "گروه خالی را به اقدام تبدیل می‌کند" : "گروه حاوی شرط یا اقدام است")
       });
     } else if (isActionNode(n)) {
       items.push({
@@ -4649,12 +4706,14 @@
       items.push({
         act: "to-group",
         label: count > 1 ? `تبدیل ${count} اقدام به گروه` : "تبدیل به گروه",
-        disabled: !canModify || !multiOk,
-        title: !canModify
-          ? "فقط مشاهده"
-          : (multiOk
-            ? (count > 1 ? "اقدام‌های انتخاب‌شده را داخل یک گروه می‌برد" : "اقدام را داخل یک گروه جدید می‌برد")
-            : "فقط اقدام‌های هم‌سطح را با Ctrl انتخاب کنید")
+        disabled: !canModify || shapeLocked || !multiOk,
+        title: shapeLocked
+          ? t("editor.child.locked")
+          : !canModify
+            ? "فقط مشاهده"
+            : (multiOk
+              ? (count > 1 ? "اقدام‌های انتخاب‌شده را داخل یک گروه می‌برد" : "اقدام را داخل یک گروه جدید می‌برد")
+              : "فقط اقدام‌های هم‌سطح را با Ctrl انتخاب کنید")
       });
     } else if (n.kind === "condition") {
       const needsBrowser = conditionNeedsBrowser(n);
@@ -4686,10 +4745,12 @@
       items.push({
         act: "promote",
         label: count > 1 ? `انتقال ${count} المان به سطح بالاتر` : "انتقال به سطح بالاتر",
-        disabled: !canModify,
-        title: !canModify
-          ? "فقط مشاهده"
-          : "خروج از این گروه و قرار گرفتن در سطح والد"
+        disabled: !canModify || shapeLocked,
+        title: shapeLocked
+          ? t("editor.child.locked")
+          : !canModify
+            ? "فقط مشاهده"
+            : "خروج از این گروه و قرار گرفتن در سطح والد"
       });
     }
 
@@ -4706,12 +4767,14 @@
         act: "move-to-group",
         label: movers.length > 1 ? `انتقال ${movers.length} المان به گروه` : "انتقال به گروه",
         submenu: true,
-        disabled: !canModify || targets.length === 0,
-        title: !canModify
-          ? "فقط مشاهده"
-          : (targets.length
-            ? "انتقال به یکی از گروه‌های دیاگرام جاری"
-            : "در این سطح گروهی برای انتقال نیست")
+        disabled: !canModify || shapeLocked || targets.length === 0,
+        title: shapeLocked
+          ? t("editor.child.locked")
+          : !canModify
+            ? "فقط مشاهده"
+            : (targets.length
+              ? "انتقال به یکی از گروه‌های دیاگرام جاری"
+              : "در این سطح گروهی برای انتقال نیست")
       });
     }
 
@@ -5192,7 +5255,7 @@
 
   /** Can this node be moved into target group without cycles / no-ops? */
   function canMoveIntoGroup(node, groupId) {
-    if (!canModify || !node || !groupId || node.kind === "start") return false;
+    if (!canModify || structLocked || !node || !groupId || node.kind === "start") return false;
     if (node.id === groupId) return false;
     if ((node.groupNodeId || null) === groupId) return false;
     const g = nodeById(groupId);
@@ -5216,7 +5279,7 @@
    * rewires outer edges to the group container.
    */
   function moveNodesIntoGroup(nodes, groupId) {
-    if (!canModify) return false;
+    if (!canModify || structLocked) return false;
     const g = nodeById(groupId);
     if (!g || g.kind !== "group") return false;
     const list = (nodes || []).filter((n) => canMoveIntoGroup(n, groupId));
@@ -5290,7 +5353,7 @@
 
   /** Lift node one scope up (out of its containing group). */
   function promoteNodeToParent(node) {
-    if (!canModify || !node || node.kind === "start" || !node.groupNodeId) return false;
+    if (!canModify || structLocked || !node || node.kind === "start" || !node.groupNodeId) return false;
     const parentGroup = nodeById(node.groupNodeId);
     if (!parentGroup || parentGroup.kind !== "group") return false;
     const parentScope = parentGroup.groupNodeId || null;
@@ -5319,7 +5382,7 @@
   }
 
   function promoteSelectionToParent(primary) {
-    if (!canModify) return 0;
+    if (!canModify || structLocked) return 0;
     const list = (selected.has(primary.id)
       ? [...selected].map(nodeById)
       : [primary]
@@ -5365,7 +5428,7 @@
    * leaving the group empty. Keeps edges between the children.
    */
   function liftGroupChildrenToParent(g) {
-    if (!canModify || !g || g.kind !== "group") return false;
+    if (!canModify || structLocked || !g || g.kind !== "group") return false;
     const kids = groupDirectChildren(g.id);
     if (!kids.length) return false;
 
@@ -5471,7 +5534,7 @@
 
   function addStep(groupId) {
     const gid = groupId || editingGroupId || currentScopeId();
-    if (!canModify) return null;
+    if (!canModify || structLocked) return null;
     const g = gid ? nodeById(gid) : null;
     const node = createStepNode({
       groupNodeId: gid || null,
@@ -5546,6 +5609,32 @@
     });
   }
 
+  /**
+   * Read-only stand-in for a node's property panel inside a template child.
+   *
+   * The node's real values still belong to the mother, so showing editable controls would let the
+   * user type into fields whose contents the next cascade silently discards. Instead the panel
+   * explains where the values come from and links the user to the mother.
+   */
+  function childLockedInspectorHtml(n) {
+    const kindLabel = n.kind === "group" ? t("editor.inspector.groupProps")
+      : n.kind === "condition" ? t("editor.inspector.conditionProps")
+      : isActionNode(n) ? t("editor.inspector.actionProps")
+      : t("editor.inspector.props");
+    const title = (n.title || "").trim();
+    return `
+      <div class="insp-locked">
+        <div class="insp-locked-head">
+          <i class="ti ti-lock" aria-hidden="true"></i>
+          <span>${t("editor.child.lockedTitle")}</span>
+        </div>
+        <p class="palette-hint" style="margin:0;line-height:1.8">${t("editor.child.lockedBody")}</p>
+        ${title ? `<p class="palette-hint" style="margin:8px 0 0;line-height:1.8">
+          <strong>${esc(kindLabel)}:</strong> ${esc(title)}</p>` : ""}
+      </div>
+    `;
+  }
+
   function renderInspector() {
     const id = [...selected][0];
     const n = id && nodeById(id);
@@ -5562,6 +5651,13 @@
         : n.kind === "start"
           ? (n.groupNodeId ? t("editor.inspector.startGroupRepeat") : t("editor.inspector.startRepeat"))
         : t("editor.inspector.props");
+    }
+    // Child mode: every node except the process-level start belongs to the mother, so its panel
+    // is shown as a read-only notice. The start node keeps its full editable inspector so the
+    // child can still choose its data source, border colour and repeat behaviour.
+    if (structLocked && !isRootStart(n)) {
+      inspector.innerHTML = childLockedInspectorHtml(n);
+      return;
     }
     if (n.kind === "start") {
       inspector.innerHTML = startInspectorHtml(n);
@@ -8290,6 +8386,12 @@
     renderInspector();
     highlightSelection();
     if (isPort) {
+      // Child mode: no new connections. Ports are inert, but selecting still works so the user
+      // can inspect the node.
+      if (structLocked) {
+        setStatus(t("editor.child.locked"), "warn");
+        return;
+      }
       let kind = edgeHint
         || (ev.altKey ? "parent" : ev.shiftKey ? "fail" : ev.ctrlKey ? "success" : "next");
       if (n.kind === "condition" && (kind === "next" || !edgeHint)) {
@@ -8321,6 +8423,9 @@
       dragging = null;
       dragMoved = false;
     } else {
+      // Child mode: node positions come from the mother, so only the start node may be nudged
+      // (its position is one of the start-node parameters the cascade preserves).
+      if (structLocked && !isRootStart(n)) return;
       const ids = selected.has(n.id) ? [...selected] : [n.id];
       const items = ids.map((id) => {
         const node = nodeById(id);
@@ -9024,7 +9129,7 @@
   });
   wrap.addEventListener("drop", (ev) => {
     ev.preventDefault();
-    if (!canModify) return;
+    if (!canModify || structLocked) return;
     const kind = ev.dataTransfer.getData("kind");
     if (!kind) return;
 
@@ -9087,6 +9192,46 @@
   document.getElementById("btn-back-group").addEventListener("click", closeGroup);
   document.getElementById("btn-group-edit-close").addEventListener("click", closeGroup);
   document.getElementById("btn-save").addEventListener("click", save);
+
+  /**
+   * Child mode banner. The diagram is visible but frozen, and the only reason a user sees it at
+   * all is to tune the start node — so say that plainly instead of leaving them to discover which
+   * controls are dead. Rendered once, above the canvas.
+   *
+   * The text is carried as data-i18n attributes rather than resolved here: this runs while the page
+   * is still booting, which can be before DaI18n has fetched its locales, and `t()` falls back to
+   * the raw key in that window. Handing the keys to DaI18n means it fills them in as soon as it is
+   * ready and re-translates them on every language switch.
+   *
+   * The template name is a separate element rather than a `{name}` substitution because DaI18n's
+   * DOM pass calls `t(key)` without variables, so an interpolated key would render with a literal
+   * `{name}` in it.
+   */
+  function mountChildBanner() {
+    if (!structLocked || !wrap) return;
+    if (document.getElementById("flow-child-banner")) return;
+    const bar = document.createElement("div");
+    bar.id = "flow-child-banner";
+    bar.className = "flow-child-banner";
+    bar.setAttribute("role", "status");
+    const nameEl = templateTitle
+      ? `<span class="flow-child-banner-template">${esc(templateTitle)}</span>`
+      : "";
+    bar.innerHTML = `
+      <i class="ti ti-lock" aria-hidden="true"></i>
+      <span class="flow-child-banner-text">
+        <span data-i18n="editor.child.banner"></span>
+        ${nameEl ? `<span class="flow-child-banner-from"><span data-i18n="editor.child.bannerFromLabel"></span> ${nameEl}</span>` : ""}
+      </span>
+    `;
+    const host = wrap.parentElement || document.body;
+    host.insertBefore(bar, wrap);
+    // Fill in now when the bundle is already loaded, so the banner never flashes a raw key.
+    if (window.DaI18n && typeof window.DaI18n.apply === "function") {
+      try { window.DaI18n.apply(bar); } catch { /* the load handler will cover it */ }
+    }
+  }
+  mountChildBanner();
   const btnRenameProcess = document.getElementById("btn-rename-process");
   if (btnRenameProcess) {
     btnRenameProcess.hidden = !canModify;
@@ -9136,6 +9281,12 @@
     if (ev.key === "Escape" && editingGroupId) { closeGroup(); return; }
     if (ev.key === "Delete" || ev.key === "Backspace") {
       if (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA" || ev.target.tagName === "SELECT") return;
+      // Child mode: deleting nodes or edges is a structural change owned by the mother. The
+      // selection may still include the start node, which has nothing to delete anyway.
+      if (structLocked) {
+        setStatus(t("editor.child.locked"), "warn");
+        return;
+      }
       if (deleteSelectedEdge()) return;
       const ids = new Set(selected);
       if (!ids.size) return;

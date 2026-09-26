@@ -1037,6 +1037,13 @@
       "missingStart": "This process had no start node (an earlier recording removed it). A root start node was created and the process-level settings were moved onto it. Press Save once.",
       "orphanStart": "{n} start node(s) belonging to a group that no longer exists were removed."
     },
+    "child": {
+      "banner": "This process was created from a template; only the start node's parameters can be edited.",
+      "bannerFromLabel": "Template:",
+      "locked": "This part comes from the mother process and is inherited from the template.",
+      "lockedTitle": "Locked — inherited from the mother process",
+      "lockedBody": "This process was created from a template, and its structure (nodes, connections and their properties) comes from the mother process. Each time the mother is edited those values are rewritten here. Only the start node's own parameters — data source, border colour, repeat mode and range — belong to this process and stay editable."
+    },
     "status": {
       "stepsHint": "{steps} actions — double-click a group to see its actions",
       "loadingLocal": "Loading from local storage...",
