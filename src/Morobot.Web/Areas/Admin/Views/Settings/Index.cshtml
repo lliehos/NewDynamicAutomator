@@ -98,11 +98,13 @@
             @if (isAuthSwitch)
             {
               @* A hidden "false" plus a checkbox: the browser posts the checkbox value only when
-                 ticked, so the hidden entry guarantees a value either way and the last one wins. *@
+                 ticked, so the hidden entry guarantees a value either way and the last one wins.
+                 `data-da-switch="off"` stops da-switch.js from ALSO restyling this input: it would
+                 add a second switch track on top of the one below, leaving two switches per row. *@
               <label class="admin-settings-switch" for="setting_@s.Key">
                 <input type="hidden" name="setting_@s.Key" value="false" />
                 <input type="checkbox" id="setting_@s.Key" name="setting_@s.Key" value="true"
-                       data-auth-switch="true" @(authSwitchOn ? "checked" : null) />
+                       data-auth-switch="true" data-da-switch="off" @(authSwitchOn ? "checked" : null) />
                 <span class="admin-settings-switch-track" aria-hidden="true"></span>
               </label>
             }
@@ -111,7 +113,7 @@
               <label class="admin-settings-switch" for="setting_@s.Key">
                 <input type="hidden" name="setting_@s.Key" value="false" />
                 <input type="checkbox" id="setting_@s.Key" name="setting_@s.Key" value="true"
-                       @(boolSwitchOn ? "checked" : null) />
+                       data-da-switch="off" @(boolSwitchOn ? "checked" : null) />
                 <span class="admin-settings-switch-track" aria-hidden="true"></span>
               </label>
             }
@@ -246,14 +248,17 @@
 
   // The two sign-in switches and the LDAP fields they govern.
   //
+  // Independent state: turning one on must NOT turn the other off. Both may be on at once, which
+  // is the whole point of having two switches instead of one choice.
+  //
   // The LDAP fields are only meaningful while the LDAP switch is on, so they are hidden when it
   // is off — hidden with CSS rather than removed, so their values still post and turning the
   // switch off and back on does not lose the host name someone just typed.
   //
-  // The two switches may not both be off: that would lock everyone out of the system, including
-  // whoever would have to turn one back on. The rule is enforced on the server as well (see
-  // SettingsController); here it is applied as you click, so the page never shows an impossible
-  // state and never needs a round trip to explain itself.
+  // The only rule is that they may not BOTH be off: that would leave nobody able to sign in,
+  // including whoever would have to fix it. When the second one is switched off, the other is
+  // turned back on. The server enforces the same rule (see SettingsController), because a crafted
+  // POST would not run this script.
   (function () {
     var grid = document.querySelector('.admin-settings-grid');
     if (!grid) return;
@@ -278,24 +283,38 @@
           else el.setAttribute('tabindex', '-1');
         });
       });
-      // Never let the last method be switched off. Disabling rather than ignoring the click
-      // shows why it will not move, instead of a click that appears to do nothing.
-      localBox.disabled = ldapBox.checked && localBox.checked;
+    }
+
+    /**
+     * Reflect a programmatic change on the element so the switch chrome follows it.
+     *
+     * The visual switch is drawn by its own stylesheet off :checked, so setting .checked alone
+     * re-renders correctly — but a disabled checkbox is styled as off AND is omitted from the
+     * POST, so nothing here may leave one disabled.
+     */
+    function setChecked(box, value) {
+      if (box.checked === value) return;
+      box.checked = value;
+      box.dispatchEvent(new Event('change', { bubbles: false }));
+    }
+
+    function ensureOneOn(changed) {
+      if (localBox.checked || ldapBox.checked) return;
+      // The user just turned the last one off. Put the OTHER one back on: the switch they clicked
+      // stays where they put it (off), and the method they did not touch becomes the one that
+      // keeps sign-in available. Doing it the other way round would look like the click was
+      // ignored.
+      var other = changed === localBox ? ldapBox : localBox;
+      setChecked(other, true);
     }
 
     function onLocalChange() {
-      if (!localBox.checked && !ldapBox.checked) {
-        // The user just turned the last one off: put LDAP on instead, which is the only way to
-        // keep at least one method available.
-        ldapBox.checked = true;
-      }
+      ensureOneOn(localBox);
       syncLdapFields();
     }
 
     function onLdapChange() {
-      if (!localBox.checked && !ldapBox.checked) {
-        localBox.checked = true;
-      }
+      ensureOneOn(ldapBox);
       syncLdapFields();
     }
 

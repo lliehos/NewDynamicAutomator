@@ -73,15 +73,26 @@ public class SettingsController : Controller
             .Where(p => !(SystemSettingKeys.IsSensitiveForAdmin(p.Item1) && string.IsNullOrEmpty(p.Item2)))
             .ToList();
 
-        // The two sign-in switches must never both be off — that would leave nobody able to sign in,
-        // including the administrator who would fix it. The form's own JS prevents it, but a crafted
-        // POST would not, so the rule is enforced here too and the correction is reported.
+        // The two sign-in switches are independent and may BOTH be on. The only forbidden state is
+        // both off, which would leave nobody able to sign in — including the administrator who
+        // would fix it. The form's own JS prevents it, but a crafted POST would not, so the rule is
+        // enforced here too and the correction is reported.
+        //
+        // Missing keys must not read as "off". A switch that is present is authoritative; a switch
+        // absent from the POST keeps its stored value, because a form that does not mention a
+        // setting has not made a decision about it. Treating "absent" as "off" would silently clear
+        // a provider every time a partial form was submitted.
         var pairsByName = pairs.ToDictionary(p => p.Item1, p => p.Item2, StringComparer.OrdinalIgnoreCase);
         if (pairsByName.ContainsKey(SystemSettingKeys.AuthLocalEnabled)
             || pairsByName.ContainsKey(SystemSettingKeys.AuthLdapEnabled))
         {
-            var local = IsTruthy(pairsByName.GetValueOrDefault(SystemSettingKeys.AuthLocalEnabled));
-            var ldap = IsTruthy(pairsByName.GetValueOrDefault(SystemSettingKeys.AuthLdapEnabled));
+            var local = pairsByName.ContainsKey(SystemSettingKeys.AuthLocalEnabled)
+                ? IsTruthy(pairsByName[SystemSettingKeys.AuthLocalEnabled])
+                : IsTruthy(await _settings.GetAsync(SystemSettingKeys.AuthLocalEnabled, "true", ct));
+            var ldap = pairsByName.ContainsKey(SystemSettingKeys.AuthLdapEnabled)
+                ? IsTruthy(pairsByName[SystemSettingKeys.AuthLdapEnabled])
+                : IsTruthy(await _settings.GetAsync(SystemSettingKeys.AuthLdapEnabled, "false", ct));
+
             var (fixedLocal, fixedLdap, corrected) = SystemSettingKeys.NormalizeAuthProviders(local, ldap);
             if (corrected)
             {
