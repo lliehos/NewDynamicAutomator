@@ -638,6 +638,67 @@ async function discardRecord(opts = {}) {
   return state;
 }
 
+/**
+ * The recording tab went away — treat that as "the user is done".
+ *
+ * Closing the tab a recording runs in is the most natural way to say "stop", and it used to be
+ * ignored: the `recording` flag lives in extension storage, so nothing cleared it when the tab
+ * disappeared. The user then hit Play and was told to stop the recording first, with no recording
+ * left on screen to stop — a dead end only a manual "discard" in the popup could escape.
+ *
+ * The leftover draft is dropped rather than promoted to "review": the tab is gone, so the user
+ * cannot be looking at a review panel, and silently keeping a half-finished draft would leave the
+ * same stale flag in place on the next start.
+ *
+ * `closeTab: false` is essential here — the tab is already gone, and asking chrome to close it
+ * again would throw.
+ */
+async function handleRecordTabClosed(tabId) {
+  const { recording, recordTabId } = await chrome.storage.local.get(["recording", "recordTabId"]);
+  if (!recording || Number(recordTabId) !== Number(tabId)) return;
+  // `discardRecord` already ends with `broadcastRecordState()`, which is the `recordingChanged`
+  // message the portal and the FAB listen for — so the stop propagates without a second send.
+  await discardRecord({ closeTab: false });
+}
+
+/**
+ * The tab a PLAY was running in went away — stop the run.
+ *
+ * Play drives a real browser tab: every step acts on the page in it. Once that tab is closed there
+ * is nothing left to act on, so continuing would either error on every remaining step or silently
+ * "succeed" against nothing. Stopping is the only honest outcome, and it also releases the
+ * `playing` flag so the next Run is not refused.
+ *
+ * Step- and group-scoped plays are included: they act on a tab too, and used to leave `playing`
+ * set for the same reason.
+ */
+async function handlePlayTabClosed(tabId) {
+  const st = await chrome.storage.local.get(["playing", "playTabId"]);
+  const knownTab = Number(st.playTabId);
+  const sessionTab = typeof playTabId !== "undefined" ? Number(playTabId) : NaN;
+  if (Number(tabId) !== knownTab && Number(tabId) !== sessionTab) return;
+
+  const wasPlaying = !!st.playing || !!(typeof playStatus !== "undefined" && playStatus?.playing);
+  if (!wasPlaying) return;
+
+  await chrome.storage.local.set({ playing: false, playPaused: false, playTabId: null });
+  if (typeof playStatus !== "undefined" && playStatus) {
+    playStatus.playing = false;
+    playStatus.paused = false;
+    // Say why, so the HUD/portal does not read as a crash. The tab is gone, so there is nowhere
+    // left to show it in the page itself — this surfaces in the portal's status line.
+    playStatus.lastError = "تب اجرا بسته شد؛ اجرا متوقف گردید.";
+  }
+  try {
+    if (typeof broadcastPlayState === "function") broadcastPlayState();
+  } catch { /* best effort */ }
+  try {
+    if (typeof notifyPortalTabs === "function" && typeof getPlayStatus === "function") {
+      notifyPortalTabs({ type: "playStateChanged", ...getPlayStatus() });
+    }
+  } catch { /* the portal page may not be open */ }
+}
+
 /** Discard current batch and continue recording on the same process/tab. */
 async function resumeRecord() {
   const data = await chrome.storage.local.get([
@@ -1906,7 +1967,18 @@ chrome.webNavigation.onCompleted.addListener((details) => {
 });
 
 chrome.tabs.onCreated.addListener(() => scheduleOpenTabsBroadcast("created"));
-chrome.tabs.onRemoved.addListener(() => scheduleOpenTabsBroadcast("removed"));
+/**
+ * Closing the tab a session runs in must END that session, not just update the tab list.
+ *
+ * The `recording` and `playing` flags live in extension storage, so a closed tab left them set.
+ * The user then could not start a run ("ابتدا ضبط را متوقف کنید") with no recording left on screen
+ * to stop, and a finished play kept the process marked as running. Both are handled here.
+ */
+chrome.tabs.onRemoved.addListener((tabId) => {
+  scheduleOpenTabsBroadcast("removed");
+  handleRecordTabClosed(tabId).catch((err) => console.warn("[Morobot Global] record tab close", err));
+  handlePlayTabClosed(tabId).catch((err) => console.warn("[Morobot Global] play tab close", err));
+});
 chrome.tabs.onActivated.addListener(() => scheduleOpenTabsBroadcast("activated"));
 chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId !== chrome.windows.WINDOW_ID_NONE) scheduleOpenTabsBroadcast("focus");
