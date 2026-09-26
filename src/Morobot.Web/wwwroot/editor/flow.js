@@ -414,7 +414,8 @@
   }
 
   function enforceSingleStartOut() {
-    const start = graph.nodes.find((n) => n.kind === "start");
+    // Only the root start is a single-exit node; a group's own start is inside a group body.
+    const start = graph.nodes.find((n) => n.kind === "start" && !n.groupNodeId);
     if (!start) return;
     const outs = (graph.edges || []).filter((e) => e.from === start.id && e.kind !== "contains");
     if (outs.length <= 1) return;
@@ -483,6 +484,76 @@
     delete g.editorSessionId;
   }
 
+  /**
+   * Make sure the graph has exactly one process-level ("root") start node.
+   *
+   * A recording used to be able to leave the graph with none: every group carries its own start
+   * (that one is normal and stays), but if the root start was consumed the canvas had no entry
+   * point at all — the engine had nothing to begin from, and the process-level settings
+   * (dataSourceId, stepDelayMs, loopBackLimit, ignorePlayError, the repeat range) had no node to
+   * live on. Re-adding it here means a graph that was already damaged heals on the next open
+   * instead of staying broken for ever.
+   *
+   * Returns true when a start was added, so the caller can tell the user what happened.
+   */
+  function ensureRootStartNode() {
+    if (!Array.isArray(graph?.nodes)) return false;
+    if (graph.nodes.some((n) => n.kind === "start" && !n.groupNodeId)) return false;
+
+    // The first group that has no process-level predecessor is the natural thing to enter.
+    const firstGroup = graph.nodes.find((n) => n.kind === "group" && !n.groupNodeId) || null;
+    const startNode = {
+      id: "start",
+      kind: "start",
+      title: t("editor.nodes.start"),
+      x: 40,
+      y: 220,
+      repeatSourceType: graph.repeatSourceType || "None",
+      loopCount: 1,
+      moveLoop: false,
+      stepDelayMs: graph.stepDelayMs ?? 0,
+      loopBackLimit: graph.loopBackLimit ?? DEFAULT_LOOP_BACK_LIMIT,
+      ignorePlayError: graph.ignorePlayError !== false,
+      highlightColor: graph.highlightColor || DEFAULT_HIGHLIGHT_COLOR,
+      dedicatedRow: false,
+      rowIndexType: "None",
+      specificRowIndex: null
+    };
+    // Its own id must not already be taken by something else.
+    if (graph.nodes.some((n) => n.id === startNode.id)) startNode.id = "start-root";
+
+    // Process-level settings that were left on the graph (or on a grouped start by an older bug)
+    // move onto the real start node, so nothing is lost and the fields become visible again.
+    if (startNode.dataSourceId == null && graph.dataSourceId != null) startNode.dataSourceId = graph.dataSourceId;
+    if (startNode.repeatFromIndex == null) startNode.repeatFromIndex = graph.repeatFromIndex ?? null;
+    if (startNode.repeatToIndex == null) startNode.repeatToIndex = graph.repeatToIndex ?? null;
+
+    graph.nodes.unshift(startNode);
+    if (firstGroup) {
+      graph.edges ||= [];
+      const entry = { id: `e-root-${startNode.id}`, from: startNode.id, to: firstGroup.id, kind: "next" };
+      graph.edges.push(entry);
+    }
+    return true;
+  }
+
+  /**
+   * Drop start nodes whose group no longer exists.
+   *
+   * A recording merge could leave a `gstart-…` behind for a group that was never added (or was
+   * deleted later). Such a node is unreachable, has no meaning, and shows up as a stray "شروع".
+   */
+  function pruneOrphanGroupStartNodes() {
+    if (!Array.isArray(graph?.nodes)) return 0;
+    const groupIds = new Set(graph.nodes.filter((n) => n.kind === "group").map((n) => n.id));
+    const orphans = graph.nodes.filter((n) => n.kind === "start" && n.groupNodeId && !groupIds.has(n.groupNodeId));
+    if (!orphans.length) return 0;
+    const orphanIds = new Set(orphans.map((n) => n.id));
+    graph.nodes = graph.nodes.filter((n) => !orphanIds.has(n.id));
+    graph.edges = (graph.edges || []).filter((e) => !orphanIds.has(e.from) && !orphanIds.has(e.to));
+    return orphans.length;
+  }
+
   function applyLocalGraph(local) {
     graph = structuredClone ? structuredClone(local.graph) : JSON.parse(JSON.stringify(local.graph));
     stripCanvasMeta(graph);
@@ -501,7 +572,10 @@
     // survives a save/load cycle instead of being silently turned into 1 or the last row.
     graph.repeatFromIndex = normalizeRepeatIndex(graph.repeatFromIndex);
     graph.repeatToIndex = normalizeRepeatIndex(graph.repeatToIndex);
-    const start = graph.nodes.find((n) => n.kind === "start");
+    // Process-level settings belong to the ROOT start only. Matching any start here used to grab a
+    // grouped start when the root one was missing, which parked dataSourceId/stepDelayMs/… on a
+    // node the process never reads and hid the fields from the process panel.
+    const start = graph.nodes.find((n) => n.kind === "start" && !n.groupNodeId);
     if (start) {
       start.repeatSourceType = start.repeatSourceType || graph.repeatSourceType || "None";
       if (start.dataSourceId == null && graph.dataSourceId != null) start.dataSourceId = graph.dataSourceId;
@@ -537,9 +611,17 @@
     const stamp = local.updatedAtUtc || local.UpdatedAtUtc || null;
     if (stamp) loadedUpdatedAtUtc = stamp;
     migrateActionKinds(graph);
+    // Heal a graph that a previous recording damaged: a start node belonging to no group, and
+    // (if the recording consumed it) a missing process-level start. Doing this before the
+    // dedupe/normalise passes means those passes see the final node set.
+    const prunedStarts = pruneOrphanGroupStartNodes();
+    const addedRootStart = ensureRootStartNode();
     dedupeRootStartNodes();
     enforceSingleStartOut();
     normalizeProcessRepeat();
+    if (addedRootStart || prunedStarts) {
+      repairedGraphNotice = { addedRootStart, prunedStarts };
+    }
     titleEl.textContent = graph.title || local.title || t("editor.ribbon.workflow");
     if (originEl) {
       const recorded = String(graph.designOrigin || "").toLowerCase() === "recorded";
@@ -554,6 +636,26 @@
     renderDataSources();
     render();
     // Stay on diagram so single-click shows properties; user opens children via double-click.
+    showRepairedGraphNotice();
+  }
+
+  /**
+   * Tell the user the graph was repaired, and say which repair it was.
+   *
+   * Silent repair would be worse than the bug: the diagram would simply look different from the
+   * one they saved, with no explanation. The wording follows the project rule that the server copy
+   * is the real one — nothing was lost, the graph gained the start node it was missing.
+   */
+  function showRepairedGraphNotice() {
+    const notice = repairedGraphNotice;
+    repairedGraphNotice = null;
+    if (!notice) return;
+    const msg = notice.addedRootStart
+      ? t("editor.repair.missingStart")
+      : t("editor.repair.orphanStart", { n: notice.prunedStarts });
+    if (typeof window.daNotify === "function") window.daNotify(msg, "warn");
+    else if (window.DaNotify?.warn) DaNotify.warn(msg);
+    else status.textContent = msg;
   }
 
   function emptyShell() {
@@ -687,6 +789,11 @@
   let serverCanvasLoaded = false;
   /** Block local cache from overwriting canvas while the server load is in flight. */
   let serverCanvasLoadPending = /^\d+$/.test(String(taskId));
+  /**
+   * Set while loading when the graph had to be repaired (a missing process-level start, or a
+   * start left behind for a group that no longer exists). Survives until the user is told.
+   */
+  let repairedGraphNotice = null;
   /** Group id under drag that would become parent on drop. */
   let nestHoverGroupId = null;
   /** Distinguishes this editor tab so SignalR ignores our own saves. */
@@ -2130,7 +2237,8 @@
       inp.addEventListener("blur", apply);
     });
     document.getElementById("insp-goto-start")?.addEventListener("click", () => {
-      const start = graph.nodes.find((n) => n.kind === "start");
+      const start = graph.nodes.find((n) => n.kind === "start" && !n.groupNodeId)
+        || graph.nodes.find((n) => n.kind === "start");
       if (!start) return;
       selected.clear();
       selected.add(start.id);
@@ -2809,7 +2917,9 @@
     // --- Layer assignment (longest path from start / roots) ---
     const layerOf = new Map();
     const queue = [];
-    const start = nodes.find((n) => n.kind === "start");
+    // Lay out from the process-level start; a grouped start would only cover part of the graph.
+    const start = nodes.find((n) => n.kind === "start" && !n.groupNodeId)
+      || nodes.find((n) => n.kind === "start");
     if (start) {
       layerOf.set(start.id, 0);
       queue.push(start.id);

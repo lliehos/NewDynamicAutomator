@@ -1028,6 +1028,10 @@
       "fromRecord": "Edit: from recording",
       "manual": "Edit: manual"
     },
+    "repair": {
+      "missingStart": "This process had no start node (an earlier recording removed it). A root start node was created and the process-level settings were moved onto it. Press Save once.",
+      "orphanStart": "{n} start node(s) belonging to a group that no longer exists were removed."
+    },
     "status": {
       "stepsHint": "{steps} actions — double-click a group to see its actions",
       "loadingLocal": "Loading from local storage...",

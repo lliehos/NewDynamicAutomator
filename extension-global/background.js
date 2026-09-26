@@ -1161,11 +1161,42 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
   const base = existingGraph && typeof existingGraph === "object"
     ? existingGraph
     : { nodes: [], edges: [], dataSources: [], viewport: { x: 40, y: 40, zoom: 1 } };
-  const nodes = Array.isArray(base.nodes) ? base.nodes.slice() : [];
-  const edges = Array.isArray(base.edges) ? base.edges.slice() : [];
-  if (!processStartNode(nodes)) {
-    nodes.unshift({ id: "start", kind: "start", title: "شروع", x: 40, y: 220 });
+  let nodes = Array.isArray(base.nodes) ? base.nodes.slice() : [];
+  let edges = Array.isArray(base.edges) ? base.edges.slice() : [];
+
+  // Drop a start whose group is gone. A previous merge could leave one behind (it was written for
+  // a group that never made it into the graph), and it reads as a stray "شروع" on the canvas.
+  const groupIds = new Set(nodes.filter((n) => n.kind === "group").map((n) => n.id));
+  const orphanStartIds = new Set(
+    nodes.filter((n) => n.kind === "start" && n.groupNodeId && !groupIds.has(n.groupNodeId)).map((n) => n.id)
+  );
+  if (orphanStartIds.size) {
+    nodes = nodes.filter((n) => !orphanStartIds.has(n.id));
+    edges = edges.filter((e) => !orphanStartIds.has(e.from) && !orphanStartIds.has(e.to));
   }
+
+  // The process MUST keep a root start. Without it the run has no entry point and the
+  // process-level settings have no node to live on. Recreate it from the graph's own values
+  // rather than trusting the base to have kept it.
+  if (!processStartNode(nodes)) {
+    nodes.unshift({
+      id: nodes.some((n) => n.id === "start") ? "start-root" : "start",
+      kind: "start",
+      title: "شروع",
+      x: 40,
+      y: 220,
+      repeatSourceType: base.repeatSourceType || "None",
+      loopCount: 1,
+      moveLoop: false,
+      stepDelayMs: base.stepDelayMs ?? 0,
+      loopBackLimit: base.loopBackLimit,
+      ignorePlayError: base.ignorePlayError !== false,
+      highlightColor: base.highlightColor,
+      dataSourceId: base.dataSourceId ?? null
+    });
+  }
+
+  // Anything that was recorded into a group without its own start needs one (per-group start).
 
   const stamp = Date.now();
   let maxEntity = 0;
