@@ -336,6 +336,43 @@ public class TemplateService
     }
 
     /// <summary>
+    /// Delete a template outright.
+    /// </summary>
+    /// <remarks>
+    /// Every attached process is detached first and keeps the graph it has right now. The cascade
+    /// can no longer reach those processes, and nothing else would repair that link, so a delete is
+    /// a one-way decision for every child — which is why the caller is expected to have warned the
+    /// user with the attached count before calling this.
+    ///
+    /// The <c>SourceProcessId</c> / <c>TemplateId</c> links are cleared explicitly rather than left
+    /// to the FK behaviour, because <c>SetNull</c> on <c>SourceProcessId</c> would only clear the
+    /// mother's side while leaving the children pointing at a row that no longer exists.
+    ///
+    /// Returns the number of processes that were detached, so the caller can report the real impact.
+    /// </remarks>
+    public async Task<(bool ok, string? error, int detached)> DeleteAsync(int templateId, CancellationToken ct = default)
+    {
+        var template = await _db.ProcessTemplates.FirstOrDefaultAsync(t => t.Id == templateId, ct);
+        if (template is null) return (false, "template.notFound", 0);
+
+        // Children, excluding the mother: the mother's TemplateId is normally null, but an older
+        // build linked it, so guard against counting and detaching it as if it were a child.
+        var attached = await _db.Processes
+            .Where(p => p.TemplateId == templateId && (template.SourceProcessId == null || p.Id != template.SourceProcessId))
+            .ToListAsync(ct);
+        foreach (var child in attached)
+        {
+            child.TemplateId = null;
+            child.TemplateVersion = null;
+            child.UpdatedAtUtc = DateTime.UtcNow;
+        }
+
+        _db.ProcessTemplates.Remove(template);
+        await _db.SaveChangesAsync(ct);
+        return (true, null, attached.Count);
+    }
+
+    /// <summary>
     /// The other half of the cascade: after the MOTHER process is saved, copy its new graph into the
     /// template made from it and push that on to the template's children.
     /// </summary>

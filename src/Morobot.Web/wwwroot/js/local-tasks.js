@@ -200,6 +200,9 @@
   const ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
   const ICO_XLSX = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm1 7V3.5L19.5 9H15zM8.2 18l2.3-3.2L8.3 12h1.7l1.4 2.1L12.8 12H14.4l-2.2 2.8L14.5 18h-1.7l-1.5-2.2L9.9 18H8.2z"/></svg>`;
   const ICO_INFO = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 3.2a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8zM13.4 17h-2.8v-1.3l.7-.3V10.8l-.7-.3V9.2h2.1v6.2l.7.3V17z"/></svg>`;
+  // The template a row came from / was made into. A sheet with a stack behind it, so it reads as
+  // "this process is derived from something" rather than as another document action.
+  const ICO_TPL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 3h9a1 1 0 0 1 1 1v1H6a2 2 0 0 0-2 2v11H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm4 4h9a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm1.6 3.2v1.6h1.5l-1.8 5.4h1.6l.6-2h1.9l.6 2h1.6l-1.8-5.4h1.5V10.2h-5.7z"/></svg>`;
 
   function iconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
@@ -432,23 +435,44 @@
     const counts = taskCounts(task);
     const isEmpty = !counts.steps;
     const hasData = counts.sources > 0;
-    const canRec = recordAllowed();
-    const recTip = canRec
-      ? t("tasks.record")
-      : (window.DaEntitlements?.upgradeMessage?.("record") || t("plan.upgradeRecord") || "ضبط نیاز به پلن Pro دارد.");
+    /**
+     * A process made from a template is a CHILD: its structure is a projection of the mother that
+     * the cascade rewrites on every publish. Recording would append new groups to a graph the child
+     * does not own, and the next cascade would silently discard them — so the record button is
+     * shown disabled rather than hidden. Keeping it visible with a reason tells the user why the
+     * action is missing instead of leaving them to wonder where it went.
+     */
+    const isChild = !!task.templateId && !task.isTemplateSource;
+    const canRec = recordAllowed() && !isChild;
+    const recTip = isChild
+      ? (t("tasks.recordChildDisabled") || "این فرآیند از یک قالب ساخته شده است؛ ضبط روی آن ممکن نیست.")
+      : recordAllowed()
+        ? t("tasks.record")
+        : (window.DaEntitlements?.upgradeMessage?.("record") || t("plan.upgradeRecord") || "ضبط نیاز به پلن Pro دارد.");
     const recExtra = canRec
       ? `data-da-action="start-record-menu" data-task-id="${tid}" data-task-title="${ttitle}" aria-haspopup="menu"`
       : `data-da-action="start-record-menu" data-task-id="${tid}" data-task-title="${ttitle}" disabled aria-disabled="true" title="${escapeHtml(recTip)}"`;
-    const smartBtn = isEmpty
+    // Smart record writes a whole graph from scratch, which is even further outside what a child owns.
+    const smartBtn = isEmpty && !isChild
       ? iconBtn("is-smart", t("tasks.smart"), ICO_SMART, `data-da-action="start-smart-record" data-task-id="${tid}" data-task-title="${ttitle}"`)
       : "";
     const dataBtns = hasData
       ? `${iconBtn("is-view", t("tasks.viewData"), ICO_VIEW, `data-da-view-data="${tid}"`)}
          ${iconBtn("is-xlsx", t("tasks.downloadExcel"), ICO_XLSX, `data-da-dl-excel="${tid}"`)}`
       : "";
+    /**
+     * A live "open the source template" button for a CHILD, so the relationship is one click away
+     * without hunting for the chip. The mother gets no button here: it has no template attached to
+     * it (it is the source), and its own chip in the template column already says so.
+     */
+    const templateBtn = task.templateId
+      ? iconBtn("is-template", `${t("panel.colTemplate")}: ${task.templateTitle || ""}`.trim(), ICO_TPL,
+          `data-da-template-row="${tid}"`)
+      : "";
     return `
       ${iconLink("is-edit", t("tasks.edit"), `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_EDIT)}
       ${iconBtn("is-info", t("tasks.details"), ICO_INFO, `data-da-details="${tid}"`)}
+      ${templateBtn}
       ${iconBtn("is-play", t("tasks.play"), ICO_PLAY, `data-da-action="play-task-menu" data-task-id="${tid}" aria-haspopup="menu"`)}
       ${iconBtn("is-rec", recTip, ICO_REC, recExtra)}
       ${smartBtn}
@@ -565,6 +589,23 @@
   });
   root?.querySelectorAll("[data-da-details]").forEach((btn) => {
     btn.addEventListener("click", () => showProcessDetails(btn.getAttribute("data-da-details")));
+  });
+  /**
+   * The row's template button opens the same details modal the template chip does, so a user who
+   * spots the marker in the action column gets the version/step/attachment counts without hunting
+   * for the chip. The template list and modal both live in local-templates.js, which owns that
+   * surface — this only forwards the id.
+   */
+  root?.querySelectorAll("[data-da-template-row]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const row = (readTasks() || []).find((x) => String(x.id) === String(btn.getAttribute("data-da-template-row")));
+      const tplId = row?.templateId;
+      if (tplId != null && window.DaTemplates && typeof DaTemplates.openInfo === "function") {
+        DaTemplates.openInfo(tplId);
+        return;
+      }
+      notifyHome(t("tasks.templateInfoUnavailable") || "اطلاعات قالب در دسترس نیست.", "warn");
+    });
   });
 }
 
@@ -1357,7 +1398,10 @@ function dataSourceSafeFileName(ds) {
             // row should show, and without these the cached copy kept the stale template chip.
             || String(o.templateId || "") !== String(n.templateId || "")
             || String(o.templateTitle || "") !== String(n.templateTitle || "")
-            || Boolean(o.templateBehind) !== Boolean(n.templateBehind);
+            || Boolean(o.templateBehind) !== Boolean(n.templateBehind)
+            // The mother flag drives the chip's badge and hides its detach button, so a row that
+            // only gains/loses "source" status must still be re-rendered.
+            || Boolean(o.isTemplateSource) !== Boolean(n.isTemplateSource);
         });
       // Silent write: avoid writeTasks → da-local-tasks → render → writeTasks loop.
       if (changed) writeTasks(toStore, { silent: true });
@@ -1375,6 +1419,14 @@ function dataSourceSafeFileName(ds) {
             body.innerHTML = visible.map((row) => {
               const { steps, groups, sources } = taskCounts(row);
               const tid = escapeHtml(String(row.id));
+              /**
+               * Template cell. Two different relationships share this column:
+               *   - a CHILD has a templateId and shows the template it was built from, plus a
+               *     detach button (detaching is the child's own decision);
+               *   - the MOTHER has no templateId — it IS the source — so it shows a distinct
+               *     "mother" chip without a detach button, because it is not attached to anything.
+               * Showing a dash for the mother would hide the one row an author has to edit.
+               */
               const tplCell = row.templateId
                 ? `<span class="da-tpl-wrap">
                      <a href="#" class="da-tpl-chip${row.templateBehind ? " is-behind" : ""}"
@@ -1395,7 +1447,13 @@ function dataSourceSafeFileName(ds) {
                        <i class="ti ti-unlink" aria-hidden="true"></i>
                      </button>
                    </span>`
-                : `<span class="text-muted">—</span>`;
+                : (row.isTemplateSource
+                  ? `<span class="da-tpl-chip is-source" title="${escapeHtml(t("tasks.templateIsSource"))}">
+                       <i class="ti ti-copy" aria-hidden="true"></i>
+                       <span>${escapeHtml(t("tasks.templateSourceLabel"))}</span>
+                       <span class="da-tpl-src-badge">★</span>
+                     </span>`
+                  : `<span class="text-muted">—</span>`);
               return `<tr data-task-id="${tid}">
         <td>
           <div class="fw-semibold" data-flash="title">${escapeHtml(row.title)}</div>
@@ -1468,11 +1526,37 @@ function dataSourceSafeFileName(ds) {
     return true;
   }
 
-  async function createLocalTask(titleRaw) {
+  async function createLocalTask(titleRaw, templateId) {
     const title = (titleRaw || "").trim() || t("tasks.newProcess");
 
     if (isServerMode()) {
       try {
+        /**
+         * Starting from a template is a different endpoint on purpose. The plain create writes an
+         * empty graph and then PUTs it, which would leave a child with no structure at all; the
+         * template path copies the mother's graph, records the attachment and stamps the version,
+         * all server-side, so the derived process is correct from its first load.
+         */
+        if (templateId) {
+          const res = await fetch(`/api/templates/${encodeURIComponent(templateId)}/create-process`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            notifyHome(data.message || t("plan.limitTasks", { max: "?" }), "warning");
+            return;
+          }
+          notifyHome(t("panel.templateCreated") || t("tasks.added", { title }), "success");
+          if (window.DaTelemetry) DaTelemetry.audit("TaskCreateFromTemplate", `Created task ${data.id}: ${title}`);
+          const newId = data && data.id != null ? data.id : null;
+          if (newId != null) location.href = `/Panel/Tasks/Editor/${newId}`;
+          else window.location.reload();
+          return;
+        }
+
         const res = await fetch("/api/tasks", {
           method: "POST",
           credentials: "same-origin",
@@ -1556,6 +1640,13 @@ function dataSourceSafeFileName(ds) {
       lastPlayedAtUtc: row.lastPlayedAtUtc || null,
       lastPlayedByUserName: row.lastPlayedByUserName || "",
       playCount: row.playCount || 0,
+      // Template fields, same whitelist rule as the run fields above: the server sends them, but
+      // omitting them here meant the template chip never rendered and a child offered the record
+      // button. `isTemplateSource` is what separates the mother from its children.
+      templateId: row.templateId ?? null,
+      templateTitle: row.templateTitle || "",
+      templateBehind: !!row.templateBehind,
+      isTemplateSource: !!row.isTemplateSource,
       createdBy: row.ownerUserName || "",
       sharedUsers: [],
       sharedWithCount: row.sharedWithCount || 0,
@@ -1714,10 +1805,44 @@ function dataSourceSafeFileName(ds) {
 
   const createModalEl = document.getElementById("da-create-task-modal");
   const titleInp = document.getElementById("da-new-title");
+  const templateWrap = document.getElementById("da-new-template-wrap");
+  const templateSel = document.getElementById("da-new-template");
+
+  /**
+   * Fill the "start from a template" picker.
+   *
+   * Loaded when the dialog opens rather than at page load: a user who never creates a process makes
+   * no request, and a template created in another tab shows up without a reload. The picker stays
+   * hidden while there is nothing to choose from, so an empty select never appears.
+   */
+  async function loadTemplateOptions() {
+    if (!templateSel || !templateWrap) return;
+    try {
+      const res = await fetch("/api/templates", { credentials: "same-origin" });
+      if (!res.ok) return;
+      const list = await res.json();
+      const rows = Array.isArray(list) ? list : [];
+      // Keep the first option (the "from scratch" default) and rebuild the rest.
+      templateSel.length = 1;
+      rows.forEach((tpl) => {
+        const opt = document.createElement("option");
+        opt.value = String(tpl.id);
+        opt.textContent = tpl.attachedProcessCount
+          ? `${tpl.title} (${tpl.stepCount || 0} · ${tpl.attachedProcessCount})`
+          : `${tpl.title} (${tpl.stepCount || 0})`;
+        templateSel.appendChild(opt);
+      });
+      templateWrap.hidden = rows.length === 0;
+    } catch (err) {
+      console.warn("[local-tasks] template options failed", err);
+      if (templateWrap) templateWrap.hidden = true;
+    }
+  }
 
   createModalEl?.addEventListener("shown.bs.modal", () => {
     titleInp?.focus();
     titleInp?.select();
+    loadTemplateOptions();
   });
 
   titleInp?.addEventListener("keydown", (ev) => {
@@ -1732,8 +1857,10 @@ function dataSourceSafeFileName(ds) {
       titleInp?.focus();
       return;
     }
-    await createLocalTask(title);
+    const templateId = (templateSel?.value || "").trim();
+    await createLocalTask(title, templateId || null);
     if (titleInp) titleInp.value = "";
+    if (templateSel) templateSel.value = "";
     window.bootstrap?.Modal?.getInstance(createModalEl)?.hide();
   });
 
@@ -1789,6 +1916,19 @@ function dataSourceSafeFileName(ds) {
       if (recBtn.hasAttribute("disabled") || recBtn.getAttribute("aria-disabled") === "true") {
         ev.preventDefault();
         ev.stopPropagation();
+        /**
+         * A disabled record button has two possible reasons and they need different answers.
+         * Showing the upgrade prompt for a template child would be wrong — an upgrade would not
+         * unlock it — so the row's own marker decides which message the user gets.
+         */
+        const rowId = recBtn.getAttribute("data-task-id");
+        const row = rowId != null
+          ? (readTasks() || []).find((x) => String(x.id) === String(rowId))
+          : null;
+        if (row && row.templateId && !row.isTemplateSource) {
+          notifyHome(t("tasks.recordChildDisabled") || "ضبط روی فرآیند ساخته‌شده از قالب ممکن نیست.", "warn");
+          return;
+        }
         if (window.DaEntitlements) DaEntitlements.showUpgrade("record");
         return;
       }

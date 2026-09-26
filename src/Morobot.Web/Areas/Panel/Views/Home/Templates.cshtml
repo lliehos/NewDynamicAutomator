@@ -64,8 +64,33 @@
   </div>
 </div>
 
+<div class="modal fade" id="da-tpl-delete-modal" tabindex="-1" aria-labelledby="da-tpl-delete-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header border-0 pb-0">
+        <h5 class="modal-title text-danger" id="da-tpl-delete-title" data-i18n="panel.templateDelete">@L["panel.templateDelete"]</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="@L["common.cancel"]"></button>
+      </div>
+      <div class="modal-body pt-2">
+        <p class="mb-2" id="da-tpl-delete-lead"></p>
+        @* The attachment warning is the whole point of this dialog: deleting is irreversible for
+           every child, so the count is stated explicitly rather than hidden in a generic "are you
+           sure". It is hidden when nothing is attached, because then there is no cascade to lose. *@
+        <div class="alert alert-warning d-flex gap-2 mb-0" role="alert" id="da-tpl-delete-warn" hidden>
+          <i class="ti ti-alert-triangle mt-1" aria-hidden="true"></i>
+          <span id="da-tpl-delete-warn-text"></span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-label-secondary" data-bs-dismiss="modal" data-i18n="common.cancel">@L["common.cancel"]</button>
+        <button type="button" class="btn btn-danger" id="da-tpl-delete-confirm" data-i18n="common.delete">@L["common.delete"]</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 @section Scripts {
-<script src="~/js/local-templates.js?v=tpl-1"></script>
+<script src="~/js/local-templates.js?v=tpl-2"></script>
 <script>
   // Render the management table. Uses the same /api/templates feed the picker menu reads, so the
   // counts here and the counts in the menu can never disagree.
@@ -108,9 +133,21 @@
             <td class="text-nowrap">${esc(fmt(r.updatedAtUtc))}</td>
             <td>${esc(r.creatorUserName || "—")}</td>
             <td class="text-nowrap">
-              <button type="button" class="btn btn-sm btn-label-primary da-tpl-view" data-tpl-id="${esc(String(r.id))}">
-                <i class="ti ti-info-circle"></i>
-              </button>
+              <div class="ds-icon-btn-group">
+                <button type="button" class="ds-icon-btn da-tpl-use" data-tpl-id="${esc(String(r.id))}"
+                        title="${esc(t("panel.templateUse"))}" aria-label="${esc(t("panel.templateUse"))}">
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5z"/></svg>
+                </button>
+                <button type="button" class="btn btn-sm btn-label-primary da-tpl-view" data-tpl-id="${esc(String(r.id))}"
+                        title="${esc(t("panel.templateView"))}" aria-label="${esc(t("panel.templateView"))}">
+                  <i class="ti ti-info-circle"></i>
+                </button>
+                <button type="button" class="ds-icon-btn is-danger da-tpl-del" data-tpl-id="${esc(String(r.id))}"
+                        data-tpl-title="${esc(r.title)}" data-tpl-attached="${esc(String(r.attachedProcessCount || 0))}"
+                        title="${esc(t("panel.templateDelete"))}" aria-label="${esc(t("panel.templateDelete"))}">
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>
+                </button>
+              </div>
             </td>
           </tr>`).join("");
       } catch (err) {
@@ -119,8 +156,26 @@
     }
 
     document.addEventListener("click", (ev) => {
-      const btn = ev.target.closest(".da-tpl-view");
-      if (btn && window.DaTemplates) window.DaTemplates.openInfo(btn.getAttribute("data-tpl-id"));
+      const view = ev.target.closest(".da-tpl-view");
+      if (view && window.DaTemplates) {
+        window.DaTemplates.openInfo(view.getAttribute("data-tpl-id"));
+        return;
+      }
+      // "Create a process from this template" straight from the list. Same flow the info modal's
+      // button uses, so the two entry points cannot drift apart.
+      const use = ev.target.closest(".da-tpl-use");
+      if (use && window.DaTemplates) {
+        window.DaTemplates.useTemplate(use.getAttribute("data-tpl-id"));
+        return;
+      }
+      const del = ev.target.closest(".da-tpl-del");
+      if (del && window.DaTemplates) {
+        window.DaTemplates.openDelete(
+          del.getAttribute("data-tpl-id"),
+          del.getAttribute("data-tpl-title") || "",
+          del.getAttribute("data-tpl-attached") || "0"
+        );
+      }
     });
 
     document.addEventListener("DOMContentLoaded", load);

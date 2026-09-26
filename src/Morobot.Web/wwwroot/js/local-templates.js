@@ -66,6 +66,7 @@
   let templates = [];
   let infoTemplateId = null;
   let detachContext = null;
+  let deleteContext = null;
 
   // ── Create-from-template ──────────────────────────────────────────────────────────────────
   async function loadTemplates() {
@@ -147,6 +148,57 @@
       await loadTemplates();
       renderTemplateMenu();
       window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { refresh: true } }));
+    } catch (err) {
+      notify(err && err.message ? err.message : String(err), "warn");
+    }
+  }
+
+  // ── Delete a template ─────────────────────────────────────────────────────────────────────
+  /**
+   * Ask before deleting, and state the damage in numbers.
+   *
+   * Deleting a template detaches every process built on it, and that cannot be undone — the
+   * cascade can never reach those processes again. A generic "are you sure" would hide the only
+   * fact that matters, so the attached count comes from the row itself and is spelled out.
+   */
+  function openDelete(templateId, templateTitle, attachedCount) {
+    const attached = Number(attachedCount) || 0;
+    deleteContext = { templateId };
+
+    const lead = document.getElementById("da-tpl-delete-lead");
+    if (lead) {
+      lead.textContent = t("panel.templateDeleteLead", { name: templateTitle || `#${templateId}` });
+    }
+    const warn = document.getElementById("da-tpl-delete-warn");
+    const warnText = document.getElementById("da-tpl-delete-warn-text");
+    if (warn && warnText) {
+      if (attached > 0) {
+        warnText.textContent = t("panel.templateDeleteWarn", { count: attached });
+        warn.hidden = false;
+      } else {
+        warn.hidden = true;
+      }
+    }
+
+    const modalEl = document.getElementById("da-tpl-delete-modal");
+    if (modalEl && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+  }
+
+  async function confirmDelete() {
+    if (!deleteContext) return;
+    const { templateId } = deleteContext;
+    deleteContext = null;
+    try {
+      const res = await api(`${base}/${templateId}`, { method: "DELETE" });
+      const detached = Number(res && res.detachedProcesses) || 0;
+      // Report the real number after the fact, not just the warning before it: it is the only
+      // confirmation the user gets that the children really were cut loose.
+      notify(detached > 0
+        ? t("panel.templateDeletedDetached", { count: detached })
+        : t("panel.templateDeleted"), "ok");
+      window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { refresh: true } }));
+      // The management page renders its own table; reload it so the deleted row disappears.
+      if (document.getElementById("da-tpl-rows")) window.location.reload();
     } catch (err) {
       notify(err && err.message ? err.message : String(err), "warn");
     }
@@ -253,6 +305,12 @@
       confirmDetach();
     });
 
+    document.getElementById("da-tpl-delete-confirm")?.addEventListener("click", () => {
+      const modalEl = document.getElementById("da-tpl-delete-modal");
+      if (modalEl && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+      confirmDelete();
+    });
+
     // The template chip in a process row opens the same info modal, and the detach button on that
     // chip is handled here so the process table does not need to know how detaching works.
     document.addEventListener("click", (ev) => {
@@ -281,5 +339,5 @@
     bind();
   }
 
-  window.DaTemplates = { openInfo, useTemplate, openDetach, makeFromProcess };
+  window.DaTemplates = { openInfo, useTemplate, openDetach, makeFromProcess, openDelete };
 })();

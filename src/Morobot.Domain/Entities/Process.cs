@@ -37,6 +37,19 @@ public class Process
 
     public ProcessTemplate? Template { get; set; }
 
+    /// <summary>
+    /// The template authored FROM this process, when there is one — the inverse of
+    /// <see cref="ProcessTemplate.SourceProcessId"/>.
+    /// </summary>
+    /// <remarks>
+    /// Kept separate from <see cref="Template"/> on purpose, because the two mean opposite things:
+    /// <see cref="Template"/> is "the skeleton I was built from" (I am a CHILD), while this is
+    /// "the skeleton that was built out of me" (I am the MOTHER). A process may be one or the
+    /// other, never both, and the mother deliberately carries no <see cref="TemplateId"/> — so
+    /// without this navigation the mother would look like a standalone process and lose its badge.
+    /// </remarks>
+    public ProcessTemplate? SourceOfTemplate { get; set; }
+
     public AppUser? Creator { get; set; }
     public AppUser? LastEditor { get; set; }
     public ICollection<ProcessShare> Shares { get; set; } = new List<ProcessShare>();

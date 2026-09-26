@@ -1165,6 +1165,19 @@ html.light-style {
   color: #a16207;
   border-color: #fde68a;
 }
+/* The MOTHER of the template: this is the row an author edits to push changes down to the
+   children, so it is marked apart from an ordinary child chip rather than looking identical. */
+.da-tpl-chip.is-source {
+  background: #e7e3fc;
+  color: #5e50ee;
+  border-color: #cdc4f7;
+}
+.da-tpl-src-badge {
+  font-size: .72rem;
+  line-height: 1;
+  color: #f59e0b;
+  flex-shrink: 0;
+}
 .da-tpl-chip-detach {
   border: 0;
   background: transparent;
@@ -1175,6 +1188,23 @@ html.light-style {
 }
 .da-tpl-chip-detach:hover { color: #dc2626; }
 .da-tpl-chip-detach .ti { font-size: .9rem; }
+
+/* Template marker in the action column, so the relationship is visible without scanning across to
+   the template cell. Only children get one — the mother is marked by its own chip instead. */
+.ds-icon-btn.is-template { color: #5e50ee; }
+.ds-icon-btn.is-template:hover { background: #e7e3fc; color: #5e50ee; }
+/* Row actions on the template management table: keep them on one line and aligned. */
+.ds-icon-btn-group {
+  display: inline-flex;
+  align-items: center;
+  gap: .15rem;
+}
+/* Record on a template child: shown disabled to explain why the action is unavailable, rather
+   than hidden (a missing button reads as a bug; a greyed one reads as a rule). */
+.da-task-actions .ds-icon-btn.is-rec[disabled] {
+  opacity: .45;
+  cursor: not-allowed;
+}
 
 .da-tpl-menu { min-width: 15rem; }
 .da-tpl-menu-item { display: flex; flex-direction: column; align-items: flex-start; gap: .1rem; }

@@ -151,6 +151,7 @@
     "templateUpdated": "Last published",
     "templateCreator": "Created by",
     "templateUse": "Create a process from this template",
+    "templateView": "Template details",
     "templateInfoNote": "Processes built from this template receive its later changes, but the data sources are never copied from the template — they belong to each process.",
     "templateNewProcessPrompt": "Title of the new process from this template:",
     "templateNamePrompt": "Title of the new template:",
@@ -161,6 +162,14 @@
     "templateDetachTitle": "Detach from template",
     "templateDetachBody": "Process \"{name}\" will be detached from its template. It stops receiving the template's later changes and keeps its current version.",
     "templateDetached": "The process was detached from its template.",
+    "templateDelete": "Delete template",
+    "templateDeleteLead": "Template \"{name}\" will be deleted permanently. This cannot be undone.",
+    "templateDeleteWarn": "{count} process(es) are attached to this template. Deleting it cuts every one of them loose from the mother, and no later template change will ever reach them again. Each process keeps its current version but stays detached for good.",
+    "templateDeleted": "Template deleted.",
+    "templateDeletedDetached": "Template deleted and {count} process(es) detached from it.",
+    "startFromTemplate": "Start from a template (optional)",
+    "startFromScratch": "From scratch — no template",
+    "startFromTemplateHint": "Choosing a template takes the process structure from it and keeps it up to date with every later template edit; only the start node's own parameters stay private.",
     "colOps": "Actions",
     "searchProcesses": "Search process titles",
     "searchClear": "Clear search",
@@ -374,6 +383,7 @@
       "plans": "Plans",
       "prices": "Prices",
       "processes": "Processes",
+      "templates": "Templates",
       "migrate": "Migrate from legacy",
       "offlineUpdate": "Offline update",
       "sources": "Sources",
@@ -412,6 +422,18 @@
       "deleteConfirm": "Delete this process?",
       "empty": "No processes yet.",
       "stopped": "Stopped"
+    },
+    "templates": {
+      "title": "Templates",
+      "intro": "Shared process templates: version, steps, creator and how many processes are attached. Authoring and publishing a template happens in the user panel (process manager).",
+      "empty": "No templates have been created yet.",
+      "colId": "Id",
+      "colTitle": "Title",
+      "colVersion": "Version",
+      "colSteps": "Steps",
+      "colAttached": "Attached processes",
+      "colCreator": "Created by",
+      "colUpdated": "Last published"
     },
     "sources": {
       "title": "Sources",
@@ -940,7 +962,12 @@
     "templateBehind": "The template has been updated — refresh the process to apply it.",
     "templateCurrent": "Currently in step with the latest template version.",
     "makeTemplate": "Create a template from this process",
-    "templateNotAvailable": "Creating templates is not available."
+    "templateNotAvailable": "Creating templates is not available.",
+    "templateIsSource": "This process is the mother — the template was built from it, and editing it pushes changes to the children.",
+    "templateSourceLabel": "Mother process",
+    "recordChildDisabled": "This process was created from a template, so it cannot be recorded. Edit the mother process to change its structure.",
+    "templateInfoUnavailable": "Template details are not available.",
+    "fromTemplate": "From template: {name}"
   },
   "live": {
     "taskCreated": "New process added",

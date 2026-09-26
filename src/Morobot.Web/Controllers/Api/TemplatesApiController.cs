@@ -223,6 +223,43 @@ public class TemplatesApiController : ControllerBase
         if (dto is not null) await _catalog.TaskUpsertedAsync(dto, "updated", User.Identity?.Name, ct);
         return Ok(new { ok = true, task = dto });
     }
+
+    /// <summary>
+    /// Delete a template. Every attached process is detached and keeps its current graph.
+    /// </summary>
+    /// <remarks>
+    /// Deleting is not a retire: there is no undo, and each detached child stops following the
+    /// template for good. The response reports how many processes were cut loose so the UI can state
+    /// the real impact after the fact instead of only warning about it beforehand.
+    /// </remarks>
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    {
+        if (!CanManage) return Forbid();
+
+        var (ok, error, detached) = await _templates.DeleteAsync(id, ct);
+        if (!ok) return TemplateError(error ?? "template.notFound");
+
+        await _events.LogAsync(
+            "Audit", "Template", "TemplateDelete",
+            $"Deleted template #{id}; detached {detached} process(es)",
+            UserId, User.Identity?.Name,
+            path: $"/api/templates/{id}",
+            ct: ct);
+
+        // Every detached row lost its template chip, so anything watching the list has to re-read
+        // them. Announced per process rather than as one blanket signal, because the live catalog
+        // resolves recipients per process and a blanket event would miss the owners.
+        if (detached > 0)
+        {
+            var mine = (await _tasks.ListForUserAsync(UserId, ct)).ToList();
+            foreach (var row in mine.Where(r => r.TemplateId is null && r.IsTemplateSource == false))
+            {
+                await _catalog.TaskUpsertedAsync(row, "updated", User.Identity?.Name, ct);
+            }
+        }
+        return Ok(new { ok = true, detachedProcesses = detached });
+    }
 }
 
 /// <summary>Publish request for one template; the graph is optional so a rename needs no graph.</summary>

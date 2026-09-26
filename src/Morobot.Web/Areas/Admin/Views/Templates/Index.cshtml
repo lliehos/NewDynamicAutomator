@@ -1,0 +1,48 @@
+@model IReadOnlyList<Morobot.Contracts.Tasks.ProcessTemplateDto>
+@{
+  ViewData["Title"] = L["admin.templates.title"];
+}
+<p class="text-muted small mb-3">@L["admin.templates.intro"]</p>
+
+@if (Model.Count == 0)
+{
+  <p class="text-muted">@L["admin.templates.empty"]</p>
+}
+else
+{
+  <div class="admin-table-wrap" data-page-size="20">
+    <table class="admin-table" id="admin-template-table">
+      <thead>
+        <tr>
+          <th>@L["admin.templates.colId"]</th>
+          <th>@L["admin.templates.colTitle"]</th>
+          <th>@L["admin.templates.colVersion"]</th>
+          <th>@L["admin.templates.colSteps"]</th>
+          <th>@L["admin.templates.colAttached"]</th>
+          <th>@L["admin.templates.colCreator"]</th>
+          <th>@L["admin.templates.colUpdated"]</th>
+        </tr>
+      </thead>
+      <tbody>
+        @foreach (var t in Model)
+        {
+          <tr data-template-id="@t.Id">
+            <td>@t.Id</td>
+            <td>
+              <div class="fw-semibold">@t.Title</div>
+              @if (!string.IsNullOrWhiteSpace(t.Description))
+              {
+                <div class="text-muted small">@t.Description</div>
+              }
+            </td>
+            <td>@t.Version</td>
+            <td>@t.StepCount</td>
+            <td>@t.AttachedProcessCount</td>
+            <td>@(string.IsNullOrWhiteSpace(t.CreatorUserName) ? "—" : t.CreatorUserName)</td>
+            <td class="text-nowrap">@Morobot.Web.Services.DateDisplay.DateTimeLocal(t.UpdatedAtUtc)</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}

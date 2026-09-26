@@ -199,8 +199,13 @@ public class AppDbContext : DbContext
             // leave the template and its children intact (they lose the badge and keep working),
             // and it must not be blocked either — a mother is an ordinary process and the user can
             // reasonably delete it. One-to-one because a process authors at most one template.
+            //
+            // The inverse navigation is declared so a query can go from the PROCESS to the template
+            // it authored (`p.SourceOfTemplate`). That is the only way the list can mark the mother:
+            // the mother itself carries no TemplateId, so without this the flag would be
+            // unreachable and the mother would read as an ordinary standalone process.
             e.HasOne(x => x.SourceProcess)
-                .WithOne()
+                .WithOne(p => p.SourceOfTemplate)
                 .HasForeignKey<ProcessTemplate>(x => x.SourceProcessId)
                 .OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => x.SourceProcessId);

@@ -70,7 +70,10 @@ public class TaskService
                 TemplateTitle = a.Process.Template != null ? a.Process.Template.Title : null,
                 a.Process.TemplateVersion,
                 CurrentTemplateVersion = a.Process.Template != null ? (int?)a.Process.Template.Version : null,
-                IsTemplateSource = a.Process.Template != null && a.Process.Template.SourceProcessId == a.Process.Id,
+                // The mother is the template's SOURCE, and deliberately carries no TemplateId of
+                // its own — so this has to go through SourceOfTemplate. Testing TemplateId would
+                // report false for the one row the badge exists to mark.
+                IsTemplateSource = a.Process.SourceOfTemplate != null,
                 SharedWithCount = a.Process.Shares.Count(x => x.UserId != a.Process.CreatorUserId),
                 DataSourceCount = a.Process.DataSourceLinks.Count
             })
@@ -238,7 +241,9 @@ public class TaskService
                 TemplateTitle = t.Template != null ? t.Template.Title : null,
                 t.TemplateVersion,
                 CurrentTemplateVersion = t.Template != null ? (int?)t.Template.Version : null,
-                IsTemplateSource = t.Template != null && t.Template.SourceProcessId == t.Id
+                // Same reasoning as the user list: the mother is found through the template's
+                // source link, because the mother itself holds no TemplateId.
+                IsTemplateSource = t.SourceOfTemplate != null
             })
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
@@ -567,8 +572,9 @@ public class TaskService
             {
                 TemplateId = t.TemplateId!.Value,
                 Title = t.Template != null ? t.Template.Title : null,
-                // True when this process is the process the template was built from.
-                IsSource = t.Template != null && t.Template.SourceProcessId == t.Id
+                // True when this process is the process the template was built from. Read through
+                // the template's source link: the mother carries no TemplateId of its own.
+                IsSource = t.SourceOfTemplate != null
             })
             .FirstOrDefaultAsync(ct);
 
