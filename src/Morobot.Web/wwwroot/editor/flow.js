@@ -9210,6 +9210,23 @@
   function mountChildBanner() {
     if (!structLocked || !wrap) return;
     if (document.getElementById("flow-child-banner")) return;
+
+    // `#flow-body` is a three-column grid (palette | canvas | inspector), so the banner cannot be
+    // dropped in as a direct child — it would take a grid cell of its own and push the canvas out
+    // of place. Wrap the canvas in a column of its own and let the banner sit above it, inside that
+    // same column, so the grid keeps exactly three children.
+    let host = wrap.parentElement;
+    if (host && host.id === "flow-body") {
+      const column = document.createElement("div");
+      column.id = "flow-canvas-column";
+      column.className = "flow-canvas-column";
+      host.insertBefore(column, wrap);
+      column.appendChild(wrap);
+      host = column;
+    } else if (!host) {
+      host = document.body;
+    }
+
     const bar = document.createElement("div");
     bar.id = "flow-child-banner";
     bar.className = "flow-child-banner";
@@ -9224,7 +9241,6 @@
         ${nameEl ? `<span class="flow-child-banner-from"><span data-i18n="editor.child.bannerFromLabel"></span> ${nameEl}</span>` : ""}
       </span>
     `;
-    const host = wrap.parentElement || document.body;
     host.insertBefore(bar, wrap);
     // Fill in now when the bundle is already loaded, so the banner never flashes a raw key.
     if (window.DaI18n && typeof window.DaI18n.apply === "function") {
