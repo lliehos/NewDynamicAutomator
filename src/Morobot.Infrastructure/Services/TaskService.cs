@@ -70,6 +70,7 @@ public class TaskService
                 TemplateTitle = a.Process.Template != null ? a.Process.Template.Title : null,
                 a.Process.TemplateVersion,
                 CurrentTemplateVersion = a.Process.Template != null ? (int?)a.Process.Template.Version : null,
+                IsTemplateSource = a.Process.Template != null && a.Process.Template.SourceProcessId == a.Process.Id,
                 SharedWithCount = a.Process.Shares.Count(x => x.UserId != a.Process.CreatorUserId),
                 DataSourceCount = a.Process.DataSourceLinks.Count
             })
@@ -114,7 +115,8 @@ public class TaskService
                 TemplateTitle = a.TemplateTitle,
                 // Behind means the template has published since this process last inherited it.
                 TemplateBehind = a.CurrentTemplateVersion is int currentVersion
-                                 && (a.TemplateVersion ?? 0) < currentVersion
+                                 && (a.TemplateVersion ?? 0) < currentVersion,
+                IsTemplateSource = a.IsTemplateSource
             };
         }).ToList();
     }
@@ -235,7 +237,8 @@ public class TaskService
                 t.TemplateId,
                 TemplateTitle = t.Template != null ? t.Template.Title : null,
                 t.TemplateVersion,
-                CurrentTemplateVersion = t.Template != null ? (int?)t.Template.Version : null
+                CurrentTemplateVersion = t.Template != null ? (int?)t.Template.Version : null,
+                IsTemplateSource = t.Template != null && t.Template.SourceProcessId == t.Id
             })
             .OrderByDescending(t => t.Id)
             .ToListAsync(ct);
@@ -267,7 +270,8 @@ public class TaskService
                 TemplateId = t.TemplateId,
                 TemplateTitle = t.TemplateTitle,
                 TemplateBehind = t.CurrentTemplateVersion is int adminCurrentVersion
-                                 && (t.TemplateVersion ?? 0) < adminCurrentVersion
+                                 && (t.TemplateVersion ?? 0) < adminCurrentVersion,
+                IsTemplateSource = t.IsTemplateSource
             };
         }).ToList();
     }
@@ -391,6 +395,23 @@ public class TaskService
                 IsDefault = link.IsDefault,
                 SortOrder = link.SortOrder
             });
+        }
+
+        // A copy of a child is itself a child of the same template. The point of copying one is to
+        // get another process that shares the structure and differs in its data source, so cutting
+        // the link here would hand back a process that has silently stopped following the template.
+        //
+        // Its start node came over with the graph and stays its own: the copy points at whichever
+        // source it inherited, independently of the original (the library row is shared, but the
+        // choice of row is not).
+        if (source.TemplateId is int templateId)
+        {
+            copy.TemplateId = templateId;
+            var templateVersion = await _db.ProcessTemplates
+                .Where(t => t.Id == templateId)
+                .Select(t => (int?)t.Version)
+                .FirstOrDefaultAsync(ct);
+            copy.TemplateVersion = templateVersion;
         }
 
         await _db.SaveChangesAsync(ct);

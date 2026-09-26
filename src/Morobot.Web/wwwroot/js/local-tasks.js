@@ -417,6 +417,15 @@
     return !!e.canRecord;
   }
 
+  /**
+   * Whether the signed-in user may shape the shared templates (Admin or ProcessManager).
+   *
+   * The flag is rendered by the view from the same role check the sidebar and HomeController use,
+   * so the button and the page it opens can never disagree. Read once — the role cannot change
+   * inside a session (it is baked into the JWT), so there is nothing to re-evaluate.
+   */
+  const canManageTemplates = document.querySelector(".da-home")?.dataset?.canManageTemplates === "true";
+
   function actionButtonsHtml(task) {
     const tid = escapeHtml(String(task.id));
     const ttitle = escapeHtml(String(task.title || "").trim());
@@ -446,9 +455,9 @@
       ${dataBtns}
       ${iconBtn("", t("tasks.clone"), ICO_CLONE, `data-da-clone="${tid}"`)}
       ${iconBtn("", t("tasks.downloadMrbt"), ICO_DL, `data-da-download="${tid}"`)}
-      ${task.templateId
-        ? ""
-        : iconBtn("", t("tasks.makeTemplate"), ICO_COPY, `data-da-make-template="${tid}" data-task-title="${ttitle}"`)}
+      ${(canManageTemplates && !task.templateId)
+        ? iconBtn("", t("tasks.makeTemplate"), ICO_COPY, `data-da-make-template="${tid}" data-task-title="${ttitle}"`)
+        : ""}
       <label class="ds-icon-btn da-import-btn" title="${t("tasks.importMrbt")}" aria-label="${t("tasks.importMrbt")}">
         ${ICO_UP}
         <input type="file" accept=".mrbt,application/octet-stream,application/json,.json" data-da-import="${tid}" hidden />
@@ -1211,7 +1220,14 @@ function dataSourceSafeFileName(ds) {
       cards.innerHTML = `<div class="da-task-empty text-muted">فرآیندی نیست. با دکمه + یک فرآیند بسازید.</div>`;
       return;
     }
-    cards.innerHTML = normalized.map((row) => {
+    // The search box filters the cards too: on a phone the cards ARE the list, so leaving them
+    // unfiltered would make the box look broken.
+    const visible = filterTasksBySearch(normalized);
+    if (!visible.length) {
+      cards.innerHTML = `<div class="da-task-empty text-muted">${escapeHtml(t("panel.searchNoMatch"))}</div>`;
+      return;
+    }
+    cards.innerHTML = visible.map((row) => {
       const { steps, groups, sources } = taskCounts(row);
       return `<article class="da-task-card">
         <div class="da-task-card-top">
@@ -1235,6 +1251,66 @@ function dataSourceSafeFileName(ds) {
 
   let rendering = false;
   let pendingRenderTasks = undefined;
+
+  /**
+   * Current search text. Held here rather than read from the input on each render, so a re-render
+   * triggered from elsewhere (a live update, a delete) keeps the user's filter instead of dropping
+   * them back to the full list.
+   */
+  let taskSearchQuery = "";
+
+  /** Case- and diacritic-insensitive fold, so "TEst" matches "test" and Persian variants match. */
+  function foldForSearch(value) {
+    return String(value ?? "")
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u200c\u200f\u200e]/g, "")   // ZWNJ / directional marks are invisible, not content
+      .replace(/[\u064a\u06cc]/g, "\u06cc")   // Arabic yeh vs Persian yeh
+      .replace(/[\u0643\u06a9]/g, "\u06a9")   // Arabic kaf vs Persian kaf
+      .replace(/\u0623|\u0625|\u0622/g, "\u0627")
+      .replace(/\u0629/g, "\u0647")
+      .trim();
+  }
+
+  /** Rows whose title matches the current query. An empty query matches everything. */
+  function filterTasksBySearch(list) {
+    const q = foldForSearch(taskSearchQuery);
+    if (!q) return list;
+    return list.filter((row) => foldForSearch(row.title).includes(q));
+  }
+
+  /**
+   * Apply the search box: filter the list, update the count, and prune the table.
+   *
+   * Re-rendering the whole table on every keystroke would rebuild every row and lose the input's
+   * focus on some browsers; instead the rows are toggled with the `hidden` attribute, which the
+   * existing markup already supports because each row carries its task id.
+   */
+  function applyTaskSearch() {
+    const input = document.getElementById("da-task-search");
+    const clearBtn = document.getElementById("da-task-search-clear");
+    taskSearchQuery = input ? input.value : "";
+    if (clearBtn) clearBtn.hidden = !taskSearchQuery;
+    render();
+  }
+
+  /**
+   * Show how many processes are left by the filter.
+   *
+   * Only shown while a query is active: an always-visible "3 of 3" is noise, and the point of the
+   * line is to explain a list that looks shorter than the user expects.
+   */
+  function updateSearchCount(total, shown) {
+    const el = document.getElementById("da-task-search-count");
+    if (!el) return;
+    if (!foldForSearch(taskSearchQuery)) {
+      el.textContent = "";
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    el.textContent = t("panel.searchCount", { shown, total });
+  }
   function render(tasks) {
     if (rendering) {
       pendingRenderTasks = tasks;
@@ -1288,10 +1364,15 @@ function dataSourceSafeFileName(ds) {
 
       if (body) {
         try {
+          const visible = filterTasksBySearch(toStore);
+          updateSearchCount(toStore.length, visible.length);
           if (!toStore.length) {
             body.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-6">${t("tasks.empty")}</td></tr>`;
+          } else if (!visible.length) {
+            // Distinct from "no processes at all": the list is not empty, the filter is just narrow.
+            body.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-6">${escapeHtml(t("panel.searchNoMatch"))}</td></tr>`;
           } else {
-            body.innerHTML = toStore.map((row) => {
+            body.innerHTML = visible.map((row) => {
               const { steps, groups, sources } = taskCounts(row);
               const tid = escapeHtml(String(row.id));
               const tplCell = row.templateId
@@ -2231,4 +2312,31 @@ function dataSourceSafeFileName(ds) {
     DaEntitlements.fetch().then(() => scheduleRender()).catch(() => {});
   }
   window.dispatchEvent(new CustomEvent("da-request-local-tasks"));
+
+  // Search box: filter as the user types. The page only renders the input on the processes view,
+  // so this is a no-op elsewhere.
+  (function bindTaskSearch() {
+    const input = document.getElementById("da-task-search");
+    if (!input) return;
+    const clearBtn = document.getElementById("da-task-search-clear");
+    let debounce = null;
+    // Debounced so a fast typist re-renders once at the end of a burst, not per character.
+    input.addEventListener("input", () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(applyTaskSearch, 120);
+    });
+    // Enter should not submit anything; the list is already filtered.
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); clearTimeout(debounce); applyTaskSearch(); }
+      if (e.key === "Escape" && input.value) { e.preventDefault(); input.value = ""; applyTaskSearch(); input.focus(); }
+    });
+    clearBtn?.addEventListener("click", () => {
+      input.value = "";
+      clearTimeout(debounce);
+      applyTaskSearch();
+      input.focus();
+    });
+    // A bfcache restore / back navigation can bring a typed value back without an input event.
+    if (input.value) applyTaskSearch();
+  })();
 })();

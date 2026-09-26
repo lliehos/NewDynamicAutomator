@@ -575,6 +575,82 @@ html.light-style {
   user-select: none;
 }
 
+/* Process search: filters the loaded rows client-side, so it sits above the table it narrows. */
+.da-task-search {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  margin-bottom: .75rem;
+}
+
+.da-task-search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  max-width: 22rem;
+}
+
+.da-task-search-icon {
+  position: absolute;
+  inset-inline-start: .7rem;
+  font-size: 1.05rem;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.da-task-search-input {
+  width: 100%;
+  padding: .5rem 2.1rem;
+  border: 1px solid #e2e6ee;
+  border-radius: .5rem;
+  background: #fff;
+  font-size: .9rem;
+  color: inherit;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.da-task-search-input:focus {
+  outline: 0;
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, .12);
+}
+
+/* The native clear affordance duplicates our own button and differs per browser. */
+.da-task-search-input::-webkit-search-cancel-button { display: none; }
+
+.da-task-search-clear {
+  position: absolute;
+  inset-inline-end: .35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.da-task-search-clear:hover { background: #f1f3f7; color: #334155; }
+.da-task-search-clear[hidden] { display: none !important; }
+
+.da-task-search-count {
+  font-size: .82rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.da-task-search-count[hidden] { display: none !important; }
+
+/* The mobile card list has no table header, so the box needs its own breathing room there. */
+@media (max-width: 767.98px) {
+  .da-task-search-field { max-width: none; }
+}
+
 .da-tasks-busy-inner {
   display: flex;
   flex-direction: column;

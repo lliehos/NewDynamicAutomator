@@ -50,6 +50,16 @@ public class TaskListItemDto
     /// diagrams.
     /// </summary>
     public bool TemplateBehind { get; set; }
+
+    /// <summary>
+    /// True when this process is the source its template was built from — its "mother".
+    /// </summary>
+    /// <remarks>
+    /// The mother is the one attached process the cascade never writes back to, so the list marks
+    /// it: editing it is what pushes changes down to the children, and a user who did not know
+    /// which row that was would go looking for the template instead.
+    /// </remarks>
+    public bool IsTemplateSource { get; set; }
 }
 
 /// <summary>One template in the template menus, with the counts the picker shows.</summary>

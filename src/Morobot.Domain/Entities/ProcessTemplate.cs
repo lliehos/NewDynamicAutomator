@@ -59,7 +59,28 @@ public class ProcessTemplate
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// The process this template was built from — its "mother" (فرآیند مادر).
+    /// </summary>
+    /// <remarks>
+    /// A template is always authored from one process, and that process keeps owning the
+    /// structure: editing the mother cascades the template's graph down to every child, while each
+    /// child keeps only its own start node. This makes the pair mother-to-template one-to-one,
+    /// which is why the link is a single nullable id rather than a collection.
+    ///
+    /// Nullable, and cleared rather than cascading: deleting the mother must not delete the
+    /// template or the children built on it — they simply lose their "mother" badge and carry on.
+    /// Enforced as a <c>SetNull</c> delete behaviour in the context for the same reason.
+    /// </remarks>
+    public int? SourceProcessId { get; set; }
+
     public AppUser? Creator { get; set; }
+
+    /// <summary>
+    /// The mother process, when it still exists. Null after the mother was deleted — the template
+    /// and its children remain valid and editable through the template itself.
+    /// </summary>
+    public Process? SourceProcess { get; set; }
 
     /// <summary>
     /// The processes still attached to this template. A process that detaches clears its

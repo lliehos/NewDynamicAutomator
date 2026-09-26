@@ -151,4 +151,140 @@ public static class GraphJsonHelper
 
     /// <summary>Step + action nodes that count toward MaxProcessSteps.</summary>
     public static int CountProcessSteps(string? graphJson) => CountNodes(graphJson).steps;
+
+    /// <summary>
+    /// The start-node fields a child process owns. Everything else comes from its template.
+    /// </summary>
+    /// <remarks>
+    /// A child exists for two reasons only: to point the process at its own data source, and to
+    /// run on its own terms (delay, loop cap, repeat mode, highlight colour). Those are exactly
+    /// the process-level settings that live on the root start node, so this is the list that
+    /// survives a cascade. Everything else — every group, action and condition, and the wiring
+    /// between them — is structure, and structure belongs to the template.
+    ///
+    /// Keep this in step with <c>START_NODE_OWNED_KEYS</c> in the editor's flow.js, which uses the
+    /// same list to decide which inspector fields stay enabled on a child.
+    /// </remarks>
+    public static readonly string[] ChildOwnedStartFields =
+    {
+        "dataSourceId",
+        "highlightColor",
+        "repeatSourceType",
+        "loopCount",
+        "moveLoop",
+        "stepDelayMs",
+        "loopBackLimit",
+        "ignorePlayError",
+        "dedicatedRow",
+        "rowIndexType",
+        "specificRowIndex",
+        "repeatFromIndex",
+        "repeatToIndex"
+    };
+
+    /// <summary>
+    /// Build a child process's graph from its template's graph, keeping the child's own start node.
+    /// </summary>
+    /// <remarks>
+    /// This is the rule the whole mother/template/child feature rests on. The template supplies the
+    /// structure; the child supplies its start node. Doing it in one place means the three callers
+    /// that need it — publishing a template, pulling a template into one child, and saving the
+    /// mother — cannot drift apart and each keep a slightly different idea of what a child owns.
+    ///
+    /// The child's start node is carried over <b>whole</b>, then only the fields in
+    /// <see cref="ChildOwnedStartFields"/> are copied on top of the template's version, so any
+    /// field the editor adds to the start node later is preserved by default rather than dropped
+    /// because nobody remembered to list it.
+    ///
+    /// Returns the merged graph text. If either side is unparseable the template's graph is used
+    /// as-is: refusing to cascade would leave the child permanently stale, whereas losing a start
+    /// node is recoverable (the editor rebuilds one) and is reported by the caller.
+    /// </remarks>
+    public static string MergeChildGraph(string? templateGraphJson, string? childGraphJson)
+    {
+        var templateGraph = UnwrapEnvelope(templateGraphJson);
+        if (string.IsNullOrWhiteSpace(templateGraph)) return childGraphJson ?? templateGraphJson ?? string.Empty;
+
+        var childGraph = UnwrapEnvelope(childGraphJson);
+        if (string.IsNullOrWhiteSpace(childGraph)) return templateGraph;
+
+        try
+        {
+            var templateRoot = JsonNode.Parse(templateGraph) as JsonObject;
+            var childRoot = JsonNode.Parse(childGraph) as JsonObject;
+            if (templateRoot is null || childRoot is null) return templateGraph;
+
+            var templateNodes = templateRoot["nodes"] as JsonArray ?? templateRoot["Nodes"] as JsonArray;
+            var childNodes = childRoot["nodes"] as JsonArray ?? childRoot["Nodes"] as JsonArray;
+            if (templateNodes is null || childNodes is null) return templateGraph;
+
+            var isLower = templateRoot["nodes"] is not null;
+
+            // The child's root start: the only node it is allowed to own.
+            var childStart = childNodes
+                .OfType<JsonObject>()
+                .FirstOrDefault(n => IsKind(n, "start") && !HasGroup(n));
+
+            if (childStart is null) return templateGraph;
+
+            // Find where the template put ITS root start, so the merged graph keeps the same node
+            // order and the same positional reads that follow (the editor scrolls to the first node
+            // and auto-layout seeds from it).
+            var startIndex = -1;
+            for (var i = 0; i < templateNodes.Count; i++)
+            {
+                if (templateNodes[i] is JsonObject t && IsKind(t, "start") && !HasGroup(t))
+                {
+                    startIndex = i;
+                    break;
+                }
+            }
+
+            // Build the start node: template's shape first, then the child's own values on top.
+            var merged = templateNodes[startIndex >= 0 ? startIndex : 0] is JsonObject tplStart
+                ? (JsonObject)JsonNode.Parse(tplStart.ToJsonString())!
+                : new JsonObject();
+
+            foreach (var field in ChildOwnedStartFields)
+            {
+                if (childStart[field] is not null) merged[field] = JsonNode.Parse(childStart[field]!.ToJsonString());
+            }
+            // Never let a child rename the node's identity.
+            merged["id"] = childStart["id"]?.DeepClone() ?? merged["id"]?.DeepClone();
+            merged["kind"] = "start";
+
+            if (startIndex >= 0)
+            {
+                templateNodes[startIndex] = merged;
+            }
+            else
+            {
+                // The template has no root start (a damaged template): put one in front so the
+                // merged graph is still executable rather than silently headless.
+                templateNodes.Insert(0, merged);
+            }
+
+            if (!isLower && templateRoot["Nodes"] is not null) templateRoot["Nodes"] = templateNodes;
+
+            // Everything else — nodes, edges, viewport, dataSources, and the template's own
+            // process-level fields — comes from the template untouched.
+            return templateRoot.ToJsonString();
+        }
+        catch (JsonException)
+        {
+            return templateGraph;
+        }
+    }
+
+    private static bool IsKind(JsonObject node, string kind)
+    {
+        var value = node["kind"]?.GetValue<string>() ?? node["Kind"]?.GetValue<string>();
+        return string.Equals(value, kind, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasGroup(JsonObject node)
+    {
+        var gid = node["groupNodeId"]?.GetValue<string>() ?? node["GroupNodeId"]?.GetValue<string>();
+        return !string.IsNullOrWhiteSpace(gid);
+    }
 }

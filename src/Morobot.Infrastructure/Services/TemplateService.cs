@@ -89,6 +89,16 @@ public class TemplateService
     /// produced, so the author can keep editing one place and have the change reach the process
     /// they started from — otherwise creating a template from a process would immediately fork it.
     /// </summary>
+    /// <remarks>
+    /// The process becomes the template's <b>mother</b> (<see cref="ProcessTemplate.SourceProcessId"/>):
+    /// it is where later structure edits are made, and it is the one row the cascade never writes
+    /// back to.
+    ///
+    /// A process that is already a child is refused. A child owns only its start node, so making a
+    /// template from one would either freeze the template at a structure the child does not own, or
+    /// silently author the template from a graph the child cannot edit. Only a standalone process
+    /// or an existing mother may become a template's source.
+    /// </remarks>
     public async Task<(bool ok, string? error, ProcessTemplate? template)> CreateFromProcessAsync(
         int userId, int processId, SaveTemplateRequest request, CancellationToken ct = default)
     {
@@ -102,6 +112,12 @@ public class TemplateService
         if (process.TemplateId is not null)
             return (false, "template.processAlreadyFromTemplate", null);
 
+        // One mother per process: a second template from the same process would give it two
+        // competing sources of truth for the same children.
+        var alreadySource = await _db.ProcessTemplates
+            .AnyAsync(t => t.SourceProcessId == processId, ct);
+        if (alreadySource) return (false, "template.processAlreadySource", null);
+
         var template = new ProcessTemplate
         {
             Title = title,
@@ -112,6 +128,7 @@ public class TemplateService
             Version = 1,
             IsActive = true,
             CreatorUserId = userId > 0 ? userId : null,
+            SourceProcessId = process.Id,
             CreatedAtUtc = DateTime.UtcNow,
             UpdatedAtUtc = DateTime.UtcNow
         };
@@ -132,6 +149,13 @@ public class TemplateService
     /// the new graph is written into every process still attached, and each one's recorded version
     /// is brought up to date.
     /// </summary>
+    /// <remarks>
+    /// The graph is merged per child rather than copied verbatim: each child keeps its own root
+    /// start node (its data source and its run settings) while every other node comes from the
+    /// template. Writing the template graph wholesale would erase the very thing a child exists to
+    /// hold, and copying each child's graph back in would leave the structure frozen at the moment
+    /// it was created.
+    /// </remarks>
     public async Task<(bool ok, string? error, int pushed)> UpdateAsync(
         int userId, int templateId, SaveTemplateRequest request, string? newGraphJson, CancellationToken ct = default)
     {
@@ -150,20 +174,49 @@ public class TemplateService
         var pushed = 0;
         if (request.PushToAttached && newGraphJson is not null)
         {
-            var attached = await _db.Processes.Where(p => p.TemplateId == templateId).ToListAsync(ct);
-            foreach (var p in attached)
-            {
-                // Only the graph moves across. Source links stay with the process by design.
-                p.GraphJson = newGraphJson;
-                p.TemplateVersion = template.Version;
-                p.UpdatedAtUtc = DateTime.UtcNow;
-                p.LastEditorUserId = userId > 0 ? userId : null;
-                pushed++;
-            }
+            pushed = await PushGraphToChildrenAsync(template, newGraphJson, userId, ct);
         }
 
         await _db.SaveChangesAsync(ct);
         return (true, null, pushed);
+    }
+
+    /// <summary>
+    /// Write the template's graph into every attached child, keeping each child's own start node.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the three paths that cascade a template — publishing a template, pulling it into
+    /// one child, and saving the mother — so all three apply the same rule. The caller owns
+    /// <c>SaveChanges</c>, which is what lets the mother's save do the whole cascade in one
+    /// transaction: either the template, the children and the source structures all move, or none
+    /// of them do.
+    ///
+    /// Returns how many children were updated.
+    /// </remarks>
+    private async Task<int> PushGraphToChildrenAsync(
+        ProcessTemplate template, string templateGraphJson, int userId, CancellationToken ct)
+    {
+        var children = await _db.Processes
+            .Where(p => p.TemplateId == template.Id)
+            .ToListAsync(ct);
+
+        var now = DateTime.UtcNow;
+        var pushed = 0;
+        foreach (var child in children)
+        {
+            // A child that IS the template's mother must not be overwritten by its own template on
+            // the way down: the mother is where the edit came from, so merging would fold its start
+            // node into a graph it already matches and, worse, could re-point it mid-save.
+            if (template.SourceProcessId is int motherId && motherId == child.Id) continue;
+
+            child.GraphJson = GraphJsonHelper.MergeChildGraph(templateGraphJson, child.GraphJson);
+            child.TemplateVersion = template.Version;
+            child.UpdatedAtUtc = now;
+            child.LastEditorUserId = userId > 0 ? userId : null;
+            pushed++;
+        }
+
+        return pushed;
     }
 
     /// <summary>Create a process from a template. The template's sources are deliberately not copied.</summary>
@@ -235,6 +288,11 @@ public class TemplateService
     }
 
     /// <summary>Pull the template's current graph into one attached process without detaching it.</summary>
+    /// <remarks>
+    /// Merged rather than copied: the process keeps its own start node (its data source and run
+    /// settings) and takes everything else from the template. A verbatim copy would silently reset
+    /// the source the process was pointed at.
+    /// </remarks>
     public async Task<(bool ok, string? error)> PullLatestAsync(int userId, int processId, CancellationToken ct = default)
     {
         var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
@@ -245,7 +303,7 @@ public class TemplateService
             .FirstOrDefaultAsync(t => t.Id == templateId, ct);
         if (template is null) return (false, "template.notFound");
 
-        process.GraphJson = template.GraphJson;
+        process.GraphJson = GraphJsonHelper.MergeChildGraph(template.GraphJson, process.GraphJson);
         process.TemplateVersion = template.Version;
         process.UpdatedAtUtc = DateTime.UtcNow;
         process.LastEditorUserId = userId > 0 ? userId : null;

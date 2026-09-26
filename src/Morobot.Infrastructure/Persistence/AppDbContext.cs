@@ -194,6 +194,16 @@ public class AppDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(x => x.CreatorUserId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            // The mother process. SetNull, not Cascade and not Restrict: deleting the mother must
+            // leave the template and its children intact (they lose the badge and keep working),
+            // and it must not be blocked either — a mother is an ordinary process and the user can
+            // reasonably delete it. One-to-one because a process authors at most one template.
+            e.HasOne(x => x.SourceProcess)
+                .WithOne()
+                .HasForeignKey<ProcessTemplate>(x => x.SourceProcessId)
+                .OnDelete(DeleteBehavior.SetNull);
+            e.HasIndex(x => x.SourceProcessId);
         });
 
         modelBuilder.Entity<ProcessShare>(e =>

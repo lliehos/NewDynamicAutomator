@@ -83,6 +83,7 @@ public class TemplatesApiController : ControllerBase
         ["template.titleRequired"] = "عنوان قالب لازم است.",
         ["template.processNotFound"] = "فرآیند یافت نشد.",
         ["template.processAlreadyFromTemplate"] = "این فرآیند خودش از یک قالب ساخته شده است.",
+        ["template.processAlreadySource"] = "از این فرآیند قبلاً یک قالب ساخته شده است.",
         ["template.notFound"] = "قالب یافت نشد.",
         ["template.inactive"] = "این قالب غیرفعال است.",
         ["template.notAttached"] = "این فرآیند به هیچ قالبی متصل نیست."
