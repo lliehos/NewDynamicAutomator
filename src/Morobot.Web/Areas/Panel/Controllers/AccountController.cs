@@ -28,9 +28,12 @@ public class AccountController : Controller
             return RedirectToAction("Index", "Home", new { area = "Panel" });
         ViewBag.ReturnUrl = returnUrl;
         ViewBag.Error = TempData["LoginError"];
-        // The page announces which sign-in method is active, so a user is not left guessing why
-        // their directory password was refused (or why a local one was accepted).
-        ViewBag.AuthMode = await _authMode.GetModeAsync(ct);
+        // Which sign-in methods are live decides the page's shape: with one method there is nothing
+        // to choose, so no chooser is shown; with both, the visitor picks and the form is filled
+        // for them, because the two need different input types (national code vs directory account).
+        // The method is an administrative decision, but once two are enabled the visitor does have
+        // to say which account they are using, so the chooser appears exactly then.
+        ViewBag.AuthProviders = await _authMode.GetProvidersAsync(ct);
         return View();
     }
 

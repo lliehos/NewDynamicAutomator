@@ -5,12 +5,16 @@
     var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
     var errKey = ViewBag.Error as string;
     var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
-    var authMode = ViewBag.AuthMode as Morobot.Contracts.Auth.AuthMode? ?? Morobot.Contracts.Auth.AuthMode.Local;
-    var isLdap = authMode == Morobot.Contracts.Auth.AuthMode.Ldap;
-    // Two methods exist, but the page shows the active one rather than an interactive switch:
-    // offering a tab the visitor cannot choose between would imply they may pick, and the method
-    // is an administrative decision, not a per-visit preference.
-    var autocomplete = isLdap ? "off" : "current-password";
+    // Which methods the administrator has enabled. The chooser below is only rendered when both
+    // are on; with a single method there is nothing to pick, and showing one tab would read as a
+    // choice the visitor does not actually have.
+    var providers = ViewBag.AuthProviders as Morobot.Infrastructure.Identity.AuthModeResolver.AuthProviders
+                    ?? new Morobot.Infrastructure.Identity.AuthModeResolver.AuthProviders(Local: true, Ldap: false);
+    var showChooser = providers.Both;
+    var initialMethod = providers.LdapOnly ? "ldap" : "local";
+    // The two methods want different browser hints: a directory password is not this site's, so
+    // offering to save or autofill it here would be wrong.
+    var autocomplete = providers.LdapOnly ? "off" : "current-password";
 }
 
 <div class="card">
@@ -31,26 +35,41 @@
     {
       <div class="alert alert-danger small" data-i18n="@errKey">@L[errKey]</div>
     }
-    <div class="morobot-login-mode mb-4">
-      <ul class="nav nav-pills nav-justified morobot-login-mode-tabs" role="tablist">
-        <li class="nav-item" role="presentation">
-          <span class="nav-link @(isLdap ? null : "active")" role="tab"
-                aria-selected="@(isLdap ? "false" : "true")"
-                data-i18n="login.tabLocal">@L["login.tabLocal"]</span>
-        </li>
-        <li class="nav-item" role="presentation">
-          <span class="nav-link @(isLdap ? "active" : null)" role="tab"
-                aria-selected="@(isLdap ? "true" : "false")"
-                data-i18n="login.tabLdap">@L["login.tabLdap"]</span>
-        </li>
-      </ul>
-      <p class="morobot-login-mode-hint small mb-0 mt-2"
-         data-i18n="@(isLdap ? "login.modeLdapHint" : "login.modeLocalHint")">@L[isLdap ? "login.modeLdapHint" : "login.modeLocalHint"]</p>
-      @if (isLdap)
-      {
+    @if (showChooser)
+    {
+      @* Both methods are live, so the visitor does pick — and the choice matters, because a
+         national code and a directory account are typed differently. The tabs are real buttons
+         that drive the form below (see the script at the end of the page). *@
+      <div class="morobot-login-mode mb-4" data-auth-chooser data-initial="@initialMethod">
+        <ul class="nav nav-pills nav-justified morobot-login-mode-tabs" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button type="button" class="nav-link @(initialMethod == "local" ? "active" : null)" role="tab"
+                    data-auth-method="local" aria-selected="@(initialMethod == "local" ? "true" : "false")"
+                    data-i18n="login.tabLocal">@L["login.tabLocal"]</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button type="button" class="nav-link @(initialMethod == "ldap" ? "active" : null)" role="tab"
+                    data-auth-method="ldap" aria-selected="@(initialMethod == "ldap" ? "true" : "false")"
+                    data-i18n="login.tabLdap">@L["login.tabLdap"]</button>
+          </li>
+        </ul>
+        <p class="morobot-login-mode-hint small mb-0 mt-2"
+           data-auth-hint data-i18n="@(initialMethod == "ldap" ? "login.modeLdapHint" : "login.modeLocalHint")">@L[initialMethod == "ldap" ? "login.modeLdapHint" : "login.modeLocalHint"]</p>
+        @if (providers.Ldap)
+        {
+          <p class="morobot-login-mode-fallback small mb-0" data-i18n="login.adminFallbackNote">@L["login.adminFallbackNote"]</p>
+        }
+      </div>
+    }
+    else if (providers.LdapOnly)
+    {
+      @* Single method: no chooser, just a line saying which one, so a refused directory password
+         is not mistaken for a local account problem. *@
+      <div class="morobot-login-mode mb-4">
+        <p class="morobot-login-mode-hint small mb-1" data-i18n="login.modeLdapHint">@L["login.modeLdapHint"]</p>
         <p class="morobot-login-mode-fallback small mb-0" data-i18n="login.adminFallbackNote">@L["login.adminFallbackNote"]</p>
-      }
-    </div>
+      </div>
+    }
     <div class="alert alert-info small mb-4" role="note">
       <div class="fw-semibold mb-1" data-i18n="login.guideTitle">@L["login.guideTitle"]</div>
       <div data-i18n="login.guideGuest">@L["login.guideGuest"]</div>
@@ -60,8 +79,9 @@
       <input type="hidden" name="returnUrl" value="@ViewBag.ReturnUrl" />
       <input type="hidden" name="deviceJson" id="deviceJson" value="" />
       <div class="mb-6">
-        <label class="form-label" for="userName" data-i18n="login.userName">@L["login.userName"]</label>
-        <input class="form-control" id="userName" name="userName" value="" autocomplete="username" autofocus />
+        <label class="form-label" for="userName" data-i18n="login.userName" data-auth-label>@L["login.userName"]</label>
+        <input class="form-control" id="userName" name="userName" value="" autocomplete="username" autofocus
+               inputmode="text" data-auth-input />
       </div>
       <div class="mb-6">
         <label class="form-label" for="password" data-i18n="login.password">@L["login.password"]</label>
@@ -81,6 +101,55 @@
   <script src="~/js/da-device.js?v=@V.AssetVersion"></script>
 <script>
 (function () {
+  // The method chooser. Both providers being live means the visitor has to say which account they
+  // are using, because the two are typed differently: a national code is digits, a directory
+  // account is a name. The choice drives the label, the input hints and the password's autocomplete
+  // so the browser does not offer to save a directory password as this site's.
+  //
+  // The chosen method is intentionally NOT posted: the server decides the provider from the name
+  // (see AuthModeResolver.ResolveFor), so a form that lies about the method cannot make the server
+  // check credentials against the wrong store.
+  var chooser = document.querySelector('[data-auth-chooser]');
+  var input = document.querySelector('[data-auth-input]');
+  var label = document.querySelector('[data-auth-label]');
+  var password = document.getElementById('password');
+  var hint = document.querySelector('[data-auth-hint]');
+
+  function apply(method) {
+    if (!chooser) return;
+    var isLdap = method === 'ldap';
+    chooser.querySelectorAll('[data-auth-method]').forEach(function (tab) {
+      var on = tab.getAttribute('data-auth-method') === method;
+      tab.classList.toggle('active', on);
+      tab.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    if (hint) {
+      var key = isLdap ? 'login.modeLdapHint' : 'login.modeLocalHint';
+      hint.setAttribute('data-i18n', key);
+      if (window.DaI18n && DaI18n.t) hint.textContent = DaI18n.t(key);
+    }
+    if (label) {
+      var lk = isLdap ? 'login.userNameLdap' : 'login.userNameLocal';
+      label.setAttribute('data-i18n', lk);
+      if (window.DaI18n && DaI18n.t) label.textContent = DaI18n.t(lk);
+    }
+    if (input) {
+      // A national code is digits; asking a phone keyboard for it is friendlier than a full one.
+      input.setAttribute('inputmode', isLdap ? 'text' : 'numeric');
+    }
+    if (password) password.setAttribute('autocomplete', isLdap ? 'off' : 'current-password');
+  }
+
+  if (chooser) {
+    chooser.querySelectorAll('[data-auth-method]').forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        apply(tab.getAttribute('data-auth-method'));
+        if (input) input.focus();
+      });
+    });
+    apply(chooser.getAttribute('data-initial') || 'local');
+  }
+
   var form = document.getElementById("login-form");
   form.addEventListener("submit", function () {
     try {

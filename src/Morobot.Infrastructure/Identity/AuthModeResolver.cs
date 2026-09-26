@@ -1,6 +1,8 @@
 using Morobot.Contracts.Auth;
 using Morobot.Domain;
+using Morobot.Infrastructure.Persistence;
 using Morobot.Infrastructure.Services;
+using Microsoft.EntityFrameworkCore;
 
 namespace Morobot.Infrastructure.Identity;
 
@@ -19,10 +21,12 @@ namespace Morobot.Infrastructure.Identity;
 public sealed class AuthModeResolver
 {
     private readonly SystemSettingsService _settings;
+    private readonly AppDbContext _db;
 
-    public AuthModeResolver(SystemSettingsService settings)
+    public AuthModeResolver(SystemSettingsService settings, AppDbContext db)
     {
         _settings = settings;
+        _db = db;
     }
 
     /// <summary>Which providers may sign a user in.</summary>
@@ -31,15 +35,76 @@ public sealed class AuthModeResolver
         /// <summary>True when only the directory may sign users in.</summary>
         public bool LdapOnly => Ldap && !Local;
 
+        /// <summary>True when only the built-in user table may sign users in.</summary>
+        public bool LocalOnly => Local && !Ldap;
+
+        /// <summary>True when either provider may sign a user in.</summary>
+        public bool Both => Local && Ldap;
+
         /// <summary>
-        /// The legacy single value, kept so existing callers and logs keep working. When both
-        /// providers are enabled this reports Local, because a local match is tried first and is
-        /// the provider that cannot be unavailable.
+        /// The legacy single value, kept so existing callers and logs keep working. With both
+        /// providers live it reports Local, because that is the one that cannot be unavailable —
+        /// callers that must tell them apart should use <see cref="ResolveFor"/> instead.
         /// </summary>
         public AuthMode Mode => Local ? AuthMode.Local : AuthMode.Ldap;
+
+        /// <summary>
+        /// Which single provider <paramref name="userName"/> should be checked against.
+        /// </summary>
+        /// <remarks>
+        /// This is what makes running both providers at once actually work. The old API exposed a
+        /// single mode and callers branched on <c>mode == Ldap</c>, so switching the directory on
+        /// while leaving local sign-in enabled silently sent every request down the local path —
+        /// the directory was configured but never consulted.
+        ///
+        /// With both enabled the name decides: a purely numeric name is a national code, which the
+        /// built-in table stores, so it can never be a directory account and is checked locally. A
+        /// name that is actually in the directory is checked there. Anything else — a name nobody
+        /// has claimed yet — falls back to the local table.
+        /// </remarks>
+        public AuthMode ResolveFor(string? userName)
+        {
+            if (LocalOnly) return AuthMode.Local;
+            if (LdapOnly) return AuthMode.Ldap;
+            // Both are live. A national code can only be a local account, and a name the directory
+            // is known to own is checked there; everything else falls back to the local table, which
+            // is the provider that cannot be unavailable.
+            if (IsNumeric(userName)) return AuthMode.Local;
+            var name = userName?.Trim();
+            return !string.IsNullOrEmpty(name) && DirectoryNames.Contains(name) ? AuthMode.Ldap : AuthMode.Local;
+        }
+
+        /// <summary>
+        /// Names confirmed to come from the directory, filled in when both providers are live.
+        /// A directory-provisioned row carries no password hash, which is a reliable marker that
+        /// its credentials come from the directory rather than from here.
+        /// </summary>
+        internal IReadOnlySet<string> DirectoryNames { get; init; } =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// A name made only of digits, i.e. a national code. Directory account names are not
+        /// numeric, so such a name is always a local account.
+        /// </summary>
+        private static bool IsNumeric(string? userName)
+        {
+            var name = userName?.Trim();
+            if (string.IsNullOrEmpty(name)) return false;
+            foreach (var c in name)
+                if (c is < '0' or > '9') return false;
+            return true;
+        }
     }
 
-    /// <summary>Read the two switch values, normalised so at least one is on.</summary>
+    /// <summary>
+    /// Read the two switch values, normalised so at least one is on.
+    /// </summary>
+    /// <remarks>
+    /// Membership of <see cref="AuthProviders.DirectoryNames"/> is filled from the user table:
+    /// a row created by directory auto-provisioning carries no password hash, which is a reliable
+    /// marker that its credentials come from the directory rather than from here. That is what
+    /// lets a single sign-in form route a name to the right provider without asking the visitor.
+    /// </remarks>
     public async Task<AuthProviders> GetProvidersAsync(CancellationToken ct = default)
     {
         var localRaw = await _settings.GetAsync(SystemSettingKeys.AuthLocalEnabled, "true", ct);
@@ -57,7 +122,19 @@ public sealed class AuthModeResolver
         }
 
         var normalized = SystemSettingKeys.NormalizeAuthProviders(IsTrue(localRaw), IsTrue(ldapRaw));
-        return new AuthProviders(normalized.local, normalized.ldap);
+        var providers = new AuthProviders(normalized.local, normalized.ldap);
+
+        // Only worth the query when both are live: with a single provider there is nothing to
+        // route between, and the extra lookup would run on every sign-in for no benefit.
+        if (!providers.Both) return providers;
+
+        var directoryNames = await _db.Users
+            .AsNoTracking()
+            .Where(u => u.PasswordHash == null || u.PasswordHash == "")
+            .Select(u => u.UserName)
+            .ToListAsync(ct);
+
+        return providers with { DirectoryNames = new HashSet<string>(directoryNames, StringComparer.OrdinalIgnoreCase) };
     }
 
     /// <summary>The provider that decides sign-in, for callers that only need one answer.</summary>

@@ -18,7 +18,20 @@ namespace Morobot.Infrastructure.Identity;
 public class AuthService
 {
     public const string CookieName = "da_access";
-    private static readonly Regex UserNamePattern = new(@"^[a-zA-Z][a-zA-Z0-9_]{2,49}$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Accepted user-name shapes. Two are allowed:
+    /// <list type="bullet">
+    /// <item>a national code — 8 to 10 digits, which is what the legacy system used as the account
+    /// name and what users expect to type;</item>
+    /// <item>an account name — 3 to 50 characters starting with a letter, then letters, digits,
+    /// dot, dash or underscore.</item>
+    /// </list>
+    /// A name must be one or the other, never a mix: letting a code carry letters would make
+    /// "national code or user name" ambiguous when routing a sign-in to the right provider.
+    /// </summary>
+    private static readonly Regex UserNamePattern =
+        new(@"^(?:\d{8,10}|[a-zA-Z][a-zA-Z0-9._\-]{2,49})$", RegexOptions.Compiled);
 
     private readonly AppDbContext _db;
     private readonly IConfiguration _config;
@@ -276,7 +289,12 @@ public class AuthService
         // The directory, when configured, decides whether the password is right. The local row is
         // still consulted first because it supplies the role and plan: a user the directory accepts
         // but that has no row here would have no permissions, so the lookup must happen either way.
-        var mode = await _authMode.GetModeAsync(ct);
+        //
+        // Which provider is asked is resolved per user, not once for the whole install: with both
+        // switches on, a national code belongs to the local table and a directory account name
+        // belongs to the directory, and the same form has to serve both.
+        var providers = await _authMode.GetProvidersAsync(ct);
+        var mode = providers.ResolveFor(request.UserName);
         var password = request.Password ?? "";
         if (mode == AuthMode.Ldap && user is { IsActive: true, Role: UserRole.Admin }
             && !string.IsNullOrEmpty(password)
@@ -287,8 +305,11 @@ public class AuthService
             // to lock the administrator out of the very page that switches back. The local password
             // of an Admin is therefore always honoured. It is bounded to the Admin role — ordinary
             // accounts get no such bypass — and the bypass is logged so a use of it is visible.
+            //
+            // Only meaningful when the local provider is off: with it on, a numeric or unknown name
+            // already resolves to Local and this branch is never reached for an administrator.
             await _events.LogAsync("Warning", "Auth", "LoginAdminLocalFallback",
-                $"Administrator {user.UserName} signed in with the local password while LDAP mode is active.",
+                $"Administrator {user.UserName} signed in with the local password while the directory is the only method.",
                 user.Id, user.UserName, ipAddress: ip, ct: ct);
         }
         else if (mode == AuthMode.Ldap)

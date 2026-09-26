@@ -34,7 +34,18 @@ public class SettingsController : Controller
         {
             // Branding keys are edited on Admin → Branding only; showing them here too meant
             // two pages wrote the same rows and a stale save could clobber the other page.
-            Settings = all.Where(s => !SystemSettingKeys.IsBrandingOwned(s.Key)).ToList(),
+            Settings = all
+                .Where(s => !SystemSettingKeys.IsBrandingOwned(s.Key))
+                // The legacy AuthMode row is superseded by the two provider switches. It survives
+                // in the table only so an install too old to have been seeded with them still
+                // resolves its sign-in, and rendering it here would offer a second, contradictory
+                // way to choose the same thing.
+                .Where(s => !SystemSettingKeys.IsSuperseded(s.Key))
+                // Auth reads top-to-bottom: which providers are on, then the directory they
+                // configure, then the fallback plan. The service orders alphabetically, which
+                // separated the LDAP switch from the very fields it governs.
+                .OrderBy(s => SystemSettingKeys.OrderOf(s.Group, s.Key))
+                .ToList(),
             Plans = await _db.Plans.AsNoTracking().OrderBy(p => p.SortOrder).ToListAsync(ct)
         };
         return View(vm);
@@ -53,6 +64,9 @@ public class SettingsController : Controller
             .Select(k => (k["setting_".Length..], LastValue(form, k)))
             // Defence in depth: ignore branding keys even if a crafted form posts them.
             .Where(p => !SystemSettingKeys.IsBrandingOwned(p.Item1))
+            // Likewise for the superseded AuthMode row: the two switches are the only authority on
+            // which providers are live, and a stale row must not be written back alongside them.
+            .Where(p => !SystemSettingKeys.IsSuperseded(p.Item1))
             // A blank secret means "leave it alone", not "erase it". The page cannot show the
             // current value back, so it always submits blank; treating that as a clear would wipe
             // the bind password every time any other setting was saved.
@@ -75,9 +89,6 @@ public class SettingsController : Controller
                 SetPair(pairs, SystemSettingKeys.AuthLdapEnabled, fixedLdap ? "true" : "false");
                 TempData["Warn"] = _locale["admin.settings.oneAuthRequired"];
             }
-            // Keep the legacy single row in step so anything still reading it agrees with the
-            // switches: LDAP-only means Ldap, otherwise Local.
-            SetPair(pairs, SystemSettingKeys.AuthMode, fixedLocal ? "Local" : "Ldap");
         }
         // Record who made the change so the settings list can show it and the audit log can
         // answer it later; without the actor the history would be anonymous.

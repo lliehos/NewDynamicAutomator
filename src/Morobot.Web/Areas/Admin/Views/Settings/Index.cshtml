@@ -78,6 +78,10 @@
           // hidden while the LDAP switch is off (the server keeps them intact either way).
           var isAuthSwitch = s.Key is SystemSettingKeys.AuthLocalEnabled or SystemSettingKeys.AuthLdapEnabled;
           var authSwitchOn = string.Equals(s.Value, "true", StringComparison.OrdinalIgnoreCase) || s.Value == "1";
+          // Any other plain flag (currently just "use TLS") also gets a switch rather than a text
+          // box, so a mistyped value cannot read as "off".
+          var isBooleanSwitch = !isAuthSwitch && SystemSettingKeys.IsBoolean(s.Key);
+          var boolSwitchOn = string.Equals(s.Value, "true", StringComparison.OrdinalIgnoreCase) || s.Value == "1";
           var isLdapField = SystemSettingKeys.IsLdapOnly(s.Key);
           <div class="admin-settings-field@(isLdapField ? " admin-settings-ldap-field" : null)"
                @(isLdapField ? "data-ldap-field" : null)>
@@ -99,6 +103,15 @@
                 <input type="hidden" name="setting_@s.Key" value="false" />
                 <input type="checkbox" id="setting_@s.Key" name="setting_@s.Key" value="true"
                        data-auth-switch="true" @(authSwitchOn ? "checked" : null) />
+                <span class="admin-settings-switch-track" aria-hidden="true"></span>
+              </label>
+            }
+            else if (isBooleanSwitch)
+            {
+              <label class="admin-settings-switch" for="setting_@s.Key">
+                <input type="hidden" name="setting_@s.Key" value="false" />
+                <input type="checkbox" id="setting_@s.Key" name="setting_@s.Key" value="true"
+                       @(boolSwitchOn ? "checked" : null) />
                 <span class="admin-settings-switch-track" aria-hidden="true"></span>
               </label>
             }

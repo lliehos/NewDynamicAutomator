@@ -32,25 +32,88 @@ public static class SystemSettingKeys
     public const string BrandReferralQrVisible = "BrandReferralQrVisible";
 
     /// <summary>
-    /// Which identity store signs users in. "Local" = the built-in user table (the only option
-    /// before this existed, so it is the default and an untouched install keeps behaving). "Ldap"
-    /// = an external directory; the local table then keeps the roles and plan data while the
-    /// directory decides who may sign in.
+    /// Legacy single-choice key, superseded by the two switches below and intentionally not
+    /// rendered anywhere. Nothing reads it except <c>AuthModeResolver</c>, which consults it only
+    /// when neither switch exists, so an install too old to have been seeded with them still
+    /// resolves the way it used to. Kept as a constant purely so that fallback path can name it —
+    /// do not add it back to the settings page or to the seeder.
     /// </summary>
     public const string AuthMode = "AuthMode";
 
     /// <summary>
     /// "true" when the built-in user table may sign users in. Paired with
-    /// <see cref="AuthLdapEnabled"/>: the two switches replace the old single-choice AuthMode on
-    /// the settings page, and at least one of them must stay on.
+    /// <see cref="AuthLdapEnabled"/>: the two switches replace the old single-choice AuthMode, and
+    /// at least one of them must stay on. Deliberately NOT named "Local" so it does not collide
+    /// with the legacy value once stored as a bare string.
     /// </summary>
     public const string AuthLocalEnabled = "AuthLocalEnabled";
 
     /// <summary>
     /// "true" when an external directory may sign users in. Default is off, so an install that
-    /// never configured a directory keeps using the local table only.
+    /// never configured a directory keeps using the local table only. The two switches are
+    /// independent on purpose: an install may accept both, and then whichever provider recognises
+    /// the credentials is the one that signs the user in.
     /// </summary>
     public const string AuthLdapEnabled = "AuthLdapEnabled";
+
+    /// <summary>
+    /// Keys whose value is a plain "true"/"false" flag. Admin → Settings renders these as a switch
+    /// rather than a text box: a free-text field accepting any string invites a typo like "ture",
+    /// which \u2014 for a flag the code reads with a strict comparison \u2014 silently means "off".
+    /// </summary>
+    public static readonly IReadOnlySet<string> BooleanKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        AuthLocalEnabled,
+        AuthLdapEnabled,
+        LdapUseTls
+    };
+
+    /// <summary>True when the setting is a plain on/off flag.</summary>
+    public static bool IsBoolean(string? key) =>
+        !string.IsNullOrWhiteSpace(key) && BooleanKeys.Contains(key);
+
+    /// <summary>
+    /// Keys the Auth group renders, in the order it should read. Alphabetical ordering (the
+    /// service's default) put "AuthLdapEnabled" above "AuthLocalEnabled" and scattered the LDAP
+    /// connection fields around them, so the switch that governs the directory appeared after the
+    /// fields it governs. Listing the order here keeps "provider switches, then the directory
+    /// they configure, then the fallback plan" together and reviewable top to bottom.
+    /// </summary>
+    public static readonly IReadOnlyList<string> AuthGroupOrder = new[]
+    {
+        AuthLocalEnabled,
+        AuthLdapEnabled,
+        LdapHost,
+        LdapPort,
+        LdapBindDn,
+        LdapBindPassword,
+        LdapBaseDn,
+        LdapUserTemplate,
+        LdapUseTls,
+        DefaultRegisterPlan
+    };
+
+    /// <summary>
+    /// Settings the Auth group must never render: the legacy AuthMode row offers a second,
+    /// contradictory way to choose what the two switches already decide. It is filtered out here
+    /// rather than in the view so the group's visible count and the page agree.
+    /// </summary>
+    public static readonly IReadOnlySet<string> SupersededKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        AuthMode
+    };
+
+    /// <summary>True when a key is obsolete and must not be shown on the settings page.</summary>
+    public static bool IsSuperseded(string? key) =>
+        !string.IsNullOrWhiteSpace(key) && SupersededKeys.Contains(key);
+
+    /// <summary>Where a key sorts inside its group, falling back to the end for anything unlisted.</summary>
+    public static int OrderOf(string? group, string? key)
+    {
+        if (!string.Equals(group, "Auth", StringComparison.OrdinalIgnoreCase)) return 999;
+        var index = AuthGroupOrder.ToList().FindIndex(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+        return index < 0 ? 999 : index;
+    }
 
     /// <summary>Directory host name or IP, without a scheme or port.</summary>
     public const string LdapHost = "LdapHost";

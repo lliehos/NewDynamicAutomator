@@ -123,17 +123,12 @@ public static class DbSeeder
             "کد پلن فعال برای کاربران جدید (مثلاً Free)",
             "Active plan code assigned to new registrations (e.g. Free)");
 
-        await Upsert(
-            SystemSettingKeys.AuthMode,
-            nameof(AuthMode.Local),
-            "Auth",
-            "روش احراز هویت",
-            "Authentication method",
-            "Local = کاربران همین سامانه · Ldap = پوشهٔ سازمانی (Active Directory یا OpenLDAP)",
-            "Local = users of this system · Ldap = an organisational directory (Active Directory or OpenLDAP)");
-
         // The two independent provider switches. Seeded so a fresh install has them, and so the
         // back-compat path (which looks for their presence) takes the modern branch straight away.
+        //
+        // The legacy single-choice "AuthMode" row is deliberately NOT seeded: it is superseded by
+        // these two, and seeding it meant every fresh install carried a third, contradictory way
+        // to express the same choice.
         await Upsert(
             SystemSettingKeys.AuthLocalEnabled,
             "true",
@@ -158,8 +153,8 @@ public static class DbSeeder
             "Auth",
             "هاست پوشه (LDAP)",
             "Directory host (LDAP)",
-            "نام یا IP سرور پوشه؛ بدون http و بدون پورت. فقط وقتی روش احراز هویت Ldap است استفاده می‌شود.",
-            "Host name or IP of the directory; no scheme, no port. Used only when the method is Ldap.");
+            "نام یا IP سرور پوشه؛ بدون http و بدون پورت.",
+            "Host name or IP of the directory; no scheme, no port.");
 
         await Upsert(
             SystemSettingKeys.LdapPort,
@@ -169,7 +164,6 @@ public static class DbSeeder
             "Directory port (LDAP)",
             "خالی = پورت پیش‌فرض بر اساس TLS (389 یا 636).",
             "Blank = the conventional port for the transport (389 or 636).");
-
         await Upsert(
             SystemSettingKeys.LdapBaseDn,
             "",
@@ -178,7 +172,6 @@ public static class DbSeeder
             "Base DN",
             "مثال: DC=corp,DC=local — نقطهٔ شروع جست‌وجو در پوشه.",
             "For example DC=corp,DC=local — where searches in the directory start.");
-
         await Upsert(
             SystemSettingKeys.LdapBindDn,
             "",
@@ -203,8 +196,8 @@ public static class DbSeeder
             "Auth",
             "قالب نام کاربری",
             "User-name template",
-            "چگونه نام کاربری به نام ورود تبدیل شود. مثال: {0}@corp.local یا CN={0},OU=People,DC=corp,DC=local",
-            "How the typed user name becomes a sign-in name. For example {0}@corp.local or CN={0},OU=People,DC=corp,DC=local");
+            "چگونه نام کاربری به نام ورود تبدیل شود. مثال: {0}@corp.local",
+            "How the typed user name becomes a sign-in name. For example {0}@corp.local");
 
         await Upsert(
             SystemSettingKeys.LdapUseTls,
