@@ -150,19 +150,26 @@ public sealed class AuthModeResolver
             ? AuthMode.Ldap
             : AuthMode.Local;
 
+    /// <summary>
+    /// Read the directory settings. Deliberately tiny — host, port, how to qualify the name, and
+    /// whether the connection is secured — because the authenticator binds rather than searches.
+    /// </summary>
     public async Task<LdapOptions> GetLdapOptionsAsync(CancellationToken ct = default)
     {
         var useTlsRaw = await _settings.GetAsync(SystemSettingKeys.LdapUseTls, "false", ct);
         var portRaw = await _settings.GetAsync(SystemSettingKeys.LdapPort, "", ct);
+        var formatRaw = await _settings.GetAsync(SystemSettingKeys.LdapNameFormat, nameof(LdapNameFormat.DomainBackslash), ct);
 
         return new LdapOptions
         {
             Host = (await _settings.GetAsync(SystemSettingKeys.LdapHost, "", ct)).Trim(),
             Port = int.TryParse(portRaw, out var port) && port is > 0 and <= 65535 ? port : 0,
-            BaseDn = (await _settings.GetAsync(SystemSettingKeys.LdapBaseDn, "", ct)).Trim(),
-            BindDn = (await _settings.GetAsync(SystemSettingKeys.LdapBindDn, "", ct)).Trim(),
-            BindPassword = await _settings.GetAsync(SystemSettingKeys.LdapBindPassword, "", ct),
-            UserTemplate = await _settings.GetAsync(SystemSettingKeys.LdapUserTemplate, "{0}", ct),
+            Domain = (await _settings.GetAsync(SystemSettingKeys.LdapDomain, "", ct)).Trim(),
+            // An unrecognised value falls back to the on-premises AD default rather than throwing:
+            // a hand-edited row must not be able to break sign-in entirely.
+            NameFormat = Enum.TryParse<LdapNameFormat>(formatRaw?.Trim(), ignoreCase: true, out var fmt)
+                ? fmt
+                : LdapNameFormat.DomainBackslash,
             UseTls = IsTrue(useTlsRaw)
         };
     }

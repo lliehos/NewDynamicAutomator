@@ -127,6 +127,24 @@
                 }
               </select>
             }
+            else if (s.Key == SystemSettingKeys.LdapNameFormat)
+            {
+              @* Two choices, so a dropdown rather than a text box the administrator can misspell.
+                 The value stored is the enum name, which the resolver parses back. *@
+              var current = string.IsNullOrWhiteSpace(s.Value)
+                ? nameof(Morobot.Contracts.Auth.LdapNameFormat.DomainBackslash)
+                : s.Value.Trim();
+              <select class="form-select" id="setting_@s.Key" name="setting_@s.Key">
+                @foreach (var fmt in Enum.GetValues<Morobot.Contracts.Auth.LdapNameFormat>())
+                {
+                  var isUpn = fmt == Morobot.Contracts.Auth.LdapNameFormat.UserPrincipalName;
+                  var fmtLabel = isUpn
+                    ? L["admin.settings.ldapFormatUpn"]
+                    : L["admin.settings.ldapFormatDomain"];
+                  <option value="@fmt" selected="@(string.Equals(current, fmt.ToString(), StringComparison.OrdinalIgnoreCase))">@fmtLabel</option>
+                }
+              </select>
+            }
             else if (readOnly)
             {
               @* Printed, not put in a disabled box. An empty disabled input looks like a field

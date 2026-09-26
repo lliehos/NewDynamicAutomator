@@ -18,9 +18,41 @@ public enum AuthMode
 }
 
 /// <summary>
+/// How the typed user name is presented to the directory.
+/// </summary>
+/// <remarks>
+/// Active Directory will not accept a bare user name over a simple (Basic) bind — it needs the
+/// account to be qualified with its domain. This enum is that choice, in the two forms AD actually
+/// accepts, so an administrator picks one instead of hand-writing a format string.
+/// </remarks>
+public enum LdapNameFormat
+{
+    /// <summary>
+    /// <c>DOMAIN\user</c> (the classic NetBIOS form). The usual choice for on-premises AD. Shown
+    /// to the signer as the "domain" field; the domain above is used when it is set, otherwise the
+    /// part of the host name before the first dot.
+    /// </summary>
+    DomainBackslash = 0,
+
+    /// <summary>
+    /// <c>user@domain</c> (userPrincipalName). The usual choice for Microsoft 365 / Azure AD and
+    /// for directories that are reached over the internet.
+    /// </summary>
+    UserPrincipalName = 1
+}
+
+/// <summary>
 /// Directory settings, resolved from the settings table rather than appsettings so an
 /// administrator can change them without editing a file on the server.
 /// </summary>
+/// <remarks>
+/// Deliberately small: a sign-in bind needs to know WHERE the directory is (host, port), HOW to
+/// present the name (the format below) and WHETHER the connection is secured (TLS). Anything else
+/// — a search base, a service account, a DN template — belongs to a directory *search*, and this
+/// authenticator does not search: it binds. Carrying those fields anyway meant an administrator
+/// filled in four boxes that no code ever read, and a half-filled configuration looked like a
+/// working one.
+/// </remarks>
 public sealed class LdapOptions
 {
     public const int DefaultPort = 389;
@@ -35,21 +67,21 @@ public sealed class LdapOptions
     /// </summary>
     public int Port { get; set; }
 
-    /// <summary>Base DN for searches, e.g. <c>DC=corp,DC=local</c>.</summary>
-    public string BaseDn { get; set; } = string.Empty;
+    /// <summary>
+    /// The AD domain to qualify the account with, e.g. <c>corp</c> or <c>corp.local</c>. Only used
+    /// by <see cref="LdapNameFormat.DomainBackslash"/>, and optional: when blank the part of
+    /// <see cref="Host"/> before the first dot is used, so a normal on-premises install that
+    /// points at the domain controller needs nothing here.
+    /// </summary>
+    public string Domain { get; set; } = string.Empty;
 
-    /// <summary>Account used to search when the directory refuses anonymous binds.</summary>
-    public string BindDn { get; set; } = string.Empty;
-
-    public string BindPassword { get; set; } = string.Empty;
+    /// <summary>Which of the two forms AD accepts is used for the sign-in name.</summary>
+    public LdapNameFormat NameFormat { get; set; } = LdapNameFormat.DomainBackslash;
 
     /// <summary>
-    /// Turns the typed user name into a sign-in name, e.g. <c>{0}@corp.local</c> or
-    /// <c>CN={0},OU=People,DC=corp,DC=local</c>. Without a template the name is used as typed.
+    /// Require TLS (LDAPS). Uses the TLS port when no explicit port was set. Worth keeping on: a
+    /// simple bind sends the password, and without TLS it crosses the network in the clear.
     /// </summary>
-    public string UserTemplate { get; set; } = "{0}";
-
-    /// <summary>Require TLS. Uses LDAPS on the TLS port when no explicit port was set.</summary>
     public bool UseTls { get; set; }
 
     /// <summary>Effective port: the configured one, or the transport's conventional default.</summary>
@@ -62,12 +94,38 @@ public sealed class LdapOptions
     public bool IsUsable =>
         !string.IsNullOrWhiteSpace(Host) && Uri.CheckHostName(Host.Trim()) != UriHostNameType.Unknown;
 
-    /// <summary>Apply the user-name template, falling back to the name as typed.</summary>
-    public string ApplyUserTemplate(string userName)
+    /// <summary>
+    /// The domain to qualify with: the configured one, or the host name up to its first dot.
+    /// </summary>
+    public string EffectiveDomain
     {
-        if (string.IsNullOrWhiteSpace(UserTemplate) || !UserTemplate.Contains("{0}"))
-            return userName;
-        return string.Format(UserTemplate, userName);
+        get
+        {
+            var configured = Domain?.Trim().Trim('\\', '@');
+            if (!string.IsNullOrEmpty(configured)) return configured;
+            var host = Host?.Trim() ?? "";
+            var dot = host.IndexOf('.');
+            return dot > 0 ? host[..dot] : host;
+        }
+    }
+
+    /// <summary>
+    /// Turn the typed user name into the sign-in name AD expects for a simple bind.
+    /// </summary>
+    /// <remarks>
+    /// A name that is already qualified is passed through untouched, so someone may type
+    /// <c>CORP\ali</c> or <c>ali@corp.local</c> and get exactly what they typed rather than a
+    /// doubled prefix.
+    /// </remarks>
+    public string BuildSignInName(string userName)
+    {
+        var name = (userName ?? "").Trim();
+        if (string.IsNullOrEmpty(name)) return name;
+        if (name.Contains('\\') || name.Contains('@')) return name;
+
+        return NameFormat == LdapNameFormat.UserPrincipalName
+            ? $"{name}@{EffectiveDomain}"
+            : $"{EffectiveDomain}\\{name}";
     }
 }
 

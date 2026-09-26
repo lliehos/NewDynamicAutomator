@@ -32,7 +32,7 @@ public sealed class LdapAuthenticator : ILdapAuthenticator
         if (!options.IsUsable || string.IsNullOrWhiteSpace(userName) || string.IsNullOrEmpty(password))
             return LdapAuthResult.InvalidCredentials;
 
-        var signInName = options.ApplyUserTemplate(userName.Trim());
+        var signInName = options.BuildSignInName(userName);
 
         try
         {
@@ -52,15 +52,19 @@ public sealed class LdapAuthenticator : ILdapAuthenticator
             var identifier = new LdapDirectoryIdentifier(options.Host.Trim(), options.EffectivePort, false, false);
             connection = new LdapConnection(identifier)
             {
+                // A simple bind: the credentials being checked ARE the bind credentials. This is
+                // why no service account is configured — there is no separate search to perform.
                 AuthType = AuthType.Basic,
                 // Fail fast: a wrong host must not make the login page hang for the default
                 // protocol timeout, which is long enough to look like a broken server.
                 Timeout = TimeSpan.FromSeconds(10)
             };
-            // Disable certificate checks only when TLS was not requested; with TLS on, the
-            // certificate is validated, because silently accepting any certificate is exactly the
-            // attack TLS was turned on to prevent.
             connection.SessionOptions.ProtocolVersion = 3;
+            // Secure or not is the administrator's one transport decision. With TLS on the
+            // connection is LDAPS and the server certificate is validated, because silently
+            // accepting any certificate is exactly the attack TLS was turned on to prevent; with
+            // it off the password crosses the network in the clear, which is the administrator's
+            // explicit choice.
             if (options.UseTls)
             {
                 connection.SessionOptions.SecureSocketLayer = true;

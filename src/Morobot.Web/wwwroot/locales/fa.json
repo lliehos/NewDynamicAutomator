@@ -539,7 +539,9 @@
       "lastChangedBy": "آخرین تغییر:",
       "neverChanged": "از زمان نصب تغییر نکرده است",
       "unknownUser": "کاربر نامشخص",
-      "diagramColorSwitch": "اعمال"
+      "diagramColorSwitch": "اعمال",
+      "ldapFormatDomain": "دامنه\\کاربر (اکتیو دایرکتوری داخلی)",
+      "ldapFormatUpn": "کاربر@دامنه (مایکروسافت ۳۶۵ / Azure AD)"
     },
     "license": {
       "title": "لایسنس",

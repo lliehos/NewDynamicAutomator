@@ -539,7 +539,9 @@
       "lastChangedBy": "Last changed by:",
       "neverChanged": "Unchanged since setup",
       "unknownUser": "unknown user",
-      "diagramColorSwitch": "Apply"
+      "diagramColorSwitch": "Apply",
+      "ldapFormatDomain": "domain\\user (on-premises AD)",
+      "ldapFormatUpn": "user@domain (Microsoft 365 / Azure AD)"
     },
     "license": {
       "title": "License",

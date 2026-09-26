@@ -85,23 +85,33 @@ public static class SystemSettingKeys
         AuthLdapEnabled,
         LdapHost,
         LdapPort,
-        LdapBindDn,
-        LdapBindPassword,
-        LdapBaseDn,
-        LdapUserTemplate,
+        LdapDomain,
+        LdapNameFormat,
         LdapUseTls,
         DefaultRegisterPlan
     };
 
     /// <summary>
     /// Settings the Auth group must never render: the legacy AuthMode row offers a second,
-    /// contradictory way to choose what the two switches already decide. It is filtered out here
-    /// rather than in the view so the group's visible count and the page agree.
+    /// contradictory way to choose what the two switches already decide, and the removed directory
+    /// keys belong to a search this authenticator does not perform. Filtered out here rather than in
+    /// the view so the group's visible count and the page agree.
     /// </summary>
-    public static readonly IReadOnlySet<string> SupersededKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        AuthMode
-    };
+    /// <remarks>
+    /// The removed key names are spelled out rather than referencing <see cref="RemovedLdapKeys"/>:
+    /// static field initialisers run in declaration order, so a reference to a field declared
+    /// further down the file would still be null here.
+    /// </remarks>
+    public static readonly IReadOnlySet<string> SupersededKeys = new HashSet<string>(
+        new[]
+        {
+            AuthMode,
+            "LdapBaseDn",
+            "LdapBindDn",
+            "LdapBindPassword",
+            "LdapUserTemplate"
+        },
+        StringComparer.OrdinalIgnoreCase);
 
     /// <summary>True when a key is obsolete and must not be shown on the settings page.</summary>
     public static bool IsSuperseded(string? key) =>
@@ -115,21 +125,45 @@ public static class SystemSettingKeys
         return index < 0 ? 999 : index;
     }
 
+    /// <summary>
+    /// Directory keys that were removed because nothing ever read them: the authenticator binds,
+    /// it does not search, so a search base and a service account had no effect. Kept as names so
+    /// the settings page and the cleanup can recognise and delete stale rows.
+    /// </summary>
+    /// <remarks>
+    /// Declared here, above <see cref="SupersededKeys"/>, because static field initialisers run in
+    /// declaration order — referring to this from a field declared earlier would read null.
+    /// </remarks>
+    public static readonly IReadOnlyList<string> RemovedLdapKeys = new[]
+    {
+        "LdapBaseDn",
+        "LdapBindDn",
+        "LdapBindPassword",
+        "LdapUserTemplate"
+    };
+
+    /// <summary>True when a key is a directory setting that is no longer used.</summary>
+    public static bool IsRemovedLdapKey(string? key) =>
+        !string.IsNullOrWhiteSpace(key) && RemovedLdapKeys.Contains(key, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Directory host name or IP, without a scheme or port.</summary>
     public const string LdapHost = "LdapHost";
     public const string LdapPort = "LdapPort";
-    /// <summary>Base DN searches start from, e.g. "DC=corp,DC=local".</summary>
-    public const string LdapBaseDn = "LdapBaseDn";
-    /// <summary>Bind DN used to search the directory when anonymous binding is not allowed.</summary>
-    public const string LdapBindDn = "LdapBindDn";
     /// <summary>
-    /// Bind password. Sensitive: the settings page shows it masked and leaving the field untouched
-    /// keeps the stored value, so re-saving the form cannot blank a working configuration.
+    /// The AD domain used to qualify the account, e.g. "corp" or "corp.local". Optional: blank
+    /// means the part of the host name before the first dot is used, which is right for a normal
+    /// on-premises install that points at the domain controller.
     /// </summary>
-    public const string LdapBindPassword = "LdapBindPassword";
-    /// <summary>Template that turns the typed user name into a DN, e.g. "{0}@corp.local".</summary>
-    public const string LdapUserTemplate = "LdapUserTemplate";
-    /// <summary>"true" when the connection must use TLS (ldaps or StartTLS).</summary>
+    public const string LdapDomain = "LdapDomain";
+    /// <summary>
+    /// Which form of qualified name the directory is given: "DomainBackslash" (DOMAIN\user, the
+    /// on-premises AD default) or "UserPrincipalName" (user@domain, the Microsoft 365 form).
+    /// </summary>
+    public const string LdapNameFormat = "LdapNameFormat";
+    /// <summary>
+    /// "true" when the connection must be secured with TLS (LDAPS). A simple bind sends the
+    /// password, so leaving this off sends it in the clear — the administrator's explicit choice.
+    /// </summary>
     public const string LdapUseTls = "LdapUseTls";
 
     // ── Diagram defaults ──
@@ -259,15 +293,17 @@ public static class SystemSettingKeys
         !string.IsNullOrWhiteSpace(key) && ReadOnlyForAdmin.Contains(key);
 
     /// <summary>
-    /// Keys whose value is a secret. Admin → Settings never renders these back to the browser (a
-    /// secret written into the page is one screenshot, one proxy log or one shared screen away
-    /// from leaking), and an empty submission keeps the stored value rather than clearing it, so
-    /// re-saving the form to change an unrelated field cannot silently break directory sign-in.
+    /// Keys whose value is a secret, so Admin → Settings never renders it back to the browser (a
+    /// secret written into the page is one screenshot, one proxy log or one shared screen away from
+    /// leaking), and an empty submission keeps the stored value rather than clearing it, so
+    /// re-saving the form to change an unrelated field cannot silently wipe it.
     /// </summary>
-    public static readonly IReadOnlySet<string> SensitiveForAdmin = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        LdapBindPassword
-    };
+    /// <remarks>
+    /// Empty today: the directory bind password was the only entry, and a simple bind uses the
+    /// credentials being checked rather than a stored service account, so there is nothing left to
+    /// keep secret. The mechanism stays because the next secret setting will need it.
+    /// </remarks>
+    public static readonly IReadOnlySet<string> SensitiveForAdmin = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>True when the value is a secret that must not be rendered back to the browser.</summary>
     public static bool IsSensitiveForAdmin(string? key) =>
@@ -275,17 +311,14 @@ public static class SystemSettingKeys
 
     /// <summary>
     /// Directory fields that only make sense while the LDAP switch is on. The settings page hides
-    /// them when it is off, so the Auth card stays readable for the common local-only install
-    /// instead of showing five empty boxes that do nothing.
+    /// them when it is off, so the Auth card stays readable for the common local-only install.
     /// </summary>
     public static readonly IReadOnlySet<string> LdapOnlyKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         LdapHost,
         LdapPort,
-        LdapBaseDn,
-        LdapBindDn,
-        LdapBindPassword,
-        LdapUserTemplate,
+        LdapDomain,
+        LdapNameFormat,
         LdapUseTls
     };
 

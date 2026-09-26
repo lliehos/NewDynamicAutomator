@@ -151,62 +151,46 @@ public static class DbSeeder
             SystemSettingKeys.LdapHost,
             "",
             "Auth",
-            "هاست پوشه (LDAP)",
-            "Directory host (LDAP)",
-            "نام یا IP سرور پوشه؛ بدون http و بدون پورت.",
-            "Host name or IP of the directory; no scheme, no port.");
+            "هاست اکتیو دایرکتوری",
+            "Active Directory host",
+            "نام یا IP سرور دامین‌کنترلر؛ بدون http و بدون پورت.",
+            "Host name or IP of the domain controller; no scheme, no port.");
 
         await Upsert(
             SystemSettingKeys.LdapPort,
             "",
             "Auth",
-            "پورت پوشه (LDAP)",
-            "Directory port (LDAP)",
-            "خالی = پورت پیش‌فرض بر اساس TLS (389 یا 636).",
-            "Blank = the conventional port for the transport (389 or 636).");
-        await Upsert(
-            SystemSettingKeys.LdapBaseDn,
-            "",
-            "Auth",
-            "Base DN",
-            "Base DN",
-            "مثال: DC=corp,DC=local — نقطهٔ شروع جست‌وجو در پوشه.",
-            "For example DC=corp,DC=local — where searches in the directory start.");
-        await Upsert(
-            SystemSettingKeys.LdapBindDn,
-            "",
-            "Auth",
-            "Bind DN",
-            "Bind DN",
-            "حساب سرویس برای اتصال به پوشه (در صورت عدم اجازهٔ اتصال ناشناس).",
-            "Service account used to reach the directory when anonymous binding is not allowed.");
+            "پورت",
+            "Port",
+            "خالی = پورت پیش‌فرض بر اساس حالت امن (389 بدون TLS، 636 با TLS).",
+            "Blank = the conventional port for the transport (389 plain, 636 with TLS).");
 
         await Upsert(
-            SystemSettingKeys.LdapBindPassword,
+            SystemSettingKeys.LdapDomain,
             "",
             "Auth",
-            "رمز Bind",
-            "Bind password",
-            "رمز حساب سرویس. برای امنیت به‌صورت پوشیده نمایش داده می‌شود؛ خالی گذاشتن یعنی بدون تغییر.",
-            "Service-account password. Shown masked for safety; leaving it blank keeps the stored value.");
+            "دامنه",
+            "Domain",
+            "دامنهٔ اکتیو دایرکتوری، مثلاً corp یا corp.local. خالی بگذارید تا از هاست استخراج شود.",
+            "The Active Directory domain, e.g. corp or corp.local. Leave blank to take it from the host.");
 
         await Upsert(
-            SystemSettingKeys.LdapUserTemplate,
-            "{0}",
+            SystemSettingKeys.LdapNameFormat,
+            nameof(LdapNameFormat.DomainBackslash),
             "Auth",
-            "قالب نام کاربری",
-            "User-name template",
-            "چگونه نام کاربری به نام ورود تبدیل شود. مثال: {0}@corp.local",
-            "How the typed user name becomes a sign-in name. For example {0}@corp.local");
+            "قالب نام ورود",
+            "Sign-in name format",
+            "شکلی که نام کاربر به اکتیو دایرکتوری داده می‌شود. برای دامین داخلی «دامنه\\کاربر» و برای مایکروسافت ۳۶۵ «کاربر@دامنه» را انتخاب کنید.",
+            "How the user name is given to Active Directory. Choose domain\\user for an on-premises domain, user@domain for Microsoft 365.");
 
         await Upsert(
             SystemSettingKeys.LdapUseTls,
             "false",
             "Auth",
-            "استفاده از TLS",
-            "Use TLS",
-            "برای LDAPS یا StartTLS فعال کنید. بدون TLS رمز به‌صورت متن ساده روی شبکه می‌رود.",
-            "Enable for LDAPS or StartTLS. Without TLS the password crosses the network in the clear.");
+            "اتصال امن (TLS)",
+            "Secure connection (TLS)",
+            "با روشن بودن، اتصال LDAPS برقرار می‌شود و گواهی سرور بررسی می‌گردد. خاموش بودن، رمز را روی شبکه به‌صورت متن ساده می‌فرستد.",
+            "When on, the connection uses LDAPS and the server certificate is validated. When off, the password crosses the network in the clear.");
 
         await Upsert(
             SystemSettingKeys.UpdateServerUrl,
