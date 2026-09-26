@@ -1178,6 +1178,11 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
   // The process MUST keep a root start. Without it the run has no entry point and the
   // process-level settings have no node to live on. Recreate it from the graph's own values
   // rather than trusting the base to have kept it.
+  //
+  // Every repeat field the engine reads has to be carried over, not just the common ones. A
+  // partial copy silently changed behaviour: a process set to run source rows 3..5 came back as
+  // "whole source", and a dedicated-row start lost its pointer, because the rebuilt node simply
+  // had no such properties. When adding a repeat field to the start node, add it here too.
   if (!processStartNode(nodes)) {
     nodes.unshift({
       id: nodes.some((n) => n.id === "start") ? "start-root" : "start",
@@ -1186,13 +1191,19 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
       x: 40,
       y: 220,
       repeatSourceType: base.repeatSourceType || "None",
-      loopCount: 1,
-      moveLoop: false,
+      loopCount: base.loopCount ?? 1,
+      moveLoop: base.moveLoop === true,
       stepDelayMs: base.stepDelayMs ?? 0,
       loopBackLimit: base.loopBackLimit,
       ignorePlayError: base.ignorePlayError !== false,
       highlightColor: base.highlightColor,
-      dataSourceId: base.dataSourceId ?? null
+      dataSourceId: base.dataSourceId ?? null,
+      // Range over the repeat source, and the dedicated-row pointer.
+      repeatFromIndex: base.repeatFromIndex ?? null,
+      repeatToIndex: base.repeatToIndex ?? null,
+      dedicatedRow: base.dedicatedRow === true,
+      rowIndexType: base.rowIndexType || "None",
+      specificRowIndex: base.specificRowIndex ?? null
     });
   }
 

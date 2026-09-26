@@ -3758,11 +3758,22 @@ async function expandGroupByRepeatSource(tabId, groupOrStart, graph) {
       appendPlayLog("warn", "منبع گروه ردیفی ندارد؛ یک‌بار اجرا می‌شود.");
       return { type: "DataSource", indices: [0], total: 1, label: "منبع (بدون ردیف)" };
     }
+    // Honour the group start's own from/to range, exactly as the process-level start does.
+    // Without this a group set to repeat over rows 3..5 ran the whole source, so the two repeat
+    // paths disagreed about the same fields and the editor's range box was inert for groups.
+    const allIndices = Array.from({ length: count }, (_, i) => i);
+    const indices = applyIndexRange(allIndices, node.repeatFromIndex, node.repeatToIndex);
+    const rangeNote = (indices.length !== count)
+      ? ` (ردیف ${indices[0] + 1} تا ${indices[indices.length - 1] + 1})`
+      : "";
     return {
       type: "DataSource",
-      indices: Array.from({ length: count }, (_, i) => i),
-      total: count,
-      label: `منبع «${ds?.title || dsId}» × ${count}`
+      indices,
+      total: indices.length,
+      sourceRowCount: count,
+      repeatFromIndex: node.repeatFromIndex ?? null,
+      repeatToIndex: node.repeatToIndex ?? null,
+      label: `منبع «${ds?.title || dsId}» × ${indices.length}${rangeNote}`
     };
   }
   if (type === "Elements") {

@@ -58,7 +58,12 @@ public class TemplateService
                 t.UpdatedAtUtc,
                 CreatorUserName = t.Creator != null ? t.Creator.UserName : null,
                 t.GraphJson,
-                AttachedProcessCount = t.Processes.Count,
+                // The mother process — the row an author edits to change every child. Excluding the
+                // mother from the attachment count is deliberate: the mother is the SOURCE, not a
+                // child, and counting it would overstate how many processes follow the template.
+                t.SourceProcessId,
+                SourceProcessTitle = t.SourceProcess != null ? t.SourceProcess.Title : null,
+                AttachedProcessCount = t.Processes.Count(p => t.SourceProcessId == null || p.Id != t.SourceProcessId),
                 t.IsActive
             })
             .ToListAsync(ct);
@@ -76,7 +81,9 @@ public class TemplateService
                 CreatorUserName = t.CreatorUserName,
                 AttachedProcessCount = t.AttachedProcessCount,
                 GroupCount = groups,
-                StepCount = steps
+                StepCount = steps,
+                SourceProcessId = t.SourceProcessId,
+                SourceProcessTitle = t.SourceProcessTitle
             };
         }).ToList();
     }
@@ -250,7 +257,11 @@ public class TemplateService
         var process = new Process
         {
             Title = title,
-            GraphJson = template.GraphJson,
+            // Take the template's STRUCTURE, not its run settings. Copying the graph verbatim gave
+            // every new child the mother's data source and row range, so a child nobody had edited
+            // repeated the mother's rows — the opposite of what a child is for. The start node's
+            // own values are cleared here and belong to this process from now on.
+            GraphJson = GraphJsonHelper.NewChildGraphFromTemplate(template.GraphJson),
             CreatorUserId = userId > 0 ? userId : null,
             LastEditorUserId = userId > 0 ? userId : null,
             CreatedAtUtc = DateTime.UtcNow,

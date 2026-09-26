@@ -287,4 +287,63 @@ public static class GraphJsonHelper
         var gid = node["groupNodeId"]?.GetValue<string>() ?? node["GroupNodeId"]?.GetValue<string>();
         return !string.IsNullOrWhiteSpace(gid);
     }
+
+    /// <summary>
+    /// Build a NEW child's graph from a template: the template's structure, but a start node that
+    /// belongs to the child and is not yet pointed at anything.
+    /// </summary>
+    /// <remarks>
+    /// A child created from a template must not inherit the mother's start-node values. Those are
+    /// the process's own run settings — its data source, its repeat range, its delay — and the whole
+    /// reason a child exists is to run on a different source. Copying the template's graph verbatim
+    /// (which is what <c>CreateProcessAsync</c> used to do) handed every new child the mother's
+    /// source and row range, so a child that was never edited silently repeated the mother's rows;
+    /// and because the range then matched the mother's, nothing looked wrong until the child was
+    /// expected to differ.
+    ///
+    /// The structure is still the template's, and the repeat <i>mode</i> is kept so the child starts
+    /// configured the same way — only the values that must differ between children are cleared.
+    /// </remarks>
+    public static string NewChildGraphFromTemplate(string? templateGraphJson)
+    {
+        var templateGraph = UnwrapEnvelope(templateGraphJson);
+        if (string.IsNullOrWhiteSpace(templateGraph)) return templateGraphJson ?? string.Empty;
+
+        try
+        {
+            var root = JsonNode.Parse(templateGraph) as JsonObject;
+            if (root is null) return templateGraph;
+
+            var nodes = root["nodes"] as JsonArray ?? root["Nodes"] as JsonArray;
+            if (nodes is null) return templateGraph;
+
+            var isLower = root["nodes"] is not null;
+
+            var startIndex = -1;
+            for (var i = 0; i < nodes.Count; i++)
+            {
+                if (nodes[i] is JsonObject n && IsKind(n, "start") && !HasGroup(n))
+                {
+                    startIndex = i;
+                    break;
+                }
+            }
+            if (startIndex < 0) return templateGraph;
+            if (nodes[startIndex] is not JsonObject templateStart) return templateGraph;
+
+            var childStart = (JsonObject)JsonNode.Parse(templateStart.ToJsonString())!;
+            childStart["dataSourceId"] = null;
+            childStart["repeatFromIndex"] = null;
+            childStart["repeatToIndex"] = null;
+            childStart["specificRowIndex"] = null;
+
+            nodes[startIndex] = childStart;
+            if (!isLower && root["Nodes"] is not null) root["Nodes"] = nodes;
+            return root.ToJsonString();
+        }
+        catch (JsonException)
+        {
+            return templateGraph;
+        }
+    }
 }

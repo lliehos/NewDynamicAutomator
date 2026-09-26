@@ -18,12 +18,12 @@
   <title>@L["editor.title"] — @brandHead.AppName</title>
   <partial name="_BrandHead" model="brandHead" />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="~/css/da-notify.css?v=palette-4" />
-  <link rel="stylesheet" href="~/css/da-switch.css?v=1" />
-  <link rel="stylesheet" href="~/css/da-cropper.css?v=1" />
-  <link rel="stylesheet" href="~/css/da-avatar.css?v=1" />
-  <link rel="stylesheet" href="~/editor/flow.css?v=repeat-range-1" />
-  <link rel="stylesheet" href="~/editor/flow-child.css?v=4" />
+  <link rel="stylesheet" href="~/css/da-notify.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-switch.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-cropper.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-avatar.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/editor/flow.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/editor/flow-child.css?v=@V.AssetVersion" />
   <style>
     html, body { margin: 0; direction: @dir; }
     html.flow-rtl, html.flow-rtl body { font-family: Vazirmatn, Tahoma, sans-serif; }
@@ -208,16 +208,16 @@
     window.__DA_ENTITLEMENTS__ = @Html.Raw(ViewBag.EntitlementsJson ?? "{}");
     window.__DA_DIAGRAM_DEFAULTS__ = @Html.Raw(ViewBag.DiagramDefaultsJson ?? "{}");
   </script>
-  <script src="~/js/i18n.js?v=4"></script>
-  <script src="~/js/da-notify.js?v=prompt-1"></script>
-  <script src="~/js/entitlements.js?v=share-1"></script>
-  <script src="~/js/da-device.js?v=1"></script>
-  <script src="~/js/da-telemetry.js?v=1"></script>
-  <script src="~/js/da-crypto.js?v=3"></script>
-  <script src="~/js/da-secure-store.js?v=5"></script>
-  <script src="~/js/extension-gate.js?v=plan-1"></script>
-  <script src="~/js/da-switch.js?v=1"></script>
-  <script src="~/js/da-cropper.js?v=1"></script>
-  <script src="~/editor/flow.js?v=child-mode-3"></script>
+  <script src="~/js/i18n.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-notify.js?v=@V.AssetVersion"></script>
+  <script src="~/js/entitlements.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-device.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-telemetry.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-crypto.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-secure-store.js?v=@V.AssetVersion"></script>
+  <script src="~/js/extension-gate.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-switch.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-cropper.js?v=@V.AssetVersion"></script>
+  <script src="~/editor/flow.js?v=@V.AssetVersion"></script>
 </body>
 </html>

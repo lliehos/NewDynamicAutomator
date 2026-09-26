@@ -27,6 +27,7 @@
             <th data-i18n="panel.colTitle">@L["panel.colTitle"]</th>
             <th data-i18n="panel.templateVersion">@L["panel.templateVersion"]</th>
             <th data-i18n="panel.templateSteps">@L["panel.templateSteps"]</th>
+            <th data-i18n="panel.templateMother">@L["panel.templateMother"]</th>
             <th data-i18n="panel.templateAttached">@L["panel.templateAttached"]</th>
             <th class="text-nowrap" data-i18n="panel.templateUpdated">@L["panel.templateUpdated"]</th>
             <th data-i18n="panel.templateCreator">@L["panel.templateCreator"]</th>
@@ -34,7 +35,7 @@
           </tr>
         </thead>
         <tbody id="da-tpl-rows">
-          <tr><td colspan="7" class="text-center text-muted py-6" data-i18n="common.loading">@L["common.loading"]</td></tr>
+          <tr><td colspan="8" class="text-center text-muted py-6" data-i18n="common.loading">@L["common.loading"]</td></tr>
         </tbody>
       </table>
     </div>
@@ -90,7 +91,7 @@
 </div>
 
 @section Scripts {
-<script src="~/js/local-templates.js?v=tpl-2"></script>
+<script src="~/js/local-templates.js?v=@V.AssetVersion"></script>
 <script>
   // Render the management table. Uses the same /api/templates feed the picker menu reads, so the
   // counts here and the counts in the menu can never disagree.
@@ -118,7 +119,7 @@
       try {
         const rows = await (await fetch("/api/templates", { credentials: "same-origin" })).json();
         if (!rows || !rows.length) {
-          body.innerHTML = `<tr><td colspan="7" class="text-center text-muted py-6">${esc(t("panel.templateNone"))}</td></tr>`;
+          body.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-6">${esc(t("panel.templateNone"))}</td></tr>`;
           return;
         }
         body.innerHTML = rows.map((r) => `
@@ -129,6 +130,17 @@
             </td>
             <td>${esc(String(r.version || 1))}</td>
             <td>${esc(String(r.stepCount || 0))}</td>
+            <td>${
+              // The mother process: the row an author must edit to change every child. Linked
+              // straight to its editor, because naming it without a way to open it just moves the
+              // search. A dash means the mother was deleted and the template now stands alone.
+              r.sourceProcessId != null
+                ? `<a class="da-tpl-mother" href="/Panel/Tasks/Editor/${encodeURIComponent(String(r.sourceProcessId))}">
+                     <i class="ti ti-arrow-up-right" aria-hidden="true"></i>
+                     <span>${esc(r.sourceProcessTitle || ("#" + r.sourceProcessId))}</span>
+                   </a>`
+                : `<span class="text-muted" title="${esc(t("panel.templateNoMother"))}">—</span>`
+            }</td>
             <td>${esc(String(r.attachedProcessCount || 0))}</td>
             <td class="text-nowrap">${esc(fmt(r.updatedAtUtc))}</td>
             <td>${esc(r.creatorUserName || "—")}</td>
@@ -151,7 +163,7 @@
             </td>
           </tr>`).join("");
       } catch (err) {
-        body.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-6">${esc(String(err && err.message || err))}</td></tr>`;
+        body.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-6">${esc(String(err && err.message || err))}</td></tr>`;
       }
     }
 

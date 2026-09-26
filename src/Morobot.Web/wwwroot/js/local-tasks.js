@@ -245,6 +245,20 @@
     return JSON.parse(JSON.stringify(obj));
   }
 
+  /**
+   * Build the `.mrbt` payload for a process.
+   *
+   * A file is intentionally self-contained: it carries the process's structure and nothing about
+   * where that structure came from. The template link is deliberately NOT exported, because a file
+   * can be handed to someone else, opened on another deployment, or restored long after the
+   * template was retired — and in all three cases a dangling `templateId` would either be
+   * meaningless or silently re-attach the process to a template it does not belong to. Re-importing
+   * therefore yields a standalone process, which is exactly what a portable file should mean.
+   *
+   * The consequence is worth stating for the UI: importing over a CHILD detaches it from its
+   * mother, because the imported graph is now the process's own structure rather than a projection
+   * of the template. That has to be confirmed with the user, not done silently.
+   */
   function exportTaskPayload(task) {
     return {
       format: "morobot-task",
@@ -318,6 +332,15 @@
     return task;
   }
 
+  /**
+   * Replace a process's content with an imported file.
+   *
+   * The import replaces the STRUCTURE wholesale, which means the process stops being a projection
+   * of any template: its graph is now its own. So the template link is cleared here rather than
+   * left hanging — keeping `templateId` would claim an attachment the very next cascade would
+   * overwrite, undoing the import without telling anyone. Callers must warn the user first when the
+   * target is a child; see `confirmImportDetaches`.
+   */
   function applyImportToTask(taskId, imported) {
     const tasks = readTasks();
     const idx = findTaskIndex(tasks, taskId);
@@ -338,9 +361,18 @@
       sharedUsers: Array.isArray(imported.sharedUsers) ? imported.sharedUsers : (current.sharedUsers || []),
       graph
     };
+    // Detach: the imported graph is this process's own structure now, so any template link would
+    // be a claim the next cascade would silently overwrite.
+    if (tasks[idx].templateId != null) {
+      tasks[idx].templateId = null;
+      tasks[idx].templateTitle = "";
+      tasks[idx].templateBehind = false;
+      tasks[idx].sourceProcessId = null;
+      tasks[idx].sourceProcessTitle = "";
+    }
     writeTasks(tasks);
     render(tasks);
-    notifyHome(`فرآیند «${tasks[idx].title}» از فایل به‌روز شد.`, "success");
+    notifyHome(t("tasks.imported", { title: tasks[idx].title }) || `فرآیند «${tasks[idx].title}» از فایل به‌روز شد.`, "success");
   }
 
   function cloneTask(task) {
@@ -557,7 +589,18 @@
         try {
           const text = await file.text();
           const imported = await parseImportedTask(text);
-          if (!confirm(`محتوای فرآیند با فایل «${file.name}» جایگزین شود؟`)) return;
+          /**
+           * Importing over a template child detaches it — the imported graph becomes the process's
+           * own structure, so its template link is cleared. That is a real, irreversible decision
+           * (the child stops following its mother), so it is named in the confirmation rather than
+           * buried in the generic "replace the content?" question.
+           */
+          const row = (readTasks() || []).map(normalizeTask).find((r) => String(r.id) === String(id));
+          const isChild = row && row.templateId != null;
+          const lead = isChild
+            ? t("tasks.importDetachConfirm", { name: file.name, template: row.templateTitle || "—" })
+            : t("tasks.importConfirm", { name: file.name });
+          if (!confirm(lead)) return;
           applyImportToTask(id, imported);
         } catch (e) {
           notifyHome(e.message || "خطا در بارگذاری فایل", "error");
@@ -690,6 +733,24 @@ function showProcessDetails(taskId) {
     ["panel.colDataEdit", formatEditMeta(editMetaIso(row, "data"), editMetaUser(row, "data"))],
     ["panel.colLastRun", formatLastRun(row)]
   ];
+
+  /**
+   * Name the template relationship in the details dialog, because it is the one fact that decides
+   * where the user has to go to change this process: a child is locked and follows its mother,
+   * while the mother is the row that drives every child. Shown for both roles so the answer is
+   * never "look at the diagram and work it out".
+   */
+  if (row.templateId) {
+    rows.splice(1, 0, ["panel.colTemplate", escapeHtml(row.templateTitle || "—")]);
+    rows.splice(2, 0, [
+      "tasks.motherProcess",
+      row.sourceProcessTitle
+        ? `<a href="/Panel/Tasks/Editor/${encodeURIComponent(String(row.sourceProcessId ?? ""))}">${escapeHtml(row.sourceProcessTitle)}</a>`
+        : escapeHtml(t("tasks.templateNoMother"))
+    ]);
+  } else if (row.isTemplateSource) {
+    rows.splice(1, 0, ["panel.colTemplate", escapeHtml(t("tasks.templateSourceLabel"))]);
+  }
 
   const bodyHtml = `<dl class="da-details-list">${rows.map(([key, value]) => `
     <div class="da-details-row">
@@ -1433,7 +1494,12 @@ function dataSourceSafeFileName(ds) {
                         data-tpl-id="${escapeHtml(String(row.templateId))}"
                         data-task-id="${tid}"
                         data-task-title="${escapeHtml(row.title || "")}"
-                        title="${escapeHtml(row.templateBehind ? t("tasks.templateBehind") : t("tasks.templateCurrent"))}">
+                        title="${escapeHtml([
+                          row.templateBehind ? t("tasks.templateBehind") : t("tasks.templateCurrent"),
+                          row.sourceProcessTitle
+                            ? t("tasks.templateMotherLine", { name: row.sourceProcessTitle })
+                            : t("tasks.templateNoMother")
+                        ].join("\n"))}">
                        <i class="ti ti-copy" aria-hidden="true"></i>
                        <span>${escapeHtml(row.templateTitle || "")}</span>
                        ${row.templateBehind ? '<i class="ti ti-alert-triangle" aria-hidden="true"></i>' : ""}
@@ -1647,6 +1713,10 @@ function dataSourceSafeFileName(ds) {
       templateTitle: row.templateTitle || "",
       templateBehind: !!row.templateBehind,
       isTemplateSource: !!row.isTemplateSource,
+      // The mother process itself, for a child: its name and id, so the list can say which process
+      // to edit instead of only naming the template.
+      sourceProcessId: row.sourceProcessId ?? null,
+      sourceProcessTitle: row.sourceProcessTitle || "",
       createdBy: row.ownerUserName || "",
       sharedUsers: [],
       sharedWithCount: row.sharedWithCount || 0,

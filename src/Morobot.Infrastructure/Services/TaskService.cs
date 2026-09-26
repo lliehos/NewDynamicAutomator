@@ -70,6 +70,11 @@ public class TaskService
                 TemplateTitle = a.Process.Template != null ? a.Process.Template.Title : null,
                 a.Process.TemplateVersion,
                 CurrentTemplateVersion = a.Process.Template != null ? (int?)a.Process.Template.Version : null,
+                // The mother is reached through the template's source link: a child holds a
+                // TemplateId, so Template.SourceProcess is the mother process itself.
+                SourceProcessId = a.Process.Template != null ? a.Process.Template.SourceProcessId : null,
+                SourceProcessTitle = a.Process.Template != null && a.Process.Template.SourceProcess != null
+                    ? a.Process.Template.SourceProcess.Title : null,
                 // The mother is the template's SOURCE, and deliberately carries no TemplateId of
                 // its own — so this has to go through SourceOfTemplate. Testing TemplateId would
                 // report false for the one row the badge exists to mark.
@@ -116,6 +121,8 @@ public class TaskService
                 SharedWithCount = a.SharedWithCount,
                 TemplateId = a.TemplateId,
                 TemplateTitle = a.TemplateTitle,
+                SourceProcessId = a.SourceProcessId,
+                SourceProcessTitle = a.SourceProcessTitle,
                 // Behind means the template has published since this process last inherited it.
                 TemplateBehind = a.CurrentTemplateVersion is int currentVersion
                                  && (a.TemplateVersion ?? 0) < currentVersion,
@@ -241,6 +248,9 @@ public class TaskService
                 TemplateTitle = t.Template != null ? t.Template.Title : null,
                 t.TemplateVersion,
                 CurrentTemplateVersion = t.Template != null ? (int?)t.Template.Version : null,
+                SourceProcessId = t.Template != null ? t.Template.SourceProcessId : null,
+                SourceProcessTitle = t.Template != null && t.Template.SourceProcess != null
+                    ? t.Template.SourceProcess.Title : null,
                 // Same reasoning as the user list: the mother is found through the template's
                 // source link, because the mother itself holds no TemplateId.
                 IsTemplateSource = t.SourceOfTemplate != null
@@ -274,6 +284,8 @@ public class TaskService
                 OwnerUserName = t.OwnerUserName,
                 TemplateId = t.TemplateId,
                 TemplateTitle = t.TemplateTitle,
+                SourceProcessId = t.SourceProcessId,
+                SourceProcessTitle = t.SourceProcessTitle,
                 TemplateBehind = t.CurrentTemplateVersion is int adminCurrentVersion
                                  && (t.TemplateVersion ?? 0) < adminCurrentVersion,
                 IsTemplateSource = t.IsTemplateSource

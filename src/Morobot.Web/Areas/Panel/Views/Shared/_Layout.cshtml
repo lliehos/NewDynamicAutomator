@@ -41,14 +41,14 @@
   <link rel="stylesheet" href="~/assets/css/demo.css" />
   <link rel="stylesheet" href="~/assets/vendor/libs/node-waves/node-waves.css" />
   <link rel="stylesheet" href="~/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.css" />
-  <link rel="stylesheet" href="~/css/portal-app.css?v=task-search-1" />
-  <link rel="stylesheet" href="~/css/da-notify.css?v=perms-edit-1" />
-  <link rel="stylesheet" href="~/css/extension-gate.css?v=smart-path-1" />
-  <link rel="stylesheet" href="~/css/morobot-copyright.css?v=1" />
-  <link rel="stylesheet" href="~/css/referral-qr.css?v=1" />
-  <link rel="stylesheet" href="~/css/da-switch.css?v=1" />
-  <link rel="stylesheet" href="~/css/da-cropper.css?v=1" />
-  <link rel="stylesheet" href="~/css/da-avatar.css?v=1" />
+  <link rel="stylesheet" href="~/css/portal-app.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-notify.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/extension-gate.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/morobot-copyright.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/referral-qr.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-switch.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-cropper.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-avatar.css?v=@V.AssetVersion" />
   <style>
     body, .menu, .layout-navbar, .card, input, button { font-family: Vazirmatn, "Public Sans", sans-serif !important; }
   </style>
@@ -197,14 +197,14 @@
     <div class="layout-overlay layout-menu-toggle"></div>
     <div class="drag-target"></div>
   </div>
-  <script src="~/js/i18n.js?v=4"></script>
+  <script src="~/js/i18n.js?v=@V.AssetVersion"></script>
   <script>
     // The signed-in user's name, so live-update handlers can tell their own edit from someone
     // else's and avoid re-reading (and fighting) the grid they just wrote to.
     window.daCurrentUserName = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(User.Identity?.Name ?? ""));
   </script>
-  <script src="~/js/da-crypto.js?v=3"></script>
-  <script src="~/js/da-secure-store.js?v=5"></script>
+  <script src="~/js/da-crypto.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-secure-store.js?v=@V.AssetVersion"></script>
   <script src="~/assets/vendor/libs/jquery/jquery.js"></script>
   <script src="~/assets/vendor/libs/popper/popper.js"></script>
   <script src="~/assets/vendor/js/bootstrap.js"></script>
@@ -213,20 +213,20 @@
   <script src="~/assets/vendor/js/menu.js"></script>
   <script src="~/assets/js/main.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script src="~/js/da-notify.js?v=prompt-1"></script>
-  <script src="~/js/da-catalog.js?v=admin-1"></script>
-  <script src="~/js/da-device.js?v=1"></script>
-  <script src="~/js/da-telemetry.js?v=1"></script>
-  <script src="~/js/entitlements.js?v=share-1"></script>
-  <script src="~/js/extension-gate.js?v=play-tab-menu-1"></script>
-  <script src="~/js/da-switch.js?v=1"></script>
-  <script src="~/js/da-cropper.js?v=1"></script>
+  <script src="~/js/da-notify.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-catalog.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-device.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-telemetry.js?v=@V.AssetVersion"></script>
+  <script src="~/js/entitlements.js?v=@V.AssetVersion"></script>
+  <script src="~/js/extension-gate.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-switch.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-cropper.js?v=@V.AssetVersion"></script>
   @await RenderSectionAsync("Scripts", required: false)
   @if (brandHead.ShowReferralQr)
   {
     <partial name="_ReferralQrWidget" model="brandHead" />
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js" crossorigin="anonymous"></script>
-    <script src="~/js/referral-qr.js?v=1"></script>
+    <script src="~/js/referral-qr.js?v=@V.AssetVersion"></script>
   }
   @await Component.InvokeAsync("SiteChrome")
 </body>

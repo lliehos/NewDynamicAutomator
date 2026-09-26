@@ -18,6 +18,7 @@ else
           <th>@L["admin.templates.colTitle"]</th>
           <th>@L["admin.templates.colVersion"]</th>
           <th>@L["admin.templates.colSteps"]</th>
+          <th>@L["admin.templates.colMother"]</th>
           <th>@L["admin.templates.colAttached"]</th>
           <th>@L["admin.templates.colCreator"]</th>
           <th>@L["admin.templates.colUpdated"]</th>
@@ -37,6 +38,20 @@ else
             </td>
             <td>@t.Version</td>
             <td>@t.StepCount</td>
+            <td>
+              @if (t.SourceProcessId is int motherId)
+              {
+                @* Naming the mother is the point of this column: it is the process whose edits
+                   cascade into every attached child, so an admin looking at a template needs to
+                   know which process owns it. A dash means the mother was deleted and the template
+                   now stands alone — a supported state, not an error. *@
+                <a href="@Url.Action("Index", "Processes", new { area = "Admin" })">@(t.SourceProcessTitle ?? $"#{motherId}")</a>
+              }
+              else
+              {
+                <span class="text-muted">—</span>
+              }
+            </td>
             <td>@t.AttachedProcessCount</td>
             <td>@(string.IsNullOrWhiteSpace(t.CreatorUserName) ? "—" : t.CreatorUserName)</td>
             <td class="text-nowrap">@Morobot.Web.Services.DateDisplay.DateTimeLocal(t.UpdatedAtUtc)</td>

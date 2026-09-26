@@ -1178,6 +1178,20 @@ html.light-style {
   color: #f59e0b;
   flex-shrink: 0;
 }
+/* The mother process link on the template management table. Indigo to match the "mother" chip on
+   the process list, so the same idea carries the same colour on both pages. */
+.da-tpl-mother {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  color: #5e50ee;
+  font-weight: 600;
+  text-decoration: none;
+}
+.da-tpl-mother:hover { text-decoration: underline; }
+.da-tpl-mother .ti { font-size: .85rem; }
+/* The template chip's title carries two lines (state + mother), so keep them apart. */
+.da-tpl-chip[title] { cursor: pointer; }
 .da-tpl-chip-detach {
   border: 0;
   background: transparent;

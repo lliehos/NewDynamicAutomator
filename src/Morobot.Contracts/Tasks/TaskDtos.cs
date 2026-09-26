@@ -60,6 +60,21 @@ public class TaskListItemDto
     /// which row that was would go looking for the template instead.
     /// </remarks>
     public bool IsTemplateSource { get; set; }
+
+    /// <summary>
+    /// For a CHILD: the title of the mother process, reached through the template's source link.
+    /// </summary>
+    /// <remarks>
+    /// Naming the mother is the point — a child's editor is locked and its structure only changes
+    /// when the mother is edited, so the user needs to know which process to open. The template
+    /// title alone is not enough, because the template is a separate object from the process that
+    /// owns the structure. Null when the child's template has no mother (the mother was deleted),
+    /// which is a real state rather than an error.
+    /// </remarks>
+    public string? SourceProcessTitle { get; set; }
+
+    /// <summary>The mother process's id, so the list can link straight to it.</summary>
+    public int? SourceProcessId { get; set; }
 }
 
 /// <summary>One template in the template menus, with the counts the picker shows.</summary>
@@ -75,6 +90,19 @@ public class ProcessTemplateDto
     public int AttachedProcessCount { get; set; }
     public int GroupCount { get; set; }
     public int StepCount { get; set; }
+
+    /// <summary>
+    /// The process this template was built from — its "mother" — so a list can name it instead of
+    /// leaving the reader to guess which process to edit in order to change every child.
+    /// </summary>
+    /// <remarks>
+    /// Nullable, and cleared rather than cascading: deleting the mother must leave the template and
+    /// its children valid, which is the whole reason the link is optional. A null pair here means
+    /// "this template has no mother any more", which is a real and supported state.
+    /// </remarks>
+    public int? SourceProcessId { get; set; }
+    public string? SourceProcessTitle { get; set; }
+
     /// <summary>
     /// Whether the caller may create, publish or retire templates. Everyone may still *use* a
     /// template; this only governs shaping the shared skeletons, so the management actions can be

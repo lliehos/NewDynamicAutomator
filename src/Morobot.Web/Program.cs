@@ -33,6 +33,7 @@ builder.Services.AddControllersWithViews(o =>
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<Morobot.Web.Services.PlaySessionTracker>();
 builder.Services.AddSingleton<Morobot.Web.Services.UpdateNotifyStateService>();
+builder.Services.AddSingleton<Morobot.Web.Services.IAppVersionService, Morobot.Web.Services.AppVersionService>();
 builder.Services.AddScoped<Morobot.Web.Services.CatalogLiveService>();
 builder.Services.AddInfrastructure(builder.Configuration, builder.Environment.ContentRootPath);
 builder.Services.AddScoped<Morobot.Infrastructure.Services.ILicenseRequestHostAccessor, HttpLicenseRequestHostAccessor>();
@@ -155,6 +156,15 @@ app.UseStaticFiles(new StaticFileOptions
             || path.StartsWith("/img/brand", StringComparison.OrdinalIgnoreCase))
         {
             ctx.Context.Response.Headers.AccessControlAllowOrigin = "*";
+        }
+
+        // A request carrying ?v= is referencing one specific build of the file, because the views
+        // stamp every asset with the assembly version. That URL can never mean something else
+        // later, so it is safe to cache it hard instead of letting the browser revalidate on
+        // every navigation. Unversioned URLs keep the framework default.
+        if (ctx.Context.Request.Query.ContainsKey("v"))
+        {
+            ctx.Context.Response.Headers.CacheControl = "public,max-age=31536000,immutable";
         }
     }
 });

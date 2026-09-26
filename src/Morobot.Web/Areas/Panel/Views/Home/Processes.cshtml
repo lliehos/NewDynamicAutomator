@@ -177,10 +177,10 @@
 </div>
 
 @section Scripts {
-<link rel="stylesheet" href="~/editor/flow.css?v=grid-inline-1" />
-<script src="~/js/task-share.js?v=perms-edit-1"></script>
-<script src="~/js/local-tasks.js?v=tpl-child-2"></script>
-<script src="~/js/local-templates.js?v=tpl-2"></script>
+<link rel="stylesheet" href="~/editor/flow.css?v=@V.AssetVersion" />
+<script src="~/js/task-share.js?v=@V.AssetVersion"></script>
+<script src="~/js/local-tasks.js?v=@V.AssetVersion"></script>
+<script src="~/js/local-templates.js?v=@V.AssetVersion"></script>
 <script>
   document.querySelectorAll("[data-portal-ds-close]").forEach((el) => {
     el.addEventListener("click", () => {
