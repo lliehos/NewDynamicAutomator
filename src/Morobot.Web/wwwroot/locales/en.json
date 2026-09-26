@@ -541,7 +541,8 @@
       "unknownUser": "unknown user",
       "diagramColorSwitch": "Apply",
       "ldapFormatDomain": "domain\\user (on-premises AD)",
-      "ldapFormatUpn": "user@domain (Microsoft 365 / Azure AD)"
+      "ldapFormatUpn": "user@domain (Microsoft 365 / Azure AD)",
+      "ldapFormatPlain": "Plain user name (sent as typed, no domain)"
     },
     "license": {
       "title": "License",
@@ -786,8 +787,8 @@
       "playing": "Playing",
       "playingNow": "Running a process now",
       "lastSeen": "Last activity: {time}",
-      "newPassword": "New password (Free → Pro/Gold upgrade)",
-      "passwordHint": "Pro/Gold: min 8 chars, letter + digit.",
+      "newPassword": "Set a new password",
+      "passwordHint": "Fill in to change the password; leave blank to keep the current one. The user plan password policy is enforced.",
       "reservedHint": "Reserved names (admin, free, pro, guest, test, …) cannot be used."
     },
     "prices": {

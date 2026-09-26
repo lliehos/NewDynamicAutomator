@@ -180,8 +180,8 @@ public static class DbSeeder
             "Auth",
             "قالب نام ورود",
             "Sign-in name format",
-            "شکلی که نام کاربر به اکتیو دایرکتوری داده می‌شود. برای دامین داخلی «دامنه\\کاربر» و برای مایکروسافت ۳۶۵ «کاربر@دامنه» را انتخاب کنید.",
-            "How the user name is given to Active Directory. Choose domain\\user for an on-premises domain, user@domain for Microsoft 365.");
+            "شکلی که نام کاربر به اکتیو دایرکتوری داده می‌شود: «دامنه\\کاربر» برای دامین داخلی، «کاربر@دامنه» برای مایکروسافت ۳۶۵، یا «نام کاربری» تا بدون هیچ پیشوندی فرستاده شود.",
+            "How the user name is given to Active Directory: domain\\user for an on-premises domain, user@domain for Microsoft 365, or plain user name to send it with no prefix.");
 
         await Upsert(
             SystemSettingKeys.LdapUseTls,

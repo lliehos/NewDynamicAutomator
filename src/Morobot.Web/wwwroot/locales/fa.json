@@ -541,7 +541,8 @@
       "unknownUser": "کاربر نامشخص",
       "diagramColorSwitch": "اعمال",
       "ldapFormatDomain": "دامنه\\کاربر (اکتیو دایرکتوری داخلی)",
-      "ldapFormatUpn": "کاربر@دامنه (مایکروسافت ۳۶۵ / Azure AD)"
+      "ldapFormatUpn": "کاربر@دامنه (مایکروسافت ۳۶۵ / Azure AD)",
+      "ldapFormatPlain": "نام کاربری بدون پیشوند (همانطور که تایپ میشود)"
     },
     "license": {
       "title": "لایسنس",
@@ -786,8 +787,8 @@
       "playing": "در حال اجرا",
       "playingNow": "الان در حال اجرای فرآیند",
       "lastSeen": "آخرین فعالیت: {time}",
-      "newPassword": "رمز جدید (برای ارتقای Free → Pro/Gold)",
-      "passwordHint": "Pro/Gold: حداقل ۸ کاراکتر، حرف + عدد.",
+      "newPassword": "تعیین رمز عبور جدید",
+      "passwordHint": "برای تغییر رمز پر کنید خالی بگذارید تا رمز فعلی دستنخورده بماند. سیاست رمز بر اساس پلن کاربر اعمال میشود.",
       "reservedHint": "نام‌های رزرو (admin، free، pro، guest، test، …) مجاز نیست."
     },
     "prices": {

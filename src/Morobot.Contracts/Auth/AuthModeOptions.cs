@@ -28,9 +28,8 @@ public enum AuthMode
 public enum LdapNameFormat
 {
     /// <summary>
-    /// <c>DOMAIN\user</c> (the classic NetBIOS form). The usual choice for on-premises AD. Shown
-    /// to the signer as the "domain" field; the domain above is used when it is set, otherwise the
-    /// part of the host name before the first dot.
+    /// <c>DOMAIN\user</c> (the classic NetBIOS form). The usual choice for on-premises AD. The
+    /// domain is used when it is set, otherwise the part of the host name before the first dot.
     /// </summary>
     DomainBackslash = 0,
 
@@ -38,7 +37,14 @@ public enum LdapNameFormat
     /// <c>user@domain</c> (userPrincipalName). The usual choice for Microsoft 365 / Azure AD and
     /// for directories that are reached over the internet.
     /// </summary>
-    UserPrincipalName = 1
+    UserPrincipalName = 1,
+
+    /// <summary>
+    /// The name exactly as typed, with nothing added. For directories that resolve a bare account
+    /// name on their own (and for testing against one), where prefixing a domain would break the
+    /// lookup rather than help it.
+    /// </summary>
+    PlainUserName = 2
 }
 
 /// <summary>
@@ -110,17 +116,20 @@ public sealed class LdapOptions
     }
 
     /// <summary>
-    /// Turn the typed user name into the sign-in name AD expects for a simple bind.
+    /// Turn the typed user name into the sign-in name the directory expects.
     /// </summary>
     /// <remarks>
-    /// A name that is already qualified is passed through untouched, so someone may type
-    /// <c>CORP\ali</c> or <c>ali@corp.local</c> and get exactly what they typed rather than a
-    /// doubled prefix.
+    /// A name that is already qualified is passed through untouched for the two domain forms, so
+    /// someone may type <c>CORP\ali</c> or <c>ali@corp.local</c> and get exactly what they typed
+    /// rather than a doubled prefix. <see cref="LdapNameFormat.PlainUserName"/> never qualifies at
+    /// all — that is the point of it.
     /// </remarks>
     public string BuildSignInName(string userName)
     {
         var name = (userName ?? "").Trim();
         if (string.IsNullOrEmpty(name)) return name;
+
+        if (NameFormat == LdapNameFormat.PlainUserName) return name;
         if (name.Contains('\\') || name.Contains('@')) return name;
 
         return NameFormat == LdapNameFormat.UserPrincipalName

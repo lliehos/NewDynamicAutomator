@@ -68,10 +68,17 @@
         <div class="admin-top-actions">
           @* Panel entry and logout live here rather than at the bottom of the sidebar, so
              they sit with the other account-level controls instead of being buried under
-             the whole navigation list. *@
-          <a class="btn-admin secondary admin-top-link" asp-area="Panel" asp-controller="Home" asp-action="Index">
-            <i class="ti ti-layout-dashboard" aria-hidden="true"></i><span>@L["common.panel"]</span>
-          </a>
+             the whole navigation list.
+             The switcher is hidden for the built-in owner account only: that account is barred
+             from the Panel (see BlockAdminFromPanelFilter), so offering the link would bounce it
+             straight back here. Any OTHER admin-role user has a Panel of their own and switches
+             between the two surfaces with this button. *@
+          @if (!Morobot.Web.Filters.BlockAdminFromPanelFilter.IsOwnerAccount(User))
+          {
+            <a class="btn-admin secondary admin-top-link" asp-area="Panel" asp-controller="Home" asp-action="Index">
+              <i class="ti ti-layout-dashboard" aria-hidden="true"></i><span>@L["common.panel"]</span>
+            </a>
+          }
           <a class="btn-admin secondary admin-top-link" asp-area="Panel" asp-controller="Account" asp-action="Logout">
             <i class="ti ti-logout" aria-hidden="true"></i><span>@L["common.logout"]</span>
           </a>

@@ -129,18 +129,20 @@
             }
             else if (s.Key == SystemSettingKeys.LdapNameFormat)
             {
-              @* Two choices, so a dropdown rather than a text box the administrator can misspell.
-                 The value stored is the enum name, which the resolver parses back. *@
+              @* One choice per form the directory accepts, rather than a text box the administrator
+                 can misspell. The value stored is the enum name, which the resolver parses back. *@
               var current = string.IsNullOrWhiteSpace(s.Value)
                 ? nameof(Morobot.Contracts.Auth.LdapNameFormat.DomainBackslash)
                 : s.Value.Trim();
               <select class="form-select" id="setting_@s.Key" name="setting_@s.Key">
                 @foreach (var fmt in Enum.GetValues<Morobot.Contracts.Auth.LdapNameFormat>())
                 {
-                  var isUpn = fmt == Morobot.Contracts.Auth.LdapNameFormat.UserPrincipalName;
-                  var fmtLabel = isUpn
-                    ? L["admin.settings.ldapFormatUpn"]
-                    : L["admin.settings.ldapFormatDomain"];
+                  var fmtLabel = fmt switch
+                  {
+                    Morobot.Contracts.Auth.LdapNameFormat.UserPrincipalName => L["admin.settings.ldapFormatUpn"],
+                    Morobot.Contracts.Auth.LdapNameFormat.PlainUserName => L["admin.settings.ldapFormatPlain"],
+                    _ => L["admin.settings.ldapFormatDomain"]
+                  };
                   <option value="@fmt" selected="@(string.Equals(current, fmt.ToString(), StringComparison.OrdinalIgnoreCase))">@fmtLabel</option>
                 }
               </select>
