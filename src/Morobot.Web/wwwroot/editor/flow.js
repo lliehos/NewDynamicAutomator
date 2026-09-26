@@ -6647,8 +6647,7 @@
       </div>`;
     }
 
-    // ناوبری: سوئیچ انتظار برای تکمیل بارگذاری + سقف انتظار (فقط وقتی روشن است).
-    if (isUrl) {
+    // SetMemory: the variable name the resolved value is written to.
     if (n.actionType === "SetMemory") {
       html += `<div class="insp-field"><label>${t("editor.actions.memoryName")}</label>
         <input data-k="memoryVariableName" list="mem-var-list" value="${esc(n.memoryVariableName || "")}" placeholder="${esc(t("editor.actions.memoryNamePlaceholder"))}" />
