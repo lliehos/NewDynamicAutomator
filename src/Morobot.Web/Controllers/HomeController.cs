@@ -10,17 +10,29 @@ public class HomeController : Controller
 {
     private readonly SetupGuideService _setupGuide;
     private readonly ILocaleService _locale;
+    private readonly DatabaseSetupState _dbSetup;
 
-    public HomeController(SetupGuideService setupGuide, ILocaleService locale)
+    public HomeController(
+        SetupGuideService setupGuide, ILocaleService locale, DatabaseSetupState dbSetup)
     {
         _setupGuide = setupGuide;
         _locale = locale;
+        _dbSetup = dbSetup;
     }
 
     [HttpGet]
     public IActionResult Index()
     {
         ViewData["Title"] = null;
+
+        // A deployment whose database is not reachable must say so on the front page, not only on a
+        // separate setup URL. An operator who opens the site sees the problem, the identity the
+        // process runs as, and the SQL that fixes it — without having been told a path to visit.
+        // The middleware reaches this action only for loopback callers; everyone else is stopped
+        // before the controller with a bare 503.
+        if (!_dbSetup.IsReady)
+            return View("~/Views/Setup/Database.cshtml", _dbSetup.Failure);
+
         return View();
     }
 

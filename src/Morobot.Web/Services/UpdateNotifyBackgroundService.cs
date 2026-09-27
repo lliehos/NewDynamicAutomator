@@ -15,15 +15,18 @@ public sealed class UpdateNotifyBackgroundService : BackgroundService
     private readonly IServiceScopeFactory _scopes;
     private readonly IHubContext<CatalogHub> _hub;
     private readonly ILogger<UpdateNotifyBackgroundService> _log;
+    private readonly DatabaseSetupState _dbSetup;
 
     public UpdateNotifyBackgroundService(
         IServiceScopeFactory scopes,
         IHubContext<CatalogHub> hub,
-        ILogger<UpdateNotifyBackgroundService> log)
+        ILogger<UpdateNotifyBackgroundService> log,
+        DatabaseSetupState dbSetup)
     {
         _scopes = scopes;
         _hub = hub;
         _log = log;
+        _dbSetup = dbSetup;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -35,6 +38,16 @@ public sealed class UpdateNotifyBackgroundService : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            // A hosted service starts as soon as the host does — which is now *before* the database
+            // has been migrated, because initialisation was moved off the startup path. Every read
+            // below would fail with "Invalid object name 'SystemSettings'", filling the log with
+            // errors during what is normal first-run work. Wait for the application to be ready.
+            if (!_dbSetup.IsReady)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken);
+                continue;
+            }
+
             try
             {
                 using var scope = _scopes.CreateScope();

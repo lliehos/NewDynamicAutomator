@@ -274,59 +274,11 @@ public static class DbSeeder
         await Upsert(SystemSettingKeys.BrandColorBorderSubtle, BrandPaletteDefaults.BorderSubtle, "Branding", "حاشیه ملایم", "Subtle border", null, null);
         await Upsert(SystemSettingKeys.BrandReferralQrVisible, "true", "Branding", "ویجت QR معرفی", "Referral QR widget", "پیش‌فرض: نمایش", "Default: visible");
 
-        await Upsert(
-            SystemSettingKeys.DiagramStepStroke,
-            "#ff9f43",
-            "Diagram",
-            "رنگ خط اقدام",
-            "Action stroke colour",
-            "رنگ حاشیهٔ نودهای اقدام در دیاگرام.",
-            "Outline colour of action nodes in the diagram.");
-
-        await Upsert(
-            SystemSettingKeys.DiagramStepFill,
-            "#fff8f0",
-            "Diagram",
-            "رنگ پس‌زمینه اقدام",
-            "Action fill colour",
-            "رنگ داخل نودهای اقدام.",
-            "Interior colour of action nodes.");
-
-        await Upsert(
-            SystemSettingKeys.DiagramConditionStroke,
-            "#8b9098",
-            "Diagram",
-            "رنگ خط شرط",
-            "Condition stroke colour",
-            "رنگ حاشیهٔ نودهای شرط.",
-            "Outline colour of condition nodes.");
-
-        await Upsert(
-            SystemSettingKeys.DiagramConditionFill,
-            "#eceff2",
-            "Diagram",
-            "رنگ پس‌زمینه شرط",
-            "Condition fill colour",
-            "رنگ داخل نودهای شرط.",
-            "Interior colour of condition nodes.");
-
-        await Upsert(
-            SystemSettingKeys.DiagramGroupStroke,
-            "#9b92f8",
-            "Diagram",
-            "رنگ خط گروه",
-            "Group stroke colour",
-            "رنگ حاشیهٔ نودهای گروه.",
-            "Outline colour of group nodes.");
-
-        await Upsert(
-            SystemSettingKeys.DiagramHighlightColor,
-            "#ea5455",
-            "Diagram",
-            "رنگ هایلایت المان",
-            "Element highlight colour",
-            "رنگی که پلیر هنگام اجرا دور المان صفحه می‌کشد.",
-            "Colour the player draws around the page element while running.");
+        // The six node colours used to be seeded here one by one. They are now all covered by the
+        // DiagramColors catalogue loop further down, and seeding them twice in the same run was a
+        // real bug: Upsert only looks in the database, so the second call did not see the first
+        // call's still-unsaved row and queued a second INSERT for the same unique key — which is
+        // exactly the DiagramStepStroke duplicate-key crash. One source of truth: the catalogue.
 
         await Upsert(
             SystemSettingKeys.DiagramSelectorLineWidth,

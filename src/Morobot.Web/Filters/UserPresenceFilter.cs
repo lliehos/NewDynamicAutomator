@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.Caching.Memory;
 using Morobot.Infrastructure.Services;
+using Morobot.Web.Services;
 
 namespace Morobot.Web.Filters;
 
@@ -12,16 +13,22 @@ public sealed class UserPresenceFilter : IAsyncActionFilter
     private static readonly TimeSpan TouchInterval = TimeSpan.FromMinutes(2);
     private readonly EventLogService _events;
     private readonly IMemoryCache _cache;
+    private readonly DatabaseSetupState _dbSetup;
 
-    public UserPresenceFilter(EventLogService events, IMemoryCache cache)
+    public UserPresenceFilter(EventLogService events, IMemoryCache cache, DatabaseSetupState dbSetup)
     {
         _events = events;
         _cache = cache;
+        _dbSetup = dbSetup;
     }
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
-        await TouchIfNeededAsync(context);
+        // Presence is a write to the event log. With no database it cannot work, and the setup page
+        // has no signed-in user to track anyway — skip the write rather than fail the request.
+        if (_dbSetup.IsReady)
+            await TouchIfNeededAsync(context);
+
         await next();
     }
 

@@ -11,6 +11,21 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Configuration layering, lowest priority first:
+//   1. appsettings.json                    — shared defaults, shipped in Git
+//   2. appsettings.{Environment}.json      — Development or Production, chosen by ASPNETCORE_ENVIRONMENT
+//   3. environment variables               — ASPNETCORE_-prefixed vars and ConnectionStrings__Default
+//   4. appsettings.ServerUpdate.json       — added here, so it wins over all of the above
+//
+// Layer 4 exists for the offline updater. A fielded server keeps the customer's connection string
+// and secrets in appsettings.Production.json, and an update package needs a way to force a value
+// through (a new update feed URL, a rollout flag) without an operator hand-editing that file.
+// It is added LAST so it is authoritative, and it is optional so a deployment that never uses the
+// updater can delete it. Reload-on-change is off on purpose: this is boot-time configuration, and
+// silently rebinding the database mid-run would be worse than requiring a restart.
+var serverUpdateSettings = Path.Combine(builder.Environment.ContentRootPath, "appsettings.ServerUpdate.json");
+builder.Configuration.AddJsonFile(serverUpdateSettings, optional: true, reloadOnChange: false);
+
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMemoryCache();
 builder.Services.AddScoped<ILocaleService, LocaleService>();
@@ -36,6 +51,9 @@ builder.Services.AddSingleton<Morobot.Web.Services.PlaySessionTracker>();
 builder.Services.AddSingleton<Morobot.Web.Services.UpdateNotifyStateService>();
 builder.Services.AddSingleton<Morobot.Web.Services.IAppVersionService, Morobot.Web.Services.AppVersionService>();
 builder.Services.AddScoped<Morobot.Web.Services.CatalogLiveService>();
+// Singleton: the setup state must survive for the process lifetime so the "try again" action can
+// flip the whole application from blocked to ready without a restart.
+builder.Services.AddSingleton<Morobot.Web.Services.DatabaseSetupState>();
 builder.Services.AddInfrastructure(builder.Configuration, builder.Environment.ContentRootPath);
 builder.Services.AddScoped<Morobot.Infrastructure.Services.ILicenseRequestHostAccessor, HttpLicenseRequestHostAccessor>();
 
@@ -170,6 +188,12 @@ app.UseStaticFiles(new StaticFileOptions
     }
 });
 app.UseRouting();
+
+// Before authentication and before the controllers: while the database is unreachable there is
+// nothing to authenticate against, and the sign-in form would itself fail. This diverts everything
+// to the setup page except the page itself, its retry action, and the static assets it needs.
+app.UseMiddleware<Morobot.Web.Middleware.DatabaseSetupMiddleware>();
+
 app.UseMiddleware<CultureMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -184,26 +208,84 @@ app.MapControllerRoute(
     name: "default",
     pattern: "{controller=Home}/{action=Index}/{id?}");
 
-using (var scope = app.Services.CreateScope())
+// Initialisation runs in the BACKGROUND, not before the host starts listening.
+//
+// The initialisation body, given its own function so the setup page's retry action can run the very
+// same sequence. A retry only re-tests the connection; without this, a deployment whose DBA had just
+// created the login would sit in Preparing with nothing working on it. The host assigns this to
+// DatabaseSetupState.ResumeInitialisation below.
+async Task RunInitialisationAsync(IServiceProvider services, CancellationToken ct)
 {
+    using var scope = services.CreateScope();
     var config = scope.ServiceProvider.GetRequiredService<IConfiguration>();
-    var cs = config.GetConnectionString("Default")
-             ?? throw new InvalidOperationException("Connection string 'Default' is missing.");
     var log = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+    var setupState = scope.ServiceProvider.GetRequiredService<DatabaseSetupState>();
 
-    await Morobot.Infrastructure.Services.DatabaseBootstrapService.EnsureSqlServerDatabaseAsync(cs, log);
-    await Morobot.Infrastructure.Services.CanvasBackfillService.RunIfNeededAsync(cs, log);
+    try
+    {
+        var cs = config.GetConnectionString("Default")
+                 ?? throw new InvalidOperationException(
+                     "Connection string 'Default' is missing. Set ConnectionStrings:Default in " +
+                     "appsettings.json (or as an environment variable) before starting the app.");
 
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await Morobot.Infrastructure.Services.DatabaseBootstrapService.MigrateAndSeedAsync(db, log);
+        setupState.ReportProgress("بررسی اتصال به دیتابیس…");
+        var dbCheck = await Morobot.Infrastructure.Services.DatabaseBootstrapService
+            .EnsureDatabaseAsync(cs, log);
 
-    var license = scope.ServiceProvider.GetRequiredService<Morobot.Infrastructure.Services.LicenseService>();
-    await license.EnsureAnchorAsync();
+        if (!dbCheck.IsReady)
+        {
+            // Not fatal. Record the diagnosis; the middleware serves the setup page, and the retry
+            // action re-runs this whole sequence once a DBA has created what is missing. Exiting
+            // here would mean a console trace on a server nobody is watching.
+            setupState.RecordStartupFailure(dbCheck);
+            log.LogWarning(
+                "Database is not ready ({Stage}); serving the setup page. {Summary}",
+                dbCheck.Stage, dbCheck.Summary);
+            return;
+        }
 
-    var sync = scope.ServiceProvider.GetRequiredService<ExtensionSyncService>();
-    var overlay = scope.ServiceProvider.GetRequiredService<ExtensionBrandingOverlay>();
-    sync.SyncNow("startup");
-    await overlay.ApplyAllPackagesAsync(sync);
+        setupState.ReportProgress("به‌روزرسانی ساختار دیتابیس…");
+        await Morobot.Infrastructure.Services.CanvasBackfillService.RunIfNeededAsync(cs, log);
+
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await Morobot.Infrastructure.Services.DatabaseBootstrapService.MigrateAndSeedAsync(db, log);
+
+        setupState.ReportProgress("آماده‌سازی لایسنس و افزونه‌ها…");
+        var license = scope.ServiceProvider.GetRequiredService<Morobot.Infrastructure.Services.LicenseService>();
+        await license.EnsureAnchorAsync();
+
+        // SyncNow copies the extension files, but its branding overlay is skipped while the state is
+        // still Preparing — the overlay reads SystemSettings, which has only just been created. The
+        // explicit ApplyAllPackagesAsync below is what actually applies it, so the order here is
+        // deliberate: files first, then overlay, and only then is the application announced ready.
+        var sync = scope.ServiceProvider.GetRequiredService<ExtensionSyncService>();
+        var overlay = scope.ServiceProvider.GetRequiredService<ExtensionBrandingOverlay>();
+        sync.SyncNow("startup");
+        await overlay.ApplyAllPackagesAsync(sync);
+
+        // Last: flip the state so the progress page stops polling and the real site is served.
+        setupState.MarkReady();
+        log.LogInformation("Startup initialisation completed.");
+    }
+    catch (Exception ex)
+    {
+        log.LogCritical(ex, "Startup initialisation failed.");
+        setupState.RecordStartupFailure(new Morobot.Infrastructure.Services.DatabaseSetupResult
+        {
+            Stage = Morobot.Infrastructure.Services.DatabaseSetupStage.ServerUnreachable,
+            Summary = "راه‌اندازی سامانه با خطا متوقف شد. برای جزئیات، لاگ سرور را ببینید.",
+            ServerMessage = ex.Message
+        });
+    }
 }
 
-app.Run();
+// Let the setup page's retry resume the full sequence, not just the connection probe.
+app.Services.GetRequiredService<DatabaseSetupState>().ResumeInitialisation =
+    ct => RunInitialisationAsync(app.Services, ct);
+
+// Fire and forget on purpose: the host must start listening immediately so the progress page can be
+// served while this runs. Nothing here may throw — RunInitialisationAsync guards its whole body.
+_ = Task.Run(() => RunInitialisationAsync(app.Services, CancellationToken.None));
+
+await app.RunAsync();
+

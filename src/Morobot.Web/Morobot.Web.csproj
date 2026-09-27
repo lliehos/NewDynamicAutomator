@@ -30,4 +30,23 @@
     </None>
   </ItemGroup>
 
+  <!--
+    The four-file appsettings layout. appsettings.json and appsettings.Development.json are picked
+    up by the SDK automatically, but the two environment files are only copied when named explicitly
+    — without this, a publish would ship a Production server with no Production file at all, and the
+    operator would have nothing to edit. Both are optional at runtime (Program.cs adds the update
+    layer with optional: true, and the SDK's environment file is optional by default), so deleting
+    either one is a supported deployment.
+  -->
+  <ItemGroup>
+    <None Update="appsettings.Production.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Update="appsettings.ServerUpdate.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

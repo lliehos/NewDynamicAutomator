@@ -6,6 +6,20 @@
 # dotenv files
 .env
 
+# Environment-specific app settings that carry operator secrets.
+#
+# The four-file layout is: appsettings.json (shared defaults, committed),
+# appsettings.Development.json (local developer, committed),
+# appsettings.Production.json (the customer's server — connection string and JWT key),
+# appsettings.ServerUpdate.json (the offline updater's forced overrides).
+#
+# Per the project's decision every one of them is tracked, so a fielded server can be
+# diffed against the repo. That means the rules below are deliberately NOT ignoring them.
+# If a real credential is ever pasted into the Production file, uncomment the two lines
+# and commit an appsettings.Production.example.json instead.
+# appsettings.Production.json
+# appsettings.ServerUpdate.json
+
 # Local publish/run output folders (dotnet publish copies)
 _run/
 _run[0-9]/
@@ -508,3 +522,19 @@ updates/
 # Local DB / canvas backups (do not commit)
 _backup_*.bak
 _morobot*.bak
+
+# Local deployment / run folders. These hold built assemblies and copied web assets,
+# so they are build output, not source — the shipped copies live under dist/.
+_demo/
+_run/
+_run2/
+_run3/
+_run4/
+_run5/
+_run6/
+
+# Scratch files from manual editor debugging
+_tmp-*.png
+
+# Local MCP client settings
+.deputydev/

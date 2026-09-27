@@ -2349,6 +2349,11 @@
     if (n.kind === "start") return { w: 84, h: 84 };
     if (n.kind === "group") return groupBoxSize(n);
     if (n.kind === "condition") return { w: 140, h: 84 };
+    // Terminal marker: a red disc that names itself. It carries no configuration and no outgoing
+    // edge, so it stays visually lighter than a real node — but it still has to be big enough to
+    // hold its "پایان" caption legibly, otherwise the label has to live outside the shape and
+    // stops reading as part of it.
+    if (n.kind === "end") return { w: 72, h: 72 };
     if (isActionNode(n)) return stepBoxSize(n);
     return { w: 120, h: 44 };
   }
@@ -2533,7 +2538,9 @@
   }
 
   function isFlowTarget(n) {
-    return !!n && (n.kind === "group" || n.kind === "condition" || isActionNode(n));
+    // "end" is a valid target — that is its whole point: a branch may terminate instead of
+    // continuing to another node. It is never a source, so nothing else needs to change.
+    return !!n && (n.kind === "group" || n.kind === "condition" || n.kind === "end" || isActionNode(n));
   }
 
   /** Compact orange action box: icon (right) + title — width always fits full title. */
@@ -2574,6 +2581,18 @@
   const STEP_FILL_IGNORE = diagramDefaults.stepIgnoreFill || "#e8f6ee";
   const COND_STROKE = diagramDefaults.conditionStroke || "#8b9098";
   const COND_FILL = diagramDefaults.conditionFill || "#eceff2";
+  /**
+   * Terminal marker. Deep red on purpose: it is the only node whose meaning is "the run stops
+   * here", and it is the one shape an operator must be able to spot without reading anything.
+   * The tone is darker than a "bright red" would be so the white caption inside clears contrast.
+   */
+  const END_FILL = "#c92a2a";
+  const END_STROKE = "#8f1d1d";
+  /**
+   * Caption on the red disc. White — which is why END_FILL is a deep red rather than a light one;
+   * white on a bright red fails contrast at this size.
+   */
+  const END_LABEL_COLOR = "#fff";
   /** Group node outline; was a literal inside makeCloneButton. */
   const GROUP_STROKE = diagramDefaults.groupStroke || "#9b92f8";
   /** Root process start — strong green (ignorePlayError ON / default) */
@@ -2641,6 +2660,7 @@
     if (!n) return CANVAS_EDGE;
     if (n.kind === "start") return startStroke(n);
     if (n.kind === "group") return GROUP_STROKE;
+    if (n.kind === "end") return END_STROKE;
     if (isActionNode(n)) return stepStroke(n);
     if (n.kind === "condition") return COND_STROKE;
     return CANVAS_EDGE;
@@ -2832,6 +2852,25 @@
       display = display.slice(0, Math.max(3, maxChars - 1)) + "…";
     }
     return { text: display, fontSize };
+  }
+
+  /**
+   * Font size for the caption on the terminal disc.
+   *
+   * Measured against the circle's inner chord, not its diameter: the text sits on the single
+   * centre line, where the disc is at its full width, but the glyphs have to clear the curve at
+   * their own vertical extent too. 0.78 of the diameter approximates that inner band closely
+   * enough, and starting the search from 14 keeps the caption reading as a label rather than
+   * as a shout. The floor is 8 for the same reason as the other fit helpers — below that the
+   * Persian letterforms stop being distinguishable.
+   */
+  function fitEndLabelSize(text, boxW) {
+    const raw = String(text || "").trim() || t("editor.nodes.end");
+    const maxW = boxW * 0.74;
+    const charFactor = 0.52;
+    let fontSize = 11;
+    while (fontSize > 7 && raw.length * fontSize * charFactor > maxW) fontSize -= 1;
+    return fontSize;
   }
 
   function scopedContentBounds() {
@@ -4215,6 +4254,7 @@
     const fill = n.kind === "start" ? startFill(n)
       : n.kind === "group" ? "#fff"
       : n.kind === "condition" ? COND_FILL
+      : n.kind === "end" ? END_FILL
       : isActionNode(n) ? stepFill(n)
       : "#fff";
     const baseStroke = defaultStrokeFor(n);
@@ -4229,6 +4269,15 @@
       });
       if (!validity.ok) poly.style.setProperty("--da-stroke", stroke);
       g.appendChild(poly);
+    } else if (n.kind === "end") {
+      // Solid red disc, small by design: reads as a terminator, not as a node that does work.
+      const disc = el("circle", {
+        cx: w / 2, cy: h / 2, r: Math.min(w, h) / 2,
+        fill, stroke,
+        "stroke-width": sw
+      });
+      if (!validity.ok) disc.style.setProperty("--da-stroke", stroke);
+      g.appendChild(disc);
     } else {
       const rx = n.kind === "start" ? h / 2 : isActionNode(n) ? 8 : 14;
       const rectAttrs = {
@@ -4274,6 +4323,12 @@
       const fitted = fitConditionLabel(n.title || "شرط", w);
       label = fitted.text;
       fontSize = fitted.fontSize;
+    } else if (n.kind === "end") {
+      // Fitted to the disc's inner width — the chord at the vertical centre, not the full diameter,
+      // because the text sits on one line and the circle narrows toward its top and bottom.
+      const text = n.title || t("editor.nodes.end");
+      fontSize = fitEndLabelSize(text, w);
+      label = text;
     } else if (isActionNode(n)) {
       fontSize = actionLayout.fontSize || 11;
       const padR = actionLayout.padR ?? 8;
@@ -4286,7 +4341,28 @@
       label = fitActionLabel(n.title || actionTypeLabel(n.actionType) || "اقدام");
       appendActionTypeIcon(g, n, w, h, actionLayout);
     }
-    if (labelLines) {
+    // The terminal marker is a bare disc with just its own name inside — no clone/rename chrome,
+    // no icon, no second line. Its caption is what makes it self-explanatory on a shared screen,
+    // so the tooltip carries only the longer explanation.
+    if (n.kind === "end") {
+      const tip = document.createElementNS(ns, "title");
+      tip.textContent = t("editor.palette.endDesc") || "خاتمه مسیر — بدون خروجی";
+      g.appendChild(tip);
+      const caption = el("text", {
+        x: w / 2,
+        // 0.28em rather than the 0.35em used for the other shapes: that offset is tuned for a
+        // label whose box is the full node height, and here the text is the only thing in the
+        // shape, so the same factor leaves it visibly below the disc's centre.
+        y: h / 2 + fontSize * 0.28,
+        "text-anchor": "middle",
+        fill: END_LABEL_COLOR,
+        "font-size": fontSize,
+        "font-family": "Vazirmatn, Tahoma",
+        "font-weight": "600"
+      });
+      caption.textContent = label;
+      g.appendChild(caption);
+    } else if (labelLines) {
       const t = el("text", {
         x: w / 2,
         y: 12,
@@ -4333,6 +4409,9 @@
     } else if (isActionNode(n)) {
       appendRectOutPorts(g, n, stepStroke(n), 6);
     }
+    // "end" reaches here with no out-port on purpose: a terminal marker must never originate an
+    // edge, so it is deliberately absent from the chain above. Its incoming edges attach through
+    // the same anchorOn() side logic every other shape uses.
     g.addEventListener("mousedown", (ev) => {
       const renameEl = ev.target.closest && ev.target.closest(".node-rename-btn");
       if (renameEl || (ev.target.classList && ev.target.classList.contains("node-rename-btn"))) {
@@ -5532,6 +5611,12 @@
         title: "اقدام",
         desc: "اقدام روی صفحه",
         ico: `<svg viewBox="0 0 24 24" fill="none"><rect x="4" y="6" width="16" height="12" rx="3" stroke="currentColor" stroke-width="1.8"/><path d="M8 12h8M14 9.5l2.5 2.5L14 14.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+      },
+      {
+        kind: "end",
+        title: "پایان",
+        desc: "خاتمه مسیر — بدون خروجی",
+        ico: `<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="7" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>`
       }
     ];
     let hint = root.querySelector(":scope > .palette-hint");
@@ -5723,6 +5808,13 @@
     } else if (n.kind === "condition") {
       inspector.innerHTML = conditionInspectorHtml(n);
       toggleConditionFields(n.conditionType || "None");
+    } else if (n.kind === "end") {
+      // Nothing to configure. Saying so is better than rendering an empty panel, which reads
+      // as a loading failure rather than a deliberate "this node has no options".
+      inspector.innerHTML = `
+        <p class="palette-hint" style="margin:0;line-height:1.9">
+          نود «پایان» فقط مسیر را خاتمه می‌دهد: هیچ خروجی ندارد و هر تعداد یال می‌تواند به آن وصل شود.
+        </p>`;
     } else {
       inspector.innerHTML = field("عنوان", "title", n.title);
     }
@@ -6238,10 +6330,9 @@
   }
 
   /**
-   * Ids reachable from the root start node, following the same edges the player walks
+   * Ids reachable from the root start node, following the same walk the player performs
    * (action/start → next, condition → success or fail or next, group → its inner start and
-   * then its own next; contains/parent links are followed because a group's children arrive
-   * through the group).
+   * then its own next).
    *
    * Mirrors collectReachableFromStart in the player, so what the editor greys out is exactly
    * what the run will skip. Recomputed on demand rather than cached, because it is only asked
@@ -6264,8 +6355,25 @@
       const node = byId.get(id);
       if (!node) continue;
       seen.add(id);
+
+      // A group is entered through its own inner start node. That node is identified by its
+      // groupNodeId — the same way executeFlow finds it — and NOT by the group's "contains" edge.
+      //
+      // The contains edge cannot carry this: a group with four children has four contains edges
+      // and only the last one survives a save, so relying on it made the inner start look
+      // unreachable the moment any other node was added to the group. The editor then greyed out
+      // and dotted the start node of a group that runs perfectly, which is a false alarm. Read
+      // the structural link directly and the two implementations agree.
+      if (node.kind === "group") {
+        const innerStart = (graph.nodes || []).find(
+          (n) => n.kind === "start" && n.groupNodeId === node.id);
+        if (innerStart) queue.push(innerStart.id);
+      }
+
       for (const e of graph.edges || []) {
         if (e.from !== id) continue;
+        // Containment is a structural link, not a flow link, but a group's children are reached
+        // through the group, so it is still followed. It is the fallback, not the primary path.
         if (e.kind === "contains" || e.kind === "parent") queue.push(e.to);
         else if (node.kind === "condition") {
           if (e.kind === "success" || e.kind === "fail" || e.kind === "next") queue.push(e.to);
@@ -6602,17 +6710,30 @@
       }
     }
 
-    // Each branch of a condition must lead somewhere. Without this the run reaches the
-    // condition, finds no edge for the branch it needs, and stops — which reads as the
-    // engine "giving up for no reason". Caught here so it is visible before running.
+    // Each branch of a condition must lead somewhere. Without this the walk reaches the
+    // condition, finds no edge for the branch it needs, and stops — which reads as the engine
+    // "giving up for no reason". Caught here so it is visible before running.
+    //
+    // Both branches are required as soon as either one is wired, and a `next` edge is NOT accepted
+    // as a stand-in for an unwired branch. That is deliberate and mirrors the player: a condition
+    // only falls back to `next` when it has no success/fail edge at all, so allowing a half-wired
+    // condition would let the unwired branch follow `next` and run the wrong path.
+    //
+    // The one exception is the terminal marker. When any `end` node exists on the canvas, the
+    // author has stated that a path may stop deliberately — so an unwired branch no longer means
+    // "forgot to wire it", it means "this branch ends here". Requiring a dead-end edge in that
+    // case would force a pointless arrow into a node that does nothing.
     const outs = (graph.edges || []).filter((e) => e.from === n.id);
     const hasBranchEdges = outs.some((e) => e.kind === "success" || e.kind === "fail");
     if (hasBranchEdges) {
-      if (!outs.some((e) => e.kind === "success")) {
-        reasons.push("شاخهٔ «موفق» (success) این شرط وصل نشده");
-      }
-      if (!outs.some((e) => e.kind === "fail")) {
-        reasons.push("شاخهٔ «ناموفق» (fail) این شرط وصل نشده");
+      const hasTerminal = (graph.nodes || []).some((x) => x.kind === "end");
+      if (!hasTerminal) {
+        if (!outs.some((e) => e.kind === "success")) {
+          reasons.push("شاخهٔ «موفق» (success) این شرط وصل نشده");
+        }
+        if (!outs.some((e) => e.kind === "fail")) {
+          reasons.push("شاخهٔ «ناموفق» (fail) این شرط وصل نشده");
+        }
       }
     } else if (!outs.some((e) => e.kind === "next")) {
       // No branch edges and no `next`: the condition is a dead end.
@@ -8359,6 +8480,7 @@
     if (n.kind === "condition") return t("play.check.kindCondition");
     if (isActionNode(n)) return t("play.check.kindAction");
     if (n.kind === "group") return t("play.check.kindGroup");
+    if (n.kind === "end") return t("play.check.kindEnd");
     return n.kind || t("play.check.unknownNode");
   }
 
@@ -8585,9 +8707,9 @@
     if (from.kind === "start") {
       if (kind !== "next") kind = "next";
       if (!isFlowTarget(to)) {
-        return { ok: false, error: "از شروع به گروه، شرط یا اقدام وصل شوید." };
+        return { ok: false, error: "از شروع به گروه، شرط، اقدام یا پایان وصل شوید." };
       }
-      return { ok: true, kind: "next", mode: "replace-all-from", oneInTo: true };
+      return { ok: true, kind: "next", mode: "replace-all-from", oneInTo: to.kind !== "end" };
     }
 
     if (isActionNode(from)) {
@@ -8596,9 +8718,9 @@
       }
       kind = "next";
       if (!isFlowTarget(to)) {
-        return { ok: false, error: "اقدام به گروه، شرط یا اقدام وصل می‌شود." };
+        return { ok: false, error: "اقدام به گروه، شرط، اقدام یا پایان وصل می‌شود." };
       }
-      return { ok: true, kind: "next", mode: "replace-all-from", oneInTo: true };
+      return { ok: true, kind: "next", mode: "replace-all-from", oneInTo: to.kind !== "end" };
     }
 
     if (from.kind === "group") {
@@ -8609,10 +8731,12 @@
       if (to.kind === "condition") {
         return { ok: true, kind: "next", mode: "add-or-replace-same", oneInTo: true };
       }
-      if (to.kind === "group" || isActionNode(to)) {
-        return { ok: true, kind: "next", mode: "replace-group-next", oneInTo: true };
+      if (to.kind === "group" || isActionNode(to) || to.kind === "end") {
+        // "end" accepts any number of incoming edges, so oneInTo is false for it — the whole
+        // point of a terminal marker is that every branch can point at the same one.
+        return { ok: true, kind: "next", mode: "replace-group-next", oneInTo: to.kind !== "end" };
       }
-      return { ok: false, error: "گروه به گروه، شرط یا اقدام وصل می‌شود." };
+      return { ok: false, error: "گروه به گروه، شرط، اقدام یا پایان وصل می‌شود." };
     }
 
     if (from.kind === "condition") {
@@ -8621,9 +8745,9 @@
         kind = hasOk ? "fail" : "success";
       }
       if (!isFlowTarget(to)) {
-        return { ok: false, error: "خروجی شرط باید گروه، شرط یا اقدام باشد." };
+        return { ok: false, error: "خروجی شرط باید گروه، شرط، اقدام یا پایان باشد." };
       }
-      return { ok: true, kind, replaceKinds: [kind], oneInTo: true };
+      return { ok: true, kind, replaceKinds: [kind], oneInTo: to.kind !== "end" };
     }
 
     return { ok: false, error: "این اتصال پشتیبانی نمی‌شود." };
@@ -8661,7 +8785,8 @@
       const replace = new Set(res.replaceKinds || [res.kind]);
       graph.edges = graph.edges.filter((e) => !(e.from === fromId && replace.has(e.kind)));
     }
-    // Steps accept only one incoming flow edge
+    // Steps accept only one incoming flow edge. A terminal marker is the exception: every
+    // branch of the diagram is expected to funnel into the same one, so it takes them all.
     if (res.oneInTo && isActionNode(nodeById(toId))) {
       graph.edges = graph.edges.filter((e) => {
         if (e.to !== toId) return true;
@@ -9212,12 +9337,12 @@
       return;
     }
 
-    if (kind !== "group" && kind !== "condition") return;
+    if (kind !== "group" && kind !== "condition" && kind !== "end") return;
 
     const node = {
       id: tmpId(kind),
       kind,
-      title: kind === "group" ? "گروه جدید" : "شرط",
+      title: kind === "group" ? "گروه جدید" : kind === "condition" ? "شرط" : "پایان",
       x: p.x,
       y: p.y,
       isActive: true
@@ -9232,6 +9357,12 @@
       node.conditionType = "FindElement";
       node.equalityType = "Equal";
       node.constantEqualValue = "";
+    }
+    if (kind === "end") {
+      // Centre the disc on the drop point — the default places the top-left corner there, which
+      // for a 26px shape feels like the drop landed off-target.
+      node.x = p.x - sizeOf(node).w / 2;
+      node.y = p.y - sizeOf(node).h / 2;
     }
     graph.nodes.push(node);
     selected = new Set([node.id]);

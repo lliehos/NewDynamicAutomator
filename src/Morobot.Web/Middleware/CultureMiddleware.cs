@@ -31,9 +31,34 @@ public sealed class CultureMiddleware
     {
         var settings = context.RequestServices.GetRequiredService<SystemSettingsService>();
         var license = context.RequestServices.GetRequiredService<LicenseService>();
+        var dbSetup = context.RequestServices.GetRequiredService<DatabaseSetupState>();
 
-        var configured = await settings.GetAsync(
-            SystemSettingKeys.DefaultLanguage, LocaleService.DefaultCulture, context.RequestAborted);
+        // This middleware runs before MVC, so it is reached even on a request that will end at the
+        // setup or progress page. Both reads below go to the database, and during first-run
+        // initialisation the database may exist while its TABLES do not yet — so the check is
+        // "is the application ready", not "is the database reachable". Reading either way would
+        // throw a "Invalid object name 'SystemSettings'" on every request during startup and log a
+        // failure storm for what is normal, expected work in progress.
+        if (!dbSetup.IsReady)
+        {
+            ApplyCulture(context, LocaleService.DefaultCulture, bilingual: true);
+            await _next(context);
+            return;
+        }
+
+        string configured;
+        try
+        {
+            configured = await settings.GetAsync(
+                SystemSettingKeys.DefaultLanguage, LocaleService.DefaultCulture, context.RequestAborted);
+        }
+        catch
+        {
+            // The row is unreadable mid-request (a dropped connection, a permissions change). A
+            // missing language preference must not take the page down; the shipped default is fine.
+            configured = LocaleService.DefaultCulture;
+        }
+
         var fallback = LocaleService.Normalize(configured);
 
         LicenseRuntimeState runtime;
@@ -68,5 +93,20 @@ public sealed class CultureMiddleware
         System.Globalization.CultureInfo.CurrentUICulture = cultureInfo;
 
         await _next(context);
+    }
+
+    /// <summary>
+    /// Sets the request culture without consulting the database. Used on the setup path, where the
+    /// configured language cannot be read — every other consumer of the culture reads the same two
+    /// items this sets, so a fixed value here behaves like a normal request.
+    /// </summary>
+    private static void ApplyCulture(HttpContext context, string culture, bool bilingual)
+    {
+        context.Items[LocaleService.BilingualItemKey] = bilingual;
+        context.Items["da_culture"] = culture;
+
+        var cultureInfo = new System.Globalization.CultureInfo(culture == "en" ? "en-US" : "fa-IR");
+        System.Globalization.CultureInfo.CurrentCulture = cultureInfo;
+        System.Globalization.CultureInfo.CurrentUICulture = cultureInfo;
     }
 }

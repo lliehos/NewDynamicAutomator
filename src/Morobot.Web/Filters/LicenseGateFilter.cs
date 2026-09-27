@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Morobot.Infrastructure.Services;
 using Morobot.Licensing;
+using Morobot.Web.Services;
 
 namespace Morobot.Web.Filters;
 
@@ -9,11 +10,25 @@ namespace Morobot.Web.Filters;
 public sealed class LicenseGateFilter : IAsyncActionFilter
 {
     private readonly LicenseService _license;
+    private readonly DatabaseSetupState _dbSetup;
 
-    public LicenseGateFilter(LicenseService license) => _license = license;
+    public LicenseGateFilter(LicenseService license, DatabaseSetupState dbSetup)
+    {
+        _license = license;
+        _dbSetup = dbSetup;
+    }
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
+        // With no database there is no licence state to read, and this filter runs on every action —
+        // including the setup page. Reading would throw before that page could render and replace the
+        // one useful diagnostic with a 500. Setup is a prerequisite for licensing, so let it through.
+        if (!_dbSetup.IsReady)
+        {
+            await next();
+            return;
+        }
+
         var runtime = await _license.GetRuntimeStateAsync(context.HttpContext.RequestAborted);
         if (runtime.FullFeatures)
         {

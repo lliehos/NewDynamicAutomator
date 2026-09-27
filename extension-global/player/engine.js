@@ -359,11 +359,25 @@ function validateConditionNodeForPlay(n, graph) {
   // Each branch of a condition must lead somewhere. Without this the walk reaches the
   // condition, finds no edge for the branch it needs, and stops — which reads as the engine
   // giving up for no reason. Checked before the run so the author sees it up front.
+  //
+  // Both branches are required as soon as either one is wired, and `next` is NOT accepted as a
+  // stand-in. That is deliberate, and the reason is in executeFlow: a condition falls back to
+  // `next` only when it has no success/fail edge at all. Allowing a half-wired condition here
+  // would let an unwired branch silently follow `next` and run the wrong path — the exact bug
+  // that rule was written to stop.
+  //
+  // The exception is a graph that contains a terminal marker. Its presence is the author saying
+  // "a path is allowed to stop", so an unwired branch means "ends here" rather than "forgotten".
+  // Kept in step with validateConditionNode in the editor's flow.js — the two must agree, or the
+  // editor will accept a diagram the player then refuses to run.
   const outs = ((graph && graph.edges) || []).filter((e) => e.from === n.id);
   const hasBranchEdges = outs.some((e) => e.kind === "success" || e.kind === "fail");
   if (hasBranchEdges) {
-    if (!outs.some((e) => e.kind === "success")) reasons.push(tv("cond.noSuccessEdge"));
-    if (!outs.some((e) => e.kind === "fail")) reasons.push(tv("cond.noFailEdge"));
+    const hasTerminal = (((graph && graph.nodes) || [])).some((x) => x.kind === "end");
+    if (!hasTerminal) {
+      if (!outs.some((e) => e.kind === "success")) reasons.push(tv("cond.noSuccessEdge"));
+      if (!outs.some((e) => e.kind === "fail")) reasons.push(tv("cond.noFailEdge"));
+    }
   } else if (!outs.some((e) => e.kind === "next")) {
     reasons.push(tv("cond.noAnyEdge"));
   }
@@ -1637,6 +1651,15 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     const node = nodes.get(cur);
     if (!node) break;
 
+    if (node.kind === "end") {
+      // Terminal marker: the author has said this path stops here. It carries no work and no
+      // outgoing edge, so the walk simply ends — and ends as a SUCCESS, not an error. Logged
+      // explicitly because a silent return would look identical to a graph that fell off the
+      // end of its edges, which is the failure mode this node exists to make deliberate.
+      appendPlayLog("info", `نود «پایان» — مسیر در «${nodes.get(cur)?.title || "پایان"}» خاتمه یافت.`);
+      break;
+    }
+
     if (node.kind === "start") {
       const e = flowEdge(edges, cur, ["next"]);
       // No delay after start — first step runs immediately; delay is after real steps.
@@ -1703,6 +1726,22 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       );
       const wanted = pass ? "success" : "fail";
       const e = flowEdge(edges, cur, hasBranchEdges ? [wanted] : ["next"]);
+
+      if (!e && hasBranchEdges) {
+        // An unwired branch is only an error when the graph has no terminal marker. With an
+        // `end` node present the author has declared that paths may stop, so an unwired branch
+        // means "this path ends here" — treated as a clean termination and logged as such.
+        // Mirrors validateConditionNodeForPlay above; the two must agree.
+        const hasTerminal = ((graph && graph.nodes) || []).some((x) => x.kind === "end");
+        if (hasTerminal) {
+          appendPlayLog(
+            "info",
+            `شرط «${node.title || node.id}»: نتیجهٔ ${pass ? "موفق" : "ناموفق"} شد و شاخهٔ ` +
+            `«${pass ? "موفق" : "ناموفق"}» وصل نیست — مسیر خاتمه یافت.`
+          );
+          break;
+        }
+      }
 
       if (!e) {
         // Nothing to follow: either the branch we need is unwired, or the condition is a

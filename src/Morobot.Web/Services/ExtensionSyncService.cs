@@ -25,6 +25,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     private readonly IConfiguration _config;
     private readonly ILogger<ExtensionSyncService> _log;
     private readonly IServiceScopeFactory _scopes;
+    private readonly DatabaseSetupState _dbSetup;
     private readonly List<FileSystemWatcher> _watchers = new();
     private readonly object _gate = new();
     private Timer? _debounce;
@@ -34,12 +35,14 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         IWebHostEnvironment env,
         IConfiguration config,
         ILogger<ExtensionSyncService> log,
-        IServiceScopeFactory scopes)
+        IServiceScopeFactory scopes,
+        DatabaseSetupState dbSetup)
     {
         _env = env;
         _config = config;
         _log = log;
         _scopes = scopes;
+        _dbSetup = dbSetup;
 
         var appKey = ExtensionInstallPathHelper.ResolveAppInstanceKey(_config);
         var baseInstall = ExtensionInstallPathHelper.InstanceRoot(_config);
@@ -341,6 +344,17 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
 
     private void TryApplyBrandingOverlay()
     {
+        // The overlay reads branding from SystemSettings, which does not exist until migrations have
+        // run. This method is reached from StartAsync — a hosted service starts as soon as the host
+        // does, which is now *before* initialisation, because that was moved off the startup path to
+        // let the progress page be served. Sync itself is pure file copying and still runs; only the
+        // database-backed overlay is deferred. The initialiser applies the overlay once it is ready.
+        if (!_dbSetup.IsReady)
+        {
+            _log.LogDebug("Extension branding overlay deferred until startup initialisation completes.");
+            return;
+        }
+
         try
         {
             using var scope = _scopes.CreateScope();

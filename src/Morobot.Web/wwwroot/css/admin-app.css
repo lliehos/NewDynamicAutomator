@@ -948,6 +948,64 @@ label { font-size: .9rem; }
   border: 1px solid var(--morobot-soft-2, var(--morobot-soft-2-default));
 }
 .admin-chip .ti { font-size: .85rem; }
+
+/* Event log: the level filter row, the level badges, and the details disclosure. */
+.admin-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem;
+  margin-bottom: .85rem;
+}
+.admin-filter-label {
+  color: #94a3b8;
+  font-size: .78rem;
+  font-weight: 600;
+  margin-inline-end: .15rem;
+}
+a.admin-chip {
+  text-decoration: none;
+  background: #fff;
+  color: #64748b;
+  border-color: rgba(226, 232, 240, .95);
+}
+a.admin-chip:hover { border-color: var(--morobot-primary, var(--morobot-primary-default)); color: var(--morobot-primary-dark, var(--morobot-primary-dark-default)); }
+a.admin-chip.is-active {
+  background: var(--morobot-primary, var(--morobot-primary-default));
+  color: #fff;
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+}
+.admin-chip-info { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+.admin-chip-warning { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+.admin-chip-error { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+.admin-chip-audit { background: #f5f3ff; color: #6d28d9; border-color: #ddd6fe; }
+.admin-nowrap { white-space: nowrap; }
+.admin-log-message { max-width: 34rem; }
+.admin-log-detail { color: #94a3b8; font-size: .78rem; margin-top: .2rem; }
+.admin-log-detail pre {
+  margin: .3rem 0 0;
+  padding: .45rem .6rem;
+  background: #f8fafc;
+  border: 1px solid rgba(226, 232, 240, .95);
+  border-radius: .45rem;
+  font-size: .74rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  direction: ltr;
+  text-align: left;
+}
+.admin-log-detail summary { cursor: pointer; }
+.admin-empty {
+  background: #fff;
+  border: 1px solid rgba(226, 232, 240, .85);
+  border-radius: .9rem;
+  padding: 3rem 1rem;
+  text-align: center;
+  color: #94a3b8;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .06);
+}
+.admin-empty .ti { font-size: 2rem; opacity: .5; }
+.admin-empty p { margin: .6rem 0 0; font-size: .9rem; }
 .admin-status {
   display: inline-flex;
   align-items: center;
