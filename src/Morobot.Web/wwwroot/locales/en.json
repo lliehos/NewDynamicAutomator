@@ -372,7 +372,11 @@
       "updatesManual": "Manual update check for online servers. Offline servers show the last cached result.",
       "diagramSelectorWidth": "Thickness of the box drawn around the selected element while running (1 to 12).",
       "diagramStepDelay": "Default pause after each step in a new process, in milliseconds (0 to 60000).",
-      "diagramLoopBackLimit": "Most times a node may be revisited before a loop is treated as stuck (1 to 1000)."
+      "diagramLoopBackLimit": "Most times a node may be revisited before a loop is treated as stuck (1 to 1000).",
+      "planCurrency": "Currency both prices are stated in. A standard three-letter code, such as IRR or USD.",
+      "monthlyPrice": "Amount charged for one month. Leave blank if the plan has no monthly option.",
+      "yearlyPrice": "Amount charged for one year. Leave blank if the plan has no yearly option.",
+      "discountPercent": "Percentage discount advertised against this price (0 to 100). Blank means no discount."
     },
     "pager": {
       "label": "Pagination",
@@ -613,7 +617,13 @@
       "fieldReferralUrlDefault": "Product default",
       "fieldAllowBilingual": "Bilingual (Persian and English)",
       "fieldAllowPlanManagement": "User plan management",
-      "capsTitle": "Capabilities in this licence"
+      "capsTitle": "Capabilities in this licence",
+      "importTabFile": "Upload file",
+      "importTabPaste": "Paste text",
+      "dropTitle": "Drop the licence file here",
+      "dropSub": "or click to choose",
+      "dropFormats": "Accepted: .morobot and .json",
+      "dropClear": "Remove the selected file"
     },
     "branding": {
       "title": "Organization branding",
@@ -653,7 +663,7 @@
       "referralQrHint": "QR button at bottom-left of user panel — links to morobot.ir",
       "referralQrShow": "Show referral QR widget in user panel",
       "diagramColors": "Diagram colours",
-      "diagramColorsIntro": "Colours of the process editor nodes, and the outline the player draws while running. Each colour has its own apply switch; with it off the diagram uses its built-in default and the stored value is kept.",
+      "diagramColorsIntro": "Colours of the process editor nodes, and the outline the player draws while running. Each colour holds a single value; use the reset button to restore the value the product ships.",
       "diagramApply": "Apply this colour",
       "diagramStepStroke": "Action stroke",
       "diagramStepFill": "Action fill",
@@ -667,7 +677,15 @@
       "diagramGroupEdges": "Edges",
       "diagramGroupCanvas": "Canvas and text",
       "diagramReset": "Reset to default",
-      "identityHint": "Enter the name, title and organization per language. A language left blank uses the other language's value."
+      "identityHint": "Enter the name, title and organization per language. A language left blank uses the other language's value.",
+      "diagramDefaultsTitle": "Diagram defaults",
+      "diagramDefaultsIntro": "The values every new diagram starts from, plus the editor's two ignore-error switch defaults.",
+      "diagramGroupErrors": "Ignore-error defaults",
+      "diagramIgnoreStart": "Ignore errors by default (start node)",
+      "diagramIgnoreNode": "Ignore errors by default (inner nodes)",
+      "diagramSelectorWidth": "Selector outline width",
+      "diagramStepDelay": "Default pause between steps (ms)",
+      "diagramLoopBackLimit": "Loop-back limit"
     },
     "updates": {
       "title": "Software updates",
@@ -1568,15 +1586,5 @@
       "more": " and {n} more nodes"
     }
   },
-  "adminScreen": {},
-  "branding": {
-    "diagramDefaultsTitle": "Diagram defaults",
-    "diagramDefaultsIntro": "The values every new diagram starts from, plus the editor's two ignore-error switch defaults.",
-    "diagramGroupErrors": "Ignore-error defaults",
-    "diagramIgnoreStart": "Ignore errors by default (start node)",
-    "diagramIgnoreNode": "Ignore errors by default (inner nodes)",
-    "diagramSelectorWidth": "Selector outline width",
-    "diagramStepDelay": "Default pause between steps (ms)",
-    "diagramLoopBackLimit": "Loop-back limit"
-  }
+  "adminScreen": {}
 }

@@ -1108,6 +1108,139 @@ label { font-size: .9rem; }
   font-weight: 600;
   color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
 }
+
+/* ── Licence import ──
+   The licence page reuses the offline-update drop zone above, and adds the parts it needs: a
+   file/paste switch, the accepted-format line, and a chip naming the chosen file. */
+.admin-import {
+  display: flex;
+  flex-direction: column;
+  gap: .7rem;
+}
+.admin-import-tabs {
+  display: flex;
+  gap: .25rem;
+  padding: .2rem;
+  border-radius: .6rem;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+}
+.admin-import-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .35rem;
+  padding: .42rem .6rem;
+  border: 0;
+  border-radius: .45rem;
+  background: transparent;
+  font-size: .82rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.admin-import-tab:hover { color: var(--morobot-ink, var(--morobot-ink-default)); }
+.admin-import-tab.is-active {
+  background: #fff;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .09);
+}
+.admin-import-tab .ti { font-size: 1rem; }
+
+/* Only the selected channel is rendered, so the admin never sees two inputs competing. */
+.admin-import-pane { display: none; }
+.admin-import-pane.is-active { display: block; }
+.admin-import-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .78rem;
+  line-height: 1.5;
+  /* A licence document is one very long JSON line. Without these it scrolls sideways and the admin
+     cannot see — or select — the whole thing, which reads as the text being cut off. Wrapping and
+     a hard break inside the box keep every character reachable. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  resize: vertical;
+  max-height: 22rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 9rem;
+}
+.admin-dropzone-formats {
+  margin-top: .45rem;
+  font-size: .72rem;
+  color: #94a3b8;
+}
+.admin-dropzone.is-dragging {
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  border-style: solid;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  box-shadow: 0 0 0 3px var(--morobot-soft, var(--morobot-soft-default));
+}
+
+/* The chosen file, named so the admin can confirm it before sending. */
+.admin-file-chip {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-top: .55rem;
+  padding: .5rem .65rem;
+  border-radius: .6rem;
+  border: 1px solid var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+  background: #fff;
+  font-size: .82rem;
+}
+/* `display: flex` above beats the browser's own rule for [hidden], which is only `display: none` at
+   the same specificity — so without this the chip showed (as an empty row) before any file was
+   picked. Restated here so the JS `hidden` toggle actually hides it. */
+.admin-file-chip[hidden] { display: none; }
+.admin-file-chip > .ti {
+  font-size: 1.1rem;
+  color: var(--morobot-primary, var(--morobot-primary-default));
+}
+.admin-file-chip-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: ltr;
+  text-align: start;
+}
+.admin-file-chip-size {
+  color: #94a3b8;
+  font-size: .74rem;
+  font-variant-numeric: tabular-nums;
+}
+.admin-file-chip-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 0;
+  border-radius: .4rem;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+}
+.admin-file-chip-clear:hover { background: #fef2f2; color: #dc2626; }
+
+.admin-import-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .4rem;
+}
+/* Disabled until there is something to send: an empty submit only bounces back with a warning. */
+.admin-import-submit:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
 /* Visually hidden, but still focusable and still the control that posts the file. */
 .admin-dropzone-input {
   position: absolute;

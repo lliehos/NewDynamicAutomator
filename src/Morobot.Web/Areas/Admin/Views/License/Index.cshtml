@@ -139,13 +139,58 @@
     <div class="card-admin">
       <h3><i class="ti ti-upload" aria-hidden="true"></i>@L["admin.license.importTitle"]</h3>
       <p class="admin-field-hint">@L["admin.license.importHint"]</p>
-      <form method="post" asp-action="Import" enctype="multipart/form-data" class="admin-form-stack">
+
+      @* Two ways in, shown as tabs rather than stacked: pasting JSON and choosing a file are
+         alternatives, and showing both at once made the admin guess which one wins. The tabs also
+         give the drop zone the whole card, so it reads as the primary action. *@
+      <form method="post" asp-action="Import" enctype="multipart/form-data" class="admin-import" data-import-form>
         @Html.AntiForgeryToken()
-        <label class="admin-label" for="licenseFile">@L["admin.license.importFile"]</label>
-        <input class="form-control" type="file" id="licenseFile" name="licenseFile" accept=".morobot,.json,application/json" />
-        <label class="admin-label" for="licenseText">@L["admin.license.importPaste"]</label>
-        <textarea class="form-control admin-textarea" id="licenseText" name="licenseText" rows="6" placeholder="{ ... }"></textarea>
-        <button type="submit" class="btn-admin">@L["admin.license.importSubmit"]</button>
+
+        <div class="admin-import-tabs" role="tablist">
+          <button type="button" class="admin-import-tab is-active" role="tab" aria-selected="true"
+                  data-import-tab="file">
+            <i class="ti ti-file-upload" aria-hidden="true"></i>@L["admin.license.importTabFile"]
+          </button>
+          <button type="button" class="admin-import-tab" role="tab" aria-selected="false"
+                  data-import-tab="paste">
+            <i class="ti ti-clipboard-text" aria-hidden="true"></i>@L["admin.license.importTabPaste"]
+          </button>
+        </div>
+
+        @* The file input stays in the DOM and is what actually posts; the visible drop zone only
+           drives it. Keeping the real input means the form works with JavaScript disabled — the
+           zone is an enhancement, not the mechanism. *@
+        <div class="admin-import-pane is-active" data-import-pane="file">
+          <label class="admin-dropzone" for="licenseFile" data-dropzone>
+            <input class="admin-dropzone-input" type="file" id="licenseFile" name="licenseFile"
+                   accept=".morobot,.json,application/json" data-dropzone-input />
+            <span class="admin-dropzone-icon" aria-hidden="true"><i class="ti ti-cloud-upload"></i></span>
+            <span class="admin-dropzone-title">@L["admin.license.dropTitle"]</span>
+            <span class="admin-dropzone-sub">@L["admin.license.dropSub"]</span>
+            <span class="admin-dropzone-formats">@L["admin.license.dropFormats"]</span>
+          </label>
+
+          @* Shown only once a file is chosen, so the admin can see which file will be sent. *@
+          <div class="admin-file-chip" data-file-chip hidden>
+            <i class="ti ti-file-certificate" aria-hidden="true"></i>
+            <span class="admin-file-chip-name" data-file-name></span>
+            <span class="admin-file-chip-size" data-file-size></span>
+            <button type="button" class="admin-file-chip-clear" data-file-clear
+                    aria-label="@L["admin.license.dropClear"]" title="@L["admin.license.dropClear"]">
+              <i class="ti ti-x" aria-hidden="true"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="admin-import-pane" data-import-pane="paste">
+          <label class="admin-label" for="licenseText">@L["admin.license.importPaste"]</label>
+          <textarea class="form-control admin-textarea admin-import-textarea" id="licenseText" name="licenseText"
+                    rows="7" placeholder="{ ... }" dir="ltr" spellcheck="false" data-import-textarea></textarea>
+        </div>
+
+        <button type="submit" class="btn-admin admin-import-submit" data-import-submit>
+          <i class="ti ti-shield-check" aria-hidden="true"></i>@L["admin.license.importSubmit"]
+        </button>
       </form>
     </div>
 
@@ -191,19 +236,119 @@
           <div class="admin-alert is-warn">@L["admin.updates.notIncluded"]</div>
         }
       </div>
-
-      <div class="admin-settings-card">
-        <h3><i class="ti ti-database-import" aria-hidden="true"></i>@L["admin.license.legacyTitle"]</h3>
-        @if (d.AllowLegacyMigration)
-        {
-          <div class="admin-alert is-ok">@L["admin.license.legacyAllowed"]</div>
-        }
-        else
-        {
-          <div class="admin-alert is-warn">@L["admin.license.legacyNotAllowed"]</div>
-        }
-        <partial name="_AdminHint" model='L["admin.license.legacyHint"]' />
-      </div>
     }
     </div>
   </div>
+
+@section Scripts {
+<script>
+// Licence import: tab switching, drag-and-drop onto the zone, and a file chip so the admin can see
+// which file will be sent. All of it is progressive — the real <input type="file"> and the textarea
+// both submit without any of this, so a failed script leaves a working (if plainer) form.
+(function () {
+  var form = document.querySelector('[data-import-form]');
+  if (!form) return;
+
+  var tabs = form.querySelectorAll('[data-import-tab]');
+  var panes = form.querySelectorAll('[data-import-pane]');
+  var zone = form.querySelector('[data-dropzone]');
+  var input = form.querySelector('[data-dropzone-input]');
+  var chip = form.querySelector('[data-file-chip]');
+  var chipName = form.querySelector('[data-file-name]');
+  var chipSize = form.querySelector('[data-file-size]');
+  var chipClear = form.querySelector('[data-file-clear]');
+  var textarea = form.querySelector('[data-import-textarea]');
+  var submit = form.querySelector('[data-import-submit]');
+
+  var SIZE_UNITS = ['B', 'KB', 'MB'];
+  function formatSize(bytes) {
+    var i = 0, n = bytes;
+    while (n >= 1024 && i < SIZE_UNITS.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)) + ' ' + SIZE_UNITS[i];
+  }
+
+  // ── Tabs ──
+  function select(which) {
+    for (var i = 0; i < tabs.length; i++) {
+      var on = tabs[i].getAttribute('data-import-tab') === which;
+      tabs[i].classList.toggle('is-active', on);
+      tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    for (var j = 0; j < panes.length; j++) {
+      panes[j].classList.toggle('is-active', panes[j].getAttribute('data-import-pane') === which);
+    }
+    // Only the visible channel may carry a value, otherwise the server sees both and the file wins
+    // even though the admin was pasting. Clearing the hidden one makes the choice unambiguous.
+    if (which === 'file') textarea.value = '';
+    else if (input) input.value = '';
+  }
+  for (var t = 0; t < tabs.length; t++) {
+    tabs[t].addEventListener('click', function () { select(this.getAttribute('data-import-tab')); });
+  }
+  // Normalise the initial state through the same function the clicks use, so the tabs and panes can
+  // never disagree. The Razor classes already mark "file" active; this makes that the single rule.
+  select('file');
+
+  // ── File chip ──
+  function showFile() {
+    if (!chip) return;
+    var f = input && input.files && input.files[0];
+    if (!f) { chip.hidden = true; return; }
+    chipName.textContent = f.name;
+    chipSize.textContent = formatSize(f.size);
+    chip.hidden = false;
+  }
+  if (input) {
+    input.addEventListener('change', showFile);
+  }
+  if (chipClear) {
+    chipClear.addEventListener('click', function (e) {
+      // Stop the click reaching the <label>, which would immediately reopen the picker.
+      e.preventDefault();
+      e.stopPropagation();
+      input.value = '';
+      showFile();
+    });
+  }
+
+  // ── Drag and drop ──
+  if (zone && input) {
+    ['dragenter', 'dragover'].forEach(function (ev) {
+      zone.addEventListener(ev, function (e) {
+        e.preventDefault();
+        zone.classList.add('is-dragging');
+      });
+    });
+    ['dragleave', 'dragend'].forEach(function (ev) {
+      zone.addEventListener(ev, function () { zone.classList.remove('is-dragging'); });
+    });
+    zone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      zone.classList.remove('is-dragging');
+      var files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length) return;
+      // A DataTransfer is the only way to put a dropped file into the real input, so the ordinary
+      // form post carries it — no separate upload path to keep in sync.
+      var dt = new DataTransfer();
+      dt.items.add(files[0]);
+      input.files = dt.files;
+      select('file');
+      showFile();
+    });
+  }
+
+  // ── Guard the submit ──
+  // Submitting an empty form just bounces back with a warning, so the button reflects whether
+  // there is actually something to send.
+  function refreshSubmit() {
+    if (!submit) return;
+    var hasFile = input && input.files && input.files.length > 0;
+    var hasText = textarea && textarea.value.trim().length > 0;
+    submit.disabled = !hasFile && !hasText;
+  }
+  refreshSubmit();
+  if (input) input.addEventListener('change', refreshSubmit);
+  if (textarea) textarea.addEventListener('input', refreshSubmit);
+})();
+</script>
+}
