@@ -884,8 +884,11 @@ function resolveHighlightColor(graph) {
 
 /** Process start: ignorePlayError defaults to true. */
 function resolveIgnorePlayError(graph) {
-  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId)
-    || (graph?.nodes || []).find((n) => n.kind === "start");
+  // ONLY the process-level start owns this switch. A start node inside a group has its own repeat
+  // settings (its inspector does not even show this option), so it must never be read as the
+  // process-wide policy — an old graph that left a stale flag on a grouped start would otherwise
+  // silently override the real setting.
+  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
   if (start && Object.prototype.hasOwnProperty.call(start, "ignorePlayError")) {
     return start.ignorePlayError !== false;
   }
@@ -1604,8 +1607,11 @@ function flowEdge(edges, fromId, preferredKinds) {
  * make the run effectively unkillable.
  */
 function resolveLoopBackLimit(graph) {
-  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId)
-    || (graph?.nodes || []).find((n) => n.kind === "start");
+  // Only the process-level start carries this setting — a group start has its own repeat options
+  // and its inspector never shows "حداکثر بازگشت حلقه". Falling back to any start node would let a
+  // stale value on a grouped start silently become the process-wide loop budget (and even override
+  // the graph-level value). Mirrors the editor, which reads only the root start.
+  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
   const raw = Number(start?.loopBackLimit ?? graph?.loopBackLimit);
   if (!Number.isFinite(raw) || raw <= 0) return 100;
   return Math.min(1000, Math.max(1, Math.floor(raw)));
