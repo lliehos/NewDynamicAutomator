@@ -871,8 +871,8 @@ async function paceLoopBack(graph, nextId, visitCounts, loopBackLimit) {
 
 /** Process start: highlight border color for targeted elements. */
 function resolveHighlightColor(graph) {
-  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId)
-    || (graph?.nodes || []).find((n) => n.kind === "start");
+  // Process-level setting: root start only, then the graph, then the built-in default.
+  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
   const raw = start?.highlightColor ?? graph?.highlightColor ?? "#ea5455";
   const s = String(raw || "").trim();
   if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
@@ -970,9 +970,10 @@ function appendPlayResult(entry) {
 }
 
 function processStartNode(graph) {
-  return (graph.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId)
-    || (graph.nodes || []).find((n) => n.kind === "start")
-    || null;
+  // The PROCESS start is the one with no owning group. A start node inside a group is a different
+  // thing (it drives that group's repeat), so falling back to it would let a group's settings stand
+  // in for the process's — the editor reads only the root start, and the two must agree.
+  return (graph.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId) || null;
 }
 
 /**
