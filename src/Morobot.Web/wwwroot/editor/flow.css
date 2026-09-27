@@ -225,7 +225,6 @@ rect.flow-marquee{pointer-events:none}
 #flow-svg g.node:hover .port-idle{opacity:.55}
 #flow-svg g.node .port:hover{filter:brightness(1.12);opacity:1}
 #flow-svg g.node .node-clone-btn,
-#flow-svg g.node .node-rename-btn,
 #flow-svg g.node .node-promote-btn{
   opacity:0;
   pointer-events:none;
@@ -234,8 +233,6 @@ rect.flow-marquee{pointer-events:none}
 }
 #flow-svg g.node:hover .node-clone-btn,
 #flow-svg g.node.node-on .node-clone-btn,
-#flow-svg g.node:hover .node-rename-btn,
-#flow-svg g.node.node-on .node-rename-btn,
 #flow-svg g.node:hover .node-promote-btn,
 #flow-svg g.node.node-on .node-promote-btn{
   opacity:1;
@@ -245,7 +242,6 @@ rect.flow-marquee{pointer-events:none}
 #flow-svg g.node .node-clone-btn[data-tone="group"]:hover .clone-ico{stroke:var(--morobot-primary-light)}
 #flow-svg g.node .node-clone-btn[data-tone="condition"]:hover .clone-ico{stroke:#8b9098}
 #flow-svg g.node .node-clone-btn[data-tone="action"]:hover .clone-ico{stroke:#ff9f43}
-#flow-svg g.node .node-rename-btn:hover .rename-ico{opacity:.9;fill:var(--morobot-primary)}
 #flow-svg g.node .node-promote-btn:hover .promote-bg{fill:#ff9f43}
 #flow-svg g.node .node-promote-btn:hover .promote-ico{stroke:#fff}
 .btn-canvas-save{

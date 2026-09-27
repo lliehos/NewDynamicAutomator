@@ -1411,17 +1411,6 @@
     }
   }
 
-  async function renameDiagramNode(n) {
-    if (!canModify || structLocked || !n || n.kind === "start") return;
-    const current = n.title || "";
-    const next = await promptRename(current, "editor.insp.title", "editor.ribbon.renamePrompt");
-    if (next == null || next === current) return;
-    n.title = next;
-    render();
-    renderInspector();
-    await save();
-  }
-
   function findDataSourceById(sourceId) {
     return (graph.dataSources || []).find((d) => Number(d.id) === Number(sourceId)) || null;
   }
@@ -4335,16 +4324,13 @@
       g.insertBefore(tip, g.firstChild);
     }
     // Buttons first (lower paint layer); titles appended after so they sit above.
-    // Child mode: the graph shape belongs to the mother, so no clone/rename affordances.
+    // Child mode: the graph shape belongs to the mother, so no clone affordance.
     if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify && !structLocked) {
       g.appendChild(makeCloneButton(w, h, n.kind === "condition" ? "condition" : n.kind === "group" ? "group" : "action"));
     }
-    // No rename pencil on a condition: its "title" is not what identifies it — the condition type
-    // and its success/fail branches are — so offering "تغییر عنوان" there was a control that did
-    // something the user could not see reflected anywhere meaningful.
-    if ((n.kind === "group" || isActionNode(n)) && canModify && !structLocked) {
-      g.appendChild(makeRenameButton(w, h, n.kind === "group" ? "group" : "action"));
-    }
+    // No rename pencil on the canvas for any node kind. Every node already has a "عنوان" field in
+    // its inspector, which is where a title is actually visible and editable, so the pencil was a
+    // second entry point for the same edit that only added visual noise on top of the shape.
     let label = n.title;
     let fontSize = 12;
     let labelLines = null;
@@ -4453,13 +4439,6 @@
     // edge, so it is deliberately absent from the chain above. Its incoming edges attach through
     // the same anchorOn() side logic every other shape uses.
     g.addEventListener("mousedown", (ev) => {
-      const renameEl = ev.target.closest && ev.target.closest(".node-rename-btn");
-      if (renameEl || (ev.target.classList && ev.target.classList.contains("node-rename-btn"))) {
-        ev.stopPropagation();
-        ev.preventDefault();
-        renameDiagramNode(n);
-        return;
-      }
       const cloneEl = ev.target.closest && ev.target.closest(".node-clone-btn");
       if (cloneEl || (ev.target.classList && ev.target.classList.contains("node-clone-btn"))) {
         ev.stopPropagation();
@@ -4569,36 +4548,6 @@
       class: "clone-ico",
       x: 7, y: 3, width: 9, height: 9, rx: 1.5,
       fill: "none", stroke: color, "stroke-width": 1.45
-    }));
-    return btn;
-  }
-
-  /** Pencil next to title (top-right) for rename modal. */
-  function makeRenameButton(w, h, kind) {
-    const size = 18;
-    const x = Math.max(4, w - size - 5);
-    const y = kind === "condition" ? Math.max(4, h * 0.18) : 5;
-    const color = kind === "group" ? morobotPrimaryColor()
-      : kind === "condition" ? "#6f6b7d"
-      : morobotPrimaryColor();
-    const btn = el("g", {
-      class: "node-rename-btn",
-      transform: `translate(${x},${y})`,
-      style: "cursor:pointer"
-    });
-    const tip = document.createElementNS(ns, "title");
-    tip.textContent = t("editor.ds.rename") || "تغییر عنوان";
-    btn.appendChild(tip);
-    btn.appendChild(el("rect", {
-      class: "rename-hit",
-      width: size, height: size, rx: 4,
-      fill: "transparent", stroke: "none"
-    }));
-    // Simple pencil glyph
-    btn.appendChild(el("path", {
-      class: "rename-ico",
-      d: "M4 13.5V16h2.5L14.2 8.3 11.7 5.8 4 13.5zm12.2-9.1a.75.75 0 0 0 0-1.06L14.7 1.8a.75.75 0 0 0-1.06 0L12.4 3.04l2.5 2.5 1.3-1.14z",
-      fill: color
     }));
     return btn;
   }
