@@ -59,13 +59,11 @@ public class BrandingController : Controller
         var runtime = await _license.GetRuntimeStateAsync(ct);
         var userId = int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null;
 
-        // Diagram colours are NOT a licensed feature — the editor reads them on every install — so
-        // they are saved before the licence gate below, which only guards the branding identity
-        // (name, logo, favicon, palette). Without this split, an unlicensed install could not save
-        // the colour it is entitled to change, and the gate would have silently swallowed it.
+        // Diagram colours are part of the branding licence, exactly like the identity, the logo and
+        // the brand palette — so an unlicensed install cannot change them and the whole page is one
+        // decision rather than a licensed section with an unlicensed pocket inside it.
         if (!runtime.AllowsBranding)
         {
-            await _branding.SaveDiagramColorsAsync(model, userId, User.Identity?.Name, ct);
             TempData["Danger"] = _locale["admin.branding.notLicensed"];
             return RedirectToAction("Index", "License");
         }
@@ -75,6 +73,12 @@ public class BrandingController : Controller
             model.LogoUrl = existing.LogoUrl;
         if (string.IsNullOrWhiteSpace(model.FaviconUrl))
             model.FaviconUrl = existing.FaviconUrl;
+        // The legacy single-value identity rows are no longer posted by the form. Carry the stored
+        // values through so the model handed to the service is complete, and so a future caller that
+        // does read them sees what is actually saved rather than the default.
+        model.AppName = existing.AppName;
+        model.BrandTitle = existing.BrandTitle;
+        model.OrganizationName = existing.OrganizationName;
 
         Directory.CreateDirectory(Path.Combine(_env.WebRootPath, "uploads", "branding"));
 
@@ -122,13 +126,21 @@ public class BrandingController : Controller
     /// and left the editor wondering which won; resetting writes the shipped value into the one
     /// setting, so the page simply shows the restored colour.
     ///
-    /// Not licence-gated: the diagram colours are not a licensed feature, so an unlicensed install
-    /// can still restore them.
+    /// Licence-gated with the rest of the diagram colours: leaving it open would have been a hole in
+    /// the gate, since writing the shipped value changes the palette just as much as choosing a new
+    /// one does.
     /// </remarks>
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ResetColor(string key, CancellationToken ct)
     {
+        var runtime = await _license.GetRuntimeStateAsync(ct);
+        if (!runtime.AllowsBranding)
+        {
+            TempData["Danger"] = _locale["admin.branding.notLicensed"];
+            return RedirectToAction("Index", "License");
+        }
+
         var userId = int.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null;
         var done = await _branding.ResetDiagramColorAsync(key, userId, User.Identity?.Name, ct);
         if (!done) return NotFound();

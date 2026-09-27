@@ -623,14 +623,10 @@
       "notLicensed": "Custom branding requires a valid license.",
       "identity": "Identity",
       "assets": "Brand assets",
-      "appName": "Application name",
-      "sharedValueHint": "Used when the language-specific value is left blank.",
       "appNameEn": "App name (English)",
       "appNameFa": "App name (Persian)",
-      "brandTitle": "Brand title",
       "brandTitleEn": "Brand title (English)",
       "brandTitleFa": "Brand title (Persian)",
-      "organization": "Organization name",
       "organizationEn": "Organization (English)",
       "organizationFa": "Organization (Persian)",
       "logo": "Logo",
@@ -672,7 +668,8 @@
       "diagramGroupStates": "States",
       "diagramGroupEdges": "Edges",
       "diagramGroupCanvas": "Canvas and text",
-      "diagramReset": "Reset to default"
+      "diagramReset": "Reset to default",
+      "identityHint": "Enter the name, title and organization per language. A language left blank uses the other language's value."
     },
     "updates": {
       "title": "Software updates",

@@ -54,18 +54,28 @@ public sealed class BrandHeadModel
         => FromDto(dto, siteOrigin, isFa: false);
 
     /// <summary>
-    /// Resolve the model for one language, preferring the per-language value and falling back
-    /// to the shared one. A blank language value must not blank the name - an admin who only
-    /// filled the Persian side still gets a working English site (and vice versa).
+    /// Resolve the model for one language.
     /// </summary>
+    /// <remarks>
+    /// Both languages are entered as their own value — there is no separate "shared" field. When a
+    /// language is left blank the OTHER language's value is used before the built-in default, so a
+    /// deployment that only fills one side still has a working site in both: an Arabic or Persian
+    /// name followed by nothing reads worse than the same name twice. This is what the removed
+    /// shared box used to do, except it always fell back to one fixed value regardless of which
+    /// language was missing; falling back to the other entered language is closer to intent.
+    /// </remarks>
     public static BrandHeadModel FromDto(TenantBrandingDto dto, string? siteOrigin, bool isFa)
     {
         var palette = CopyPalette(dto);
-        var app = Pick(isFa ? dto.AppNameFa : dto.AppNameEn, dto.AppName, DefaultAppName);
-        var title = Pick(isFa ? dto.BrandTitleFa : dto.BrandTitleEn, dto.BrandTitle, app);
+        var app = Pick(isFa ? dto.AppNameFa : dto.AppNameEn,
+                       isFa ? dto.AppNameEn : dto.AppNameFa,
+                       DefaultAppName);
+        var title = Pick(isFa ? dto.BrandTitleFa : dto.BrandTitleEn,
+                         isFa ? dto.BrandTitleEn : dto.BrandTitleFa,
+                         app);
         var org = isFa
-            ? Pick(dto.OrganizationNameFa, dto.OrganizationName, null)
-            : Pick(dto.OrganizationNameEn, dto.OrganizationName, null);
+            ? Pick(dto.OrganizationNameFa, dto.OrganizationNameEn, null)
+            : Pick(dto.OrganizationNameEn, dto.OrganizationNameFa, null);
         var showQr = !dto.IsLicensedBranding || dto.ShowReferralQrWidget;
         // The widget link is vendor-signed inside the licence. Falling back to the page compiled
         // into the app keeps the widget working on a trial, where no licence exists yet.

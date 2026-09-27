@@ -35,22 +35,36 @@ public sealed class LicenseDisplayDto
 
 public sealed class TenantBrandingDto
 {
+    /// <summary>
+    /// Legacy single-value name, kept because the licence file and older rows still carry it.
+    /// </summary>
+    /// <remarks>
+    /// Not entered on Admin → Branding any more: the page has one box per language, and a separate
+    /// unqualified box read as a third meaningless field beside them. It survives as the fallback
+    /// for an install whose ONLY value is this one — an older deployment, or a licence that names
+    /// the product — so nothing that used to show a name can start showing a blank.
+    /// </remarks>
     public string AppName { get; set; } = "Morobot";
+
+    /// <summary>Legacy single-value title. See <see cref="AppName"/>.</summary>
     public string BrandTitle { get; set; } = "Morobot";
+
+    /// <summary>Legacy single-value organization. See <see cref="AppName"/>.</summary>
     public string? OrganizationName { get; set; }
+
     public string? LogoUrl { get; set; }
     public string? FaviconUrl { get; set; }
     public bool IsLicensedBranding { get; set; }
 
     /// <summary>
-    /// Per-language overrides.
-    ///
-    /// The product is bilingual, but the name/title/organization were single values, so a
-    /// Persian deployment and an English one showed the same text. Each field now has an En
-    /// and an Fa value; the resolved AppName/BrandTitle/OrganizationName pick the one that
-    /// matches the reader's language. Leaving a language blank falls back to the shared
-    /// value, so an admin who only cares about one language does not have to fill both.
+    /// The name, title and organization, one value per language.
     /// </summary>
+    /// <remarks>
+    /// The product is bilingual and was originally single-valued, so a Persian deployment and an
+    /// English one showed the same text. Each is now entered per language. A blank language falls
+    /// back to the OTHER language before the legacy single value, so filling one side still leaves
+    /// a usable site in both — and does not leave one language blank.
+    /// </remarks>
     public string? AppNameEn { get; set; }
     public string? AppNameFa { get; set; }
     public string? BrandTitleEn { get; set; }

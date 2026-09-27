@@ -475,6 +475,24 @@ label { font-size: .9rem; }
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+/* ── Branding form ──
+   The branding form reuses .admin-settings-grid for its cards, but its cards hold two-column
+   language pairs and the diagram colour grid. At the settings page's 3-across layout each card was
+   only ~420px, which collapsed every language pair to a single column and made the page read as one
+   long list of inputs.
+   These rules sit AFTER the .admin-settings-grid media queries on purpose: equal specificity means
+   the later rule wins, so putting them earlier let the 3-across rule override them. */
+@media (min-width: 900px) {
+  .admin-settings-grid.admin-branding-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* The colour cards hold a wide picker+hex+reset row and a grid of them, so they take the full
+     width rather than being squeezed into half of it. */
+  .admin-settings-grid.admin-branding-form > .admin-settings-card:has(.admin-color-grid) {
+    grid-column: 1 / -1;
+  }
+}
 .admin-settings-card {
   background: #fff;
   border-radius: .85rem;

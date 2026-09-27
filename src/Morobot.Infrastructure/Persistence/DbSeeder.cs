@@ -206,17 +206,20 @@ public static class DbSeeder
         await Upsert(SystemSettingKeys.UpdateAvailableNotes, "", "Updates", "یادداشت نسخه", "Release notes", null, null);
         await Upsert(SystemSettingKeys.UpdateAvailableUrl, "", "Updates", "لینک دانلود", "Download URL", null, null);
 
-        await Upsert(SystemSettingKeys.BrandAppName, "Morobot", "Branding", "نام اپلیکیشن", "Application name", "فقط با لایسنس معتبر.", "Licensed installs only.");
-        await Upsert(SystemSettingKeys.BrandTitle, "Morobot", "Branding", "عنوان برند", "Brand title", null, null);
-        await Upsert(SystemSettingKeys.BrandOrganization, "", "Branding", "نام سازمان", "Organization name", null, null);
-        // Per-language overrides. A blank value falls back to the shared value above, so these
-        // start empty and only take effect once an admin fills them in.
-        await Upsert(SystemSettingKeys.BrandAppNameFa, "", "Branding", "نام اپلیکیشن (فارسی)", "Application name (Persian)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
-        await Upsert(SystemSettingKeys.BrandAppNameEn, "", "Branding", "نام اپلیکیشن (انگلیسی)", "Application name (English)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
-        await Upsert(SystemSettingKeys.BrandTitleFa, "", "Branding", "عنوان برند (فارسی)", "Brand title (Persian)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
-        await Upsert(SystemSettingKeys.BrandTitleEn, "", "Branding", "عنوان برند (انگلیسی)", "Brand title (English)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
-        await Upsert(SystemSettingKeys.BrandOrganizationFa, "", "Branding", "نام سازمان (فارسی)", "Organization (Persian)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
-        await Upsert(SystemSettingKeys.BrandOrganizationEn, "", "Branding", "نام سازمان (انگلیسی)", "Organization (English)", "خالی = استفاده از مقدار مشترک", "Blank = use the shared value");
+        // Legacy single-value identity rows. Not on the branding page any more — it has one box per
+        // language — but kept as the fallback for an install or licence whose only value is this
+        // one. Labelled "legacy" so the row is not mistaken for something still being edited.
+        await Upsert(SystemSettingKeys.BrandAppName, "Morobot", "Branding", "نام اپلیکیشن (قدیمی)", "Application name (legacy)", "دیگر در صفحهٔ برندینگ ویرایش نمی‌شود؛ فقط به‌عنوان مقدار پشتیبان برای نصب‌های قدیمی می‌ماند.", "No longer edited on Admin → Branding; kept only as the fallback for an older install.");
+        await Upsert(SystemSettingKeys.BrandTitle, "Morobot", "Branding", "عنوان برند (قدیمی)", "Brand title (legacy)", null, null);
+        await Upsert(SystemSettingKeys.BrandOrganization, "", "Branding", "نام سازمان (قدیمی)", "Organization name (legacy)", null, null);
+        // One value per language. A blank language falls back to the OTHER language, then to the
+        // legacy row above, so a deployment that fills only one side still shows a name in both.
+        await Upsert(SystemSettingKeys.BrandAppNameFa, "", "Branding", "نام اپلیکیشن (فارسی)", "Application name (Persian)", "خالی = استفاده از مقدار انگلیسی", "Blank = use the English value");
+        await Upsert(SystemSettingKeys.BrandAppNameEn, "", "Branding", "نام اپلیکیشن (انگلیسی)", "Application name (English)", "خالی = استفاده از مقدار فارسی", "Blank = use the Persian value");
+        await Upsert(SystemSettingKeys.BrandTitleFa, "", "Branding", "عنوان برند (فارسی)", "Brand title (Persian)", "خالی = استفاده از مقدار انگلیسی", "Blank = use the English value");
+        await Upsert(SystemSettingKeys.BrandTitleEn, "", "Branding", "عنوان برند (انگلیسی)", "Brand title (English)", "خالی = استفاده از مقدار فارسی", "Blank = use the Persian value");
+        await Upsert(SystemSettingKeys.BrandOrganizationFa, "", "Branding", "نام سازمان (فارسی)", "Organization (Persian)", "خالی = استفاده از مقدار انگلیسی", "Blank = use the English value");
+        await Upsert(SystemSettingKeys.BrandOrganizationEn, "", "Branding", "نام سازمان (انگلیسی)", "Organization (English)", "خالی = استفاده از مقدار فارسی", "Blank = use the Persian value");
         await Upsert(SystemSettingKeys.BrandLogoPath, "", "Branding", "مسیر لوگو", "Logo path", "/uploads/branding/logo.png", "/uploads/branding/logo.png");
         await Upsert(SystemSettingKeys.BrandFaviconPath, "", "Branding", "مسیر فاوآیکون", "Favicon path", "/uploads/branding/favicon.png", "/uploads/branding/favicon.png");
         await Upsert(SystemSettingKeys.BrandColorPrimary, BrandPaletteDefaults.Primary, "Branding", "رنگ اصلی", "Primary color", null, null);

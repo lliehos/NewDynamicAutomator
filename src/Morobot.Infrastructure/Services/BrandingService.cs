@@ -115,9 +115,11 @@ public sealed class BrandingService
         if (!state.AllowsBranding)
             throw new InvalidOperationException("branding.error.notLicensed");
 
-        await SetTrackedAsync(SystemSettingKeys.BrandAppName, model.AppName, ct);
-        await SetTrackedAsync(SystemSettingKeys.BrandTitle, model.BrandTitle, ct);
-        await SetTrackedAsync(SystemSettingKeys.BrandOrganization, model.OrganizationName ?? "", ct);
+        // The per-language values are what the page edits. The legacy single-value rows
+        // (BrandAppName / BrandTitle / BrandOrganization) are deliberately NOT written here: the
+        // form no longer posts them, so writing would blank them with the model's default, and they
+        // are the last-resort fallback for an install whose only value is the old one. They keep
+        // whatever they already held.
         await SetTrackedAsync(SystemSettingKeys.BrandAppNameEn, model.AppNameEn ?? "", ct);
         await SetTrackedAsync(SystemSettingKeys.BrandAppNameFa, model.AppNameFa ?? "", ct);
         await SetTrackedAsync(SystemSettingKeys.BrandTitleEn, model.BrandTitleEn ?? "", ct);
@@ -221,32 +223,6 @@ public sealed class BrandingService
             _actorUserName = null;
         }
         return true;
-    }
-
-    /// <summary>
-    /// Save ONLY the diagram colours, with change tracking.
-    /// </summary>
-    /// <remarks>
-    /// The branding page is licence-gated but the diagram colours are not a licensed feature, so
-    /// the controller calls this one on the unlicensed path instead of dropping the whole save.
-    /// </remarks>
-    public async Task SaveDiagramColorsAsync(
-        TenantBrandingDto model,
-        int? actorUserId,
-        string? actorUserName,
-        CancellationToken ct = default)
-    {
-        _actorUserId = actorUserId;
-        _actorUserName = actorUserName;
-        try
-        {
-            await SaveDiagramColorsAsync(model, ct);
-        }
-        finally
-        {
-            _actorUserId = null;
-            _actorUserName = null;
-        }
     }
 
     private async Task SavePaletteAsync(TenantBrandingDto model, CancellationToken ct)
