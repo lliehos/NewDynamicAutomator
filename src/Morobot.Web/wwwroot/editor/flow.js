@@ -2384,11 +2384,10 @@
     if (n.kind === "start") return { w: 84, h: 84 };
     if (n.kind === "group") return groupBoxSize(n);
     if (n.kind === "condition") return { w: 140, h: 84 };
-    // Terminal marker: a red disc that names itself. It carries no configuration and no outgoing
-    // edge, so it stays visually lighter than a real node — but it still has to be big enough to
-    // hold its "پایان" caption legibly, otherwise the label has to live outside the shape and
-    // stops reading as part of it.
-    if (n.kind === "end") return { w: 72, h: 72 };
+    // Terminal marker: a small red disc that names itself. It carries no configuration and no
+    // outgoing edge, so it is deliberately about half the size of a real node — big enough for the
+    // "پایان" caption to sit under/inside it, small enough not to compete with the work nodes.
+    if (n.kind === "end") return { w: 36, h: 36 };
     if (isActionNode(n)) return stepBoxSize(n);
     return { w: 120, h: 44 };
   }
