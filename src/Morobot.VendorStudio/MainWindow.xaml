@@ -263,6 +263,14 @@
               </TextBlock>
             </CheckBox>
 
+            <CheckBox x:Name="AllowBilingual" Margin="28,0,0,8" IsChecked="True"
+                      ToolTip="اگر خاموش باشد، سامانه فقط به زبان پیش‌فرض نمایش داده می‌شود و کلید تغییر زبان پنهان می‌شود. برای لایسنس‌های قدیمی روشن در نظر گرفته می‌شود.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="دو زبانه (فارسی و انگلیسی)"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: فعال — خاموش یعنی فقط زبان پیش‌فرض)"/>
+              </TextBlock>
+            </CheckBox>
+
             <StackPanel Orientation="Horizontal" Margin="28,8,0,12">
               <Button Content="امضای لایسنس" Width="130" Style="{StaticResource VsButton}" Click="SignLicense_Click"/>
               <Button Content="ذخیره .morobot" Width="130" Margin="10,0,0,0"

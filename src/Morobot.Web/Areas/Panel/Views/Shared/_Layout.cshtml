@@ -157,8 +157,13 @@
             </div>
             <ul class="navbar-nav flex-row align-items-center ms-auto">
               <li class="nav-item me-2">
-                <button type="button" class="btn btn-sm btn-label-primary rounded-pill px-3 da-lang-chip"
-                        data-lang-switch data-lang-next="@nextLang" title="@langLabel">@langLabel</button>
+                @* Hidden when the licence excludes the second language, so the visitor is not offered
+                   a choice the install cannot honour. *@
+                @if (L.Bilingual)
+                {
+                  <button type="button" class="btn btn-sm btn-label-primary rounded-pill px-3 da-lang-chip"
+                          data-lang-switch data-lang-next="@nextLang" title="@langLabel">@langLabel</button>
+                }
               </li>
               <li class="nav-item me-3 d-none d-sm-block">
                 <a class="nav-link text-muted" href="/" data-i18n="common.site" title="@L["common.site"]">@L["common.site"]</a>

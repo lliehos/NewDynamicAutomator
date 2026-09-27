@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Morobot.Infrastructure.Identity;
+using Morobot.Infrastructure.Services;
 using Morobot.Web.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,12 +14,18 @@ public class SettingsController : Controller
     private readonly ILocaleService _locale;
     private readonly AuthService _auth;
     private readonly IWebHostEnvironment _env;
+    private readonly LicenseService _license;
 
-    public SettingsController(ILocaleService locale, AuthService auth, IWebHostEnvironment env)
+    public SettingsController(
+        ILocaleService locale,
+        AuthService auth,
+        IWebHostEnvironment env,
+        LicenseService license)
     {
         _locale = locale;
         _auth = auth;
         _env = env;
+        _license = license;
     }
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -161,9 +168,14 @@ public class SettingsController : Controller
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public IActionResult SetLanguage(string lang, string? returnUrl = null)
+    public async Task<IActionResult> SetLanguage(string lang, string? returnUrl = null, CancellationToken ct = default)
     {
-        LocaleService.SetCookie(Response, lang);
+        // Guarded the same way as the admin switch: when the licence excludes the second language the
+        // control is not rendered, and storing the choice anyway would leave a cookie the middleware
+        // silently overrides — indistinguishable from a broken switch.
+        if (await IsBilingualAsync(ct))
+            LocaleService.SetCookie(Response, lang);
+
         Response.Cookies.Append("da_local_user", User.Identity?.Name ?? "test", new CookieOptions
         {
             HttpOnly = false,
@@ -175,5 +187,11 @@ public class SettingsController : Controller
         if (!string.IsNullOrWhiteSpace(returnUrl) && Url.IsLocalUrl(returnUrl))
             return Redirect(returnUrl);
         return RedirectToAction(nameof(Index));
+    }
+
+    private async Task<bool> IsBilingualAsync(CancellationToken ct)
+    {
+        try { return (await _license.GetRuntimeStateAsync(ct)).AllowsBilingual; }
+        catch { return true; }
     }
 }

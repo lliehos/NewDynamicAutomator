@@ -32,7 +32,7 @@ Morobot license tool (vendor-only — never deploy private keys to customers)
 
 Commands:
   genkeypair [--out-dir <path>]
-  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--allow-plan-management true|false] [--update-url URL] [--max-source-rows N] [--max-source-bytes N] [-o license.morobot]
+  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--allow-plan-management true|false] [--allow-bilingual true|false] [--update-url URL] [--max-source-rows N] [--max-source-bytes N] [-o license.morobot]
   package --project <path-to-Morobot.Web.csproj> --output <folder>
   package-update --version <semver> --source <published-folder> [-o <file.zip>] [--notes "text"] [--channel stable] [--min-current <semver>] [--product-name Morobot]
   verify --license <file.morobot> [--public-key <pem>]
@@ -106,6 +106,9 @@ static int Sign(string[] args)
     // Opt-OUT, unlike migration: plan management existed before this flag was signable, so an
     // omission has to mean "allowed" or every already-signed licence would silently lose it.
     var allowPlanManagement = !string.Equals(GetArg(args, "--allow-plan-management"), "false", StringComparison.OrdinalIgnoreCase);
+    // Opt-OUT as well: the second language shipped before this flag was signable, so an omission has
+    // to mean "both languages" or existing single-licence customers would silently lose one.
+    var allowBilingual = !string.Equals(GetArg(args, "--allow-bilingual"), "false", StringComparison.OrdinalIgnoreCase);
     var updateUrl = GetArg(args, "--update-url");
     var allowedHostRaw = GetArg(args, "--allowed-host");
     string? allowedHost = null;
@@ -150,6 +153,7 @@ static int Sign(string[] args)
         AllowUpdates = allowUpdates,
         AllowLegacyMigration = allowLegacyMigration,
         AllowPlanManagement = allowPlanManagement,
+        AllowBilingual = allowBilingual,
         UpdateServerUrl = updateUrl,
         AllowedHost = allowedHost,
         ReferralWidgetUrl = referralUrl,

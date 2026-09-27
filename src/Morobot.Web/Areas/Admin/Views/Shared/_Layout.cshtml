@@ -88,12 +88,17 @@
           <a class="btn-admin secondary admin-top-link" asp-area="Panel" asp-controller="Account" asp-action="Logout">
             <i class="ti ti-logout" aria-hidden="true"></i><span>@L["common.logout"]</span>
           </a>
-          <form method="post" asp-area="Admin" asp-controller="Settings" asp-action="SetLanguage" class="admin-lang">
-            @Html.AntiForgeryToken()
-            <input type="hidden" name="lang" value="@nextLang" />
-            <input type="hidden" name="returnUrl" value="@(Context.Request.Path + Context.Request.QueryString)" />
-            <button type="submit" class="btn-admin secondary">@langLabel</button>
-          </form>
+          @* The switch is hidden when the licence excludes the second language: offering it would
+             either do nothing or, worse, leave the admin in a language the install does not serve. *@
+          @if (L.Bilingual)
+          {
+            <form method="post" asp-area="Admin" asp-controller="Settings" asp-action="SetLanguage" class="admin-lang">
+              @Html.AntiForgeryToken()
+              <input type="hidden" name="lang" value="@nextLang" />
+              <input type="hidden" name="returnUrl" value="@(Context.Request.Path + Context.Request.QueryString)" />
+              <button type="submit" class="btn-admin secondary">@langLabel</button>
+            </form>
+          }
         </div>
       </div>
       @await Component.InvokeAsync("AdminLicenseStrip")

@@ -73,6 +73,45 @@ public sealed class BrandingService
     }
 
     /// <summary>
+    /// The stored stamp of the current branding, or an empty string when none has been written yet.
+    /// </summary>
+    /// <remarks>
+    /// One settings lookup, which is the entire point: it tells the caller whether the browser's
+    /// cached copy is still current without reading the forty-odd settings that copy was built from.
+    /// An install that has never saved branding returns empty, which cannot match a cookie's stamp,
+    /// so the first request falls through to a full read and writes both the cookie and the stamp.
+    /// </remarks>
+    public Task<string> GetStampAsync(CancellationToken ct = default)
+        => _settings.GetAsync(SystemSettingKeys.BrandStamp, "", ct);
+
+    /// <summary>
+    /// Record the stamp for an already-resolved branding snapshot, if none is stored yet.
+    /// </summary>
+    /// <remarks>
+    /// This exists so an install that has never saved branding still reaches the cached path. The row
+    /// is seeded (as an empty string), so the write has somewhere to land; without this call the row
+    /// would stay empty, every comparison against it would fail, and the full read would run on every
+    /// single page render — the exact cost the cache was added to remove.
+    ///
+    /// It is called only when the stamp is missing, and re-reads before writing, so the steady state
+    /// performs no write at all. Two concurrent first requests may both write the same value; that is
+    /// harmless because the value is derived from the branding rather than assigned, so whichever
+    /// write lands last is still correct.
+    /// </remarks>
+    public async Task EnsureStampAsync(TenantBrandingDto dto, CancellationToken ct = default)
+    {
+        if (!string.IsNullOrEmpty(await GetStampAsync(ct)))
+            return;
+
+        await _settings.SetAsync(
+            SystemSettingKeys.BrandStamp,
+            BrandStamp.Compute(dto),
+            actorUserId: null,
+            actorUserName: null,
+            ct);
+    }
+
+    /// <summary>
     /// Load the diagram behaviour defaults the branding page now owns.
     /// </summary>
     /// <remarks>
@@ -148,11 +187,20 @@ public sealed class BrandingService
             await SetTrackedAsync(SystemSettingKeys.BrandFaviconPath, model.FaviconUrl, ct);
         await SavePaletteAsync(model, ct);
         await SaveDiagramColorsAsync(model, ct);
+
+        // Written last, from what was just stored, so the stamp always describes the saved state.
+        // Computing it from the posted model instead would stamp the pre-normalisation values, and a
+        // colour the service corrected (an invalid hex falls back to the shipped default) would leave
+        // a stamp that never matches the data it claims to describe.
+        var saved = await GetAsync(ct);
+        await SetTrackedAsync(
+            SystemSettingKeys.BrandStamp,
+            BrandStamp.Compute(saved),
+            ct);
     }
 
     private async Task ApplyPaletteFromSettingsAsync(TenantBrandingDto dto, CancellationToken ct)
-    {
-        dto.ColorPrimary = BrandPaletteDefaults.NormalizeHex(
+    {        dto.ColorPrimary = BrandPaletteDefaults.NormalizeHex(
             await _settings.GetAsync(SystemSettingKeys.BrandColorPrimary, BrandPaletteDefaults.Primary, ct),
             BrandPaletteDefaults.Primary);
         dto.ColorPrimaryDark = BrandPaletteDefaults.NormalizeHex(

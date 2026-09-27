@@ -113,6 +113,13 @@
         </dd>
         <dt>@L["admin.license.fieldAllowUpdates"]</dt>
         <dd>@(d.AllowUpdates ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
+        @* Every optional capability is listed together, because an administrator trying to explain
+           why a page is missing (no plan levels, no second language) needs to see that the licence
+           decided it rather than guess at a bug. *@
+        <dt>@L["admin.license.fieldAllowPlanManagement"]</dt>
+        <dd>@(d.AllowPlanManagement ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
+        <dt>@L["admin.license.fieldAllowBilingual"]</dt>
+        <dd>@(d.AllowBilingual ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
         <dt>@L["admin.license.fieldReferralUrl"]</dt>
         <dd>
           @if (string.IsNullOrWhiteSpace(d.ReferralWidgetUrl))

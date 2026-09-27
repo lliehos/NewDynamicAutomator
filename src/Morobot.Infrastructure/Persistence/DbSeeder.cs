@@ -211,6 +211,29 @@ public static class DbSeeder
             "با روشن بودن، رمز عبور باید دست‌کم یک حرف و یک رقم داشته باشد. پلنی که قاعدهٔ خودش را دارد، بر این تنظیم مقدم است.",
             "When on, a password must contain at least one letter and one digit. A plan with its own rule takes precedence.");
 
+        // The language a first-time visitor sees. The per-visitor cookie still wins once someone
+        // chooses, so this only decides the starting point.
+        await Upsert(
+            SystemSettingKeys.DefaultLanguage,
+            "fa",
+            "Auth",
+            "زبان پیش‌فرض سامانه",
+            "Default system language",
+            "زبانی که بازدیدکنندهٔ تازه با آن روبه‌رو می‌شود. هر کاربری که خودش زبان را تغییر دهد، انتخاب خودش را می‌بیند.",
+            "The language a first-time visitor is shown. Anyone who changes the language themselves keeps their own choice.");
+
+        // The branding stamp must have a row to exist at all: BrandingService writes it and throws
+        // for an undeclared key, and the cache path reads it on every request. Seeded empty, which
+        // means "no stamp yet" — the first render fills it in.
+        await Upsert(
+            SystemSettingKeys.BrandStamp,
+            "",
+            "Branding",
+            "اثر انگشت برندینگ",
+            "Branding stamp",
+            "به‌صورت خودکار نوشته می‌شود؛ دست نزنید. برای تشخیص تغییر برندینگ و تازه‌سازی کش مرورگر است.",
+            "Written automatically; do not edit. Used to detect a branding change and refresh the browser's cached copy.");
+
         await Upsert(
             SystemSettingKeys.UpdateServerUrl,
             UpdateCheckService.DefaultUpdateUrl,

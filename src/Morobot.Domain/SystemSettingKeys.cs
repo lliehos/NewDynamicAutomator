@@ -32,6 +32,19 @@ public static class SystemSettingKeys
     public const string BrandReferralQrVisible = "BrandReferralQrVisible";
 
     /// <summary>
+    /// A short stamp of the current branding, kept so a browser's cached copy can tell in ONE read
+    /// whether it is still current.
+    /// </summary>
+    /// <remarks>
+    /// Branding reaches every page, so the browser caches it and only re-reads when it changes. That
+    /// decision needs a cheap "has it changed?" answer: comparing the cached copy against the
+    /// forty-odd settings it was built from would defeat the purpose, and a timestamp would make
+    /// every request look like a change. One row holding a hash of those settings answers it in a
+    /// single lookup, and is written by <c>BrandingService.SaveCoreAsync</c> whenever branding is saved.
+    /// </remarks>
+    public const string BrandStamp = "BrandStamp";
+
+    /// <summary>
     /// Legacy single-choice key, superseded by the two switches below and intentionally not
     /// rendered anywhere. Nothing reads it except <c>AuthModeResolver</c>, which consults it only
     /// when neither switch exists, so an install too old to have been seeded with them still
@@ -96,8 +109,22 @@ public static class SystemSettingKeys
         // accepted, so it belongs with the credentials rather than above the switches that decide
         // whether credentials are used at all.
         PasswordMinLength,
-        PasswordRequireLetterAndDigit
+        PasswordRequireLetterAndDigit,
+        // Language sits last: it is the one setting here that is about presentation rather than
+        // authentication, and putting it after the credentials keeps the card's main job first.
+        DefaultLanguage
     };
+
+    /// <summary>
+    /// Settings rendered as a two-choice language picker rather than a free-text box.
+    /// </summary>
+    /// <remarks>
+    /// A language is an enum in practice — the supported set is fixed by the locale files — so a
+    /// text box would let an administrator store a code nothing can render.
+    /// </remarks>
+    public static bool IsLanguageChoice(string? key) =>
+        !string.IsNullOrWhiteSpace(key)
+        && string.Equals(key, DefaultLanguage, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Settings the Auth group must never render: the legacy AuthMode row offers a second,
@@ -188,6 +215,17 @@ public static class SystemSettingKeys
     public const string PasswordMinLength = "PasswordMinLength";
     /// <summary>"true" when a password must contain a letter and a digit and no plan states a rule.</summary>
     public const string PasswordRequireLetterAndDigit = "PasswordRequireLetterAndDigit";
+
+    /// <summary>
+    /// The language the site opens in for a visitor who has not chosen one.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from the per-user language cookie: the cookie records a deliberate choice and always
+    /// wins, while this is what a first-time visitor, a search engine or a shared link sees. It was
+    /// hard-coded to Persian in <c>LocaleService.DefaultCulture</c>, so an English-language
+    /// deployment had no way to change it.
+    /// </remarks>
+    public const string DefaultLanguage = "DefaultLanguage";
 
     /// <summary>
     /// The global password-policy settings, in the order the Auth card renders them: the length,
@@ -535,7 +573,10 @@ public static class SystemSettingKeys
         UpdateLastCheckUtc,
         UpdateAvailableVersion,
         UpdateAvailableNotes,
-        UpdateAvailableUrl
+        UpdateAvailableUrl,
+        // An internal fingerprint of the branding: the cache reads it and a save writes it. Hand
+        // editing it would only cause every client to re-read, so it is shown for information.
+        BrandStamp
     };
 
     /// <summary>True when the value is system-managed and must not be edited from the settings form.</summary>

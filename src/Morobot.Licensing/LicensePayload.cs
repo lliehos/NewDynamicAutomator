@@ -41,6 +41,18 @@ public sealed class LicensePayload
     /// misconfiguration. A vendor who wants a flat install turns it off explicitly.
     /// </remarks>
     public bool AllowPlanManagement { get; set; } = true;
+
+    /// <summary>
+    /// Whether the deployment may offer both languages (Persian and English).
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <c>true</c> for the same reason as <see cref="AllowPlanManagement"/>: the flag
+    /// arrived after licences had been signed, and an absent JSON value takes the CLR default. A
+    /// <c>false</c> default would have switched every existing installation to a single language on
+    /// update, and — because a single-language install hides the language switcher — the loss would
+    /// have looked like a UI regression rather than a licence change.
+    /// </remarks>
+    public bool AllowBilingual { get; set; } = true;
     /// <summary>Optional override for update check URL.</summary>
     public string? UpdateServerUrl { get; set; }
     /// <summary>When set, HTTP Host (or this IP) must match. Empty = no host lock.</summary>

@@ -106,6 +106,10 @@
       </div>
     </div>
     <div class="col-12 col-lg-5">
+      @* The language card disappears entirely when the licence excludes the second language: a card
+         whose only action is unavailable is worse than no card. *@
+      @if (L.Bilingual)
+      {
       <div class="card">
         <div class="card-header">
           <h5 class="mb-0" data-i18n="settings.language">@L["settings.language"]</h5>
@@ -126,6 +130,7 @@
           </form>
         </div>
       </div>
+      }
     </div>
   </div>
 </div>

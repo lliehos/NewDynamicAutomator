@@ -540,7 +540,8 @@
       "diagramColorSwitch": "اعمال",
       "ldapFormatDomain": "دامنه\\کاربر (اکتیو دایرکتوری داخلی)",
       "ldapFormatUpn": "کاربر@دامنه (مایکروسافت ۳۶۵ / Azure AD)",
-      "ldapFormatPlain": "نام کاربری بدون پیشوند (همانطور که تایپ میشود)"
+      "ldapFormatPlain": "نام کاربری بدون پیشوند (همانطور که تایپ میشود)",
+      "bilingualOff": "لایسنس این نصب تک‌زبانه است؛ سامانه با همان زبان پیش‌فرض نمایش داده می‌شود و کلید تغییر زبان پنهان است."
     },
     "license": {
       "title": "لایسنس",
@@ -609,7 +610,10 @@
         "HostMismatch": "دامنه/IP درخواست با لایسنس همخوان نیست"
       },
       "fieldReferralUrl": "لینک ویجت معرفی",
-      "fieldReferralUrlDefault": "پیش‌فرض محصول"
+      "fieldReferralUrlDefault": "پیش‌فرض محصول",
+      "fieldAllowBilingual": "دو زبانه (فارسی و انگلیسی)",
+      "fieldAllowPlanManagement": "مدیریت پلن‌های کاربر",
+      "capsTitle": "قابلیت‌های این لایسنس"
     },
     "branding": {
       "title": "برندینگ سازمان",

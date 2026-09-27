@@ -29,6 +29,11 @@ public sealed class LicenseDisplayDto
     /// trial — the deployment has no plan levels at all and every user sits at the top one.
     /// </summary>
     public bool AllowPlanManagement { get; set; }
+    /// <summary>
+    /// Whether both languages are offered (default ON). When it is off the install is locked to the
+    /// system default language and the language switcher is hidden.
+    /// </summary>
+    public bool AllowBilingual { get; set; }
     public bool ShowCopyright { get; set; }
     public string? DatabaseServerHint { get; set; }
     public string? UpdateServerUrl { get; set; }

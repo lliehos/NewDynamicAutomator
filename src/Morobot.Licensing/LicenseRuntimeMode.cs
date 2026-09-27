@@ -56,6 +56,22 @@ public sealed class LicenseRuntimeState
     public bool AllowsPlanManagement => Mode == LicenseRuntimeMode.Licensed && (Payload?.AllowPlanManagement ?? true);
 
     /// <summary>
+    /// Whether both languages are available.
+    /// </summary>
+    /// <remarks>
+    /// A TRIAL is bilingual: the trial exists to show what the product does, and the second language
+    /// is part of what it does. Only a signed licence can restrict the install to one language.
+    /// </remarks>
+    public bool AllowsBilingual => Mode switch
+    {
+        LicenseRuntimeMode.Licensed => Payload?.AllowBilingual ?? true,
+        LicenseRuntimeMode.Trial => true,
+        // A restricted install is view-only; it keeps the shipped behaviour so nothing about the
+        // interface changes while the customer is sorting out their licence.
+        _ => true
+    };
+
+    /// <summary>
     /// Row ceiling implied by the license. A trial or restricted install falls back to the small
     /// trial cap; a licensed install uses the signed value (null = the vendor sold no ceiling).
     /// </summary>

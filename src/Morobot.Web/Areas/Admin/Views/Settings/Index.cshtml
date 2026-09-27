@@ -125,9 +125,25 @@
                 }
               </select>
             }
-            else if (s.Key == SystemSettingKeys.LdapNameFormat)
+            else if (SystemSettingKeys.IsLanguageChoice(s.Key))
             {
-              @* One choice per form the directory accepts, rather than a text box the administrator
+              @* A language is a fixed choice, not free text: only the locales that ship can be
+                 rendered, so a text box would let an administrator store a code nothing can draw.
+                 When the licence excludes the second language this still renders — the setting is
+                 what decides WHICH single language the install uses, so hiding it would leave the
+                 deployment locked to a language nobody chose. *@
+              var currentLang = string.IsNullOrWhiteSpace(s.Value) ? "fa" : s.Value.Trim().ToLowerInvariant();
+              <select class="form-select" id="setting_@s.Key" name="setting_@s.Key" dir="ltr">
+                <option value="fa" selected="@(currentLang == "fa")">فارسی (fa)</option>
+                <option value="en" selected="@(currentLang == "en")">English (en)</option>
+              </select>
+              @if (!L.Bilingual)
+              {
+                <p class="admin-field-hint">@L["admin.settings.bilingualOff"]</p>
+              }
+            }
+            else if (s.Key == SystemSettingKeys.LdapNameFormat)
+            {              @* One choice per form the directory accepts, rather than a text box the administrator
                  can misspell. The value stored is the enum name, which the resolver parses back. *@
               var current = string.IsNullOrWhiteSpace(s.Value)
                 ? nameof(Morobot.Contracts.Auth.LdapNameFormat.DomainBackslash)

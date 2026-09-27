@@ -17,12 +17,18 @@ public class SettingsController : Controller
     private readonly SystemSettingsService _settings;
     private readonly AppDbContext _db;
     private readonly ILocaleService _locale;
+    private readonly LicenseService _license;
 
-    public SettingsController(SystemSettingsService settings, AppDbContext db, ILocaleService locale)
+    public SettingsController(
+        SystemSettingsService settings,
+        AppDbContext db,
+        ILocaleService locale,
+        LicenseService license)
     {
         _settings = settings;
         _db = db;
         _locale = locale;
+        _license = license;
     }
 
     [HttpGet]
@@ -145,11 +151,23 @@ public class SettingsController : Controller
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public IActionResult SetLanguage(string lang, string? returnUrl = null)
+    public async Task<IActionResult> SetLanguage(string lang, string? returnUrl = null, CancellationToken ct = default)
     {
-        LocaleService.SetCookie(Response, lang);
+        // The switch is hidden when the licence excludes the second language, so this only stops a
+        // crafted POST from storing a choice the install cannot serve. Without it the visitor would
+        // be left with a cookie that the middleware silently overrides, which looks like the switch
+        // being broken rather than unavailable.
+        if (await IsBilingualAsync(ct))
+            LocaleService.SetCookie(Response, lang);
+
         if (!string.IsNullOrWhiteSpace(returnUrl) && Url.IsLocalUrl(returnUrl))
             return Redirect(returnUrl);
         return RedirectToAction(nameof(Index));
+    }
+
+    private async Task<bool> IsBilingualAsync(CancellationToken ct)
+    {
+        try { return (await _license.GetRuntimeStateAsync(ct)).AllowsBilingual; }
+        catch { return true; }
     }
 }

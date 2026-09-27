@@ -10,6 +10,8 @@ public interface ILocaleService
     string Culture { get; }
     string Dir { get; }
     bool IsRtl { get; }
+    /// <summary>False when the licence excludes the second language; the language switch hides then.</summary>
+    bool Bilingual { get; }
     string this[string key] { get; }
     string T(string key, params (string name, string? value)[] args);
 }
@@ -18,6 +20,16 @@ public sealed class LocaleService : ILocaleService
 {
     public const string CookieName = "da_culture";
     public const string DefaultCulture = "fa";
+
+    /// <summary>
+    /// HttpContext.Items key saying whether the licence includes the second language.
+    /// </summary>
+    /// <remarks>
+    /// Set by <c>CultureMiddleware</c>, which has already resolved the licence for the request. Read
+    /// from here rather than from the licence again so a page cannot end up half-bilingual: the
+    /// switch, the culture and the rendered text all come from one decision.
+    /// </remarks>
+    public const string BilingualItemKey = "da.bilingual";
 
     private static readonly ConcurrentDictionary<string, Dictionary<string, string>> FlatCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -73,6 +85,14 @@ public sealed class LocaleService : ILocaleService
 
     public bool IsRtl => !string.Equals(Culture, "en", StringComparison.OrdinalIgnoreCase);
     public string Dir => IsRtl ? "rtl" : "ltr";
+
+    /// <summary>
+    /// Whether to offer the language switch. Defaults to true so a request that somehow did not go
+    /// through the middleware (a background task rendering a template, a unit test) behaves as a
+    /// normal install rather than silently pretending its licence forbids the second language.
+    /// </summary>
+    public bool Bilingual =>
+        _http.HttpContext?.Items[BilingualItemKey] is not bool bilingual || bilingual;
 
     public string this[string key] => T(key);
 

@@ -227,6 +227,7 @@ public sealed class LicenseService
             AllowUpdates = runtime.AllowsUpdates,
             AllowLegacyMigration = runtime.AllowsLegacyMigration,
             AllowPlanManagement = runtime.AllowsPlanManagement,
+            AllowBilingual = runtime.AllowsBilingual,
             ShowCopyright = runtime.ShowCopyright,
             UpdateServerUrl = updateUrl,
             PendingConnectionRestart = string.IsNullOrWhiteSpace(pendingRestart) ? null : pendingRestart
@@ -367,6 +368,7 @@ public sealed class LicenseService
             AllowUpdates = payload.AllowUpdates,
             AllowLegacyMigration = payload.AllowLegacyMigration,
             AllowPlanManagement = payload.AllowPlanManagement,
+            AllowBilingual = payload.AllowBilingual,
             TrialDays = payload.TrialDays > 0 ? payload.TrialDays : 3,
             DatabaseServerHint = ExtractServerHint(payload.DatabaseConnectionString),
             AllowedHost = string.IsNullOrWhiteSpace(payload.AllowedHost)

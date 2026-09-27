@@ -540,7 +540,8 @@
       "diagramColorSwitch": "Apply",
       "ldapFormatDomain": "domain\\user (on-premises AD)",
       "ldapFormatUpn": "user@domain (Microsoft 365 / Azure AD)",
-      "ldapFormatPlain": "Plain user name (sent as typed, no domain)"
+      "ldapFormatPlain": "Plain user name (sent as typed, no domain)",
+      "bilingualOff": "This installation's licence is single-language; the site is shown in the default language and the language switch is hidden."
     },
     "license": {
       "title": "License",
@@ -609,7 +610,10 @@
         "HostMismatch": "Request host/IP does not match license"
       },
       "fieldReferralUrl": "Referral widget link",
-      "fieldReferralUrlDefault": "Product default"
+      "fieldReferralUrlDefault": "Product default",
+      "fieldAllowBilingual": "Bilingual (Persian and English)",
+      "fieldAllowPlanManagement": "User plan management",
+      "capsTitle": "Capabilities in this licence"
     },
     "branding": {
       "title": "Organization branding",

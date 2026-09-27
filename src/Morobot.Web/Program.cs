@@ -14,6 +14,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMemoryCache();
 builder.Services.AddScoped<ILocaleService, LocaleService>();
+builder.Services.AddScoped<BrandingCookieService>();
 builder.Services.AddScoped<TenantBrandingViewService>();
 builder.Services.AddScoped<ExtensionBrandingOverlay>();
 builder.Services.AddSingleton<SetupGuideService>();

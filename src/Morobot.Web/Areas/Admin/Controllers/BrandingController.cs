@@ -5,7 +5,6 @@ using Morobot.Contracts.Licensing;
 using Morobot.Infrastructure.Services;
 using Morobot.Web.Areas.Admin.Models;
 using Morobot.Web.Services;
-
 namespace Morobot.Web.Areas.Admin.Controllers;
 
 [Area("Admin")]
@@ -15,6 +14,7 @@ public class BrandingController : Controller
     private readonly BrandingService _branding;
     private readonly LicenseService _license;
     private readonly DiagramSettingsService _diagram;
+    private readonly BrandingCookieService _cookie;
     private readonly IWebHostEnvironment _env;
     private readonly ILocaleService _locale;
     private readonly ExtensionSyncService _sync;
@@ -24,6 +24,7 @@ public class BrandingController : Controller
         BrandingService branding,
         LicenseService license,
         DiagramSettingsService diagram,
+        BrandingCookieService cookie,
         IWebHostEnvironment env,
         ILocaleService locale,
         ExtensionSyncService sync,
@@ -32,6 +33,7 @@ public class BrandingController : Controller
         _branding = branding;
         _license = license;
         _diagram = diagram;
+        _cookie = cookie;
         _env = env;
         _locale = locale;
         _sync = sync;
@@ -94,6 +96,16 @@ public class BrandingController : Controller
             model.ShowReferralQrWidget = ReadSwitch(Request.Form, "ShowReferralQrWidget");
 
             await _branding.SaveAsync(model, userId, User.Identity?.Name, ct);
+
+            // Refresh the browser's cached copy in the SAME response that saved the change. The cache
+            // is stamped, so the next page render would notice the new stamp and re-read anyway — but
+            // that leaves the administrator who just picked a colour looking at the old one until
+            // they navigate. Writing it here means the palette they chose is what they see.
+            var saved = await _branding.GetAsync(ct);
+            _cookie.Write(
+                _locale.Culture,
+                BrandStamp.Compute(saved),
+                saved);
 
             // The diagram BEHAVIOUR defaults live here now too, behind the same licence: they are the
             // starting point every new process's canvas is drawn from, so they belong with the rest of

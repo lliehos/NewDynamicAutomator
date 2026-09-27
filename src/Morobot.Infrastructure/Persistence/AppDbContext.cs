@@ -132,6 +132,8 @@ public class AppDbContext : DbContext
             // CLR property so the database default and the model default agree — when they disagree
             // EF emits a spurious AlterColumn on the next migration.
             e.Property(x => x.AllowPlanManagement).HasDefaultValue(true);
+            // Same mirror-and-default reasoning as AllowPlanManagement above.
+            e.Property(x => x.AllowBilingual).HasDefaultValue(true);
             e.HasIndex(x => x.ImportedAtUtc);
         });
 
