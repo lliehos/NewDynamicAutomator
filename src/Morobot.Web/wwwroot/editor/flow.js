@@ -2383,7 +2383,10 @@
   function sizeOf(n) {
     if (n.kind === "start") return { w: 84, h: 84 };
     if (n.kind === "group") return groupBoxSize(n);
-    if (n.kind === "condition") return { w: 140, h: 84 };
+    // Condition diamond: ~30% smaller than before (140x84) so a row of conditions reads as a
+    // chain rather than as a stack of boxes. The label auto-fits (fitConditionLabel), so the
+    // caption shrinks with it instead of overflowing the diamond.
+    if (n.kind === "condition") return { w: 98, h: 59 };
     // Terminal marker: a small red disc that names itself. It carries no configuration and no
     // outgoing edge, so it is deliberately about half the size of a real node — big enough for the
     // "پایان" caption to sit under/inside it, small enough not to compete with the work nodes.
@@ -4336,8 +4339,11 @@
     if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify && !structLocked) {
       g.appendChild(makeCloneButton(w, h, n.kind === "condition" ? "condition" : n.kind === "group" ? "group" : "action"));
     }
-    if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify && !structLocked) {
-      g.appendChild(makeRenameButton(w, h, n.kind === "condition" ? "condition" : n.kind === "group" ? "group" : "action"));
+    // No rename pencil on a condition: its "title" is not what identifies it — the condition type
+    // and its success/fail branches are — so offering "تغییر عنوان" there was a control that did
+    // something the user could not see reflected anywhere meaningful.
+    if ((n.kind === "group" || isActionNode(n)) && canModify && !structLocked) {
+      g.appendChild(makeRenameButton(w, h, n.kind === "group" ? "group" : "action"));
     }
     let label = n.title;
     let fontSize = 12;
