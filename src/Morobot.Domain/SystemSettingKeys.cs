@@ -66,6 +66,7 @@ public static class SystemSettingKeys
         AuthLocalEnabled,
         AuthLdapEnabled,
         LdapUseTls,
+        PasswordRequireLetterAndDigit,
         DiagramIgnorePlayError,
         DiagramNodeIgnoreError
     };
@@ -90,7 +91,12 @@ public static class SystemSettingKeys
         LdapDomain,
         LdapNameFormat,
         LdapUseTls,
-        DefaultRegisterPlan
+        DefaultRegisterPlan,
+        // The password floor reads after the sign-in providers: it governs how a password is
+        // accepted, so it belongs with the credentials rather than above the switches that decide
+        // whether credentials are used at all.
+        PasswordMinLength,
+        PasswordRequireLetterAndDigit
     };
 
     /// <summary>
@@ -167,6 +173,40 @@ public static class SystemSettingKeys
     /// password, so leaving this off sends it in the clear — the administrator's explicit choice.
     /// </summary>
     public const string LdapUseTls = "LdapUseTls";
+
+    // ── Password policy ──
+    // The policy used to live only on each Plan (MinPasswordLength / RequireLetterAndDigit), which
+    // meant an install with no plan levels had no password rules at all — the very installs that
+    // most need a floor, since a licensed-with-plans deployment states its policy per plan. These
+    // two settings are that floor.
+    //
+    // They are read as a FALLBACK: a plan that states its own rules still wins (see
+    // PasswordPolicy.Resolve), so a deployment selling a strong-password tier is unaffected. These
+    // values are what applies when there is no plan to ask.
+
+    /// <summary>Minimum password length used when no plan states one.</summary>
+    public const string PasswordMinLength = "PasswordMinLength";
+    /// <summary>"true" when a password must contain a letter and a digit and no plan states a rule.</summary>
+    public const string PasswordRequireLetterAndDigit = "PasswordRequireLetterAndDigit";
+
+    /// <summary>
+    /// The global password-policy settings, in the order the Auth card renders them: the length,
+    /// then the complexity switch that qualifies it.
+    /// </summary>
+    /// <remarks>
+    /// Declared here rather than only in the view so that a caller wanting "the password settings"
+    /// has one list to read, and so adding a third rule has an obvious home.
+    /// </remarks>
+    public static readonly IReadOnlyList<string> PasswordPolicyKeys = new[]
+    {
+        PasswordMinLength,
+        PasswordRequireLetterAndDigit
+    };
+
+    /// <summary>True when the key is one of the global password-policy settings.</summary>
+    public static bool IsPasswordPolicy(string? key) =>
+        !string.IsNullOrWhiteSpace(key)
+        && PasswordPolicyKeys.Contains(key, StringComparer.OrdinalIgnoreCase);
 
     // ── Diagram defaults ──
     // The editor's colours and play defaults were compiled into flow.js, so changing how every
@@ -411,6 +451,32 @@ public static class SystemSettingKeys
         StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// The diagram behaviour defaults that moved to Admin → Branding along with the colours.
+    /// </summary>
+    /// <remarks>
+    /// These are the values a NEW process's canvas starts from — selector line width, step delay,
+    /// loop-back limit and the two ignore-error defaults. They used to sit in the Diagram group on
+    /// Admin → Settings, which split the diagram's appearance across two pages: an admin changing
+    /// the palette on Branding and the node behaviour on Settings had to know the two were related.
+    /// Listing them here is what removes them from Settings — a key is rendered by the page that
+    /// owns it (see <see cref="IsBrandingOwned"/>).
+    /// </remarks>
+    public static readonly IReadOnlySet<string> DiagramBehaviourOwned = new HashSet<string>(
+        new[]
+        {
+            DiagramSelectorLineWidth,
+            DiagramStepDelayMs,
+            DiagramLoopBackLimit,
+            DiagramIgnorePlayError,
+            DiagramNodeIgnoreError
+        },
+        StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>True when the key is one of the diagram behaviour defaults now owned by Branding.</summary>
+    public static bool IsDiagramBehaviourOwned(string? key) =>
+        !string.IsNullOrWhiteSpace(key) && DiagramBehaviourOwned.Contains(key);
+
+    /// <summary>
     /// Keys owned by Admin → Branding. Admin → Settings must NOT list these: both pages read and
     /// write the same rows, so exposing them in two places let a stale Settings form silently
     /// overwrite branding (or vice versa). Branding values are also licence-gated and need the
@@ -443,7 +509,14 @@ public static class SystemSettingKeys
         BrandColorSoft2,
         BrandColorInk,
         BrandColorBorderSubtle,
-        BrandReferralQrVisible
+        BrandReferralQrVisible,
+        // Spelled out rather than referencing DiagramBehaviourOwned: static field initialisers run in
+        // declaration order, so that field (declared below) would still be null here.
+        DiagramSelectorLineWidth,
+        DiagramStepDelayMs,
+        DiagramLoopBackLimit,
+        DiagramIgnorePlayError,
+        DiagramNodeIgnoreError
     }.Concat(DiagramColorOwnedKeys).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>True when the key belongs to a page other than Admin → Settings.</summary>
@@ -530,11 +603,10 @@ public static class SystemSettingKeys
     {
         new SettingGroupInfo("Auth", "auth", "ti-shield-lock", 10),
         new SettingGroupInfo("Updates", "updates", "ti-refresh", 20),
-        // "Diagram" stays, but it is no longer about colour: the colours and their apply switches
-        // moved to Admin → Branding (see BrandingOwned). What is left here are the editor's
-        // non-colour defaults — selector line width, step delay, loop-back limit, ignore-errors —
-        // which are behaviour, not branding, so they belong on the settings page.
-        new SettingGroupInfo("Diagram", "diagram", "ti-hierarchy", 25),
+        // "Diagram" is gone from this page. Its colours moved to Admin → Branding first, and now the
+        // behaviour defaults (selector width, step delay, loop-back limit, the two ignore-error
+        // switches) have followed them, so nothing diagram-related is left. The group is declared on
+        // the Branding side instead — see the views that render it there.
         new SettingGroupInfo("Deployment", "deployment", "ti-server-cog", 30),
         new SettingGroupInfo("Branding", "branding", "ti-palette", 40)
     };

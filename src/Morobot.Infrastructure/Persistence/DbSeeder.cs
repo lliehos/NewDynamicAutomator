@@ -25,7 +25,8 @@ public static class DbSeeder
             bool play, bool selector, bool record, bool smart, int sort,
             int minPwd, bool letterDigit, bool selfUpgrade,
             bool canShare, bool canReceiveShare, int? maxShares,
-            bool shareView, bool shareEdit, bool shareDelete, bool shareExec, bool shareDs)
+            bool shareView, bool shareEdit, bool shareDelete, bool shareExec, bool shareDs,
+            decimal? monthly, decimal? yearly)
         {
             var plan = await db.Plans.FirstOrDefaultAsync(p => p.Code == code);
             if (plan is null)
@@ -56,33 +57,30 @@ public static class DbSeeder
             plan.ShareAllowDelete = shareDelete;
             plan.ShareAllowExecute = shareExec;
             plan.ShareAllowChangeDataSource = shareDs;
+
+            // Seed the shipped price ONLY when the plan has no price at all. A price is commercial
+            // data the admin owns, so an existing value is never overwritten; but leaving every
+            // existing plan at NULL would make the new pricing fields look broken on an upgrade,
+            // since the admin has no way to know a value was ever intended.
+            if (plan.MonthlyPrice is null && plan.YearlyPrice is null && (monthly is not null || yearly is not null))
+            {
+                plan.MonthlyPrice = monthly;
+                plan.YearlyPrice = yearly;
+                plan.PriceCurrency = "IRR";
+            }
         }
 
         // Local/guest: no share. Free can share (actor); Pro+ can receive (admin-tunable).
+        // Local and Free have no price: one is a sign-in placeholder and the other is free.
         await UpsertPlan(nameof(PlanCode.Local), "محلی / تست", "Local / Test", 1, 1, 30, false, false, false, false, 1, 3, false, false,
-            false, false, null, false, false, false, false, false);
+            false, false, null, false, false, false, false, false, null, null);
         await UpsertPlan(nameof(PlanCode.Free), "رایگان", "Free", 3, 3, 80, true, true, false, false, 2, 3, false, false,
-            true, false, 3, true, true, false, true, false);
+            true, false, 3, true, true, false, true, false, null, null);
         await UpsertPlan(nameof(PlanCode.Pro), "حرفه‌ای", "Pro", null, null, null, true, true, true, false, 3, 8, true, true,
-            true, true, null, true, true, true, true, true);
+            true, true, null, true, true, true, true, true, 990000m, 9900000m);
         await UpsertPlan(nameof(PlanCode.Gold), "طلایی", "Gold", null, null, null, true, true, true, true, 4, 8, true, true,
-            true, true, null, true, true, true, true, true);
+            true, true, null, true, true, true, true, true, 1990000m, 19900000m);
         await db.SaveChangesAsync();
-
-        var pro = await db.Plans.FirstAsync(p => p.Code == nameof(PlanCode.Pro));
-        if (!await db.PlanPrices.AnyAsync(p => p.PlanId == pro.Id))
-        {
-            db.PlanPrices.Add(new PlanPrice
-            {
-                PlanId = pro.Id,
-                Amount = 990000,
-                Currency = "IRR",
-                Interval = "monthly",
-                IsActive = true,
-                Notes = "Default Pro monthly price (admin-managed; no payment gateway yet)"
-            });
-            await db.SaveChangesAsync();
-        }
     }
 
     private static async Task EnsureSystemSettingsAsync(AppDbContext db)
@@ -191,6 +189,27 @@ public static class DbSeeder
             "Secure connection (TLS)",
             "با روشن بودن، اتصال LDAPS برقرار می‌شود و گواهی سرور بررسی می‌گردد. خاموش بودن، رمز را روی شبکه به‌صورت متن ساده می‌فرستد.",
             "When on, the connection uses LDAPS and the server certificate is validated. When off, the password crosses the network in the clear.");
+
+        // The deployment-wide password floor. It is the fallback for a plan that states no rules of
+        // its own, and the only policy an install with no plan levels has. Seeded at the value a
+        // typical Free signup already used, so turning it on changes nothing for existing installs.
+        await Upsert(
+            SystemSettingKeys.PasswordMinLength,
+            PasswordPolicy.FallbackMinLength.ToString(),
+            "Auth",
+            "حداقل طول رمز عبور",
+            "Minimum password length",
+            "کمترین تعداد نویسه برای رمز عبور. اگر پلنی قاعدهٔ خودش را داشته باشد، همان اعمال می‌شود و این مقدار نادیده گرفته می‌شود.",
+            "Fewest characters a password may have. A plan that states its own rule overrides this value.");
+
+        await Upsert(
+            SystemSettingKeys.PasswordRequireLetterAndDigit,
+            "false",
+            "Auth",
+            "الزام حرف و رقم در رمز",
+            "Require a letter and a digit",
+            "با روشن بودن، رمز عبور باید دست‌کم یک حرف و یک رقم داشته باشد. پلنی که قاعدهٔ خودش را دارد، بر این تنظیم مقدم است.",
+            "When on, a password must contain at least one letter and one digit. A plan with its own rule takes precedence.");
 
         await Upsert(
             SystemSettingKeys.UpdateServerUrl,

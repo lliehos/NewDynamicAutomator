@@ -110,7 +110,74 @@ public class EntitlementService
                 return await ApplyLicenseCeilingAsync(LocalDefaults(), ct);
         }
 
+        // An install whose licence has no plan management has no levels to be on: every user gets
+        // the top plan. This also covers a TRIAL, which is deliberately plan-less.
+        //
+        // Applying it here rather than at each call site is the point — entitlements are read from
+        // this one method (and FromClaims for the cookie path), so flattening in the resolver means
+        // the caps, the feature flags and the "my plan" display all agree without every caller
+        // having to remember the rule.
+        plan = await FlattenToTopPlanAsync(plan, ct);
+
         return await ApplyLicenseCeilingAsync(FromPlan(plan, user.PlanExpiresAtUtc), ct);
+    }
+
+    /// <summary>
+    /// The plan a user is effectively on. When the licence grants plan management this is the plan
+    /// they were assigned; when it does not (and during a trial) it is the deployment's top plan, so
+    /// no user is ever held below a level the install cannot express.
+    /// </summary>
+    /// <remarks>
+    /// The top plan is the active plan with the GREATEST capability, chosen by sort order first and
+    /// then by "unlimited beats limited". Sort order is the admin's own statement of which plan is
+    /// highest, and falling back to a capability comparison keeps the rule sane on an install whose
+    /// sort orders are all equal (the seeded default) rather than silently picking plan #1.
+    /// </remarks>
+    public async Task<Plan> FlattenToTopPlanAsync(Plan plan, CancellationToken ct = default)
+    {
+        if (await AllowsPlanManagementAsync(ct))
+            return plan;
+
+        // A Local account is not a level, it is the deliberate no-play account used for testing and
+        // for a device that must not drive a browser (see LocalDefaults: CanPlay = false). Promoting
+        // it to the top plan would hand those accounts the very capability the plan exists to deny,
+        // so it is left exactly as assigned.
+        if (PasswordPolicy.IsLocal(plan.Code))
+            return plan;
+
+        var top = await _db.Plans.AsNoTracking()
+            .Where(p => p.IsActive && p.Code != nameof(PlanCode.Local))
+            .OrderByDescending(p => p.SortOrder)
+            // Prefer the plan that grants the most: unlimited caps rank above numeric ones, and the
+            // capability switches break a remaining tie. Ordering is done in SQL as far as the
+            // columns allow. A plan row that cannot be expressed is not an option — the plan the
+            // user already holds is a safer answer than falling back to a hard-coded code.
+            .ThenByDescending(p => p.MaxTasks == null ? 1 : 0)
+            .ThenByDescending(p => p.MaxDataSources == null ? 1 : 0)
+            .ThenByDescending(p => p.CanSmart)
+            .ThenByDescending(p => p.CanRecord)
+            .ThenByDescending(p => p.CanPlay)
+            .FirstOrDefaultAsync(ct);
+
+        // Only ever RAISE a level. If the install somehow has no usable top plan, the user keeps
+        // what they had rather than being silently dropped to nothing.
+        return top is not null && top.SortOrder > plan.SortOrder ? top : plan;
+    }
+
+    /// <summary>True when this licence lets the deployment manage user plan levels.</summary>
+    public async Task<bool> AllowsPlanManagementAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var runtime = await _licenses.GetRuntimeStateAsync(ct);
+            return runtime.AllowsPlanManagement;
+        }
+        catch
+        {
+            // A licence that cannot be read is not a reason to strip capabilities from every user;
+            // the licence layer already has its own restricted mode for that.
+            return true;
+        }
     }
 
     public async Task<EntitlementsDto> ResolveWithCountsAsync(int userId, ClaimsPrincipal principal, CancellationToken ct = default)
@@ -123,12 +190,41 @@ public class EntitlementService
             .Include(u => u.Plan)
             .FirstOrDefaultAsync(u => u.Id == userId, ct);
         var entitlements = dbUser is null
-            ? await ApplyLicenseCeilingAsync(fromClaims, ct)
+            ? await FlattenClaimsAsync(fromClaims, ct)
             : await ResolveForUserAsync(dbUser, ct);
 
         entitlements.TaskCount = await _db.ProcessShares.CountAsync(a => a.UserId == userId, ct);
         entitlements.DataSourceCount = await CountCanvasDataSourcesAsync(userId, ct);
         return entitlements;
+    }
+
+    /// <summary>
+    /// Brings an entitlements object built from the auth cookie up to the flattened level.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="FromClaims"/> cannot flatten by itself: it is static and has no database, and the
+    /// plan cookie is only rewritten when the user signs in or changes plan. Without this, a user
+    /// holding a cookie issued before the licence changed would keep reporting the old (lower) level
+    /// from every page that reads the cookie, even though the server would allow the top level.
+    /// </remarks>
+    private async Task<EntitlementsDto> FlattenClaimsAsync(EntitlementsDto entitlements, CancellationToken ct)
+    {
+        if (await AllowsPlanManagementAsync(ct))
+            return await ApplyLicenseCeilingAsync(entitlements, ct);
+
+        var plan = await _db.Plans.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Code == entitlements.PlanCode, ct);
+        if (plan is null)
+            return await ApplyLicenseCeilingAsync(entitlements, ct);
+
+        var flattened = await FlattenToTopPlanAsync(plan, ct);
+        if (ReferenceEquals(flattened, plan) || flattened.Code == plan.Code)
+            return await ApplyLicenseCeilingAsync(entitlements, ct);
+
+        var upgraded = FromPlan(flattened, entitlements.PlanExpiresAtUtc);
+        upgraded.TaskCount = entitlements.TaskCount;
+        upgraded.DataSourceCount = entitlements.DataSourceCount;
+        return await ApplyLicenseCeilingAsync(upgraded, ct);
     }
 
     /// <summary>

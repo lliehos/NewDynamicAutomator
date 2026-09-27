@@ -101,9 +101,72 @@ public sealed class DiagramSettingsService
         return dto;
     }
 
-    /// <summary>Write a resolved colour onto the matching editor field.</summary>
-    private static void AssignColor(DiagramDefaultsDto dto, string editorField, string hex)
+    /// <summary>
+    /// The setting keys this service owns for saving: the three numeric/behaviour defaults and the
+    /// two ignore-error flags. Colours are NOT here — they are saved with the branding palette.
+    /// </summary>
+    /// <remarks>
+    /// Kept as an explicit list so the branding page cannot accidentally write an unrelated setting
+    /// whose name happened to reach the posted form.
+    /// </remarks>
+    public static readonly IReadOnlyList<string> OwnedKeys = new[]
     {
+        SystemSettingKeys.DiagramSelectorLineWidth,
+        SystemSettingKeys.DiagramStepDelayMs,
+        SystemSettingKeys.DiagramLoopBackLimit,
+        SystemSettingKeys.DiagramIgnorePlayError,
+        SystemSettingKeys.DiagramNodeIgnoreError
+    };
+
+    /// <summary>
+    /// Persist the diagram behaviour defaults (not the colours) from a posted branding form.
+    /// </summary>
+    /// <remarks>
+    /// Values are read by their setting key so the form and the settings rows keep the same names:
+    /// a form field named after the key makes the mapping obvious and means the two pages that can
+    /// show these (Settings, before the move, and Branding, now) post identical data.
+    ///
+    /// Out-of-range numbers are IGNORED rather than clamped. A clamped value would be saved as a
+    /// number the admin never typed and cannot see they did not type, whereas ignoring it leaves the
+    /// stored value intact and the page re-renders what is really in effect.
+    /// </remarks>
+    public async Task SaveAsync(IReadOnlyDictionary<string, string?> values, int? actorUserId, string? actorUserName, CancellationToken ct = default)
+    {
+        var pairs = new List<(string, string)>();
+
+        void AddIfPresent(string key, Func<string, bool> accept, Func<string, string> normalize)
+        {
+            if (!values.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw)) return;
+            var trimmed = raw.Trim();
+            if (accept(trimmed)) pairs.Add((key, normalize(trimmed)));
+        }
+
+        AddIfPresent(SystemSettingKeys.DiagramSelectorLineWidth,
+            v => double.TryParse(v, out var d) && d >= MinSelectorLineWidth && d <= MaxSelectorLineWidth,
+            v => double.Parse(v).ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        AddIfPresent(SystemSettingKeys.DiagramStepDelayMs,
+            v => int.TryParse(v, out var d) && d >= 0 && d <= 60_000,
+            v => int.Parse(v).ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        AddIfPresent(SystemSettingKeys.DiagramLoopBackLimit,
+            v => int.TryParse(v, out _),
+            v => ClampLoopBackLimit(int.Parse(v)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        // The two switches always have a definite value once the form was submitted, so they are
+        // written even when off — that is the difference between "untouched" and "turned off".
+        foreach (var key in new[] { SystemSettingKeys.DiagramIgnorePlayError, SystemSettingKeys.DiagramNodeIgnoreError })
+        {
+            if (values.TryGetValue(key, out var raw) && !string.IsNullOrWhiteSpace(raw))
+                pairs.Add((key, IsTrue(raw) ? "true" : "false"));
+        }
+
+        if (pairs.Count > 0)
+            await _settings.SaveAsync(pairs, actorUserId, actorUserName, ct);
+    }
+
+    /// <summary>Write a resolved colour onto the matching editor field.</summary>
+    private static void AssignColor(DiagramDefaultsDto dto, string editorField, string hex)    {
         switch (editorField)
         {
             case "stepStroke": dto.StepStroke = hex; break;

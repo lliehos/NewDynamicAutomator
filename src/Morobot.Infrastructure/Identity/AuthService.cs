@@ -84,7 +84,10 @@ public class AuthService
             return (null, "register.errorUserNameFormat");
 
         var registerPlan = await _settings.GetDefaultRegisterPlanAsync(ct);
-        var (pwdOk, pwdErr) = PasswordPolicy.Validate(password, registerPlan);
+        // The plan's own rules win; the deployment-wide policy is the floor for an install whose
+        // licence has no plan levels (and for any plan that states no rules of its own).
+        var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
+        var (pwdOk, pwdErr) = PasswordPolicy.Validate(password, registerPlan, globalMinLen, globalComplexity);
         if (!pwdOk)
             return (null, pwdErr);
 
@@ -180,7 +183,8 @@ public class AuthService
             && !string.Equals(newPwd, request.ConfirmPassword, StringComparison.Ordinal))
             return (null, "register.errorPasswordMismatch");
 
-        var (pwdOk, pwdErr) = PasswordPolicy.Validate(newPwd, plan);
+        var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
+        var (pwdOk, pwdErr) = PasswordPolicy.Validate(newPwd, plan, globalMinLen, globalComplexity);
         if (!pwdOk)
             return (null, pwdErr);
 

@@ -35,6 +35,47 @@ public class SystemSettingsService
         return plan;
     }
 
+    /// <summary>
+    /// The deployment-wide password policy from Admin → Settings, as nullable values.
+    /// </summary>
+    /// <remarks>
+    /// Both members are null when the setting has never been written, which lets
+    /// <see cref="PasswordPolicy.Resolve"/> tell "this install has no opinion" from "this install
+    /// deliberately chose the weakest rule". Reading them together means a caller cannot accidentally
+    /// apply the length but forget the complexity rule.
+    /// </remarks>
+    public async Task<(int? minLength, bool? requireLetterAndDigit)> GetGlobalPasswordPolicyAsync(
+        CancellationToken ct = default)
+    {
+        var rows = await _db.SystemSettings.AsNoTracking()
+            .Where(s => s.Key == SystemSettingKeys.PasswordMinLength
+                     || s.Key == SystemSettingKeys.PasswordRequireLetterAndDigit)
+            .Select(s => new { s.Key, s.Value })
+            .ToListAsync(ct);
+
+        int? minLength = null;
+        bool? requireLetterAndDigit = null;
+
+        foreach (var row in rows)
+        {
+            if (string.IsNullOrWhiteSpace(row.Value))
+                continue;
+
+            if (string.Equals(row.Key, SystemSettingKeys.PasswordMinLength, StringComparison.OrdinalIgnoreCase))
+            {
+                if (int.TryParse(row.Value.Trim(), out var parsed))
+                    minLength = parsed;
+            }
+            else if (string.Equals(row.Key, SystemSettingKeys.PasswordRequireLetterAndDigit, StringComparison.OrdinalIgnoreCase))
+            {
+                var v = row.Value.Trim();
+                requireLetterAndDigit = v is "true" or "True" or "1" or "on" or "yes";
+            }
+        }
+
+        return (minLength, requireLetterAndDigit);
+    }
+
     public Task<List<SystemSetting>> ListAsync(CancellationToken ct = default) =>
         _db.SystemSettings.OrderBy(s => s.Group).ThenBy(s => s.Key).ToListAsync(ct);
 

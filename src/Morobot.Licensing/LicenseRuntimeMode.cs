@@ -44,6 +44,18 @@ public sealed class LicenseRuntimeState
     public bool AllowsLegacyMigration => Mode == LicenseRuntimeMode.Licensed && (Payload?.AllowLegacyMigration ?? false);
 
     /// <summary>
+    /// Whether the deployment may define and assign its own user plan levels.
+    /// </summary>
+    /// <remarks>
+    /// A TRIAL has no plan management: there is no signed payload to carry the permission, and the
+    /// trial is meant to demonstrate the product rather than let an install configure its own
+    /// commercial tiers before buying. A trial therefore behaves exactly like a licence that turned
+    /// the option off — every user sits at the top level, which is also what makes the trial show
+    /// the product's full capability.
+    /// </remarks>
+    public bool AllowsPlanManagement => Mode == LicenseRuntimeMode.Licensed && (Payload?.AllowPlanManagement ?? true);
+
+    /// <summary>
     /// Row ceiling implied by the license. A trial or restricted install falls back to the small
     /// trial cap; a licensed install uses the signed value (null = the vendor sold no ceiling).
     /// </summary>

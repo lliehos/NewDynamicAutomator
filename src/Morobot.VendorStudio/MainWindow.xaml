@@ -255,6 +255,14 @@
               </TextBlock>
             </CheckBox>
 
+            <CheckBox x:Name="AllowPlanManagement" Margin="28,0,0,8" IsChecked="True"
+                      ToolTip="اگر خاموش باشد، مشتری سطوح پلن کاربران را مدیریت نمی‌کند و همهٔ کاربران در بالاترین سطح (نامحدود) قرار می‌گیرند. برای لایسنس‌های قدیمی روشن در نظر گرفته می‌شود.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازه مدیریت پلن‌های کاربر"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: فعال — خاموش یعنی همهٔ کاربران در بالاترین سطح)"/>
+              </TextBlock>
+            </CheckBox>
+
             <StackPanel Orientation="Horizontal" Margin="28,8,0,12">
               <Button Content="امضای لایسنس" Width="130" Style="{StaticResource VsButton}" Click="SignLicense_Click"/>
               <Button Content="ذخیره .morobot" Width="130" Margin="10,0,0,0"

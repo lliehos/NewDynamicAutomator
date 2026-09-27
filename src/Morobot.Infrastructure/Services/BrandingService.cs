@@ -68,7 +68,23 @@ public sealed class BrandingService
             ReferralWidgetUrl = LicenseReferralUrl.TryNormalize(state.Payload?.ReferralWidgetUrl)
         };
         await ApplyPaletteFromSettingsAsync(dto, ct);
+        await ApplyDiagramDefaultsAsync(dto, ct);
         return dto;
+    }
+
+    /// <summary>
+    /// Load the diagram behaviour defaults the branding page now owns.
+    /// </summary>
+    /// <remarks>
+    /// Read straight from the settings rows by key rather than through
+    /// <c>DiagramSettingsService.GetAsync</c>: that method resolves the values into the editor's
+    /// camel-cased payload for flow.js, which would then have to be mapped back to setting keys to
+    /// render the form. The form posts setting keys, so it reads setting keys.
+    /// </remarks>
+    private async Task ApplyDiagramDefaultsAsync(TenantBrandingDto dto, CancellationToken ct)
+    {
+        foreach (var key in SystemSettingKeys.DiagramBehaviourOwned)
+            dto.DiagramDefaults[key] = await _settings.GetAsync(key, "", ct);
     }
 
     public async Task SaveAsync(TenantBrandingDto model, CancellationToken ct = default)

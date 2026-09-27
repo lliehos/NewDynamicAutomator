@@ -21,6 +21,7 @@ public class UsersController : Controller
     private readonly PlaySessionTracker _plays;
     private readonly LicenseService _license;
     private readonly DeploymentBindingService _deploymentBinding;
+    private readonly SystemSettingsService _settings;
     private readonly PasswordHasher<AppUser> _hasher = new();
 
     public UsersController(
@@ -28,13 +29,15 @@ public class UsersController : Controller
         EventLogService events,
         PlaySessionTracker plays,
         LicenseService license,
-        DeploymentBindingService deploymentBinding)
+        DeploymentBindingService deploymentBinding,
+        SystemSettingsService settings)
     {
         _db = db;
         _events = events;
         _plays = plays;
         _license = license;
         _deploymentBinding = deploymentBinding;
+        _settings = settings;
     }
 
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -116,7 +119,8 @@ public class UsersController : Controller
             plan = await _db.Plans.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pid, ct);
         plan ??= await _db.Plans.AsNoTracking().FirstAsync(p => p.Code == nameof(PlanCode.Free), ct);
 
-        var (pwdOk, pwdErr) = PasswordPolicy.Validate(password, plan);
+        var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
+        var (pwdOk, pwdErr) = PasswordPolicy.Validate(password, plan, globalMinLen, globalComplexity);
         if (!pwdOk)
         {
             ModelState.AddModelError(nameof(password), pwdErr ?? "Invalid password");
@@ -190,8 +194,9 @@ public class UsersController : Controller
                          ?? targetPlan;
         targetPlan ??= await _db.Plans.AsNoTracking().FirstAsync(p => p.Code == nameof(PlanCode.Free), ct);
 
-        var wasStrict = user.Plan is not null && PasswordPolicy.IsStrict(user.Plan);
-        var needsStrict = PasswordPolicy.IsStrict(targetPlan);
+        var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
+        var wasStrict = PasswordPolicy.IsStrict(user.Plan, globalMinLen, globalComplexity);
+        var needsStrict = PasswordPolicy.IsStrict(targetPlan, globalMinLen, globalComplexity);
 
         if (needsStrict && !wasStrict && string.IsNullOrWhiteSpace(newPassword))
         {
@@ -209,7 +214,7 @@ public class UsersController : Controller
 
         if (!string.IsNullOrWhiteSpace(newPassword))
         {
-            var (pwdOk, pwdErr) = PasswordPolicy.Validate(newPassword, targetPlan);
+            var (pwdOk, pwdErr) = PasswordPolicy.Validate(newPassword, targetPlan, globalMinLen, globalComplexity);
             if (!pwdOk)
             {
                 ModelState.AddModelError(nameof(newPassword), pwdErr ?? "Invalid password");

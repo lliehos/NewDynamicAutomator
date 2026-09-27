@@ -41,22 +41,10 @@
       var gkey = SystemSettingKeys.SettingGroupInfo.LocaleKeyOf(group.Key);
       var gtitle = L["admin.settings.groups." + gkey + ".title"];
       var gdesc = L["admin.settings.groups." + gkey + ".desc"];
-      // The Diagram group is split into two cards so the page says what each value is FOR:
-      // "behaviour defaults" are numbers and one flag that a new process starts from, while the
-      // ignore-error pair are the defaults for the two switches that share that name in the
-      // editor. Colours are not here at all — they are on Admin → Branding.
-      var isDiagram = string.Equals(group.Key, "Diagram", StringComparison.OrdinalIgnoreCase);
-      var cards = isDiagram
-        ? new[]
-          {
-            (Key: "diagramDefaults", Title: L["admin.settings.groups.diagram.defaults"],
-             Desc: L["admin.settings.groups.diagram.defaultsDesc"],
-             Rows: group.Where(s => !SystemSettingKeys.IsIgnoreErrorDefault(s.Key)).ToList()),
-            (Key: "diagramErrors", Title: L["admin.settings.groups.diagram.errors"],
-             Desc: L["admin.settings.groups.diagram.errorsDesc"],
-             Rows: group.Where(s => SystemSettingKeys.IsIgnoreErrorDefault(s.Key)).ToList())
-          }
-        : new[] { (Key: gkey, Title: gtitle, Desc: gdesc, Rows: group.ToList()) };
+      // One card per group. The Diagram group used to be split in two here because its colours lived
+      // on Branding while its behaviour defaults lived here; both halves are on Branding now, so the
+      // split has nothing left to describe.
+      var cards = new[] { (Key: gkey, Title: gtitle, Desc: gdesc, Rows: group.ToList()) };
       @foreach (var card in cards.Where(c => c.Rows.Count > 0))
       {
         var gkey2 = card.Key;

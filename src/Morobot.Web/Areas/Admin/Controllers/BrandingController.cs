@@ -94,6 +94,12 @@ public class BrandingController : Controller
             model.ShowReferralQrWidget = ReadSwitch(Request.Form, "ShowReferralQrWidget");
 
             await _branding.SaveAsync(model, userId, User.Identity?.Name, ct);
+
+            // The diagram BEHAVIOUR defaults live here now too, behind the same licence: they are the
+            // starting point every new process's canvas is drawn from, so they belong with the rest of
+            // the diagram's appearance rather than split across two pages that both claim to own it.
+            await _diagram.SaveAsync(ReadDiagramDefaults(), userId, User.Identity?.Name, ct);
+
             _sync.SyncNow("branding-save");
             await _overlay.ApplyAllPackagesAsync(_sync, ct);
             TempData["Ok"] = _locale["admin.branding.saved"];
@@ -170,6 +176,29 @@ public class BrandingController : Controller
             return v is "true" or "True" or "1" or "on" or "yes";
         }
         return false;
+    }
+
+    /// <summary>
+    /// The diagram behaviour defaults as posted, keyed by their setting key.
+    /// </summary>
+    /// <remarks>
+    /// The two ignore-error switches need the same last-value treatment as every other switch on this
+    /// form (see <see cref="ReadSwitch"/>): they post a hidden "false" before the checkbox, and model
+    /// binding would take the first value and report the opposite of what the user chose.
+    /// </remarks>
+    private Dictionary<string, string?> ReadDiagramDefaults()
+    {
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in DiagramSettingsService.OwnedKeys)
+        {
+            var isSwitch = key is Morobot.Domain.SystemSettingKeys.DiagramIgnorePlayError
+                or Morobot.Domain.SystemSettingKeys.DiagramNodeIgnoreError;
+
+            result[key] = isSwitch
+                ? (ReadSwitch(Request.Form, key) ? "true" : "false")
+                : Request.Form[key].LastOrDefault();
+        }
+        return result;
     }
 
     private async Task<string> SaveBrandFileAsync(IFormFile file, string prefix, CancellationToken ct)

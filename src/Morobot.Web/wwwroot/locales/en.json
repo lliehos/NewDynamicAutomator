@@ -369,7 +369,10 @@
       "shareDs": "Grant data-source change permission when sharing.",
       "userActive": "Inactive users cannot sign in.",
       "licenseSafeFields": "Only non-sensitive fields are shown. Signatures and internal keys are never displayed.",
-      "updatesManual": "Manual update check for online servers. Offline servers show the last cached result."
+      "updatesManual": "Manual update check for online servers. Offline servers show the last cached result.",
+      "diagramSelectorWidth": "Thickness of the box drawn around the selected element while running (1 to 12).",
+      "diagramStepDelay": "Default pause after each step in a new process, in milliseconds (0 to 60000).",
+      "diagramLoopBackLimit": "Most times a node may be revisited before a loop is treated as stuck (1 to 1000)."
     },
     "pager": {
       "label": "Pagination",
@@ -385,7 +388,6 @@
       "license": "License",
       "branding": "Branding",
       "plans": "Plans",
-      "prices": "Prices",
       "processes": "Processes",
       "templates": "Templates",
       "migrate": "Migrate from legacy",
@@ -524,14 +526,6 @@
         "branding": {
           "title": "Branding",
           "desc": "Brand identity; edited from the Branding page."
-        },
-        "diagram": {
-          "title": "Diagram",
-          "desc": "Appearance and run defaults for new processes. Each colour has an on/off switch: turning one off applies the built-in diagram default while keeping the stored value.",
-          "defaults": "Diagram defaults",
-          "defaultsDesc": "The values a new process starts from. Colours live under Branding → Diagram colours.",
-          "errors": "Ignore-error defaults",
-          "errorsDesc": "The start node and inner nodes have separate switches; these are the starting state of each in a new process."
         }
       },
       "notSetYet": "Not set yet",
@@ -773,7 +767,19 @@
       "shareEdit": "Edit",
       "shareDelete": "Delete",
       "shareExecute": "Execute",
-      "shareDs": "Change data source"
+      "shareDs": "Change data source",
+      "pricing": "Pricing",
+      "pricingHint": "Enter the price for each cycle. Leaving one blank means that cycle is not sold — which is different from zero, meaning free.",
+      "currency": "Currency",
+      "monthlyPrice": "Monthly price",
+      "monthlyDiscount": "Monthly discount %",
+      "yearlyPrice": "Yearly price",
+      "yearlyDiscount": "Yearly discount %",
+      "monthlyShort": "Monthly",
+      "yearlyShort": "Yearly",
+      "off": "off",
+      "passwordHint": "These rules apply only when a plan states its own; otherwise the system-wide policy (Settings → Authentication) is used.",
+      "notLicensed": "Plan management is not enabled in this installation's licence."
     },
     "users": {
       "title": "Users",
@@ -1557,5 +1563,16 @@
       "message": "A loop on the canvas has no way out: {list} - it has no exit condition, so the run only stops when it hits the \"max loop-back visits\" limit.",
       "more": " and {n} more nodes"
     }
+  },
+  "adminScreen": {},
+  "branding": {
+    "diagramDefaultsTitle": "Diagram defaults",
+    "diagramDefaultsIntro": "The values every new diagram starts from, plus the editor's two ignore-error switch defaults.",
+    "diagramGroupErrors": "Ignore-error defaults",
+    "diagramIgnoreStart": "Ignore errors by default (start node)",
+    "diagramIgnoreNode": "Ignore errors by default (inner nodes)",
+    "diagramSelectorWidth": "Selector outline width",
+    "diagramStepDelay": "Default pause between steps (ms)",
+    "diagramLoopBackLimit": "Loop-back limit"
   }
 }

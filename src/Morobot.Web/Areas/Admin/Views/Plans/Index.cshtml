@@ -20,6 +20,7 @@
       <th>@L["admin.plans.name"]</th>
       <th>@L["admin.plans.limits"]</th>
       <th>@L["admin.plans.caps"]</th>
+      <th>@L["admin.plans.pricing"]</th>
       <th>@L["admin.plans.password"]</th>
       <th>@L["admin.plans.active"]</th>
       <th></th>
@@ -39,8 +40,42 @@
         <span class="admin-chip" title="@L["admin.plans.maxSourceBytes"]"><i class="ti ti-file-database" aria-hidden="true"></i>@(Morobot.Web.Areas.Admin.Views.Plans.PlanViewFormat.Size(p.MaxSourceBytes))</span>
       </td>
       <td><partial name="_AdminPlanCaps" model="p" /></td>
-      <td>
-        â‰¥@p.MinPasswordLength
+      <td>        @* Two cycles, each showing its amount and, when set, the discount advertised against it.
+           A plan with no price for a cycle shows a dash rather than 0 — "not sold" and "free" are
+           different answers and the admin needs to tell them apart. *@
+        @{ var currency = p.PriceCurrency; }
+        <div class="admin-price-chip">
+          <span class="admin-price-cycle">@L["admin.plans.monthlyShort"]</span>
+          @if (p.MonthlyPrice is decimal mp)
+          {
+            <span class="admin-price-amount">@mp.ToString("N0") <small>@currency</small></span>
+            @if (p.MonthlyDiscountPercent is decimal md and > 0)
+            {
+              <span class="admin-price-off">@md.ToString("0.##")% @L["admin.plans.off"]</span>
+            }
+          }
+          else
+          {
+            <span class="admin-price-none">—</span>
+          }
+        </div>
+        <div class="admin-price-chip">
+          <span class="admin-price-cycle">@L["admin.plans.yearlyShort"]</span>
+          @if (p.YearlyPrice is decimal yp)
+          {
+            <span class="admin-price-amount">@yp.ToString("N0") <small>@currency</small></span>
+            @if (p.YearlyDiscountPercent is decimal yd and > 0)
+            {
+              <span class="admin-price-off">@yd.ToString("0.##")% @L["admin.plans.off"]</span>
+            }
+          }
+          else
+          {
+            <span class="admin-price-none">—</span>
+          }
+        </div>
+      </td>
+      <td>        â‰¥@p.MinPasswordLength
         @(p.RequireLetterAndDigit ? " آ· Aa1" : "")
       </td>
       <td><partial name="_AdminStatus" model="p.IsActive" /></td>

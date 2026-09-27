@@ -14,6 +14,10 @@
   // Offline update likewise only means something when the licence includes updates at all.
   var allowsUpdates = (ViewData[Morobot.Web.Filters.TenantBrandingViewDataFilter.LicenseStateKey]
       as Morobot.Licensing.LicenseRuntimeState)?.AllowsUpdates == true;
+  // Plan levels are a licensed capability. Without it the deployment has no levels to manage —
+  // every user sits at the top one — so the page would be a list of switches that change nothing.
+  var allowsPlanManagement = (ViewData[Morobot.Web.Filters.TenantBrandingViewDataFilter.LicenseStateKey]
+      as Morobot.Licensing.LicenseRuntimeState)?.AllowsPlanManagement == true;
 }
 <!doctype html>
 <html lang="@culture" dir="@dir" data-admin-catalog="1">
@@ -48,8 +52,10 @@
           <a class="@NavClass("OfflineUpdate")" asp-area="Admin" asp-controller="OfflineUpdate" asp-action="Index"><i class="ti ti-package" aria-hidden="true"></i>@L["admin.nav.offlineUpdate"]</a>
         }
         <a class="@NavClass("Branding")" asp-area="Admin" asp-controller="Branding" asp-action="Index"><i class="ti ti-palette" aria-hidden="true"></i>@L["admin.nav.branding"]</a>
-        <a class="@NavClass("Plans")" asp-area="Admin" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]</a>
-        <a class="@NavClass("Prices")" asp-area="Admin" asp-controller="Prices" asp-action="Index"><i class="ti ti-currency-dollar" aria-hidden="true"></i>@L["admin.nav.prices"]</a>
+        @if (allowsPlanManagement)
+        {
+          <a class="@NavClass("Plans")" asp-area="Admin" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]</a>
+        }
         <a class="@NavClass("Processes")" asp-area="Admin" asp-controller="Processes" asp-action="Index"><i class="ti ti-git-branch" aria-hidden="true"></i>@L["admin.nav.processes"]</a>
         <a class="@NavClass("Templates")" asp-area="Admin" asp-controller="Templates" asp-action="Index"><i class="ti ti-template" aria-hidden="true"></i>@L["admin.nav.templates"]</a>
         @if (allowsLegacyMigration)

@@ -88,6 +88,7 @@ public partial class MainWindow : Window
                 TrialDays = int.TryParse(TrialDays.Text, out var trial) ? trial : 3,
                 AllowUpdates = AllowUpdates.IsChecked == true,
                 AllowLegacyMigration = AllowLegacyMigration.IsChecked == true,
+                AllowPlanManagement = AllowPlanManagement.IsChecked == true,
                 UpdateServerUrl = string.IsNullOrWhiteSpace(UpdateUrl.Text) ? null : UpdateUrl.Text.Trim(),
                 AllowedHost = allowedHost,
                 ReferralWidgetUrl = referralUrl,

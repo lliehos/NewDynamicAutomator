@@ -411,6 +411,61 @@ label { font-size: .9rem; }
   margin-top: .5rem;
 }
 
+/* Three numeric defaults on one row: they are all small numbers and reading them side by side is
+   how an admin sanity-checks a delay against a loop limit. Wraps on a narrow card. */
+.admin-diagram-defaults-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: .65rem .85rem;
+  margin-bottom: .5rem;
+}
+
+/* ── Plan pricing ──   Amount and its discount sit side by side: the discount only means anything next to the price it
+   applies to, so stacking them would invite reading one row's percentage against the other's
+   amount. Wraps rather than shrinking, so a long number never squashes the discount box. */
+.admin-price-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: .65rem .85rem;
+  align-items: start;
+}
+
+/* Prices in the plans table: one compact chip per cycle, so the column stays readable next to
+   Limits and Capabilities instead of repeating the whole pricing card. */
+.admin-price-chip {
+  display: flex;
+  align-items: baseline;
+  gap: .4rem;
+  white-space: nowrap;
+  font-size: .82rem;
+  line-height: 1.5;
+}
+.admin-price-cycle {
+  min-width: 3.6rem;
+  color: #94a3b8;
+  font-size: .74rem;
+}
+.admin-price-amount {
+  font-weight: 600;
+  color: var(--morobot-ink, var(--morobot-ink-default));
+  font-variant-numeric: tabular-nums;
+}
+.admin-price-amount small {
+  font-weight: 400;
+  color: #94a3b8;
+  font-size: .7rem;
+}
+.admin-price-off {
+  color: #0f766e;
+  background: rgba(15, 118, 110, .09);
+  border-radius: .35rem;
+  padding: 0 .3rem;
+  font-size: .7rem;
+}
+.admin-price-none {
+  color: #cbd5e1;
+}
+
 /* ── Responsive form layout ── */
 .admin-form-shell {
   display: grid;

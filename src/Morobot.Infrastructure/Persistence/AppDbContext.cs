@@ -74,6 +74,13 @@ public class AppDbContext : DbContext
             e.Property(x => x.NameFa).HasMaxLength(80).IsRequired();
             e.Property(x => x.NameEn).HasMaxLength(80).IsRequired();
             e.Property(x => x.MinPasswordLength).HasDefaultValue(3);
+            // Money needs an explicit precision or SQL Server silently truncates to the default
+            // (18,2) and EF warns on every migration. Prices and discounts share the same shape.
+            e.Property(x => x.MonthlyPrice).HasPrecision(18, 2);
+            e.Property(x => x.MonthlyDiscountPercent).HasPrecision(5, 2);
+            e.Property(x => x.YearlyPrice).HasPrecision(18, 2);
+            e.Property(x => x.YearlyDiscountPercent).HasPrecision(5, 2);
+            e.Property(x => x.PriceCurrency).HasMaxLength(10).IsRequired();
         });
 
         modelBuilder.Entity<SystemSetting>(e =>
@@ -121,6 +128,10 @@ public class AppDbContext : DbContext
             e.Property(x => x.ReferralWidgetUrl).HasMaxLength(500);
             e.Property(x => x.TrialDays).HasDefaultValue(3);
             e.Property(x => x.AllowUpdates).HasDefaultValue(true);
+            // Mirror of LicensePayload.AllowPlanManagement. Defaulted to true here as well as on the
+            // CLR property so the database default and the model default agree — when they disagree
+            // EF emits a spurious AlterColumn on the next migration.
+            e.Property(x => x.AllowPlanManagement).HasDefaultValue(true);
             e.HasIndex(x => x.ImportedAtUtc);
         });
 

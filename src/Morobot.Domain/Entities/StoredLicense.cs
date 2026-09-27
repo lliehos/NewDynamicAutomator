@@ -13,6 +13,11 @@ public class StoredLicense
     public bool AllowUpdates { get; set; } = true;
     /// <summary>Vendor-granted ability to import a legacy database (default off).</summary>
     public bool AllowLegacyMigration { get; set; }
+    /// <summary>
+    /// Vendor-granted ability to manage user plan levels (default ON, including for licences signed
+    /// before the flag existed — see <c>LicensePayload.AllowPlanManagement</c>).
+    /// </summary>
+    public bool AllowPlanManagement { get; set; } = true;
     public int TrialDays { get; set; } = 3;
     public string? DatabaseServerHint { get; set; }
     public string? AllowedHost { get; set; }

@@ -27,6 +27,20 @@ public sealed class LicensePayload
     /// vendor-authorised operation, so a buyer must be granted it explicitly.
     /// </summary>
     public bool AllowLegacyMigration { get; set; }
+
+    /// <summary>
+    /// Whether the deployment may manage its own user plan levels.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <c>true</c> rather than false, which is the opposite of
+    /// <see cref="AllowLegacyMigration"/> on purpose: this flag was introduced after licences had
+    /// already been signed, and JSON deserialisation leaves an absent bool at its default. A
+    /// <c>false</c> default would have silently stripped plan management from every existing
+    /// customer the moment they updated, and — because a licence without plan management puts all
+    /// users at the top level — it would have looked like a free upgrade rather than a
+    /// misconfiguration. A vendor who wants a flat install turns it off explicitly.
+    /// </remarks>
+    public bool AllowPlanManagement { get; set; } = true;
     /// <summary>Optional override for update check URL.</summary>
     public string? UpdateServerUrl { get; set; }
     /// <summary>When set, HTTP Host (or this IP) must match. Empty = no host lock.</summary>

@@ -24,6 +24,11 @@ public sealed class LicenseDisplayDto
     public bool AllowUpdates { get; set; }
     /// <summary>Vendor-granted ability to import a legacy database (default off).</summary>
     public bool AllowLegacyMigration { get; set; }
+    /// <summary>
+    /// Vendor-granted ability to manage user plan levels (default ON). When it is off — and in a
+    /// trial — the deployment has no plan levels at all and every user sits at the top one.
+    /// </summary>
+    public bool AllowPlanManagement { get; set; }
     public bool ShowCopyright { get; set; }
     public string? DatabaseServerHint { get; set; }
     public string? UpdateServerUrl { get; set; }
@@ -93,6 +98,17 @@ public sealed class TenantBrandingDto
     /// keyed by setting key so adding a colour there is enough to have it show up, save and reset.
     /// </remarks>
     public Dictionary<string, string> DiagramColors { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Diagram behaviour defaults — the values a new process's canvas starts from, and the two
+    /// ignore-error switches the editor shows.
+    /// </summary>
+    /// <remarks>
+    /// Same reasoning as <see cref="DiagramColors"/>: they describe how the diagram behaves, so they
+    /// belong on the page that already owns the diagram's appearance. Keyed by setting key so the
+    /// form posts, and the page renders, the same names the settings table uses.
+    /// </remarks>
+    public Dictionary<string, string> DiagramDefaults { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Panel referral QR widget (morobot.ir). Enterprise can disable when licensed.</summary>
     public bool ShowReferralQrWidget { get; set; } = true;

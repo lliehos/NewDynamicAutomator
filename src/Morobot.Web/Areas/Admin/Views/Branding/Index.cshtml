@@ -246,6 +246,56 @@
   </div>
 
   <div class="admin-settings-card">
+    <h3><i class="ti ti-hierarchy" aria-hidden="true"></i>@L["admin.branding.diagramDefaultsTitle"]</h3>
+    <p class="admin-field-hint mb-3">@L["admin.branding.diagramDefaultsIntro"]</p>
+
+    @* The behaviour defaults that used to sit on Admin → Settings, beside the colours that had
+       already moved here. Reading them straight out of Model.DiagramDefaults keeps the field names
+       identical to the setting keys, so the posted form needs no translation table.
+       Every boolean here must be a switch — a free-text field accepting "ture" would read as off. *@
+    @{
+      string Val(string key) => Model.DiagramDefaults.TryGetValue(key, out var v) ? v : "";
+      bool On(string key) => string.Equals(Val(key), "true", StringComparison.OrdinalIgnoreCase) || Val(key) == "1";
+      var numericDefaults = new[]
+      {
+        (Key: Morobot.Domain.SystemSettingKeys.DiagramSelectorLineWidth, Label: L["admin.branding.diagramSelectorWidth"], Hint: L["admin.hints.diagramSelectorWidth"]),
+        (Key: Morobot.Domain.SystemSettingKeys.DiagramStepDelayMs, Label: L["admin.branding.diagramStepDelay"], Hint: L["admin.hints.diagramStepDelay"]),
+        (Key: Morobot.Domain.SystemSettingKeys.DiagramLoopBackLimit, Label: L["admin.branding.diagramLoopBackLimit"], Hint: L["admin.hints.diagramLoopBackLimit"])
+      };
+    }
+    <div class="admin-diagram-defaults-grid">
+      @foreach (var item in numericDefaults)
+      {
+        <div>
+          <label class="admin-label" for="@item.Key"><span>@item.Label</span><partial name="_AdminHint" model="item.Hint" /></label>
+          <input class="form-control" id="@item.Key" name="@item.Key" value="@Val(item.Key)" dir="ltr" inputmode="numeric" />
+        </div>
+      }
+    </div>
+
+    <h4 class="admin-branding-subhead">@L["admin.branding.diagramGroupErrors"]</h4>
+    <div class="admin-switch-grid">
+      <label class="admin-settings-switch" for="@Morobot.Domain.SystemSettingKeys.DiagramIgnorePlayError">
+        <input type="hidden" name="@Morobot.Domain.SystemSettingKeys.DiagramIgnorePlayError" value="false" />
+        <input type="checkbox" id="@Morobot.Domain.SystemSettingKeys.DiagramIgnorePlayError"
+               name="@Morobot.Domain.SystemSettingKeys.DiagramIgnorePlayError" value="true"
+               data-da-switch="off" @(On(Morobot.Domain.SystemSettingKeys.DiagramIgnorePlayError) ? "checked" : null) />
+        <span class="admin-settings-switch-track" aria-hidden="true"></span>
+        <span class="admin-settings-switch-label">@L["admin.branding.diagramIgnoreStart"]</span>
+      </label>
+
+      <label class="admin-settings-switch" for="@Morobot.Domain.SystemSettingKeys.DiagramNodeIgnoreError">
+        <input type="hidden" name="@Morobot.Domain.SystemSettingKeys.DiagramNodeIgnoreError" value="false" />
+        <input type="checkbox" id="@Morobot.Domain.SystemSettingKeys.DiagramNodeIgnoreError"
+               name="@Morobot.Domain.SystemSettingKeys.DiagramNodeIgnoreError" value="true"
+               data-da-switch="off" @(On(Morobot.Domain.SystemSettingKeys.DiagramNodeIgnoreError) ? "checked" : null) />
+        <span class="admin-settings-switch-track" aria-hidden="true"></span>
+        <span class="admin-settings-switch-label">@L["admin.branding.diagramIgnoreNode"]</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="admin-settings-card">
     <h3><i class="ti ti-qrcode" aria-hidden="true"></i>@L["admin.branding.referralQr"]</h3>
     <p class="admin-field-hint">@L["admin.branding.referralQrHint"]</p>
     <label class="admin-switch-line">
