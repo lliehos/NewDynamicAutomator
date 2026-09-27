@@ -1163,8 +1163,13 @@
       masterId = list[0].id;
     }
     if (rst === "DataSource" && !list.length && start) {
+      // A repeat can only be row-driven while a source exists. Persisting "DataSource" with an
+      // empty list would leave the canvas saying "rows of the default source" while the inspector
+      // and the engine both behave as "once" — so reset the stored value to match reality.
       start.repeatSourceType = "None";
       graph.repeatSourceType = "None";
+      start.dataSourceId = null;
+      graph.dataSourceId = null;
     }
     return masterId;
   }
@@ -1190,6 +1195,22 @@
     const list = graph.dataSources || [];
     ensureDefaultDataSource();
     const masterId = masterDataSourceId();
+    // Keep the section title count and the empty-state hint in sync with the actual list.
+    // Scope the lookup to THIS panel: the inspector can also hold the process-properties block,
+    // whose own "منبع داده" title must not be rewritten.
+    const panelEl = listEl.closest(".ds-panel") || listEl.parentElement;
+    const titleEl = panelEl ? panelEl.querySelector(".insp-section-title") : null;
+    if (titleEl) titleEl.textContent = `${t("editor.ds.viewerTitle")} (${list.length})`;
+    const hintEl = panelEl ? panelEl.querySelector("#ds-empty-hint") : null;
+    if (hintEl && list.length) hintEl.remove();
+    if (!hintEl && !list.length && titleEl) {
+      const p = document.createElement("p");
+      p.className = "palette-hint";
+      p.id = "ds-empty-hint";
+      p.style.cssText = "margin:0 0 8px;line-height:1.7";
+      p.textContent = t("editor.insp.noSourceYet");
+      titleEl.after(p);
+    }
     if (!list.length) {
       listEl.innerHTML = `<li class="ds-meta" style="background:transparent;padding:0">${t("editor.ds.emptyList")}</li>`;
       return;
@@ -2100,7 +2121,16 @@
     const newMaster = ensureDefaultDataSource({ forceForRepeat: true });
     graph.nodes.forEach((n) => {
       // Clear DS id refs only — column name fields (selectorDynamicColumn, etc.) stay.
-      if (n.kind !== "start" && Number(n.dataSourceId) === Number(sourceId)) n.dataSourceId = null;
+      // The start node IS included: it owns the process repeat source, so leaving its id behind
+      // would persist a dangling dataSourceId (repeat "None" pointing at a source that is gone).
+      // When the source had to be replaced by a new default, re-point the start node at it instead.
+      if (Number(n.dataSourceId) === Number(sourceId)) {
+        n.dataSourceId = newMaster && Number(newMaster) !== Number(sourceId) ? Number(newMaster) : null;
+        if (n.kind === "start" && Number(newMaster) === Number(sourceId)) {
+          n.repeatSourceType = "None";
+          graph.repeatSourceType = "None";
+        }
+      }
       if (Number(n.sourceId) === Number(sourceId)) n.sourceId = null;
       if (Number(n.selectorDataSourceId) === Number(sourceId)) n.selectorDataSourceId = null;
       if (Number(n.equalSelectorDataSourceId) === Number(sourceId)) n.equalSelectorDataSourceId = null;
@@ -2172,11 +2202,15 @@
   function dataSourcesPanelHtml() {
     const count = (graph.dataSources || []).length;
     const disabled = canModify ? "" : "disabled";
+    // Only show the "no source yet" hint when there really is no source — otherwise it directly
+    // contradicts the populated list rendered right below it.
+    const emptyHint = count
+      ? ""
+      : `<p class="palette-hint" id="ds-empty-hint" style="margin:0 0 8px;line-height:1.7">${t("editor.insp.noSourceYet")}</p>`;
     return `
+      <div class="ds-panel">
       <div class="insp-section-title">${t("editor.ds.viewerTitle")} (${count})</div>
-      <p class="palette-hint" style="margin:0 0 8px;line-height:1.7">
-        ${t("editor.insp.noSourceYet")}
-      </p>
+      ${emptyHint}
       <div class="ds-dropzone${canModify ? "" : " is-disabled"}" id="ds-dropzone" tabindex="${canModify ? "0" : "-1"}" role="button" aria-label="${t("editor.ds.dropHint")}">
         <input type="file" id="ds-file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ${disabled} hidden />
         <div class="ds-dropzone-inner">
@@ -2195,6 +2229,7 @@
       </div>
       <div id="ds-status" class="ds-status"></div>
       <ul class="ds-list" id="ds-list"></ul>
+      </div>
     `;
   }
 
