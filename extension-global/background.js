@@ -1374,6 +1374,30 @@ async function loadUserTasks() {
   return [];
 }
 
+/**
+ * Publish the start node's highlight colour so the manual-click preview can use it.
+ *
+ * The preview (content/click-preview.js) outlines the element a HUMAN clicked, so the operator
+ * can see what a step would target before running it. That is most useful precisely when nothing
+ * is running, so it cannot read the colour from a live play payload — hence this copy in storage.
+ *
+ * Only the PROCESS-level start owns the colour, matching resolveHighlightColor() in the engine:
+ * a start node inside a group has its own settings and must not stand in for the process's.
+ */
+async function publishPreviewHighlightColor(taskId) {
+  try {
+    const tasks = await loadUserTasks();
+    const task = tasks.find((t) => String(t.id) === String(taskId));
+    const nodes = task?.graph?.nodes || [];
+    const start = nodes.find((n) => n.kind === "start" && !n.groupNodeId);
+    const raw = start?.highlightColor ?? task?.graph?.highlightColor ?? "";
+    const v = String(raw || "").trim();
+    await chrome.storage.local.set({
+      da_preview_highlight_color: /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : ""
+    });
+  } catch { /* a missing colour only costs the preview its exact tint */ }
+}
+
 async function saveUserTasks(tasks) {
   const user = await currentLocalUser();
   const key = `localTasks__${user}`;
@@ -1765,6 +1789,10 @@ async function startPlayWithAutoReload(message, sender) {
     openNewTab: pendingPlay.openNewTab,
     activateTab: isConditionCheck ? false : undefined
   };
+
+  // Keep the manual-click preview's colour in step with the process being run. Done here (on a
+  // play request) because that is the moment the operator has told us which process matters.
+  await publishPreviewHighlightColor(pendingPlay.taskId);
 
   const { resumePlayAfterReload } = await chrome.storage.local.get("resumePlayAfterReload");
   if (resumePlayAfterReload) {
