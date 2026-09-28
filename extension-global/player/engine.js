@@ -1612,7 +1612,8 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
               })
             ]);
           } catch (err) {
-            appendPlayLog("warn", `خطا در بررسی شرط: ${err?.message || err}`);
+            lastConditionError = err?.message || String(err);
+            appendPlayLog("warn", `خطا در بررسی شرط: ${lastConditionError}`);
             pass = false;
           }
           playStatus.lastResult = {
@@ -1621,12 +1622,15 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
             nodeId: step.id,
             checkId
           };
-          appendPlayLog(
-            pass ? "info" : "warn",
-            pass
-              ? `نتیجه شرط «${title}»: برقرار (موفق)`
-              : `نتیجه شرط «${title}»: برقرار نیست (ناموفق)`
-          );
+          // Distinguish "the condition is false" from "the condition could not be checked".
+          // Both report a fail branch, but only the second one is an operational problem the
+          // author needs to hear about — the old wording called them the same thing.
+          const verdict = pass
+            ? `نتیجه شرط «${title}»: برقرار (موفق)`
+            : lastConditionError
+              ? `نتیجه شرط «${title}»: بررسی ممکن نشد — ${lastConditionError} (شاخه fail)`
+              : `نتیجه شرط «${title}»: برقرار نیست (ناموفق)`;
+          appendPlayLog(pass ? "info" : "warn", verdict);
           // Mark finished before final finally so portal can show result immediately.
           playStatus.playing = false;
           broadcastPlayState();
@@ -1826,10 +1830,18 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       try {
         pass = await evaluateCondition(activeTabId, node, graph, rowIndex);
       } catch (err) {
-        appendPlayLog("warn", `شرط «${node.title || node.id}»: اکسپشن → fail — ${err?.message || err}`);
+        lastConditionError = err?.message || String(err);
+        appendPlayLog("warn", `شرط «${node.title || node.id}»: اکسپشن → fail — ${lastConditionError}`);
         pass = false;
       }
-      appendPlayLog("info", `شرط «${node.title || node.id}»: ${pass ? "موفق (success)" : "ناموفق (fail)"}`);
+      // Say WHICH kind of fail this is. A check that could not run and a check that is simply
+      // false take the same branch, but only one of them means "go fix your diagram".
+      appendPlayLog(
+        lastConditionError ? "warn" : "info",
+        lastConditionError
+          ? `شرط «${node.title || node.id}»: بررسی ممکن نشد (${lastConditionError}) → شاخه fail`
+          : `شرط «${node.title || node.id}»: ${pass ? "موفق (success)" : "ناموفق (fail)"}`
+      );
       appendPlayResult({
         t: Date.now(),
         loop: loopIndex,
@@ -2020,7 +2032,30 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
     return { ok: true, skipped: true, inactive: true, tabId };
   }
 
-  const outcome = await runStep(tabId, graph.taskId, step, playStatus.runMode, graph, rowIndex);
+  // A step that THROWS must be treated as a step that FAILED, not as a reason to kill the run.
+  //
+  // runStep reaches the page through chrome.scripting, evaluates author-supplied selectors
+  // (including regexes), and dereferences a lot of node fields. Any of those can throw for
+  // reasons the inner helpers do not catch — an invalid pattern, a rejected script injection, a
+  // node shape an older graph saved. Without this guard the exception unwound straight out of
+  // runOneAction and executeFlow, so the loop's own failure policy (ignoreError, "continue to the
+  // next loop index", the per-step result row) was skipped entirely: one bad step ended the whole
+  // run and the log showed a stack trace instead of a step error.
+  //
+  // Catching here gives a thrown step exactly the same treatment as one that returned
+  // { ok: false } — same result row, same ignoreError handling, same loop decision.
+  let outcome;
+  try {
+    outcome = await runStep(tabId, graph.taskId, step, playStatus.runMode, graph, rowIndex);
+  } catch (err) {
+    const detail = err?.stack || err?.message || String(err);
+    outcome = {
+      ok: false,
+      error: `خطای غیرمنتظره در اجرای مرحله: ${err?.message || String(err)}`,
+      reason: "step_exception"
+    };
+    appendPlayLog("warn", `مرحله «${label}» با اکسپشن متوقف شد — ${detail}`);
+  }
   const failed = !outcome?.ok;
   const ignored = failed && step.ignoreError !== false;
   const errMsg = outcome?.error || "توقف به‌خاطر واگرایی";
@@ -2078,8 +2113,23 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
   return { ok: true, tabId: activeTabId };
 }
 
+/**
+ * Why the last evaluateCondition() call ended the way it did.
+ *
+ * A condition has only two branches, so a thrown error has to become one of them — the fail
+ * branch, by long-standing design. The harm is not the branch, it is the REPORTING: an
+ * exception was logged as «ناموفق (fail)» exactly like a legitimate false, so an author would
+ * go and re-check a selector when the real fault was an unreachable tab or a thrown helper.
+ * This side-channel lets the callers say "the check could not run" instead of "the check is
+ * false", while the branch taken stays identical.
+ *
+ * `null` means "no error — the boolean is a real answer".
+ */
+let lastConditionError = null;
+
 async function evaluateCondition(tabId, node, graph, rowIndex) {
   const ct = node.conditionType || "None";
+  lastConditionError = null;
   try {
     if (ct === "None") return true;
 
@@ -2088,7 +2138,11 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
       try {
         const tab = await chrome.tabs.get(tabId);
         actual = tab.url || "";
-      } catch {
+      } catch (err) {
+        // The tab is gone (closed, or a frame we cannot reach). That is NOT "the page URL does
+        // not match" — reporting it as a plain fail sent the author hunting for a wrong URL.
+        lastConditionError = `تب موردنظر در دسترس نیست (${err?.message || err})`;
+        appendPlayLog("warn", `شرط «آدرس صفحه»: ${lastConditionError} → شاخه fail`);
         return false;
       }
       const expected = await resolveConditionCompareValue(tabId, node, graph, rowIndex, { preferUrl: true });
@@ -2100,7 +2154,9 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
       try {
         const tabs = await chrome.tabs.query({});
         count = tabs.filter((t) => t.id).length;
-      } catch {
+      } catch (err) {
+        lastConditionError = `فهرست تب‌ها خوانده نشد (${err?.message || err})`;
+        appendPlayLog("warn", `شرط «تعداد تب‌ها»: ${lastConditionError} → شاخه fail`);
         return false;
       }
       const expected = Number(
@@ -2160,7 +2216,9 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
     if (ct === "MemoryValue") {
       const name = String(node.memoryVariableName || "").trim();
       if (!name) {
-        appendPlayLog("warn", "شرط متغیر حافظه بدون نام — شاخه fail");
+        // A misconfigured node, not a legitimate false: say so.
+        lastConditionError = "شرط متغیر حافظه بدون نام متغیر است";
+        appendPlayLog("warn", `${lastConditionError} — شاخه fail`);
         return false;
       }
       const vars = await getPlayMemoryVars();
@@ -2183,9 +2241,13 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
     appendPlayLog("info", `نوع شرط پشتیبانی‌نشده: ${ct} — شاخه success`);
     return true;
   } catch (err) {
-    // Never surface as play error: exception ≡ fail branch; details as warning only.
+    // Never surface as a play error: an exception still means the fail branch, because a
+    // condition must always resolve to a branch. What changes is that we now REMEMBER the
+    // failure, so the caller can report «بررسی ممکن نشد» rather than a bare «ناموفق» — the two
+    // look identical to the user otherwise, and only one of them is the author's bug.
     const detail = err?.stack || err?.message || String(err);
-    appendPlayLog("warn", `ارزیابی شرط با اکسپشن → fail — ${detail}`);
+    lastConditionError = err?.message || String(err);
+    appendPlayLog("warn", `ارزیابی شرط با خطا ممکن نشد → شاخه fail — ${detail}`);
     return false;
   }
 }
@@ -3320,6 +3382,9 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
   const run = async () => {
     const start = Date.now();
     let expectedCellRevision = null;
+    // Consecutive 409s, to distinguish a one-off optimistic-concurrency conflict (retry at once)
+    // from a contended cell (must back off). Reset by any non-conflict outcome.
+    let conflictStreak = 0;
     while (Date.now() - start < maxMs) {
       const localHit = (ds.cells || []).find((c) =>
         (c.key === col || c.Key === col || c.columnName === col)
@@ -3365,8 +3430,17 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
           message: res.message || res.body?.message || res.body?.Message || null
         };
       }
-      // 409 conflict: adopt the server's current revision and retry immediately.
+      // 409 conflict: adopt the server's current revision and retry.
+      //
+      // The retry is NOT immediate. A persistent conflict means some other writer is actively
+      // holding this cell, and an unthrottled `continue` spun as fast as the event loop allowed —
+      // hammering chrome.runtime.sendMessage (and the server behind it) for the whole wait budget,
+      // while starving the very writer whose lock we were waiting on. So a conflict backs off
+      // like any other retry; only the FIRST one retries at once, because a single conflict is
+      // the normal optimistic-concurrency case and resolves as soon as we present the new
+      // revision.
       if (res?.conflict) {
+        conflictStreak += 1;
         const cur = res.body?.currentCellRevision ?? res.body?.CurrentCellRevision;
         if (cur != null) {
           expectedCellRevision = cur;
@@ -3376,9 +3450,16 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
             cur,
             res.body?.currentDataRevision ?? res.body?.CurrentDataRevision
           );
+          if (conflictStreak > 1) {
+            // Growing, capped pause: enough to let the other writer finish, short enough that a
+            // quick lock turnaround is not punished.
+            await sleep(Math.min(1000, 60 * conflictStreak));
+          }
           continue;
         }
       }
+      // Any other outcome resets the streak: the next conflict is a fresh one, not a run of them.
+      conflictStreak = 0;
       await sleep(Math.min(800, 80 + Math.floor((Date.now() - start) / 40)));
     }
     return { ok: false, error: "cell_write_timeout" };
