@@ -271,6 +271,14 @@
               </TextBlock>
             </CheckBox>
 
+            <CheckBox x:Name="AllowFrontPackage" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="بستهٔ نرم‌افزاری فرانت (سایت عمومی) یک بستهٔ جداگانهٔ فروش است. اگر روشن باشد، بازدیدکنندهٔ وارد‌نشده به صفحهٔ فرانت می‌رود؛ اگر خاموش باشد، مستقیم به پنل می‌رود. برای لایسنس‌های قدیمی خاموش در نظر گرفته می‌شود.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="بستهٔ فرانت (سایت عمومی) فعال باشد"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — روشن یعنی صفحهٔ پیش‌فرض، فرانت است)"/>
+              </TextBlock>
+            </CheckBox>
+
             <StackPanel Orientation="Horizontal" Margin="28,8,0,12">
               <Button Content="امضای لایسنس" Width="130" Style="{StaticResource VsButton}" Click="SignLicense_Click"/>
               <Button Content="ذخیره .morobot" Width="130" Margin="10,0,0,0"

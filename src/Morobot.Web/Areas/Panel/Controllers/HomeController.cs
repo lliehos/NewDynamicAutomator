@@ -8,6 +8,10 @@ namespace Morobot.Web.Areas.Panel.Controllers;
 [Authorize]
 public class HomeController : Controller
 {
+    private readonly IConfiguration _configuration;
+
+    public HomeController(IConfiguration configuration) => _configuration = configuration;
+
     public IActionResult Index()
     {
         ViewData["Title"] = "صفحه اصلی";
@@ -42,6 +46,24 @@ public class HomeController : Controller
         if (!User.IsInRole(nameof(UserRole.Admin)) && !User.IsInRole(nameof(UserRole.ProcessManager)))
             return Forbid();
         ViewData["Title"] = "قالب‌ها";
+        return View();
+    }
+
+    /// <summary>
+    /// The illustrated user guide: one section per panel page, in the order a new user meets them.
+    /// </summary>
+    /// <remarks>
+    /// Content lives in the locale files (<c>panel.guide.*</c>) rather than in the view, so the page
+    /// is bilingual like the rest of the panel and a wording change does not touch markup. The
+    /// screenshot for each section is looked up from the <c>Guide.shots</c> configuration list, so
+    /// an operator can re-shoot a page and drop in new files without editing this code — and a
+    /// section whose image is missing renders a labelled placeholder instead of a broken image.
+    /// </remarks>
+    public IActionResult Guide()
+    {
+        ViewData["Title"] = "راهنمای استفاده";
+        ViewData["GuideShots"] = _configuration
+            .GetSection("Guide:Shots").Get<string[]>() ?? [];
         return View();
     }
 }

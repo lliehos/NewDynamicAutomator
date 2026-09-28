@@ -273,6 +273,11 @@ public static class DbSeeder
         await Upsert(SystemSettingKeys.BrandColorInk, BrandPaletteDefaults.Ink, "Branding", "رنگ متن", "Ink color", null, null);
         await Upsert(SystemSettingKeys.BrandColorBorderSubtle, BrandPaletteDefaults.BorderSubtle, "Branding", "حاشیه ملایم", "Subtle border", null, null);
         await Upsert(SystemSettingKeys.BrandReferralQrVisible, "true", "Branding", "ویجت QR معرفی", "Referral QR widget", "پیش‌فرض: نمایش", "Default: visible");
+        // Seeded as OFF on purpose: the licence says whether the deployment OWNS the front-end
+        // package, this switch says whether its owner wants the public site shown. Defaulting it on
+        // would publish a public front page the moment a licence granted the package, before anyone
+        // had decided to.
+        await Upsert(SystemSettingKeys.FrontShowSite, "false", "Branding", "نمایش سایت فرانت", "Show front site", "نیازمند لایسنس بستهٔ فرانت", "Requires the front-package licence");
 
         // The six node colours used to be seeded here one by one. They are now all covered by the
         // DiagramColors catalogue loop further down, and seeding them twice in the same run was a

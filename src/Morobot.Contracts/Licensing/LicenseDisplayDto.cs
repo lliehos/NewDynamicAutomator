@@ -34,6 +34,12 @@ public sealed class LicenseDisplayDto
     /// system default language and the language switcher is hidden.
     /// </summary>
     public bool AllowBilingual { get; set; }
+    /// <summary>
+    /// Whether the front-end package (the public site) is active (default OFF). When it is off the
+    /// deployment is panel-first: an unauthenticated visitor lands on the panel instead of the
+    /// public front page. The page itself stays reachable at <c>/Home/Index</c>.
+    /// </summary>
+    public bool AllowFrontPackage { get; set; }
     public bool ShowCopyright { get; set; }
     public string? DatabaseServerHint { get; set; }
     public string? UpdateServerUrl { get; set; }
@@ -117,6 +123,15 @@ public sealed class TenantBrandingDto
 
     /// <summary>Panel referral QR widget (morobot.ir). Enterprise can disable when licensed.</summary>
     public bool ShowReferralQrWidget { get; set; } = true;
+
+    /// <summary>
+    /// Whether the public front site should be the default landing page. Read-only here: the raw
+    /// setting is written by the Branding controller, which is also the only place that knows
+    /// whether the licence carries the front-end package. Defaults to off, matching the seeded row,
+    /// so a deployment that has just been granted the package does not publish a site nobody
+    /// configured.
+    /// </summary>
+    public string FrontShowSite { get; set; } = "false";
 
     /// <summary>
     /// Vendor-signed link for the referral widget, taken from the licence file. Null when the

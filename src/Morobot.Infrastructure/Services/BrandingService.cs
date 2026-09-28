@@ -227,6 +227,7 @@ public sealed class BrandingService
         var qrRaw = await _settings.GetAsync(SystemSettingKeys.BrandReferralQrVisible, "true", ct);
         dto.ShowReferralQrWidget = !string.Equals(qrRaw, "false", StringComparison.OrdinalIgnoreCase)
                                    && qrRaw != "0";
+        dto.FrontShowSite = await _settings.GetAsync(SystemSettingKeys.FrontShowSite, "false", ct);
 
         await ApplyDiagramColorsAsync(dto, ct);
     }

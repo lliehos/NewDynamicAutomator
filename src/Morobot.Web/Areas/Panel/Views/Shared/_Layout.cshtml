@@ -8,6 +8,7 @@
   var isProcesses = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("Processes", StringComparison.OrdinalIgnoreCase);
   var isSources = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("DataSources", StringComparison.OrdinalIgnoreCase);
   var isTemplates = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("Templates", StringComparison.OrdinalIgnoreCase);
+  var isGuide = ctrl.Equals("Home", StringComparison.OrdinalIgnoreCase) && act.Equals("Guide", StringComparison.OrdinalIgnoreCase);
   var isSettings = ctrl.Equals("Settings", StringComparison.OrdinalIgnoreCase);
   var nextLang = L.IsRtl ? "en" : "fa";
   var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
@@ -49,6 +50,12 @@
   <link rel="stylesheet" href="~/css/da-switch.css?v=@V.AssetVersion" />
   <link rel="stylesheet" href="~/css/da-cropper.css?v=@V.AssetVersion" />
   <link rel="stylesheet" href="~/css/da-avatar.css?v=@V.AssetVersion" />
+  @* The guide's long-form reading rules are not needed by the other panel pages, so the
+     stylesheet is loaded only where it is used rather than in every page's critical path. *@
+  @if (isGuide)
+  {
+    <link rel="stylesheet" href="~/css/panel-guide.css?v=@V.AssetVersion" />
+  }
   <style>
     body, .menu, .layout-navbar, .card, input, button { font-family: Vazirmatn, "Public Sans", sans-serif !important; }
   </style>
@@ -121,6 +128,12 @@
               </a>
             </li>
           }
+          <li class="menu-item @(isGuide ? "active" : null)">
+            <a asp-area="Panel" asp-controller="Home" asp-action="Guide" class="menu-link">
+              <i class="menu-icon tf-icons ti ti-help-circle"></i>
+              <div data-i18n="panel.navGuide">@L["panel.navGuide"]</div>
+            </a>
+          </li>
           <li class="menu-item @(isSettings ? "active" : null)">
             <a asp-area="Panel" asp-controller="Settings" asp-action="Index" class="menu-link">
               <i class="menu-icon tf-icons ti ti-settings"></i>
@@ -167,6 +180,10 @@
               </li>
               <li class="nav-item me-3 d-none d-sm-block">
                 <a class="nav-link text-muted" href="/" data-i18n="common.site" title="@L["common.site"]">@L["common.site"]</a>
+              </li>
+              <li class="nav-item me-3 d-none d-sm-block">
+                <a class="nav-link text-muted da-navbar-guide" asp-area="Panel" asp-controller="Home" asp-action="Guide"
+                   data-i18n="panel.navGuide" title="@L["panel.navGuide"]">@L["panel.navGuide"]</a>
               </li>
               <li class="nav-item me-3 d-none d-sm-block">
                 @{

@@ -11,6 +11,12 @@ namespace Morobot.Web.Areas.Admin.Controllers;
 [Authorize(Roles = "Admin")]
 public class BrandingController : Controller
 {
+    /// <summary>
+    /// ViewData flag telling the view whether the licence carries the front-end package, which is
+    /// what decides whether the front-site switch is shown at all.
+    /// </summary>
+    internal const string FrontPackageAllowedKey = "FrontPackageAllowed";
+
     private readonly BrandingService _branding;
     private readonly LicenseService _license;
     private readonly DiagramSettingsService _diagram;
@@ -19,6 +25,7 @@ public class BrandingController : Controller
     private readonly ILocaleService _locale;
     private readonly ExtensionSyncService _sync;
     private readonly ExtensionBrandingOverlay _overlay;
+    private readonly SystemSettingsService _settings;
 
     public BrandingController(
         BrandingService branding,
@@ -28,7 +35,8 @@ public class BrandingController : Controller
         IWebHostEnvironment env,
         ILocaleService locale,
         ExtensionSyncService sync,
-        ExtensionBrandingOverlay overlay)
+        ExtensionBrandingOverlay overlay,
+        SystemSettingsService settings)
     {
         _branding = branding;
         _license = license;
@@ -38,6 +46,7 @@ public class BrandingController : Controller
         _locale = locale;
         _sync = sync;
         _overlay = overlay;
+        _settings = settings;
     }
 
     [HttpGet]
@@ -51,6 +60,10 @@ public class BrandingController : Controller
         }
 
         ViewData["Title"] = _locale["admin.branding.title"];
+        // The front-site switch is only meaningful when the licence actually carries the front-end
+        // package. Passed as a flag rather than left for the view to guess, so the switch and the
+        // save path agree on exactly the same condition.
+        ViewData[FrontPackageAllowedKey] = runtime.AllowsFrontPackage;
         return View(await _branding.GetAsync(ct));
     }
 
@@ -94,6 +107,22 @@ public class BrandingController : Controller
             // Only the referral-QR switch still posts hidden+checkbox; the diagram colours no longer
             // carry a switch at all (reset-to-default replaced them, see ResetColor).
             model.ShowReferralQrWidget = ReadSwitch(Request.Form, "ShowReferralQrWidget");
+
+            // The front-site switch is written ONLY when the licence carries the front-end package.
+            // A disabled control is dropped from the POST by the browser, so ReadSwitch would report
+            // "false" for a licence that cannot show the section at all — and a plain licence upgrade
+            // would then find the owner's own choice already wiped. Skipping the write keeps whatever
+            // was stored, so re-granting the package restores the previous decision instead of
+            // silently resetting it.
+            if (runtime.AllowsFrontPackage)
+            {
+                await _settings.SetAsync(
+                    Morobot.Domain.SystemSettingKeys.FrontShowSite,
+                    ReadSwitch(Request.Form, Morobot.Domain.SystemSettingKeys.FrontShowSite) ? "true" : "false",
+                    userId,
+                    User.Identity?.Name,
+                    ct);
+            }
 
             await _branding.SaveAsync(model, userId, User.Identity?.Name, ct);
 

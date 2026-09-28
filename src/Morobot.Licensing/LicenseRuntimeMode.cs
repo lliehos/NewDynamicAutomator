@@ -72,6 +72,18 @@ public sealed class LicenseRuntimeState
     };
 
     /// <summary>
+    /// Whether the front-end package (the public site) is active for this deployment.
+    /// </summary>
+    /// <remarks>
+    /// Strictly <see cref="LicenseRuntimeMode.Licensed"/>-only, with no trial fallback: the package
+    /// is a separately sold bundle rather than a feature of the product, so an install that has not
+    /// bought it — including a trial, and including a restricted install whose licence lapsed —
+    /// stays panel-first. A registry-style <c>Front.Page</c> override can still force either landing
+    /// page, but that is an operator's decision and not something the licence grants.
+    /// </remarks>
+    public bool AllowsFrontPackage => Mode == LicenseRuntimeMode.Licensed && (Payload?.AllowFrontPackage ?? false);
+
+    /// <summary>
     /// Row ceiling implied by the license. A trial or restricted install falls back to the small
     /// trial cap; a licensed install uses the signed value (null = the vendor sold no ceiling).
     /// </summary>

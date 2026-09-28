@@ -70,6 +70,24 @@ public static class SystemSettingKeys
     public const string AuthLdapEnabled = "AuthLdapEnabled";
 
     /// <summary>
+    /// "true" when the deployment's public front page should be the default landing page.
+    /// </summary>
+    /// <remarks>
+    /// This is the ADMIN's own switch, and it sits ON TOP OF the licence rather than replacing it:
+    /// the front-end package is sold per licence (<c>LicensePayload.AllowFrontPackage</c>), so the
+    /// switch is only shown — and only honoured — on a licence that carries the package. A licence
+    /// without it can never turn the public site back on by changing a setting, which is the whole
+    /// point of signing the capability.
+    /// <para>
+    /// Deliberately the OPPOSITE default direction from the licence flag: the licence decides whether
+    /// the package EXISTS, this decides whether the owner WANTS it shown. An absent row therefore
+    /// means "off", so a deployment that has just been granted the package and has not touched the
+    /// switch yet does not silently start publishing a site it never configured.
+    /// </para>
+    /// </remarks>
+    public const string FrontShowSite = "FrontShowSite";
+
+    /// <summary>
     /// Keys whose value is a plain "true"/"false" flag. Admin → Settings renders these as a switch
     /// rather than a text box: a free-text field accepting any string invites a typo like "ture",
     /// which \u2014 for a flag the code reads with a strict comparison \u2014 silently means "off".
@@ -81,7 +99,8 @@ public static class SystemSettingKeys
         LdapUseTls,
         PasswordRequireLetterAndDigit,
         DiagramIgnorePlayError,
-        DiagramNodeIgnoreError
+        DiagramNodeIgnoreError,
+        FrontShowSite
     };
 
     /// <summary>True when the setting is a plain on/off flag.</summary>
@@ -548,6 +567,10 @@ public static class SystemSettingKeys
         BrandColorInk,
         BrandColorBorderSubtle,
         BrandReferralQrVisible,
+        // The front-site switch lives on Branding because it is a licensing/branding decision about
+        // the PUBLIC surface, and because Branding is already the page that shows licence-gated
+        // controls with a signed-capability check.
+        FrontShowSite,
         // Spelled out rather than referencing DiagramBehaviourOwned: static field initialisers run in
         // declaration order, so that field (declared below) would still be null here.
         DiagramSelectorLineWidth,

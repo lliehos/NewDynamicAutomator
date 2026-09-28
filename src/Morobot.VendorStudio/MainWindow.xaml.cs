@@ -90,6 +90,7 @@ public partial class MainWindow : Window
                 AllowLegacyMigration = AllowLegacyMigration.IsChecked == true,
                 AllowPlanManagement = AllowPlanManagement.IsChecked == true,
                 AllowBilingual = AllowBilingual.IsChecked == true,
+                AllowFrontPackage = AllowFrontPackage.IsChecked == true,
                 UpdateServerUrl = string.IsNullOrWhiteSpace(UpdateUrl.Text) ? null : UpdateUrl.Text.Trim(),
                 AllowedHost = allowedHost,
                 ReferralWidgetUrl = referralUrl,

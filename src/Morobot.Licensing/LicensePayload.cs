@@ -53,6 +53,21 @@ public sealed class LicensePayload
     /// have looked like a UI regression rather than a licence change.
     /// </remarks>
     public bool AllowBilingual { get; set; } = true;
+
+    /// <summary>
+    /// Whether this deployment's front-end package (the public site) is active. Drives which page
+    /// an unauthenticated visitor lands on: with the package the public front page is the default,
+    /// without it the panel is.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately <c>false</c> by default — OPT-IN, unlike <see cref="AllowPlanManagement"/>.
+    /// The front-end package is a separate commercial bundle: a customer who never bought it must
+    /// not acquire it by omission, and a licence signed before this flag existed has to keep
+    /// behaving exactly as it did (panel-first). A vendor who sells the package passes
+    /// <c>--allow-front-package true</c>.
+    /// </remarks>
+    public bool AllowFrontPackage { get; set; }
+
     /// <summary>Optional override for update check URL.</summary>
     public string? UpdateServerUrl { get; set; }
     /// <summary>When set, HTTP Host (or this IP) must match. Empty = no host lock.</summary>

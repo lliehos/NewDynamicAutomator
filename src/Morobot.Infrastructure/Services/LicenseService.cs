@@ -184,6 +184,20 @@ public sealed class LicenseService
         return state;
     }
 
+    /// <summary>
+    /// Whether the signed licence sold this deployment the front-end package — i.e. whether the
+    /// public site is even permitted here.
+    /// </summary>
+    /// <remarks>
+    /// A narrow reader over <see cref="GetRuntimeStateAsync"/> rather than a second source of truth.
+    /// It exists so call sites read as the question they are actually asking ("did we buy the front
+    /// end?") instead of reaching into the runtime state and re-deriving the rule, which is how the
+    /// same flag ends up interpreted two different ways. Note this is only the LICENCE half: whether
+    /// the site is actually shown is a separate admin switch, and both must agree.
+    /// </remarks>
+    public async Task<bool> IsFrontPackageEnabledAsync(CancellationToken ct = default)
+        => (await GetRuntimeStateAsync(ct)).AllowsFrontPackage;
+
     private string BuildRuntimeCacheKey()
     {
         var (host, _) = _hostAccessor.GetCurrent();
@@ -228,6 +242,7 @@ public sealed class LicenseService
             AllowLegacyMigration = runtime.AllowsLegacyMigration,
             AllowPlanManagement = runtime.AllowsPlanManagement,
             AllowBilingual = runtime.AllowsBilingual,
+            AllowFrontPackage = runtime.AllowsFrontPackage,
             ShowCopyright = runtime.ShowCopyright,
             UpdateServerUrl = updateUrl,
             PendingConnectionRestart = string.IsNullOrWhiteSpace(pendingRestart) ? null : pendingRestart

@@ -305,6 +305,29 @@
     </label>
   </div>
 
+  @{
+    // The front-end package is sold per licence, so this whole card is shown only when the licence
+    // carries it. Without the package there is no public site for the switch to govern, and offering
+    // it would promise something the install cannot deliver.
+    var frontAllowed = ViewData[Morobot.Web.Areas.Admin.Controllers.BrandingController.FrontPackageAllowedKey] as bool? == true;
+    var frontOn = string.Equals(Model.FrontShowSite, "true", StringComparison.OrdinalIgnoreCase) || Model.FrontShowSite == "1";
+  }
+  @if (frontAllowed)
+  {
+    <div class="admin-settings-card">
+      <h3><i class="ti ti-world" aria-hidden="true"></i>@L["admin.branding.frontSite"]</h3>
+      <p class="admin-field-hint">@L["admin.branding.frontSiteHint"]</p>
+      <label class="admin-settings-switch" for="@Morobot.Domain.SystemSettingKeys.FrontShowSite">
+        <input type="hidden" name="@Morobot.Domain.SystemSettingKeys.FrontShowSite" value="false" />
+        <input type="checkbox" id="@Morobot.Domain.SystemSettingKeys.FrontShowSite"
+               name="@Morobot.Domain.SystemSettingKeys.FrontShowSite" value="true"
+               data-da-switch="off" @(frontOn ? "checked" : null) />
+        <span class="admin-settings-switch-track" aria-hidden="true"></span>
+        <span class="admin-settings-switch-label">@L["admin.branding.frontSiteShow"]</span>
+      </label>
+    </div>
+  }
+
   <div class="admin-settings-card admin-branding-actions">
     <button type="submit" class="btn-admin"><i class="ti ti-device-floppy" aria-hidden="true"></i>@L["admin.branding.save"]</button>
   </div>
