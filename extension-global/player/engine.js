@@ -898,9 +898,43 @@ function resolveIgnorePlayError(graph) {
   return true;
 }
 
+/**
+ * Is this step failure an authentication/session failure?
+ *
+ * background.js reports a 401/403 from any server call as `{ error: "auth" }` — a bare marker,
+ * not a sentence — and every server-backed action depends on that session. Treating it like an
+ * ordinary step error is wrong in a way that compounds: with the process default
+ * (`ignorePlayError: true`) the run would CARRY ON against a dead session, so every later
+ * server call failed too and the log filled with unrelated errors instead of one clear cause.
+ *
+ * Matched by exact marker first (that is what the code actually produces), then by the message
+ * text so a wrapped or translated form is still caught.
+ */
+function isAuthFailure(outcome) {
+  if (!outcome) return false;
+  const reason = String(outcome.reason || "").trim().toLowerCase();
+  if (reason === "auth" || reason === "unauthorized" || reason === "unauthenticated") return true;
+  const err = String(outcome.error || "").trim().toLowerCase();
+  if (err === "auth") return true;
+  return /\b(401|403)\b/.test(err) || /unauthor|unauthentic|session expired|نشست منقضی|دسترسی ندارید/.test(err);
+}
+
+/** The message shown when the run stops because the session is gone. */
+const AUTH_FAILURE_MESSAGE =
+  "نشست/دسترسی به سرور معتبر نیست (خطای احراز هویت) — اجرا متوقف شد. " +
+  "ورد پنل را تازه کنید و دوباره اجرا کنید.";
+
 /** Decide after a non-ignored step failure: next loop index vs abort play. */
-function handleStepFailureForLoop(graph, errorMsg) {
+function handleStepFailureForLoop(graph, errorMsg, opts = {}) {
   const msg = errorMsg || "خطای اجرا";
+  // An auth failure is NOT subject to the ignore policies. Those exist so a flaky step does not
+  // abort a long run; an expired session is not flaky — nothing downstream can succeed, so
+  // "continue" only delays the inevitable and buries the real cause under follow-on errors.
+  if (opts.authFailure) {
+    playStatus.lastError = AUTH_FAILURE_MESSAGE;
+    appendPlayLog("error", `توقف اجرا — ${AUTH_FAILURE_MESSAGE}`);
+    return { continueLoop: false, authFailure: true };
+  }
   if (resolveIgnorePlayError(graph)) {
     appendPlayLog(
       "warn",
@@ -1649,7 +1683,9 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
           const outcome = await runOneAction(activeTabId, graph, step, rowIndex, li + 1, iters.total, 1, 1);
           if (outcome.tabId) activeTabId = outcome.tabId;
           if (!outcome.ok) {
-            const decision = handleStepFailureForLoop(graph, outcome.error);
+            const decision = handleStepFailureForLoop(graph, outcome.error, {
+              authFailure: outcome.authFailure === true
+            });
             if (decision.continueLoop) continue;
             break;
           }
@@ -1663,7 +1699,9 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
         const walked = await executeFlow(activeTabId, graph, entryId, rowIndex, li + 1, iters.total, opts);
         activeTabId = walked.tabId || activeTabId;
         if (walked.stepFailed) {
-          const decision = handleStepFailureForLoop(graph, walked.error);
+          const decision = handleStepFailureForLoop(graph, walked.error, {
+            authFailure: walked.authFailure === true
+          });
           if (decision.continueLoop) continue;
           break;
         }
@@ -1672,7 +1710,27 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
       if (playStatus.lastError) break;
     }
     if (!playAbort && !playStatus.lastError) {
-      appendPlayLog("info", `اجرا با موفقیت تمام شد (${iters.total} حلقه)`);
+      // "Successfully finished" must not paper over steps that failed and were skipped.
+      //
+      // ignoreError (per step) and ignorePlayError (per process) deliberately let a run continue
+      // past a failure, and each such step is already marked `ignoredError` in its own result row.
+      // But the summary only counted loops, so a run in which several steps failed — and whose
+      // actual work therefore never happened — announced an unqualified success. An operator
+      // reading «اجرا با موفقیت تمام شد» had no way to know the run was only partly effective.
+      //
+      // Counted from the results we already keep, rather than a new counter, so the number cannot
+      // drift from the rows the operator can inspect.
+      const rows = Array.isArray(playStatus.results) ? playStatus.results : [];
+      const ignoredCount = rows.filter((r) => r && r.ignoredError).length;
+      if (ignoredCount > 0) {
+        appendPlayLog(
+          "warn",
+          `اجرا تمام شد — اما ${ignoredCount} مرحله خطا داشت و طبق تنظیم «چشم‌پوشی از خطا» رد شد. ` +
+          `نتیجهٔ کامل حاصل نشده است؛ جزئیات در فهرست نتایج.`
+        );
+      } else {
+        appendPlayLog("info", `اجرا با موفقیت تمام شد (${iters.total} حلقه)`);
+      }
     }
   } finally {
     playStatus.playing = false;
@@ -1812,7 +1870,13 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       }
       if (!outcome.ok) {
         // Non-ignored step error → end this iteration (like continue); loop decides next.
-        return { tabId: activeTabId, stepFailed: true, error: outcome.error || "خطای مرحله" };
+        // `authFailure` travels with it so the loop's ignore policy cannot override a dead session.
+        return {
+          tabId: activeTabId,
+          stepFailed: true,
+          error: outcome.error || "خطای مرحله",
+          authFailure: outcome.authFailure === true
+        };
       }
       const nextId = flowEdge(edges, node.id, ["next"])?.to || null;
       // Delay after the step finished, before the next node.
@@ -1968,7 +2032,12 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
           });
           activeTabId = inner.tabId || activeTabId;
           if (inner.stepFailed) {
-            return { tabId: activeTabId, stepFailed: true, error: inner.error || "خطای مرحله" };
+            return {
+              tabId: activeTabId,
+              stepFailed: true,
+              error: inner.error || "خطای مرحله",
+              authFailure: inner.authFailure === true
+            };
           }
           if (playStatus.lastError) break;
         }
@@ -2057,10 +2126,15 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
     appendPlayLog("warn", `مرحله «${label}» با اکسپشن متوقف شد — ${detail}`);
   }
   const failed = !outcome?.ok;
-  const ignored = failed && step.ignoreError !== false;
-  const errMsg = outcome?.error || "توقف به‌خاطر واگرایی";
-  const reason = outcome?.reason || outcome?.unexpected?.reason || "";
-  const errDetail = reason ? `${errMsg} [${reason}]` : errMsg;
+  // An auth failure must never be swallowed by ignoreError (step) / ignorePlayError (process).
+  // See isAuthFailure(): continuing against a dead session fails everything downstream.
+  const authFailure = failed && isAuthFailure(outcome);
+  const ignored = failed && !authFailure && step.ignoreError !== false;
+  const errMsg = authFailure
+    ? AUTH_FAILURE_MESSAGE
+    : (outcome?.error || "توقف به‌خاطر واگرایی");
+  const reason = authFailure ? "auth" : (outcome?.reason || outcome?.unexpected?.reason || "");
+  const errDetail = reason && !authFailure ? `${errMsg} [${reason}]` : errMsg;
 
   const result = {
     t: Date.now(),
@@ -2094,8 +2168,9 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
       return { ok: true, ignoredError: true, error: errDetail, tabId };
     }
     appendPlayLog("error", `خطا در مرحله «${label}»: ${errDetail}`);
-    // End current iteration (caller / loop decides continue vs abort).
-    return { ok: false, stepFailed: true, error: errDetail, tabId };
+    // End current iteration (caller / loop decides continue vs abort). `authFailure` rides along
+    // so the loop can refuse to continue even when its own ignore policy is switched on.
+    return { ok: false, stepFailed: true, error: errDetail, authFailure, tabId };
   }
 
   let activeTabId = tabId;
