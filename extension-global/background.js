@@ -383,8 +383,36 @@ async function listOpenTabs() {
   return { ok: true, tabs: items };
 }
 
-let openTabsBroadcastTimer = null;
-function scheduleOpenTabsBroadcast(reason) {
+/**
+ * Find the ONE flow-editor tab, or explain why there is not exactly one.
+ *
+ * The editor holds the graph in memory, so a node can only be appended while that page is open.
+ * More than one editor is refused rather than guessed at: appending to the wrong process is a
+ * silent, wrong edit, and the user has no way to tell it happened. The owner asked for exactly
+ * this rule.
+ *
+ * The editor route is /Panel/Tasks/Editor/{id}; the id is read from the URL so the caller knows
+ * which process it is talking to.
+ */
+async function findEditorTab() {
+  const portal = String(await portalBase()).replace(/\/$/, "");
+  const tabs = await chrome.tabs.query({});
+  const editors = [];
+  for (const t of tabs) {
+    if (!t.id) continue;
+    const url = t.url || t.pendingUrl || "";
+    const m = /\/Panel\/Tasks\/Editor\/([^/?#]+)/i.exec(url);
+    if (!m) continue;
+    // Same portal only: a stale tab from another host must not be mistaken for the editor.
+    if (portal && !url.startsWith(portal) && !/:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url)) continue;
+    editors.push({ id: t.id, url, taskId: decodeURIComponent(m[1]) });
+  }
+  if (editors.length === 0) return { ok: false, reason: "no_editor" };
+  if (editors.length > 1) return { ok: false, reason: "many_editors", count: editors.length };
+  return { ok: true, tabId: editors[0].id, taskId: editors[0].taskId, url: editors[0].url };
+}
+
+let openTabsBroadcastTimer = null;function scheduleOpenTabsBroadcast(reason) {
   if (openTabsBroadcastTimer) clearTimeout(openTabsBroadcastTimer);
   openTabsBroadcastTimer = setTimeout(() => {
     openTabsBroadcastTimer = null;

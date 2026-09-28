@@ -147,6 +147,55 @@ const CTX_ITEMS = [
   [CTX_R_OBJ, "ctx.objectRelative"]
 ];
 
+/**
+ * "Build element" — a SECOND top-level menu, next to the selector one.
+ *
+ * It appends a node to the flow that is open in an editor tab, using the element the user just
+ * right-clicked. Deliberately a separate parent (the owner's choice) rather than a seventh entry
+ * in the selector menu: the two do different things, and mixing them made a long list where the
+ * two halves had nothing to do with each other.
+ */
+const CTX_BUILD_PARENT = "da-build-parent";
+
+/**
+ * The element types offered.
+ *
+ * Page ACTIONS and CONDITIONS only (the owner's choice). The types are the ones a node created
+ * from a live page element can actually be filled with: every one of them needs a selector, and
+ * that is exactly what the right-click provides. Types that need no page element (waiting, tab
+ * bookkeeping, memory) are left out — offering them here would produce a node with an irrelevant
+ * selector, which is worse than not offering them.
+ */
+const BUILD_ITEMS = [
+  ["Click", "build.click"],
+  ["DoubleClick", "build.doubleClick"],
+  ["RightClick", "build.rightClick"],
+  ["Hover", "build.hover"],
+  ["InputContent", "build.inputContent"],
+  ["ClearContent", "build.clearContent"],
+  ["SelectOption", "build.selectOption"],
+  ["PressKey", "build.pressKey"],
+  ["GoToUrl", "build.goToUrl"],
+  ["FindElement", "build.findElement"],
+  ["NotFindElement", "build.notFindElement"],
+  ["ElementVisible", "build.visible"],
+  ["ElementHidden", "build.hidden"],
+  ["ElementValue", "build.elementValue"]
+];
+const BUILD_MENU_IDS = new Set(BUILD_ITEMS.map(([id]) => id));
+
+/**
+ * Every menu id this extension creates, used to suppress the whole menu on our own panel.
+ * Built from the same source lists as the creates, so a new entry cannot be forgotten here.
+ */
+const ALL_MENU_IDS = [
+  CTX_PARENT,
+  CTX_BUILD_PARENT,
+  ...CTX_ITEMS.map(([id]) => id),
+  ...BUILD_ITEMS.map(([id]) => id)
+];
+
+
 /** Culture comes from the portal via chrome.storage.uiCulture (see content/portal-bridge.js). */
 async function ctxCulture() {
   try {
@@ -167,7 +216,26 @@ const CTX_LABELS = {
     "ctx.elementRelative": "سلکتور این المان (نسبی)",
     "ctx.frameRelative": "سلکتور فریم این المان (نسبی)",
     "ctx.objectRelative": "سلکتور آبجکت این المان (نسبی)",
-    "ctx.framePathEmpty": "فریم تودرتویی یافت نشد"
+    "ctx.framePathEmpty": "فریم تودرتویی یافت نشد",
+    "build.parent": "ساخت عنصر در فرآیند",
+    "build.click": "کلیک روی المان",
+    "build.doubleClick": "دبل‌کلیک روی المان",
+    "build.rightClick": "کلیک راست روی المان",
+    "build.hover": "نگه‌داشتن نشانگر روی المان",
+    "build.inputContent": "پر کردن فیلد المان",
+    "build.clearContent": "پاک کردن متن فیلد",
+    "build.selectOption": "انتخاب گزینه از لیست",
+    "build.pressKey": "فشردن اینتر روی المان",
+    "build.goToUrl": "رفتن به آدرس",
+    "build.findElement": "شرط: وجود المان",
+    "build.notFindElement": "شرط: نبود المان",
+    "build.visible": "شرط: نمایان بودن المان",
+    "build.hidden": "شرط: پنهان بودن المان",
+    "build.elementValue": "شرط: مقدار المان",
+    "build.noEditor": "ابتدا ادیتور فرآیند را باز کنید.",
+    "build.manyEditors": "بیش از یک ادیتور باز است؛ فقط یکی را باز بگذارید.",
+    "build.locked": "این فرآیند قفل است و نود جدید نمی‌پذیرد.",
+    "build.noElement": "المانی انتخاب نشده است. ابتدا روی آن راست‌کلیک کنید."
   },
   en: {
     "ctx.parent": "Copy selector",
@@ -177,7 +245,26 @@ const CTX_LABELS = {
     "ctx.elementRelative": "This element's selector (relative)",
     "ctx.frameRelative": "This element's frame selector (relative)",
     "ctx.objectRelative": "This element's object selector (relative)",
-    "ctx.framePathEmpty": "No nested frame found"
+    "ctx.framePathEmpty": "No nested frame found",
+    "build.parent": "Add element to process",
+    "build.click": "Click the element",
+    "build.doubleClick": "Double-click the element",
+    "build.rightClick": "Right-click the element",
+    "build.hover": "Hover the element",
+    "build.inputContent": "Fill the element's field",
+    "build.clearContent": "Clear the field's text",
+    "build.selectOption": "Select an option from the list",
+    "build.pressKey": "Press Enter on the element",
+    "build.goToUrl": "Go to URL",
+    "build.findElement": "Condition: element exists",
+    "build.notFindElement": "Condition: element is absent",
+    "build.visible": "Condition: element is visible",
+    "build.hidden": "Condition: element is hidden",
+    "build.elementValue": "Condition: element value",
+    "build.noEditor": "Open the process editor first.",
+    "build.manyEditors": "More than one editor is open; keep only one.",
+    "build.locked": "This process is locked and cannot take a new node.",
+    "build.noElement": "No element selected. Right-click one first."
   }
 };
 
@@ -199,6 +286,33 @@ function ctxT(culture, key) {
 let ctxMenuChain = Promise.resolve();
 let ctxMenuQueued = false;
 
+/**
+ * The portal origin, or "" when unknown. portalBase() lives in background.js (this file is
+ * evaluated in the same worker scope, but is guarded so it also loads standalone in tests).
+ */
+async function portalBaseSafe() {
+  try {
+    const { portalBase } = await chrome.storage.local.get("portalBase");
+    return String(portalBase || "").replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Is this URL our own panel?
+ *
+ * Same rule as isPortalTabUrl() in background.js: the configured portal origin, plus
+ * localhost/127.0.0.1 which is the dev portal. Kept in sync deliberately — two different notions of
+ * "our page" would show the menu on one and hide it on the other.
+ */
+async function isOnOurPortal(url) {
+  if (!url) return false;
+  const base = await portalBaseSafe();
+  if (base && url.startsWith(base)) return true;
+  return /:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
+}
+
 function ensureContextMenus() {
   // Collapse a burst of triggers into a single rebuild.
   if (ctxMenuQueued) return ctxMenuChain;
@@ -208,6 +322,9 @@ function ensureContextMenus() {
     .then(async () => {
       ctxMenuQueued = false;
       const culture = await ctxCulture();
+      const urlPatterns = ctxMenuUrlPatterns();
+      // If the API is absent there is nothing to build; bail before touching it.
+      if (!chrome.contextMenus?.create) return;
       // removeAll must finish before create, otherwise Chrome throws duplicate-id errors.
       await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
       // create() can reject with "duplicate id" (or report it via lastError) if a stale
@@ -216,14 +333,35 @@ function ensureContextMenus() {
         chrome.contextMenus.create({
           id: CTX_PARENT,
           title: ctxT(culture, "ctx.parent"),
-          contexts: ["all"]
+          contexts: ["all"],
+          documentUrlPatterns: urlPatterns
         }, () => { void chrome.runtime.lastError; });
         for (const [id, key] of CTX_ITEMS) {
           chrome.contextMenus.create({
             id,
             parentId: CTX_PARENT,
             title: ctxT(culture, key),
-            contexts: ["all"]
+            contexts: ["all"],
+            documentUrlPatterns: urlPatterns
+          }, () => { void chrome.runtime.lastError; });
+        }
+
+        // The second top-level menu. Its children ARE the element types: a context menu is a flat
+        // list, so an extra nesting level would only repeat the parent's own label as a second,
+        // identical entry (which is exactly the duplication the owner spotted).
+        chrome.contextMenus.create({
+          id: CTX_BUILD_PARENT,
+          title: ctxT(culture, "build.parent"),
+          contexts: ["all"],
+          documentUrlPatterns: urlPatterns
+        }, () => { void chrome.runtime.lastError; });
+        for (const [type, key] of BUILD_ITEMS) {
+          chrome.contextMenus.create({
+            id: type,
+            parentId: CTX_BUILD_PARENT,
+            title: ctxT(culture, key),
+            contexts: ["all"],
+            documentUrlPatterns: urlPatterns
           }, () => { void chrome.runtime.lastError; });
         }
       } catch (err) {
@@ -233,8 +371,16 @@ function ensureContextMenus() {
   return ctxMenuChain;
 }
 
-chrome.runtime.onInstalled.addListener(() => { ensureContextMenus(); });
-chrome.runtime.onStartup.addListener(() => { ensureContextMenus(); });
+// Every top-level registration is guarded. An unguarded `X.addListener(...)` on a sub-API the
+// running Chrome does not expose throws while the service worker is being evaluated, and that fails
+// the entire worker registration ("Service worker registration failed. Status code: 15") — one
+// missing API would take the whole extension down rather than just the one feature.
+if (chrome.runtime?.onInstalled?.addListener) {
+  chrome.runtime.onInstalled.addListener(() => { ensureContextMenus(); });
+}
+if (chrome.runtime?.onStartup?.addListener) {
+  chrome.runtime.onStartup.addListener(() => { ensureContextMenus(); });
+}
 // Rebuild whenever the portal switches language, so labels follow the user immediately.
 try {
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -243,31 +389,135 @@ try {
 } catch { /* ignore */ }
 ensureContextMenus();
 
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (!tab?.id || !MENU_IDS.has(info.menuItemId)) return;
-  try {
-    const id = info.menuItemId;
-    const unique = id === CTX_U_EL || id === CTX_U_FR || id === CTX_U_OBJ;
-    let result;
-    if (id === CTX_U_EL || id === CTX_R_EL) {
-      result = await copyElementSelector(info, tab, unique);
-    } else if (id === CTX_U_FR || id === CTX_R_FR) {
-      result = await copyFrameElement(info, tab, unique);
-    } else {
-      result = await copySelectorObject(info, tab, unique);
-    }
-    if (result.ok) {
-      console.info("[Morobot Global Selector]", id, result.preview || result.selector || "");
-    } else {
-      console.warn("[Morobot Global Selector] failed", result.error);
-    }
-  } catch (err) {
-    console.warn("[Morobot Global Selector] error", err?.message || err);
-  }
-});
+/**
+ * URL patterns for the menus: all ordinary web pages.
+ *
+ * On our own panel the operator is using the application, not aiming at a page element, so "copy
+ * selector" and "add element to process" are meaningless there and only clutter the menu they
+ * actually want (the browser's own).
+ *
+ * Chrome's pattern syntax has NO negation, so "everywhere except the portal" cannot be written as a
+ * pattern — the portal is excluded by the click-time check in isOnOurPortal() instead. These
+ * patterns simply keep the menu off non-web pages (chrome://, file://, the extension's own pages).
+ *
+ * Note on the earlier attempt: this was previously done with `contextMenus.onShown`. That was wrong
+ * twice over — onShown is a recent API that may be absent, and calling addListener on it unguarded
+ * threw during service-worker evaluation, failing the entire worker registration. Hence the
+ * defensive guards around every top-level registration below.
+ */
+function ctxMenuUrlPatterns() {
+  return ["http://*/*", "https://*/*"];
+}
 
-async function captureLeaf(tab, frameId, unique) {
-  let captured = null;
+/**
+ * Click-time guard, the belt to documentUrlPatterns' braces.
+ *
+ * Covers the case where the tab navigates between the menu opening and the click, which no URL
+ * pattern can catch.
+ */
+if (chrome.contextMenus?.onClicked?.addListener) {
+  chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+    if (!tab?.id) return;
+
+    // Our own panel is not a target surface: these entries mean nothing there.
+    if (await isOnOurPortal(tab.url || info.pageUrl)) return;
+
+    // "Build element": append a node to the flow open in the (single) editor tab.
+    if (BUILD_MENU_IDS.has(info.menuItemId)) {
+      await handleBuildElement(info, tab).catch((err) => {
+        console.warn("[selector] build element failed", err?.message || err);
+        notifyBuildError(tab.id, "build.noElement");
+      });
+      return;
+    }
+
+    if (!MENU_IDS.has(info.menuItemId)) return;
+    try {
+      const id = info.menuItemId;
+      const unique = id === CTX_U_EL || id === CTX_U_FR || id === CTX_U_OBJ;
+      let result;
+      if (id === CTX_U_EL || id === CTX_R_EL) {
+        result = await copyElementSelector(info, tab, unique);
+      } else if (id === CTX_U_FR || id === CTX_R_FR) {
+        result = await copyFrameElement(info, tab, unique);
+      } else {
+        result = await copySelectorObject(info, tab, unique);
+      }
+      if (result.ok) {
+        console.info("[Morobot Global Selector]", id, result.preview || result.selector || "");
+      } else {
+        console.warn("[Morobot Global Selector] failed", result.error);
+      }
+    } catch (err) {
+      console.warn("[Morobot Global Selector] error", err?.message || err);
+    }
+  });
+}
+
+/**
+ * Append a node for the right-clicked element to the flow open in the editor.
+ *
+ * Order of checks is deliberate — each failure has a different fix, and reporting the wrong one
+ * sends the user to the wrong place:
+ *   1. is an element actually captured?   (else: right-click the element first)
+ *   2. is EXACTLY ONE editor open?        (else: no editor / too many editors)
+ *   3. hand the node to that editor and let IT validate the graph (locked, child-of-template).
+ * The editor is the only place that knows the graph shape and its write permissions, so the
+ * decision to accept the node belongs there, not here.
+ */
+async function handleBuildElement(info, tab) {
+  const frameId = info.frameId ?? 0;
+
+  const cap = await captureLeaf(tab, frameId, true);
+  if (!cap.ok) {
+    notifyBuildError(tab.id, "build.noElement", cap.error);
+    return;
+  }
+
+  const found = await findEditorTab();
+  if (!found.ok) {
+    notifyBuildError(tab.id, found.reason === "many_editors" ? "build.manyEditors" : "build.noEditor");
+    return;
+  }
+
+  const payload = {
+    source: "da-extension",
+    type: "da-build-node",
+    actionType: info.menuItemId,
+    selector: cap.captured.selector,
+    framePathJson: cap.captured.framePathJson || null,
+    url: cap.captured.url || null,
+    matchCount: cap.captured.matchCount ?? null
+  };
+
+  let res = null;
+  try {
+    // The editor listens in the PAGE world (see content/portal-ui.js), so the message is
+    // relayed through its content script rather than posted directly from the worker.
+    res = await chrome.tabs.sendMessage(found.tabId, {
+      type: "relayToPage",
+      payload
+    });
+  } catch {
+    res = null;
+  }
+
+  if (res && res.ok === false) {
+    notifyBuildError(tab.id, res.errorKey || "build.noElement", res.error);
+  }
+}
+
+/** Tell the user why nothing happened, on the tab they right-clicked. */
+function notifyBuildError(tabId, labelKey, detail) {
+  if (!tabId) return;
+  chrome.tabs.sendMessage(tabId, {
+    type: "da-build-error",
+    labelKey,
+    detail: detail || ""
+  }).catch(() => {});
+}
+
+async function captureLeaf(tab, frameId, unique) {  let captured = null;
   try {
     captured = await chrome.tabs.sendMessage(
       tab.id,

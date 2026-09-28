@@ -18,8 +18,27 @@
     }
   }
 
-  function emitPlayUi(phase, text, extra) {
-    const detail = { phase, text: text || "", ...(extra || {}) };
+  /**
+   * Explain why "build element" did not add a node.
+   *
+   * The refusal happens on the tab the user right-clicked, which may not be the editor tab, so
+   * this both sets the page status and raises the editor's own notice channel — otherwise the
+   * message lands somewhere the user is not looking and looks like nothing happened.
+   */
+  function showBuildNotice(labelKey, detail) {
+    const culture = (document.documentElement.dataset.culture || "fa").toLowerCase() === "en" ? "en" : "fa";
+    const pack = culture === "en"
+      ? { noEditor: "Open the process editor first.", manyEditors: "More than one editor is open; keep only one.", locked: "This process is locked and cannot take a new node.", noElement: "No element selected. Right-click one first." }
+      : { noEditor: "ابتدا ادیتور فرآیند را باز کنید.", manyEditors: "بیش از یک ادیتور باز است؛ فقط یکی را باز بگذارید.", locked: "این فرآیند قفل است و نود جدید نمی‌پذیرد.", noElement: "المانی انتخاب نشده است. ابتدا روی آن راست‌کلیک کنید." };
+    const short = String(labelKey || "").replace(/^build\./, "");
+    const text = pack[short] || pack.noElement;
+    setPortalStatus(text, "error");
+    try {
+      window.postMessage({ source: "da-player-ext", type: "build-notice", text, detail: detail || "" }, "*");
+    } catch { /* ignore */ }
+  }
+
+  function emitPlayUi(phase, text, extra) {    const detail = { phase, text: text || "", ...(extra || {}) };
     try {
       // postMessage reaches the page world (editor); CustomEvent stays in the content-script world.
       window.postMessage({ source: "da-player-ext", type: "play-ui", ...detail }, "*");
@@ -485,8 +504,7 @@
   });
 
   // postMessage path for ctx «اجرا/بررسی در مرورگر» (reliable tabId)
-  window.addEventListener("message", async (ev) => {
-    if (ev.source !== window) return;
+  window.addEventListener("message", async (ev) => {    if (ev.source !== window) return;
     const d = ev.data;
     if (!d || d.source !== "da-editor") return;
     if (d.type === "play") {
@@ -605,7 +623,46 @@
     return true;
   }
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    // Relay from the worker into the PAGE world, where the editor listens.
+    // The editor lives in the page, not in this content script, so a message from the service
+    // worker has to be forwarded across the isolated-world boundary. The editor's answer is
+    // returned to the worker so it can report a refusal (locked graph, etc.) to the user.
+    if (message?.type === "relayToPage") {
+      const requestId = `da-build-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+      let settled = false;
+      const onReply = (ev) => {
+        if (ev.source !== window) return;
+        const d = ev.data;
+        if (!d || d.source !== "da-editor" || d.type !== "da-build-node-result") return;
+        if (d.requestId !== requestId) return;
+        settled = true;
+        window.removeEventListener("message", onReply);
+        try { sendResponse(d.result || { ok: false, errorKey: "build.noElement" }); } catch { /* ignore */ }
+      };
+      window.addEventListener("message", onReply);
+      try {
+        window.postMessage({ ...(message.payload || {}), requestId }, "*");
+      } catch {
+        window.removeEventListener("message", onReply);
+        try { sendResponse({ ok: false, errorKey: "build.noElement" }); } catch { /* ignore */ }
+        return false;
+      }
+      // Do not leave the worker waiting forever on a page that never answers.
+      setTimeout(() => {
+        if (settled) return;
+        window.removeEventListener("message", onReply);
+        try { sendResponse({ ok: false, errorKey: "build.noEditor" }); } catch { /* ignore */ }
+      }, 2500);
+      return true;   // async response
+    }
+
+    // A refusal the worker could not resolve into a label — show it on the page.
+    if (message?.type === "da-build-error") {
+      showBuildNotice(message.labelKey, message.detail);
+      return;
+    }
+
     if (maybeAnnounceFromPlayState(message)) return;
     if (message?.type !== "playStateChanged") return;
 

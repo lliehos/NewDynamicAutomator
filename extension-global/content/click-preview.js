@@ -29,6 +29,45 @@
   let shownEl = null;
   let hideTimer = null;
   let colorCache = { value: DEFAULT_COLOR, at: 0 };
+  let isRecording = false;
+
+  /**
+   * Are we on the Morobot panel itself?
+   *
+   * The outline must NOT run there: on our own pages the user is clicking the application, not a
+   * target element, so an outline on every click is noise over the UI they are trying to use
+   * (the owner hit exactly this). Detected the same way portal-bridge.js does it — the configured
+   * portal origin, plus the /Panel and /Admin path prefixes — so the two agree on what "our page"
+   * means and a self-hosted portal on another host is still recognised.
+   */
+  let onPortal = /^\/(Panel|Admin)(\/|$)/i.test(location.pathname || "/");
+  /**
+   * Storage is not reachable from every context this script runs in.
+   *
+   * The content script is declared `all_frames: true`, so it is injected into every sub-frame on
+   * the page, and in some of those (and in pages that were already open when the extension
+   * reloaded) `chrome.storage` is absent. Touching it at top level then threw on load — the error
+   * the owner saw — and took the whole preview down with it. Every access goes through here, so a
+   * missing API degrades to "no preview" instead of a broken content script.
+   */
+  function storageGet(keys) {
+    try {
+      if (!chrome?.storage?.local?.get) return Promise.resolve({});
+      return chrome.storage.local.get(keys);
+    } catch {
+      return Promise.resolve({});
+    }
+  }
+
+  function refreshPortalFlag() {
+    storageGet(["portalBase"])
+      .then((d) => {
+        const base = String(d.portalBase || "").replace(/\/$/, "");
+        if (base && location.href.startsWith(base)) onPortal = true;
+      })
+      .catch(() => { /* keep the path-based answer */ });
+  }
+  refreshPortalFlag();
 
   /**
    * Is a run in progress?
@@ -46,8 +85,14 @@
    */
   let isPlaying = false;
   function refreshPlaying() {
-    chrome.storage.local.get(["playing"])
-      .then((d) => { isPlaying = !!d.playing; })
+    storageGet(["playing", "recording", "recordPhase"])
+      .then((d) => {
+        isPlaying = !!d.playing;
+        // Recording counts as "armed": every click there becomes a step, so the operator needs to
+        // see which element each one targets. Outside recording and playback the outline is only
+        // shown for a right-click / right-drag, where choosing a target is the actual question.
+        isRecording = !!d.recording || d.recordPhase === "recording";
+      })
       .catch(() => { /* keep the last known value */ });
   }
   // Prime from storage, and keep it fresh even if an onChanged event is ever missed.
@@ -74,7 +119,7 @@
   function getColor() {
     const now = Date.now();
     if (now - colorCache.at < 5000) return colorCache.value;
-    chrome.storage.local.get(["da_preview_highlight_color"])
+    storageGet(["da_preview_highlight_color"])
       .then((d) => {
         const v = String(d.da_preview_highlight_color || "").trim();
         colorCache = { value: /^#[0-9a-fA-F]{6}$/.test(v) ? v : DEFAULT_COLOR, at: Date.now() };
@@ -100,6 +145,7 @@
 
   function show(el) {
     if (!(el instanceof Element)) return;
+    if (!shouldPreview()) return;
     // Never draw over our own HUD, and never on the portal chrome itself.
     if (typeof isFromFab === "function" && isFromFab(el)) return;
     if (el.closest && el.closest("#da-player-fab, #da-recorder-fab")) return;
@@ -134,11 +180,49 @@
     hideTimer = setTimeout(clear, FADE_OUT_MS);
   }
 
+  /** Should this interaction be previewed at all? */
+  function shouldPreview() {
+    // Our own panel: the user is operating the application, not aiming at a target element.
+    if (onPortal) return false;
+    // During playback the engine draws its own outline on the element it is about to act on.
+    if (isPlaying) return false;
+    return true;
+  }
+
+  // LEFT click — only meaningful while RECORDING.
+  //
+  // Recording turns each click into a step, so seeing which element each one targets is the whole
+  // point. Outside recording a plain left click is just the user browsing, and outlining every one
+  // of them is noise — the owner asked for exactly this distinction.
+  //
   // Capture phase so the preview is drawn even when the page stops propagation, and so it is
   // applied before the page's own handler can navigate away or re-render the target.
   document.addEventListener("click", (e) => {
-    if (isPlaying) return;                        // the engine owns highlighting during a run
+    if (!shouldPreview()) return;
+    if (!isRecording) return;
     if (e.button != null && e.button !== 0) return;
+    const el = e.target instanceof Element ? e.target : null;
+    if (!el) return;
+    show(el);
+  }, true);
+
+  // RIGHT button — meaningful whenever playback is not running, recording or not.
+  //
+  // A right-click (or a right-drag box) is how the user picks a target: for "copy selector" and
+  // for "build element". That is precisely the moment "which element(s) am I aiming at?" is the
+  // live question, so the outline answers it here whether or not a recording is in progress.
+  //
+  // If a DRAG just finished, context-selector.js has resolved the enclosed group to one ancestor,
+  // and THAT is what the selector will target — not the element under the pointer. The two differ
+  // exactly when it matters: dragging across a row's cells leaves the pointer over the last <td>,
+  // but the target is the parent <tr>. The resolved ancestor is preferred here so the wrong
+  // single-element outline is never drawn at all.
+  document.addEventListener("contextmenu", (e) => {
+    if (!shouldPreview()) return;
+    const dragged = typeof window.__daTakeLastBoxTarget === "function"
+      ? window.__daTakeLastBoxTarget()
+      : null;
+    if (dragged instanceof Element) { show(dragged); return; }
     const el = e.target instanceof Element ? e.target : null;
     if (!el) return;
     show(el);

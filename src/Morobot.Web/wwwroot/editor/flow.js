@@ -2608,6 +2608,19 @@
   const COND_STROKE = diagramDefaults.conditionStroke || "#8b9098";
   const COND_FILL = diagramDefaults.conditionFill || "#eceff2";
   /**
+   * The condition types a node can have.
+   *
+   * Declared once because this list was previously repeated inline in several places (the
+   * selector-requirement checks and the inspector's dropdown). Two copies of a list like this
+   * drift: adding a type in the dropdown but not in the requirement check silently produces a
+   * condition the editor believes needs no selector.
+   */
+  const CONDITION_TYPES = new Set([
+    "Url", "FindElement", "NotFindElement", "FindElements", "ElementValue",
+    "ElementVisible", "ElementHidden", "MemoryValue", "SourceValue",
+    "DriverTabs", "SystemDate", "SystemTime"
+  ]);
+  /**
    * Terminal marker. Deep red on purpose: it is the only node whose meaning is "the run stops
    * here", and it is the one shape an operator must be able to spot without reading anything.
    * The tone is darker than a "bright red" would be so the white caption inside clears contrast.
@@ -5481,6 +5494,10 @@
       applyPlayUiPhase(d.phase);
       return;
     }
+    if (d.type === "build-notice") {
+      setStatus(d.text || "ساخت عنصر انجام نشد.", "error");
+      return;
+    }
     if (d.type !== "condition-result") return;
     const msg = d.message || (d.pass ? "نتیجه شرط: برقرار (موفق)" : "نتیجه شرط: برقرار نیست (ناموفق)");
     setStatus(msg, d.pass ? "success" : "error");
@@ -5488,6 +5505,180 @@
       window.daConditionAlert(!!d.pass, msg);
     }
   });
+
+  /**
+   * «ساخت عنصر» — append a node for an element the user right-clicked on another page.
+   *
+   * The extension cannot touch the graph: the graph lives here, in this page, and only this page
+   * knows the shape, the permissions and the current scope. So the extension sends the intent and
+   * THIS decides whether it is allowed and where the node goes. Every refusal is answered with a
+   * reason key so the extension can tell the user something useful instead of silently doing
+   * nothing (which is indistinguishable from a broken menu item).
+   */
+  window.addEventListener("message", (ev) => {
+    if (ev.source !== window) return;
+    const d = ev.data;
+    if (!d || d.source !== "da-extension" || d.type !== "da-build-node") return;
+    const result = buildNodeFromElement(d);
+    try {
+      window.postMessage({
+        source: "da-editor",
+        type: "da-build-node-result",
+        requestId: d.requestId || null,
+        result
+      }, "*");
+    } catch { /* ignore */ }
+  });
+
+  /** Answer shape shared by every failure path of buildNodeFromElement(). */
+  function buildRefusal(errorKey, error) {
+    return { ok: false, errorKey, error: error || null };
+  }
+
+  /**
+   * Append one node, wired to the end of the chain.
+   *
+   * "End of the chain" = the last action whose outgoing edge reaches the terminal node, i.e. the
+   * step a run would execute last. A node appended anywhere else would either never run or would
+   * silently bypass the steps after it.
+   */
+  function buildNodeFromElement(msg) {
+    if (!canModify) return buildRefusal("build.locked", "فقط مشاهده");
+    if (structLocked) return buildRefusal("build.locked", "فرآیند فرزند قالب");
+
+    const actionType = String(msg.actionType || "").trim();
+    const selector = String(msg.selector || "").trim();
+    if (!actionType) return buildRefusal("build.noElement");
+    if (!selector) return buildRefusal("build.noElement");
+
+    // Conditions and actions are different node kinds; the type decides which.
+    const isCondition = CONDITION_TYPES.has(actionType);
+    const scopeId = currentScopeId();
+    const siblings = graph.nodes.filter((n) =>
+      isActionNode(n) && (n.groupNodeId || null) === (scopeId || null)
+    );
+
+    // Place the node below the chain so it does not land on top of existing nodes.
+    const lastStep = siblings[siblings.length - 1] || null;
+    const node = createStepNode({
+      groupNodeId: scopeId || null,
+      actionType: isCondition ? "None" : actionType,
+      title: actionTypeLabel(actionType) || actionType,
+      x: lastStep ? lastStep.x : 120,
+      y: lastStep ? lastStep.y + 90 : 120
+    });
+    if (isCondition) {
+      node.kind = "condition";
+      node.conditionType = actionType;
+      node.selectorValue = selector;
+    } else {
+      node.selectorValue = selector;
+    }
+    // The selector came from a live element, so record whether it resolved uniquely: a selector
+    // matching several elements would click an arbitrary one, and the author must be able to see
+    // that before running.
+    if (msg.matchCount != null) node.selectorMatchCount = Number(msg.matchCount) || 0;
+    if (msg.framePathJson) node.framePathJson = msg.framePathJson;
+    if (msg.url) node.sourceUrl = String(msg.url);
+
+    // Wire the new node in after the tail, preserving whatever the tail pointed at.
+    //
+    // The tail is by definition a node that leads nowhere a step already follows — either an edge
+    // straight to the terminal marker, or no edge at all. So the tail holds AT MOST ONE outgoing
+    // flow edge, and the correct wiring is to re-point that one edge at the new node and then send
+    // the new node on to the old destination. Adding a second edge from the tail (instead of
+    // re-pointing) would give the tail two successors, which is a branch the operator never asked
+    // for and which the runner would resolve arbitrarily.
+    const tail = findChainTail(scopeId);
+    if (tail) {
+      const outgoing = graph.edges.find((e) =>
+        e.from === tail.id && (e.kind === "next" || e.kind === "success" || e.kind === "fail")
+      );
+      if (outgoing) {
+        const previousTarget = outgoing.to;
+        outgoing.to = node.id;
+        graph.edges.push({ id: tmpId("e"), from: node.id, to: previousTarget, kind: "next" });
+      } else {
+        // The tail led nowhere: the new node simply follows it.
+        graph.edges.push({ id: tmpId("e"), from: tail.id, to: node.id, kind: "next" });
+      }
+    } else {
+      // Nothing to attach to at all: start the node from the scope's entry.
+      const start = graph.nodes.find((n) =>
+        n.kind === "start" && (n.groupNodeId || null) === (scopeId || null)
+      ) || graph.nodes.find((n) => n.kind === "start" && !n.groupNodeId);
+      if (start) graph.edges.push({ id: tmpId("e"), from: start.id, to: node.id, kind: "next" });
+    }
+
+    selected = new Set([node.id]);
+    render();
+    renderInspector();
+    setStatus(`نود «${node.title}» به انتهای فرآیند اضافه شد.`, "success");
+    return { ok: true, nodeId: node.id, title: node.title };
+  }
+
+  /**
+   * The node a new step should attach to: the last node in this scope that has no outgoing
+   * connection, and is not the terminal marker.
+   *
+   * The owner's rule: attach after the last node that leads nowhere — whether that node is an
+   * action, a condition or a group. Only the "end" node is excluded, because anything wired after
+   * it would never run.
+   *
+   * This is found by OUTGOING DEGREE, not by walking forward from the start. Walking was wrong for
+   * branches: a condition with success and fail edges has two live paths, and a walk picks whichever
+   * edge it happens to find first, so the new node landed on one branch and silently orphaned the
+   * other. Looking for the node with no outgoing edge is branch-agnostic and also handles a node
+   * that is not reachable by walking at all.
+   *
+   * Ordering: the candidates are ranked by position, so with several dangling ends (an unfinished
+   * branch) the one furthest down the canvas wins — the visually "last" node, which is what the
+   * operator expects.
+   */
+  function findChainTail(scopeId) {
+    const scope = scopeId || null;
+
+    /**
+     * Does this node already lead somewhere a new step could NOT be inserted?
+     *
+     * An edge to the terminal marker does not count: linking a step to `end` is how the flow says
+     * "this is the last step", so the last real node in every finished flow has exactly that edge.
+     * Treating it as "occupied" would make every complete flow report no tail at all. Only an edge
+     * to another step, condition or group means the chain genuinely continues past this node.
+     */
+    const hasSuccessor = (id) => graph.edges.some((e) => {
+      if (e.from !== id) return false;
+      if (e.kind !== "next" && e.kind !== "success" && e.kind !== "fail") return false;
+      const to = nodeById(e.to);
+      return !!to && to.kind !== "end";
+    });
+
+    // A candidate is any node in this scope that can carry a following step and currently leads
+    // nowhere. `end` is excluded: nothing may follow the terminal marker. `start` IS a candidate —
+    // in an empty flow it is the only thing a step can follow, and a scope whose start still leads
+    // nowhere is exactly that case.
+    const isAttachable = (n) =>
+      n.kind === "start" || n.kind === "group" || n.kind === "condition" || isActionNode(n);
+
+    const candidates = graph.nodes.filter((n) =>
+      (n.groupNodeId || null) === scope &&
+      n.kind !== "end" &&
+      isAttachable(n) &&
+      !hasSuccessor(n.id)
+    );
+
+    if (!candidates.length) return null;
+    if (candidates.length === 1) return candidates[0];
+
+    // Several dangling ends (an unfinished branch, say): the lowest node on the canvas wins, then
+    // the right-most — that is the one that reads as "the last thing in the flow".
+    return candidates.reduce((best, n) => {
+      if (n.y > best.y) return n;
+      if (n.y === best.y && n.x > best.x) return n;
+      return best;
+    });
+  }
+
   window.addEventListener("da-play-progress", (ev) => {
     setPlayFocusFromProgress(ev.detail || {});
   });
