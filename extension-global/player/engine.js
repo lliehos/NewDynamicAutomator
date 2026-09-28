@@ -3106,9 +3106,15 @@ async function resolveDynamicSelectorAsync(step, graph, rowIndex, opts = {}) {
     const col = step[dynCol];
 
     if (hasPh) {
-      const val = (col && ds)
-        ? ((await readDataSourceCellForPlay(ds, col, row, step, graph)) ?? "")
-        : "";
+      let val = "";
+      if (col && ds) {
+        const got = await readDataSourceCellForPlay(ds, col, row, step, graph);
+        // A selector is the most dangerous place to accept a missing value: dropping the
+        // placeholder yields a selector that still PARSES but points somewhere else, so the
+        // click lands on the wrong element and nothing reports a problem.
+        if (got === undefined) throw dataSourceUnavailable(step, ds, col, row);
+        val = got;
+      }
       sel = sel.split(DYN_SEL_PLACEHOLDER).join(val);
     }
     if (/\{\{[^}]+\}\}/.test(sel)) {
@@ -3117,7 +3123,9 @@ async function resolveDynamicSelectorAsync(step, graph, rowIndex, opts = {}) {
       for (const part of parts) {
         const m = part.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
         if (m) {
-          out.push((await readDataSourceCellForPlay(ds, m[1], row, step, graph)) ?? "");
+          const got = await readDataSourceCellForPlay(ds, m[1], row, step, graph);
+          if (got === undefined) throw dataSourceUnavailable(step, ds, m[1], row);
+          out.push(got);
         } else {
           out.push(part);
         }
@@ -3174,7 +3182,11 @@ async function appendAttributeFilterAsync(sel, step, graph, rowIndex, opts = {})
       ds = sources.find((d) => Number(d.id) === Number(step[dynDsKey])) || null;
     }
     if (!ds) ds = findDataSourceForStep(step, graph);
-    attrVal = (await readDataSourceCellForPlay(ds, step[dynColKey], rowIndex ?? 0, step, graph)) ?? "";
+    // The attribute value is part of the selector, so an unavailable value would produce a
+    // selector matching the wrong element (e.g. [data-id=""]). Refuse rather than guess.
+    const got = await readDataSourceCellForPlay(ds, step[dynColKey], rowIndex ?? 0, step, graph);
+    if (got === undefined) throw dataSourceUnavailable(step, ds, step[dynColKey], rowIndex);
+    attrVal = got;
   } else {
     attrVal = step[opts.attrValue || "attributeValue"] ?? "";
   }
@@ -3273,11 +3285,12 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
     const v = await readDataSourceCellForPlay(
       ds, step.dynamicSourceColumnName, rowIndex ?? 0, step, graph
     );
-    if (v != null && String(v).trim() !== "") return String(v);
-    const raw = opts.preferUrl
-      ? (step.navigateUrl || step.constantValue || "")
-      : (step.constantValue || step.navigateUrl || "");
-    return resolveDynamicTextAsync(raw, step, graph, rowIndex ?? 0);
+    // A REAL value (including a legitimately empty one) is used as-is.
+    if (v !== undefined) return String(v);
+    // The value could NOT be obtained. Falling through to `constantValue` here is what made a
+    // server outage indistinguishable from live data: the step silently ran on the author's
+    // stored constant. Surface it instead — the caller decides (see the strict consumers).
+    throw dataSourceUnavailable(step, ds, step.dynamicSourceColumnName, rowIndex);
   }
   if (cst === "Memory") {
     const nameKey = opts.memoryNameKey || "memoryVariableName";
@@ -3414,6 +3427,18 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Read one cell from the server.
+ *
+ * Returns the RAW message result so the caller can tell the three cases apart:
+ *   { ok:true,  body:{ cellValue } }  — read succeeded; cellValue may legitimately be ""
+ *   { ok:false, error:"…" }           — the read FAILED (network, http, auth)
+ *
+ * It used to collapse a failure into `null` here, which made "the server is unreachable" and
+ * "the cell is empty" the same value. That is what let a run continue with the node's stored
+ * constant in place of live data, with nothing in the log to say so. Keeping the failure
+ * distinct is the whole point; see fetchServerCellForPlay.
+ */
 async function readServerCell(dataSourceId, rowIndex, columnKey) {
   try {
     return await chrome.runtime.sendMessage({
@@ -3422,8 +3447,9 @@ async function readServerCell(dataSourceId, rowIndex, columnKey) {
       rowIndex,
       columnKey
     });
-  } catch {
-    return null;
+  } catch (err) {
+    // The worker or the page is gone. Still a failure, not an empty cell.
+    return { ok: false, error: err?.message || String(err) };
   }
 }
 
@@ -3563,6 +3589,22 @@ async function ensureDataSourceRowCountMeta(ds) {
   if (res.body.dataRevision != null) ds.dataRevision = res.body.dataRevision;
 }
 
+/**
+ * Read a cell for a run, through the in-flight dedupe cache.
+ *
+ * Returns a STRING on success (an empty string for a legitimately empty cell) and `undefined`
+ * when the read FAILED. The distinction is the entire point of phase 3.3:
+ *
+ *   ""          — we asked the server and the cell is empty. A real answer.
+ *   undefined   — we could NOT ask, or the ask failed. NOT an answer.
+ *
+ * Callers that feed live data into a page action (a selector, a typed value, a URL) must treat
+ * `undefined` as a step error rather than substituting the node's stored constant, because a
+ * wrong value there means clicking or typing the wrong thing on a real page. Callers that merely
+ * record a value can accept the gap.
+ *
+ * Reporting is deliberately NOT silent any more: a failed read is logged with its reason.
+ */
 async function fetchServerCellForPlay(id, row, col, ds, graph, step) {
   const cacheKey = playCellKey(id, row, col);
   if (playCellReadInflight.has(cacheKey)) {
@@ -3570,7 +3612,14 @@ async function fetchServerCellForPlay(id, row, col, ds, graph, step) {
   }
   const work = (async () => {
     const fresh = await readServerCell(id, row, col);
-    if (!fresh?.ok || !fresh.body) return null;
+    if (!fresh?.ok || !fresh.body) {
+      const why = fresh?.error || "پاسخی از سرور نرسید";
+      appendPlayLog(
+        "warn",
+        `خواندن سلول «${col}» (ردیف ${row + 1}) از سرور ناموفق بود — ${why}`
+      );
+      return undefined;
+    }
     const val = fresh.body.cellValue ?? fresh.body.CellValue ?? "";
     const rev = fresh.body.cellRevision ?? fresh.body.CellRevision;
     const dRev = fresh.body.dataRevision ?? fresh.body.DataRevision;
@@ -3578,7 +3627,7 @@ async function fetchServerCellForPlay(id, row, col, ds, graph, step) {
     if (graph) {
       emitDataSourceCellEvent(graph, ds, col, row, "read", val, step?.title);
     }
-    return val;
+    return String(val);
   })();
   playCellReadInflight.set(cacheKey, work);
   try {
@@ -3671,22 +3720,37 @@ function stepUsesDataSourceValue(step) {
       && cst !== "Memory" && cst !== "Elements" && cst !== "System");
 }
 
+/**
+ * Resolve one cell's value for a run.
+ *
+ * Return contract (phase 3.3) — the caller's behaviour depends on telling these apart:
+ *   ""          a real, empty value
+ *   "text"      a real value
+ *   undefined   NO VALUE AVAILABLE — the data source or column is missing, the cell is not in the
+ *               local cache and the server could not supply it, or the read failed.
+ *
+ * `undefined` means "we could not find out", which is not the same as "the value is empty". A
+ * page action must not silently proceed on it.
+ */
 async function readDataSourceCellForPlay(ds, columnKey, rowIndex, step, graph) {
-  if (!ds || !columnKey) return null;
+  if (!ds || !columnKey) return undefined;
   const col = String(columnKey).trim();
   const row = Number(rowIndex) || 0;
   const id = Number(ds.id) || 0;
 
   if (id <= 0) {
-    return cellValue(ds, col, row, { emitRead: true, graph, stepTitle: step?.title });
+    // Local-only source: whatever the cache holds is all there is.
+    return cellValue(ds, col, row, { emitRead: true, graph, stepTitle: step?.title }) ?? undefined;
   }
 
   const mirrored = cellValue(ds, col, row, { emitRead: false });
   if (mirrored != null) {
     if (graph) emitDataSourceCellEvent(graph, ds, col, row, "read", mirrored, step?.title);
-    return mirrored;
+    return String(mirrored);
   }
 
+  // Not cached — ask the server. This yields "" for a genuinely empty cell and `undefined`
+  // when the read failed, and the two must not be conflated.
   return fetchServerCellForPlay(id, row, col, ds, graph, step);
 }
 
@@ -3864,7 +3928,8 @@ async function resolveDynamicTextAsync(text, step, graph, rowIndex) {
       const v = await readDataSourceCellForPlay(
         ds, step.dynamicSourceColumnName, rowIndex ?? 0, step, graph
       );
-      return v != null ? String(v) : "";
+      if (v === undefined) throw dataSourceUnavailable(step, ds, step.dynamicSourceColumnName, rowIndex);
+      return String(v);
     }
     return text || "";
   }
@@ -3876,12 +3941,27 @@ async function resolveDynamicTextAsync(text, step, graph, rowIndex) {
   for (const part of parts) {
     const m = part.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
     if (m) {
-      out.push((await readDataSourceCellForPlay(ds, m[1], rowIndex ?? 0, step, graph)) ?? "");
+      const v = await readDataSourceCellForPlay(ds, m[1], rowIndex ?? 0, step, graph);
+      // An unavailable placeholder must NOT vanish. Substituting "" silently truncated the
+      // text — a half-built selector or a half-typed value — and the step then acted on it.
+      if (v === undefined) throw dataSourceUnavailable(step, ds, m[1], rowIndex);
+      out.push(v);
     } else {
       out.push(part);
     }
   }
   return out.join("");
+}
+
+/** Build the error used whenever a needed data-source value could not be read. */
+function dataSourceUnavailable(step, ds, columnKey, rowIndex) {
+  const why =
+    `مقدار از منبع داده خوانده نشد (منبع ${ds?.id ?? "?"}، ستون «${columnKey || "?"}»، ` +
+    `ردیف ${(rowIndex ?? 0) + 1})`;
+  appendPlayLog("error", `${why} — از مقدار خالی/ثابت به‌جای دادهٔ واقعی استفاده نمی‌شود.`);
+  const err = new Error(why);
+  err.reason = "data_source_unavailable";
+  return err;
 }
 
 function findDataSourceForValue(step, graph) {
