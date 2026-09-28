@@ -1,7 +1,63 @@
 /** Portal handshake + encrypted local task sync — Recorder role. */
 (function () {
-  if (window.DaPortalDetect && !DaPortalDetect.isMorobotPortalPage()) return;
+  // This script runs at document_start, when the DOM is empty. isMorobotPortalPage() inspects the
+  // DOM (title / meta / [data-i18n]) as one of its signals, so calling it here and bailing out on a
+  // false answer kills the whole file on a fresh navigation — no listeners, no mark(), and the page
+  // then reports "the extension did not respond" until a manual refresh (by which time the DOM
+  // exists and the check passes). That made behaviour depend on how the page was reached.
+  //
+  // Instead: skip ONLY when the answer is trustworthy, which is when the detector has no DOM
+  // evidence to consult yet. `da_access` / `da_culture` cookies and the /Panel, /Admin path prefix
+  // are all available immediately, so an unambiguous true is honoured now; a false is re-checked at
+  // DOM ready and only then treated as authoritative.
+  function looksLikePortalNow() {
+    try {
+      if (!window.DaPortalDetect) return true; // no detector loaded -> never block the bridge
+      const path = location.pathname || "/";
+      if (/^\/(Panel|Admin)(\/|$)/i.test(path)) return true;
+      return !!window.DaPortalDetect.isMorobotPortalPage();
+    } catch {
+      return true;
+    }
+  }
 
+  // Deferred start: resolves the "not a portal" case once the DOM can be inspected.
+  function startWhenConfirmed() {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", onDomReady, { once: true });
+      // Belt and braces: some navigations (bfcache restore, script injected mid-load) can skip
+      // DOMContentLoaded for this frame, so give the decision one more chance at window load.
+      window.addEventListener("load", onDomReady, { once: true });
+    } else {
+      onDomReady();
+    }
+  }
+
+  let started = false;
+  function onDomReady() {
+    if (started) return;
+    if (!looksLikePortalNow()) return; // now the DOM exists, so a false is trustworthy
+    started = true;
+    run();
+  }
+
+  // Everything below lives inside run(). The early-true path must CALL it, not merely reach its
+  // declaration: a `function` statement only defines it. Without the explicit call on this path the
+  // whole bridge silently did nothing on /Panel and /Admin (the pages that decide by URL, not by
+  // DOM), so mark() never ran, `dataset.daPlayerExtension` was never set, and the editor reported
+  // "افزونهٔ اجرا متصل نیست" — with a page refresh unable to help, because the fault was structural
+  // rather than a timing race.
+  if (!looksLikePortalNow()) {
+    // Inconclusive (or a non-portal page seen early): decide again once the DOM is parsed.
+    startWhenConfirmed();
+    return;
+  }
+
+  // Reached only when the early check already said "portal" — start immediately.
+  started = true;
+  run();
+
+  function run() {
   const ROLE = "recorder";
 
   function isActionNode(n) {
@@ -269,4 +325,5 @@
   }
   pullFromExtension();
   pushPageTasksToExtension();
+  }
 })();

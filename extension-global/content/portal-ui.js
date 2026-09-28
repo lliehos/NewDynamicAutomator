@@ -257,11 +257,14 @@
       groupNodeId: scope?.groupNodeId || null,
       stepNodeId: scope?.stepNodeId || null,
       conditionNodeId: scope?.conditionNodeId || null,
+      // "from this node onward": entry point for a full walk, not a single-node run.
+      nextFromNodeId: scope?.nextFromNodeId || null,
       playScope: scope?.playScope
-        || (scope?.conditionNodeId ? "condition"
-          : scope?.stepNodeId ? "step"
-            : scope?.groupNodeId ? "group"
-              : "task"),
+        || (scope?.nextFromNodeId ? "next"
+          : scope?.conditionNodeId ? "condition"
+            : scope?.stepNodeId ? "step"
+              : scope?.groupNodeId ? "group"
+                : "task"),
       tabId: hasTargetTab ? rawTab : null,
       // Portal Start → new blank tab; ctx check/run → never open a new tab.
       openNewTab: hasTargetTab ? false : (isConditionCheck ? false : (scope?.openNewTab !== false))
@@ -492,6 +495,7 @@
         groupNodeId: d.groupNodeId,
         stepNodeId: d.stepNodeId,
         conditionNodeId: d.conditionNodeId,
+        nextFromNodeId: d.nextFromNodeId,
         playScope: d.playScope || null,
         tabId: d.tabId,
         openNewTab: d.openNewTab,
@@ -552,6 +556,7 @@
       groupNodeId: d.groupNodeId,
       stepNodeId: d.stepNodeId,
       conditionNodeId: d.conditionNodeId,
+      nextFromNodeId: d.nextFromNodeId,
       playScope: d.playScope || null,
       tabId: d.tabId,
       openNewTab: d.openNewTab,

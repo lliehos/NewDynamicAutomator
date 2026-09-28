@@ -224,10 +224,27 @@ rect.flow-marquee{pointer-events:none}
 #flow-svg g.node .port-idle{opacity:.32}
 #flow-svg g.node:hover .port-idle{opacity:.55}
 #flow-svg g.node .port:hover{filter:brightness(1.12);opacity:1}
+/*
+ * Node side icons (clone / promote).
+ *
+ * These used to be opacity:0 and only appeared on `:hover` of the node or when the node was
+ * selected. That made them vanish the moment the user clicked empty canvas — clearing the
+ * selection also cleared every icon — so the affordance disappeared exactly when the user was
+ * looking for it, and its position had to be rediscovered by hovering each node in turn.
+ *
+ * Now they are always drawn. The resting opacity is 0.9 rather than something subtle: an earlier
+ * 0.55 made the icon genuinely hard to see on a small node, and on an action node it was worse —
+ * the icon is drawn in the ACTION stroke colour (#ff9f43) on the action node's own pale green fill,
+ * so low opacity plus a low-contrast pairing left a smudge rather than an icon. The whole point is
+ * to advertise that the node can be copied, so it has to be legible at rest.
+ *
+ * Full opacity is still reserved for hover/selection, but the difference is now emphasis rather
+ * than existence.
+ */
 #flow-svg g.node .node-clone-btn,
 #flow-svg g.node .node-promote-btn{
-  opacity:0;
-  pointer-events:none;
+  opacity:.9;
+  pointer-events:auto;
   cursor:pointer;
   transition:opacity .12s ease;
 }
@@ -236,9 +253,26 @@ rect.flow-marquee{pointer-events:none}
 #flow-svg g.node:hover .node-promote-btn,
 #flow-svg g.node.node-on .node-promote-btn{
   opacity:1;
-  pointer-events:auto;
 }
-#flow-svg g.node .node-clone-btn:hover .clone-ico{opacity:.85;stroke-width:1.7}
+
+/*
+ * The icon colour follows the node's kind, which means on an action node it is #ff9f43 drawn on
+ * that node's pale green fill — two light colours with very little between them. The white plate
+ * gives the strokes something to sit on, so the icon reads on every node colour instead of only
+ * the dark ones. It is drawn as a sibling *behind* the strokes, and stays transparent on hover so
+ * it never looks like a button.
+ */
+#flow-svg g.node .node-clone-btn .clone-plate{
+  fill:#ffffff;
+  fill-opacity:.85;
+  stroke:none;
+}
+#flow-svg g.node.node-on .node-clone-btn .clone-plate,
+#flow-svg g.node .node-clone-btn:hover .clone-plate{
+  fill-opacity:.95;
+}
+
+#flow-svg g.node .node-clone-btn:hover .clone-ico{opacity:1;stroke-width:1.7}
 #flow-svg g.node .node-clone-btn[data-tone="group"]:hover .clone-ico{stroke:var(--morobot-primary-light)}
 #flow-svg g.node .node-clone-btn[data-tone="condition"]:hover .clone-ico{stroke:#8b9098}
 #flow-svg g.node .node-clone-btn[data-tone="action"]:hover .clone-ico{stroke:#ff9f43}
@@ -1076,6 +1110,8 @@ rect.flow-marquee{pointer-events:none}
   position:absolute;
   top:0;
   left:100%;
+  /* The negative left margin is bridged by .ctx-submenu::before, so the pointer can travel from the
+     parent row into the submenu without crossing dead space and losing the hover. */
   margin:0 0 0 4px;
   padding:6px;
   list-style:none;
@@ -1099,10 +1135,29 @@ rect.flow-marquee{pointer-events:none}
   text-overflow:ellipsis;
   max-width:320px;
 }
-.ctx-menu li.has-sub:hover > .ctx-submenu,
-.ctx-menu li.has-sub:focus-within > .ctx-submenu{
-  /* filled dynamically; keep visible once opened via JS (hidden attr removed) */
+/* Submenus open on hover so moving along the parent list feels immediate, but only ONE may be open
+   at a time. The rule below hides every submenu whose parent is not the one being hovered, which is
+   what closes the previous one when the pointer moves to the next entry — a plain `:hover` rule
+   cannot do that, because the entry you just left is no longer hovered but its child stays
+   rendered. `hidden` still wins for menus JS has not populated yet. */
+.ctx-menu li.has-sub:not(:hover):not(:focus-within) > .ctx-submenu:not([hidden]) {
+  display: none;
 }
+.ctx-menu li.has-sub:hover > .ctx-submenu:not([hidden]),
+.ctx-menu li.has-sub:focus-within > .ctx-submenu:not([hidden]) {
+  display: block;
+}
+/* Keep the open submenu reachable while the pointer travels the 4px gap between the two boxes:
+   without this the hover is lost in the gap and the submenu closes under the cursor. */
+.ctx-menu li.has-sub > .ctx-submenu::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  left: -8px;
+}
+[dir="rtl"] .ctx-menu li.has-sub > .ctx-submenu::before{ left: auto; right: -8px; }
 
 .flow-mobile-scrim{
   display:none;

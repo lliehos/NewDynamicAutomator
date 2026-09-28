@@ -1734,6 +1734,9 @@ async function startPlayWithAutoReload(message, sender) {
   const rawTab = message.tabId != null && message.tabId !== "" ? Number(message.tabId) : NaN;
   const hasExplicitTab = Number.isFinite(rawTab);
   const isConditionCheck = !!message.conditionNodeId;
+  // "from this node onward" walks the graph like a whole-task run, so it must not be forced onto a
+  // sender tab the way a condition check is, and a fresh tab has to stay possible.
+  const isNextFrom = !!message.nextFromNodeId;
   const pendingPlay = {
     taskId: message.taskId,
     tabId: hasExplicitTab
@@ -1743,11 +1746,13 @@ async function startPlayWithAutoReload(message, sender) {
     groupNodeId: message.groupNodeId || null,
     stepNodeId: message.stepNodeId || null,
     conditionNodeId: message.conditionNodeId || null,
+    nextFromNodeId: message.nextFromNodeId || null,
     playScope: message.playScope
-      || (message.conditionNodeId ? "condition"
-        : message.stepNodeId ? "step"
-          : message.groupNodeId ? "group"
-            : "task"),
+      || (message.nextFromNodeId ? "next"
+        : message.conditionNodeId ? "condition"
+          : message.stepNodeId ? "step"
+            : message.groupNodeId ? "group"
+              : "task"),
     openNewTab: hasExplicitTab || isConditionCheck ? false : (message.openNewTab === true)
   };
 
@@ -1755,6 +1760,7 @@ async function startPlayWithAutoReload(message, sender) {
     groupNodeId: pendingPlay.groupNodeId,
     stepNodeId: pendingPlay.stepNodeId,
     conditionNodeId: pendingPlay.conditionNodeId,
+    nextFromNodeId: pendingPlay.nextFromNodeId,
     playScope: pendingPlay.playScope,
     openNewTab: pendingPlay.openNewTab,
     activateTab: isConditionCheck ? false : undefined
@@ -1883,6 +1889,7 @@ async function resumePendingPlayAfterReload() {
         groupNodeId: pendingPlayRequest.groupNodeId || null,
         stepNodeId: pendingPlayRequest.stepNodeId || null,
         conditionNodeId: pendingPlayRequest.conditionNodeId || null,
+        nextFromNodeId: pendingPlayRequest.nextFromNodeId || null,
         playScope: pendingPlayRequest.playScope || null,
         openNewTab: pendingPlayRequest.openNewTab === true
       }

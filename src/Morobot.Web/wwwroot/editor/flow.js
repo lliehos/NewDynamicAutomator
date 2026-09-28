@@ -4534,6 +4534,13 @@
     const tip = document.createElementNS(ns, "title");
     tip.textContent = "کپی این المان";
     btn.appendChild(tip);
+    // A soft white plate under the strokes. The icon is tinted to the node kind, so on an action
+    // node it is the action orange drawn on that node's own pale fill — the two are close enough in
+    // lightness that the glyph all but disappeared. The plate is painted first so it sits behind.
+    btn.appendChild(el("rect", {
+      class: "clone-plate",
+      x: 1, y: 1, width: size - 2, height: size - 2, rx: 4
+    }));
     btn.appendChild(el("rect", {
       class: "clone-hit",
       width: size, height: size, rx: 4,
@@ -4768,6 +4775,17 @@
      * process-level start" — i.e. exactly what must not be touched.
      */
     const shapeLocked = structLocked && !isRootStart(n);
+
+    // A node whose own configuration is incomplete cannot be run or checked — the request would be
+    // rejected anyway, so the menu must not pretend the action is available. The entry point stays
+    // clickable so the user can open it and see WHAT is wrong (the reasons are surfaced in its title
+    // and in the notification the action would have produced).
+    const validity = validateNode(n);
+    const nodeInvalid = !validity.ok;
+    const invalidReason = nodeInvalid
+      ? `نود نامعتبر: ${validity.reasons.filter(Boolean).join(" | ")}`
+      : "";
+
     ctxMenu.hidden = false;
     ctxMenu.style.left = `${x}px`;
     ctxMenu.style.top = `${y}px`;
@@ -4779,12 +4797,38 @@
         title: "نمایش پنل ویژگی‌ها"
       }
     ];
-    if (n.kind === "group") {
+
+    /**
+     * Run/check entries go through here so the "invalid node" rule is applied in ONE place. Every
+     * such item is disabled and relabelled; a new run action added later cannot forget the rule.
+     *
+     * Declared AFTER `items`: a closure that reads a `const` declared below it hits the temporal
+     * dead zone if it is ever called early, which is exactly how the open-tab helper broke before.
+     */
+    const pushRunItem = (item) => {
+      if (!nodeInvalid) {
+        items.push(item);
+        return;
+      }
       items.push({
+        ...item,
+        label: "نود نامعتبر",
+        disabled: true,
+        title: invalidReason
+      });
+    };
+    if (n.kind === "group") {
+      pushRunItem({
         act: "run-browser",
-        label: "اجرا در مرورگر",
+        label: "اجرای این گروه",
         submenu: true,
-        title: "اجرای این گروه در یکی از تب‌های باز مرورگر"
+        title: "کل این گروه را در یکی از تب‌های باز مرورگر اجرا می‌کند — به تعدادی که نود شروع خودِ گروه تعیین کرده"
+      });
+      pushRunItem({
+        act: "run-browser-next",
+        label: "اجرا از این گروه به بعد",
+        submenu: true,
+        title: "از این گروه شروع می‌کند و یال‌ها را تا پایان گردش کار دنبال می‌کند"
       });
       items.push({ act: "edit", label: "باز کردن طراح داخل" });
       const childN = groupDirectChildren(n.id).length;
@@ -4812,11 +4856,17 @@
             : (canConv ? "گروه خالی را به اقدام تبدیل می‌کند" : "گروه حاوی شرط یا اقدام است")
       });
     } else if (isActionNode(n)) {
-      items.push({
+      pushRunItem({
         act: "run-browser",
-        label: "اجرا در مرورگر",
+        label: "اجرای این اقدام",
         submenu: true,
-        title: "اجرای این اقدام در یکی از تب‌های باز مرورگر"
+        title: "فقط همین یک اقدام را یک‌بار در یکی از تب‌های باز مرورگر اجرا می‌کند"
+      });
+      pushRunItem({
+        act: "run-browser-next",
+        label: "اجرا از این اقدام به بعد",
+        submenu: true,
+        title: "این اقدام را اجرا می‌کند و از یال‌های بعدی تا پایان گردش کار ادامه می‌دهد"
       });
       const multi = selectedActionsForGroupConvert();
       const multiOk = Array.isArray(multi) && multi.length >= 1 && multi.some((a) => a.id === n.id);
@@ -4835,22 +4885,31 @@
       });
     } else if (n.kind === "condition") {
       const needsBrowser = conditionNeedsBrowser(n);
-      items.push({
+      // A condition is only ever CHECKED — it has no "run from here" continuation, because the
+      // branch to follow is decided by the check itself, not chosen in advance by the user. The
+      // extra "اجرا از این شرط به بعد" entry implied a scope the node does not have, so it is gone.
+      pushRunItem({
         act: "check-browser",
-        label: "بررسی در مرورگر",
-        submenu: needsBrowser,
+        label: "بررسی شرط",
+        // Always a submenu: the check must run inside a chosen tab. Even a condition that does not
+        // depend on the page can be evaluated anywhere, so the user always picks the target.
+        submenu: true,
         title: needsBrowser
-          ? "ارزیابی این شرط در یکی از تب‌های باز مرورگر (بدون سوییچ تب)"
-          : "ارزیابی این شرط (وابسته به مرورگر نیست)"
+          ? "ارزیابی این شرط در یکی از تب‌های باز مرورگر"
+          : "ارزیابی این شرط — چون به صفحه وابسته نیست، در هر تب یا تب جدیدی قابل بررسی است"
       });
     } else if (n.kind === "start") {
-      items.push({
+      // A group carries its own start node (`gstart-…`, distinguished by groupNodeId), and running
+      // that start runs THAT GROUP — not the whole process. The two were sharing one label, which
+      // told the user they were about to run everything when they were about to run one group.
+      const isGroupStart = !!n.groupNodeId;
+      pushRunItem({
         act: "run-browser",
-        label: "اجرا در مرورگر",
+        label: isGroupStart ? "اجرای کل گروه" : "اجرای کل فرآیند",
         submenu: true,
-        title: n.groupNodeId
-          ? "اجرای این گروه از شروع در یکی از تب‌های باز مرورگر"
-          : "اجرای کل فرآیند از شروع در یکی از تب‌های باز مرورگر"
+        title: isGroupStart
+          ? "کل این گروه را از نود شروع خودش اجرا می‌کند — به تعدادی که همان نود تعیین کرده"
+          : "اجرای کل فرآیند از نود شروع در یکی از تب‌های باز مرورگر"
       });
     }
 
@@ -4920,43 +4979,111 @@
       const sub = li.querySelector(".ctx-submenu");
       if (!sub) return;
       sub.hidden = false;
-      sub.innerHTML = `<li class="disabled">در حال بارگذاری تب‌ها…</li>`;
-      const tabs = await requestOpenBrowserTabs();
-      const newTabRow = (mode === "task" || mode === "group")
-        ? `<li data-tab-id="__new__" class="ctx-new-tab" title="about:blank">➕ تب جدید خالی (ایجاد خودکار)</li>`
-        : "";
-      if (!newTabRow && !tabs.length) {
-        sub.innerHTML = `<li class="disabled">تب مرورگر پیدا نشد — افزونه را Reload کنید</li>`;
+
+      // A condition that does not touch the page can be checked without any tab at all, so do not
+      // make the user pick one: offer the check directly and let a blank tab be the target.
+      if (mode === "condition" && !conditionNeedsBrowser(n)) {
+        sub.innerHTML =
+          `<li data-tab-id="__new__" class="ctx-new-tab" title="بدون نیاز به تب مشخص">`
+          + `بررسی همین‌جا (بدون نیاز به تب)</li>`
+          + `<li class="disabled">این شرط به صفحه وابسته نیست؛ در تب جدید بررسی می‌شود</li>`;
+        wireTabRows(li, mode);
         return;
       }
-      const tabRows = tabs.map((t) =>
-        `<li data-tab-id="${esc(String(t.id))}" title="${esc(t.url || "")}">${esc(t.label || t.title || String(t.id))}</li>`
-      ).join("");
-      sub.innerHTML = newTabRow + (tabRows || `<li class="disabled">تب دیگری باز نیست</li>`);
+
+      sub.innerHTML = `<li class="disabled">در حال بارگذاری تب‌ها…</li>`;
+      const tabs = await requestOpenBrowserTabs();
+
+      // A page-dependent condition MUST run in a tab that already shows the page; a blank tab has no
+      // URL and no elements, so every such check would come back false. Offering "new blank tab" there
+      // is not a convenience, it is a guaranteed wrong answer — so the row is withheld entirely.
+      const needsTab = mode === "condition" && conditionNeedsBrowser(n);
+      const newTabRow = needsTab
+        ? ""
+        : `<li data-tab-id="__new__" class="ctx-new-tab" title="about:blank">➕ تب جدید خالی (ایجاد خودکار)</li>`;
+      if (tabs === null) {
+        // The extension never answered. Say so, rather than rendering "no tabs are open" — that
+        // wording blamed the user's browser for a missing extension and sent them looking in the
+        // wrong place.
+        sub.innerHTML = newTabRow
+          + `<li class="disabled">افزونه پاسخ نداد — در chrome://extensions افزونه را Reload کنید</li>`;
+      } else if (!tabs.length) {
+        // No tab is open. The condition DOES need a page to supply the URL/element, so there is
+        // nothing to offer it; otherwise the blank-tab row is still the way forward.
+        sub.innerHTML = needsTab
+          ? `<li class="disabled">این شرط به صفحه وابسته است — ابتدا تب موردنظر را باز کنید</li>`
+          : newTabRow + `<li class="disabled">تب دیگری باز نیست</li>`;
+      } else {
+        const tabRows = tabs.map((t) =>
+          `<li data-tab-id="${esc(String(t.id))}" title="${esc(t.url || "")}">${esc(t.label || t.title || String(t.id))}</li>`
+        ).join("");
+        sub.innerHTML = newTabRow + (tabRows || `<li class="disabled">تب دیگری باز نیست</li>`);
+      }
+
+      // Wire the rows after the HTML is set, whatever branch produced it.
+      //
+      // This wiring used to sit only on the "tabs exist" path, so the `tabs === null` and
+      // `!tabs.length` branches returned BEFORE any listener was attached. The «➕ تب جدید خالی»
+      // row was therefore rendered but inert — and because an open tab made the other branch run,
+      // the bug only showed when NO tab was open. That is exactly the reported symptom: the entry
+      // works with a tab open and does nothing when none are.
+      wireTabRows(li, mode);
+    };
+
+    /**
+     * Attach the click behaviour to whatever `data-tab-id` rows the submenu now contains.
+     *
+     * Separated from `fillBrowserSubmenu` on purpose: every branch that writes rows must call this,
+     * otherwise its rows render dead. `__new__` means "no existing tab — start a blank one", and the
+     * numeric case is a real tab id.
+     */
+    function wireTabRows(li, mode) {
+      const sub = li.querySelector(".ctx-submenu");
+      if (!sub) return;
       sub.querySelectorAll("li[data-tab-id]").forEach((tabLi) => {
         tabLi.addEventListener("click", (ev) => {
           ev.stopPropagation();
           ctxMenu.hidden = true;
           const raw = tabLi.getAttribute("data-tab-id");
+          // "from here onward" always needs a real tab, exactly like a whole-task run, so it is
+          // routed as a task entry point; the difference is only which node the engine starts from.
+          // The mode carries that, so no extra flag has to be smuggled onto the node.
+          const isNext = mode === "task-next" || mode === "group-next";
+          // For a group we must pass the GROUP's id. A group node's own id is the group, but a group
+          // START node's id is the start — passing that as groupNodeId would resolve to no group at
+          // all. Resolved once here so both the fresh-tab and the existing-tab branch agree.
+          const groupTargetId = n.kind === "group" ? n.id : (n.groupNodeId || null);
           if (raw === "__new__") {
-            if (mode === "group") requestPlayInTab({ groupNodeId: n.id, openNewTab: true });
+            if (isNext) requestPlayInTab({ nextFromNodeId: n.id, openNewTab: true });
+            else if (mode === "group" && groupTargetId) requestPlayInTab({ groupNodeId: groupTargetId, openNewTab: true });
+            else if (mode === "action") requestPlayInTab({ stepNodeId: n.id, openNewTab: true });
             else if (mode === "task") {
               if (n.groupNodeId) requestPlayInTab({ groupNodeId: n.groupNodeId, openNewTab: true });
               else requestPlayInTab({ openNewTab: true });
+            } else {
+              // Condition: none of the branches above match, yet the `return` below used to fire
+              // anyway — so choosing "a new tab" for "بررسی شرط" closed the menu and did nothing.
+              // This is the condition's only remaining entry point, so it must actually dispatch.
+              //
+              // `openNewTab` here means "no tab needed": the engine runs the check without a target
+              // page. For a page-dependent condition the submenu never offers this row, so the two
+              // meanings cannot collide.
+              requestPlayInTab({ conditionNodeId: n.id, openNewTab: true });
             }
             return;
           }
           const tabId = Number(raw);
           if (!Number.isFinite(tabId)) return;
-          if (mode === "action") requestPlayInTab({ stepNodeId: n.id, tabId });
-          else if (mode === "group") requestPlayInTab({ groupNodeId: n.id, tabId });
+          if (isNext) requestPlayInTab({ nextFromNodeId: n.id, tabId });
+          else if (mode === "action") requestPlayInTab({ stepNodeId: n.id, tabId });
+          else if (mode === "group" && groupTargetId) requestPlayInTab({ groupNodeId: groupTargetId, tabId });
           else if (mode === "task") {
             if (n.groupNodeId) requestPlayInTab({ groupNodeId: n.groupNodeId, tabId });
             else requestPlayInTab({ tabId });
           } else requestPlayInTab({ conditionNodeId: n.id, tabId });
         });
       });
-    };
+    }
 
     const fillMoveToGroupSubmenu = (li) => {
       const sub = li.querySelector(".ctx-submenu");
@@ -5003,9 +5130,18 @@
         if (li.classList.contains("disabled")) return;
         if (act === "move-to-group") fillMoveToGroupSubmenu(li);
         else {
+          // "…next" runs the node then follows the edges, so it needs a real tab the same way a
+          // whole-task run does — hence the task/group modes rather than the single-node ones.
+          //
+          // A group's own start node must resolve to "group", not "task": it carries a groupNodeId,
+          // and treating it as a task entry point would run the entire process when the user asked
+          // for one group. The label and the routing have to agree or the menu lies about its scope.
+          const isGroupStart = n.kind === "start" && !!n.groupNodeId;
           const mode = act === "check-browser"
             ? "condition"
-            : (n.kind === "group" ? "group" : n.kind === "start" ? "task" : "action");
+            : act === "run-browser-next"
+              ? (n.kind === "group" ? "group-next" : "task-next")
+              : (n.kind === "group" || isGroupStart ? "group" : n.kind === "start" ? "task" : "action");
           fillBrowserSubmenu(li, mode);
         }
       };
@@ -5061,21 +5197,62 @@
             render();
           }
         } else if (act === "check-browser") {
-          requestPlayInTab({ conditionNodeId: n.id, openNewTab: false });
+          // A condition with no browser dependency still needs a target, so open a fresh tab instead
+          // of asking for a tab id that the user was never offered.
+          requestPlayInTab(conditionNeedsBrowser(n)
+            ? { conditionNodeId: n.id, openNewTab: false }
+            : { conditionNodeId: n.id, openNewTab: true });
         }
       });
     });
   }
 
-  /** شرط وابسته به مرورگر (تب/صفحه) → نیاز به انتخاب تب هدف. */
+  /**
+   * آیا این شرط به یک تب مرورگر مشخص نیاز دارد؟
+   *
+   * سه دسته وجود دارد و رفتار یکسان با همه اشتباه است:
+   *
+   *  ۱) وابسته به صفحه — آدرس صفحه یا وجود/مقدار/نمایانی المانِ همان صفحه.
+   *     باید در یکی از تب‌های باز بررسی شود، چون تنها همان تب صفحهٔ موردنظر را دارد.
+   *     بررسی در تب خالی بی‌معناست.
+   *
+   *  ۲) مستقل از صفحه — تعداد تب‌های باز، تاریخ/زمان سیستم، متغیر حافظه،
+   *     مقدار منبع داده. هیچ‌کدام به محتوای یک تب خاص کاری ندارند، پس اصلاً
+   *     نیازی به انتخاب تب نیست و نباید کاربر را مجبور به انتخاب کرد.
+   *     (استثنا: تعداد تب‌های باز به فهرست تب‌ها نیاز دارد، ولی نه به «تب هدف».)
+   *
+   *  ۳) وابسته به منبع مقایسه — نوع شرط مستقل از صفحه است، ولی خودِ مقدار
+   *     مقایسه ممکن است از المان صفحه خوانده شود (`contentSourceType === "Elements"`).
+   *     در آن حالت دوباره به تب نیاز پیدا می‌کند.
+   */
   function conditionNeedsBrowser(n) {
     if (!n || n.kind !== "condition") return false;
     const ct = n.conditionType || "None";
-    if (["FindElement", "NotFindElement", "FindElements", "ElementValue", "ElementVisible", "ElementHidden", "Url", "DriverTabs"].includes(ct)) {
+
+    // (۱) شرط‌هایی که ذاتاً به صفحهٔ همان تب وابسته‌اند.
+    if (["Url", "FindElement", "NotFindElement", "FindElements", "ElementValue", "ElementVisible", "ElementHidden"]
+      .includes(ct)) {
       return true;
     }
-    if ((n.contentSourceType || "Constant") === "Elements") return true;
-    return false;
+
+    // (۲) شرط‌هایی که به هیچ تب مشخصی وابسته نیستند.
+    if (["DriverTabs", "SystemDate", "SystemTime", "MemoryValue"].includes(ct)) {
+      return false;
+    }
+
+    // (۳) بقیه (`SourceValue` و هر نوع دیگری): فقط اگر مقدارِ مقایسه از المان صفحه بیاید.
+    return (n.contentSourceType || "Constant") === "Elements";
+  }
+
+  /**
+   * آیا برای بررسی این شرط باید «تب جدید خالی» پیشنهاد شود؟
+   *
+   * فقط وقتی معنا دارد که شرط به صفحه وابسته نباشد؛ چون در آن حالت می‌توان آن را
+   * در یک تب تازه هم سنجید. اگر شرط به المان یا آدرس صفحه وابسته باشد، تب خالی
+   * قطعاً نتیجهٔ نادرست می‌دهد، پس کاربر باید از میان تب‌های باز یکی را انتخاب کند.
+   */
+  function conditionCanRunInBlankTab(n) {
+    return !conditionNeedsBrowser(n);
   }
 
   /** @deprecated use conditionNeedsBrowser */
@@ -5087,6 +5264,13 @@
     return new Promise((resolve) => {
       let settled = false;
       let retryTimer = null;
+      let retryCount = 0;
+      // Declared BEFORE cleanup() reads them. Declaring `timer` further down (after cleanup was
+      // already defined) meant a FAST reply — i.e. the healthy case, where the extension answers on
+      // the first message — hit the temporal dead zone in clearTimeout(timer) and rejected the
+      // promise with "Cannot access 'timer' before initialization". The slower the reply, the less
+      // likely the crash, so it looked intermittent and depended on how warm the worker was.
+      let timer = null;
       const done = (tabs) => {
         if (settled) return;
         settled = true;
@@ -5103,7 +5287,7 @@
       const cleanup = () => {
         window.removeEventListener("da-open-tabs", onEvt);
         window.removeEventListener("message", onMsg);
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         if (retryTimer) clearTimeout(retryTimer);
       };
       window.addEventListener("da-open-tabs", onEvt);
@@ -5117,9 +5301,36 @@
         } catch { /* ignore */ }
       };
       ask();
-      // Retry once — Player service worker may be waking up.
-      retryTimer = setTimeout(ask, 350);
-      const timer = setTimeout(() => done([]), 4000);
+      // The reply is not instant: the message has to reach the portal bridge, cross into the service
+      // worker, query every tab and come back. A single short retry was not enough on a cold worker,
+      // so the wait is now a short poll — it stops the moment an answer arrives, and only the last
+      // poll is slow enough to overlap a worker wake-up.
+      const pollDelays = [250, 250, 400, 600, 900, 1200];
+      const poll = () => {
+        if (settled) return;
+        retryCount += 1;
+        ask();
+        if (retryCount < pollDelays.length) {
+          retryTimer = setTimeout(poll, pollDelays[retryCount]);
+        } else {
+          // Out of retries. Report the failure instead of silently pretending no tabs exist, so the
+          // menu can say "the extension did not answer" rather than showing an empty list.
+          if (!settled) {
+            settled = true;
+            cleanup();
+            resolve(null);
+          }
+        }
+      };
+      retryTimer = setTimeout(poll, pollDelays[0]);
+      // Assigned to the `timer` declared at the top of the Promise — do NOT re-declare it here.
+      timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          resolve(null);
+        }
+      }, 6000);
     });
   }
 
@@ -5137,12 +5348,43 @@
       if (first) focusInvalidNode(first.id);
       return;
     }
+
+    // Second line of defence. The menu already hides these, but the engine must not depend on the
+    // menu: a keyboard shortcut, a replayed editor event or a stale menu could still ask to run a
+    // node that is not filled in. Re-check the node this request actually targets and refuse with a
+    // message naming it, rather than letting a half-configured node reach the browser.
+    const targetedIds = [
+      scope?.nextFromNodeId,
+      scope?.conditionNodeId,
+      scope?.stepNodeId,
+      scope?.groupNodeId
+    ].filter(Boolean);
+    for (const id of targetedIds) {
+      const target = nodeById(id);
+      if (!target) continue;
+      const v = validateNode(target);
+      if (!v.ok) {
+        const label = target.title || target.kind || id;
+        const msg = `نود نامعتبر «${label}» قابل اجرا نیست: ${v.reasons.filter(Boolean).join(" | ")}`;
+        setStatus(msg, "error");
+        try {
+          window.dispatchEvent(new CustomEvent("da-notify", { detail: { message: msg, type: "error" } }));
+        } catch { /* ignore */ }
+        focusInvalidNode(id);
+        return;
+      }
+    }
+
     const rawTab = scope?.tabId != null && scope.tabId !== "" ? Number(scope.tabId) : NaN;
     const hasTab = Number.isFinite(rawTab);
+    // A "from this node onward" run behaves like a whole-task run — it walks the graph, so it only
+    // needs a tab, not any particular node context. Treated here so the guard below does not reject
+    // the fresh-tab case before the engine ever sees it.
+    const isNextFrom = !!scope?.nextFromNodeId;
     // شرط‌های غیرالمنتی بدون tabId هم مجازند؛ شرط المانی حتماً tab می‌خواهد.
     if (!hasTab && scope?.conditionNodeId) {
       const cond = nodeById(scope.conditionNodeId);
-      if (conditionNeedsBrowser(cond)) {
+      if (conditionNeedsBrowser(cond) && scope?.openNewTab !== true) {
         setStatus("برای این شرط یک تب صفحه انتخاب کنید.", "warn");
         return;
       }
@@ -5168,13 +5410,17 @@
         groupNodeId: scope?.groupNodeId || null,
         stepNodeId: scope?.stepNodeId || null,
         conditionNodeId: scope?.conditionNodeId || null,
-        playScope: scope?.conditionNodeId
-          ? "condition"
-          : scope?.stepNodeId
-            ? "step"
-            : scope?.groupNodeId
-              ? "group"
-              : "task",
+        // "from this node onward": start at this node, then follow the edges to the end.
+        nextFromNodeId: scope?.nextFromNodeId || null,
+        playScope: isNextFrom
+          ? "next"
+          : scope?.conditionNodeId
+            ? "condition"
+            : scope?.stepNodeId
+              ? "step"
+              : scope?.groupNodeId
+                ? "group"
+                : "task",
         tabId: hasTab ? rawTab : null,
         openNewTab: scope?.openNewTab === true,
         task: cached,
@@ -7443,6 +7689,10 @@
   function requestCopiedSelectorFromExt(timeoutMs = 2000) {
     return new Promise((resolve) => {
       let settled = false;
+      // Must exist before cleanup() runs: a fast reply takes the success path and calls cleanup()
+      // immediately, so declaring `timer` below would throw "Cannot access 'timer' before
+      // initialization" and reject the promise on exactly the healthy, quick-answer case.
+      let timer = null;
       const finishOk = (detail) => {
         const mapped = payloadFromExtDetail(detail);
         if (!mapped || settled) return false;
@@ -7461,7 +7711,7 @@
       const cleanup = () => {
         window.removeEventListener("message", onMsg);
         window.removeEventListener("da-copied-selector", onEvt);
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
       };
       window.addEventListener("message", onMsg);
       window.addEventListener("da-copied-selector", onEvt);
@@ -7471,7 +7721,7 @@
       try {
         window.dispatchEvent(new CustomEvent("da-request-copied-selector"));
       } catch { /* ignore */ }
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         if (settled) return;
         settled = true;
         cleanup();
@@ -7483,6 +7733,8 @@
   function storeCopiedSelectorToExt(payload, text, timeoutMs = 1500) {
     return new Promise((resolve) => {
       let settled = false;
+      // Same ordering requirement as requestCopiedSelectorFromExt — see the note there.
+      let timer = null;
       const finish = (detail) => {
         if (settled) return;
         if (detail && detail.ok) {
@@ -7501,7 +7753,7 @@
       const cleanup = () => {
         window.removeEventListener("message", onMsg);
         window.removeEventListener("da-stored-selector", onEvt);
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
       };
       window.addEventListener("message", onMsg);
       window.addEventListener("da-stored-selector", onEvt);
@@ -7511,7 +7763,7 @@
       try {
         window.dispatchEvent(new CustomEvent("da-store-copied-selector", { detail: { payload, text } }));
       } catch { /* ignore */ }
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         if (settled) return;
         settled = true;
         cleanup();
@@ -9024,7 +9276,12 @@
   }
 
   function redrawEdgesOnly() {
-    [...world.querySelectorAll("path:not(.link-preview), circle.edge-tip, circle.edge-tip-hit, polygon.edge-tip")].forEach((p) => p.remove());
+    // Remove ONLY edge geometry. This used to be `path:not(.link-preview)` — which also matched
+    // the icon strokes inside `g.action-type-ico` (a bare <path> with no class), so every
+    // select/deselect wiped the action-type icons off the nodes and left each <g> holding nothing
+    // but its <title>. A drag rebuilt the node via full render() and looked fine, which is why the
+    // bug only showed after a click. Keep this list in step with drawEdge()'s emitted classes.
+    [...world.querySelectorAll("path.edge, path.edge-hit, circle.edge-tip, circle.edge-tip-hit, polygon.edge-tip")].forEach((p) => p.remove());
     scopedEdges().forEach(drawEdge);
     // Nodes (ports) above tip hits
     world.querySelectorAll("g.node").forEach((g) => world.appendChild(g));

@@ -924,18 +924,57 @@ async function stopPlay(reason) {
   playStatus.paused = false;
   wakePlayResumeWaiters();
   clearPlayCellReadInflight();
+  clearPlayCellWriteChains();
   if (playAbortPoll) {
     clearInterval(playAbortPoll);
     playAbortPoll = null;
   }
   const tid = String(playStatus.taskId || "").trim();
-  if (tid) await unregisterPlayOnServer(tid);
+  // Capture the play TAB up front: the storage write below clears playTabId, and the stamp we
+  // must remove lives on that tab. (A task id is NOT a tab id — passing one silently no-ops.)
+  const playingTabId = playTabId;
   appendPlayLog("warn", reason === "canvas_changed"
     ? "اجرا به‌خاطر تغییر فرآیند متوقف شد"
     : "اجرا توسط کاربر متوقف شد");
+  // Publish the stopped state BEFORE the portal round-trip. unregisterPlayOnServer is a network
+  // call with its own timeout; awaiting it first left the UI reporting "playing" for the whole
+  // round-trip after the run had already stopped locally. Local truth first, bookkeeping after.
   await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
   broadcastPlayState();
+  if (tid) await unregisterPlayOnServer(tid);
+  // NOT `tid` — that is the TASK id. This clears a stamp on the play TAB, so capture the tab
+  // before the storage write above nulls playTabId.
+  await clearPlayPageMode(playingTabId);
   return getPlayStatus();
+}
+
+/**
+ * Drop the `daMorobotMode="play"` stamp this run put on the target page.
+ *
+ * Mounting the Player HUD stamps the page's <html> so the Recorder HUD knows not to mount on
+ * top of it, and vice versa. `content/fab-play.js` clears it on its own teardown, but that only
+ * runs while that script is alive — a stop from the portal, an extension reload, or a tab-level
+ * teardown leaves the stamp behind. A page left stamped "play" then REFUSES the Recorder FAB
+ * forever (`content/fab-record.js` returns early on that value), and the Player HUD will not
+ * re-init either. So the engine — which owns the stamp — must clear it on stop.
+ *
+ * Best-effort by design: the tab may already be gone, or be a chrome:// page we cannot script.
+ */
+async function clearPlayPageMode(tabId) {
+  const id = tabId != null ? tabId : playTabId;
+  if (id == null) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: id },
+      func: () => {
+        // Only ever clear OUR value: a "record" stamp belongs to the Recorder, and wiping it
+        // here would let the Player HUD mount on top of a live recording.
+        if (document.documentElement.dataset.daMorobotMode === "play") {
+          delete document.documentElement.dataset.daMorobotMode;
+        }
+      }
+    });
+  } catch { /* tab closed / not scriptable — nothing to clean */ }
 }
 
 async function pausePlay() {
@@ -1206,26 +1245,52 @@ function conditionNeedsPageElement(node) {
   return false;
 }
 
-/** آیا ارزیابی این شرط به مرورگر/تب وابسته است؟ */
+/**
+ * آیا ارزیابی این شرط به یک تب مرورگر مشخص نیاز دارد؟
+ *
+ * MUST stay in step with `conditionNeedsBrowser` in the editor's flow.js. The two decide the same
+ * question in two places, and when they disagreed the editor would hide the tab picker for a
+ * condition the engine still insisted on running inside a tab — so the user was asked to choose a
+ * tab by one half of the system and told none was needed by the other.
+ *
+ * Three categories:
+ *   1. page-dependent      -> a tab is REQUIRED (Url, element checks)
+ *   2. page-independent    -> a tab is NOT required (DriverTabs, SystemDate, SystemTime, MemoryValue)
+ *   3. source-dependent    -> only when the comparison value is read from a page element
+ */
 function conditionNeedsBrowserTab(node) {
   if (!node) return false;
-  if (conditionNeedsPageElement(node)) return true;
   const ct = node.conditionType || "None";
-  // MemoryValue reads the variable table, so it must not force a tab to be open — the same reason
-  // SourceValue is excluded below.
-  return ct === "Url" || ct === "DriverTabs";
+
+  // (1) inherently tied to the page of one tab
+  if (ct === "Url") return true;
+  if (["FindElement", "NotFindElement", "FindElements", "ElementValue", "ElementVisible", "ElementHidden"]
+    .includes(ct)) {
+    return true;
+  }
+
+  // (2) tied to no particular tab. DriverTabs only needs the LIST of tabs, which the background
+  // worker can read without a target — demanding a tab there made the user pick a page the check
+  // never looks at, and made a blank tab look like a valid answer.
+  if (["DriverTabs", "SystemDate", "SystemTime", "MemoryValue"].includes(ct)) return false;
+
+  // (3) everything else (SourceValue, …): only if the comparison operand comes from the page.
+  return (node.contentSourceType || "Constant") === "Elements";
 }
 
-/** اولین تب http(s) بدون فوکوس — برای شرط Url بدون انتخاب تب. */
+/**
+ * Resolve a tab for a condition that needs one but was not given a target.
+ *
+ * Kept as an explicit, deliberate `null`: this used to return the first http(s) tab it could find,
+ * which meant a check ran against an arbitrary page and returned a confident-looking wrong answer.
+ * Callers must treat null as "no target was chosen" and ask the user, never substitute a tab.
+ */
 async function pickSilentHttpTabId() {
-  try {
-    const all = await chrome.tabs.query({});
-    const hit = all.find((t) => t?.id && /^https?:\/\//i.test(String(t.url || t.pendingUrl || "")));
-    return hit?.id || null;
-  } catch {
-    return null;
-  }
+  return null;
 }
+
+/** Set synchronously by startPlay to claim the run before its first await. */
+let playStarting = false;
 
 async function startPlay(taskId, tabId, runMode, options) {
   const opts = options || {};
@@ -1243,6 +1308,26 @@ async function startPlay(taskId, tabId, runMode, options) {
       return { ok: false, error: "پخش در حال اجراست." };
     }
   }
+
+  // GUARD MUST BE ATOMIC. `playStatus.playing` is only set to true far below, after several
+  // awaits (checkSession, storage.get, loadUserTasks). Two starts arriving together therefore
+  // both saw `playing === false`, both sailed past the check above, and both ran the graph —
+  // a double-start that showed up as duplicated actions against the live page. Claim the run
+  // HERE, synchronously, with no await in between, so only the first caller can proceed.
+  //
+  // The condition path above deliberately dropped a stale run, so it must be allowed to start:
+  // it reaches this line with `playStarting` false (we never set it), and that is intended.
+  if (playStarting) return { ok: false, error: "پخش در حال اجراست." };
+  playStarting = true;
+  // From here on every early return MUST release the claim — hence the try/finally.
+  try {
+    return await startPlayInner(taskId, tabId, runMode, opts);
+  } finally {
+    playStarting = false;
+  }
+}
+
+async function startPlayInner(taskId, tabId, runMode, opts) {
   await checkSession();
 
   const { recording } = await chrome.storage.local.get("recording");
@@ -1293,15 +1378,21 @@ async function startPlay(taskId, tabId, runMode, options) {
   const playScope = opts.playScope
     || (opts.conditionNodeId || (singleStep && singleStep.kind === "condition")
       ? "condition"
-      : opts.stepNodeId
-        ? "step"
-        : opts.groupNodeId
-          ? "group"
-          : "task");
+      : opts.nextFromNodeId
+        ? "next"
+        : opts.stepNodeId
+          ? "step"
+          : opts.groupNodeId
+            ? "group"
+            : "task");
   opts.playScope = playScope;
   // Never walk the full diagram for a scoped step/condition play.
-  const scopedSingle = playScope === "step" || playScope === "condition"
-    || !!(opts.stepNodeId || opts.conditionNodeId);
+  //
+  // "from this node onward" is deliberately NOT included: its whole point is to start at one node
+  // and then follow the edges, so limiting it to a single visit would make it behave exactly like
+  // the plain single-node run and the two menu entries would be indistinguishable.
+  const scopedSingle = !opts.nextFromNodeId && (playScope === "step" || playScope === "condition"
+    || !!(opts.stepNodeId || opts.conditionNodeId));
   if (steps.length === 0 && !opts.stepNodeId && !singleCond) {
     // Still allow walk — conditions/groups may expand at runtime; but warn if no actions exist at all.
     const anyAction = (graph.nodes || []).some((n) => isActionNode(n));
@@ -1328,10 +1419,17 @@ async function startPlay(taskId, tabId, runMode, options) {
   const condNode = singleCond || (singleStep && singleStep.kind === "condition" ? singleStep : null);
   tabId = await resolveExecutionTabId(tabId, opts);
   if (!tabId && condNode && !conditionNeedsBrowserTab(condNode)) {
-    // SourceValue / DriverTabs / … — بدون تب هم قابل ارزیابی است.
+    // DriverTabs / SystemDate / SystemTime / MemoryValue / a constant operand — evaluable with no
+    // tab at all, so do not block here and do not borrow someone else's tab.
     tabId = null;
-  } else if (!tabId && condNode && ((condNode.conditionType || "") === "Url" || (condNode.conditionType || "") === "DriverTabs")) {
-    tabId = await pickSilentHttpTabId();
+  } else if (!tabId && condNode) {
+    // The condition DOES need a page, but no target was supplied. Do not guess: refusing is the only
+    // honest answer, because any tab we picked could be showing a different page and the result
+    // would look authoritative while being wrong.
+    return {
+      ok: false,
+      error: "این شرط به صفحه وابسته است و نیاز به یک تب هدف دارد. در منوی راست‌کلیک یک تب انتخاب کنید."
+    };
   }
   if (!tabId && !(condNode && !conditionNeedsBrowserTab(condNode))) {
     const wanted = Number(requestedTabId);
@@ -1365,7 +1463,10 @@ async function startPlay(taskId, tabId, runMode, options) {
   // Keep prior logs/results until the user clears them.
   const hadHistory = playLogs.length > 0 || (playStatus.results || []).length > 0;
   playTabId = tabId;
-  const limited = scopedSingle || !!(opts.groupNodeId || opts.stepNodeId || opts.conditionNodeId);
+  // nextFromNodeId is excluded here too: it is a full walk from a different entry point, so it keeps
+  // the process-level repeat (a spreadsheet source still drives one iteration per row).
+  const limited = !opts.nextFromNodeId
+    && (scopedSingle || !!(opts.groupNodeId || opts.stepNodeId || opts.conditionNodeId));
   const iterations = limited
     ? { type: "None", indices: [0], total: 1, label: "اجرای محدود (بدون تکرار فرآیند)" }
     : resolveProcessIterations(graph);
@@ -1424,10 +1525,14 @@ async function startPlay(taskId, tabId, runMode, options) {
       clearInterval(playAbortPoll);
       playAbortPoll = null;
     }
-    const failedTaskId = String(graph.taskId || taskId || "").trim();
-    if (failedTaskId) await unregisterPlayOnServer(failedTaskId);
+    // Local state first (see stopPlay): the UI must not keep claiming a run while the portal
+    // round-trip is in flight — most visibly on a failure, when the user is waiting for it.
+    const playingTabId = playTabId;
     await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
     broadcastPlayState();
+    const failedTaskId = String(graph.taskId || taskId || "").trim();
+    if (failedTaskId) await unregisterPlayOnServer(failedTaskId);
+    await clearPlayPageMode(playingTabId);
   });
 
   return getPlayStatus();
@@ -1466,8 +1571,12 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
       broadcastPlayState();
 
       // Single-step / single-condition scope: never continue along diagram edges.
-      const scopedSingle = opts.playScope === "step" || opts.playScope === "condition"
-        || !!(opts.conditionNodeId || opts.stepNodeId);
+      // Same exclusion as the planner above: "from this node onward" is a full walk, so it must not
+      // take the single-node branch. Guarding only the planner left this second check to strip the
+      // walk out again at run time.
+      const scopedSingle = !opts.nextFromNodeId
+        && (opts.playScope === "step" || opts.playScope === "condition"
+          || !!(opts.conditionNodeId || opts.stepNodeId));
       if (scopedSingle) {
         const nodeId = opts.conditionNodeId || opts.stepNodeId;
         const step = findGraphNode(graph, nodeId);
@@ -1571,14 +1680,25 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
       clearInterval(playAbortPoll);
       playAbortPoll = null;
     }
-    const finishedTaskId = String(playStatus.taskId || graph?.taskId || "").trim();
-    if (finishedTaskId) await unregisterPlayOnServer(finishedTaskId);
+    // Local state first (see stopPlay): publish "finished" before the portal round-trip so the
+    // HUD flips immediately instead of waiting on a network call to agree.
+    const playingTabId = playTabId;
     await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
     broadcastPlayState();
+    const finishedTaskId = String(playStatus.taskId || graph?.taskId || "").trim();
+    if (finishedTaskId) await unregisterPlayOnServer(finishedTaskId);
+    await clearPlayPageMode(playingTabId);
   }
 }
 
 function resolvePlayEntryId(graph, opts = {}) {
+  // "from this node onward": begin at the named node and then walk the graph normally. Checked
+  // before stepNodeId/groupNodeId because it is the broader scope — those two mean "only this
+  // node", while this one means "this node and everything reachable from it".
+  if (opts.nextFromNodeId) {
+    const n = findGraphNode(graph, opts.nextFromNodeId);
+    return n?.id || opts.nextFromNodeId;
+  }
   if (opts.stepNodeId) {
     const n = findGraphNode(graph, opts.stepNodeId);
     return n?.id || opts.stepNodeId;
@@ -2599,10 +2719,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
       waitMaxMs: Math.max(0, Number(step.waitMaxMs) || 0),
       highlightColor: resolveHighlightColor(graph)
     };
-    let waited = await chrome.tabs
-      .sendMessage(tabId, { type: "playExecute", payload: waitPayload }, { frameId: frameIdForWait })
-      .catch(() => null);
-    if (!waited) waited = await executeInFrame(tabId, frameIdForWait, waitPayload);
+    const waited = await executeInFrame(tabId, frameIdForWait, waitPayload);
     if (!waited || !waited.ok) {
       return onUnexpected(runMode, {
         taskId,
@@ -2662,16 +2779,18 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     requireClickable: !!stateReq.requireClickable
   };
 
-  let result = await (async () => {
+  // ONE execution path, deliberately.
+  //
+  // This used to try chrome.tabs.sendMessage into a content-script engine first and fall back to
+  // executeInFrame. The two engines had drifted: the content script never learned SelectOption,
+  // PressKey, ClearContent, ScrollIntoView or FocusElement, so whether those actions worked
+  // depended on which path won the race — the same step could succeed on one run and come back
+  // "unsupported_action" on the next. The injected engine is the complete one and needs no
+  // content script to be present, so it is now the only path.
+  const result = await (async () => {
     await clearTabPlayHighlights(tabId);
-    return chrome.tabs
-      .sendMessage(tabId, { type: "playExecute", payload }, { frameId })
-      .catch(() => null);
+    return executeInFrame(tabId, frameId, payload);
   })();
-
-  if (!result) {
-    result = await executeInFrame(tabId, frameId, payload);
-  }
 
   if (!result || !result.ok) {
     return onUnexpected(runMode, {
@@ -2730,13 +2849,11 @@ async function runCaptureStep(tabId, taskId, step, runMode, graph, rowIndex, fra
       requireEnabled: !!stateReq.requireEnabled,
       requireClickable: !!stateReq.requireClickable
     };
-    let result = await (async () => {
+    // Same single-path rule as runStep above — see the comment there.
+    const result = await (async () => {
       await clearTabPlayHighlights(tabId);
-      return chrome.tabs
-        .sendMessage(tabId, { type: "playExecute", payload }, { frameId })
-        .catch(() => null);
+      return executeInFrame(tabId, frameId, payload);
     })();
-    if (!result) result = await executeInFrame(tabId, frameId, payload);
     if (!result || !result.ok) {
       return onUnexpected(runMode, {
         taskId, stepId: step.entityId,
@@ -3067,10 +3184,8 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
       requireClickable: !!eqReq.requireClickable
     };
     await clearTabPlayHighlights(tabId);
-    let result = await chrome.tabs
-      .sendMessage(tabId, { type: "playExecute", payload }, { frameId })
-      .catch(() => null);
-    if (!result) result = await executeInFrame(tabId, frameId, payload);
+    // Same single-path rule as runStep — see the comment there.
+    const result = await executeInFrame(tabId, frameId, payload);
     return result?.text != null ? String(result.text) : "";
   }
   return resolveStepParam(step, graph, rowIndex, opts);
@@ -3136,6 +3251,22 @@ const playCellReadInflight = new Map();
 
 function clearPlayCellReadInflight() {
   playCellReadInflight.clear();
+}
+
+/**
+ * Drop the per-cell write queues at the end of a run.
+ *
+ * `playCellWriteChains` serialises concurrent writes to the same cell so two steps cannot
+ * clobber each other's revision. The queue is keyed by (dsId,row,column) and each entry is a
+ * promise chain. Nothing cleared it, so across a long browser session the map grew without
+ * bound, and — worse — a NEW run could pick up a chain left over from a run that had already
+ * been stopped, serialising fresh writes behind a dead run's promise.
+ *
+ * We only drop our references; any in-flight write still settles on its own (it is awaited by
+ * its own caller, and `stopPlay` already set `playAbort`, so its retry loop will not spin on).
+ */
+function clearPlayCellWriteChains() {
+  playCellWriteChains.clear();
 }
 
 function playCellKey(dsId, rowIndex, columnKey) {
@@ -3403,17 +3534,45 @@ async function readDataSourceCellForPlay(ds, columnKey, rowIndex, step, graph) {
   return fetchServerCellForPlay(id, row, col, ds, graph, step);
 }
 
+/**
+ * Portal housekeeping calls (register / unregister / abort-poll) with a hard ceiling.
+ *
+ * Plain `fetch` has NO timeout. If the portal is unreachable in a way that hangs the
+ * connection instead of refusing it (VPN drop, wedged proxy, machine asleep mid-flight), the
+ * promise never settles. That matters because `unregisterPlayOnServer` is awaited by
+ * `stopPlay`, so a hung portal could stall the Stop path itself — the user presses Stop and
+ * the run never reports as stopped. These are all bookkeeping requests that nobody waits on
+ * for a result, so failing fast is strictly better than hanging.
+ *
+ * The abort is composed with any signal the caller supplied rather than replacing it.
+ */
+const PORTAL_FETCH_TIMEOUT_MS = 8000;
+
 async function portalFetch(path, opts) {
   try {
     const portal = typeof portalBase === "function" ? await portalBase().catch(() => null) : null;
     const base = String(portal || "").replace(/\/$/, "");
     if (!base) return null;
-    return fetch(`${base}${path}`, {
-      credentials: "omit",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      ...(opts || {})
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PORTAL_FETCH_TIMEOUT_MS);
+    // Honour a caller's own signal too: aborting on either reason must settle the request.
+    const callerSignal = opts && opts.signal;
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+    try {
+      return await fetch(`${base}${path}`, {
+        credentials: "omit",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        ...(opts || {}),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
+    // Callers already treat null / rejection as "portal unavailable" and carry on.
     return null;
   }
 }
@@ -3935,7 +4094,15 @@ async function clearTabPlayHighlights(tabId) {
       target: { tabId, allFrames: true },
       func: () => {
         try {
-          document.querySelectorAll("#da-play-hl, .da-play-hl").forEach((n) => n.remove());
+          // The marked node is the PAGE'S OWN element, not an overlay we created — removing it would
+          // delete the user's markup. Undo the outline we set and drop the marker class instead.
+          document.querySelectorAll(".da-play-hl").forEach((n) => {
+            n.style.removeProperty("outline");
+            n.style.removeProperty("outline-offset");
+            n.classList.remove("da-play-hl");
+          });
+          // Sweep any leftover overlay from an older build so a page is never left with a stray box.
+          document.querySelectorAll("#da-play-hl").forEach((n) => n.remove());
         } catch { /* ignore */ }
       }
     });
@@ -3979,31 +4146,37 @@ async function playExecuteInjected(payload) {
     return "#ea5455";
   }
 
+  /**
+   * Outline the element a step is about to act on.
+   *
+   * The highlight is applied to the element ITSELF rather than to a box drawn over it. An overlay
+   * sits at fixed coordinates captured at highlight time, so anything that moves or resizes the page
+   * afterwards (a lazy image, a font swap, a scroll inside a container) leaves the outline behind,
+   * pointing at empty space. It also cannot follow an element inside a scrolling pane. Setting the
+   * element's own outline moves with it by construction and needs no coordinates at all.
+   *
+   * `outline` is used rather than `border`: a border participates in layout, so adding one would
+   * shift the page by its width and could reflow the very element being clicked. An outline is drawn
+   * outside the box model, so nothing on the page moves.
+   */
   function highlightTarget(el, color) {
     if (!(el instanceof Element)) return;
     const c = normalizeColor(color);
     try {
-      document.querySelectorAll("#da-play-hl, .da-play-hl").forEach((n) => n.remove());
+      document.querySelectorAll(".da-play-hl").forEach((n) => {
+        // Restore whatever the element had before, so a page is never left permanently recoloured.
+        n.style.removeProperty("outline");
+        n.style.removeProperty("outline-offset");
+        n.classList.remove("da-play-hl");
+      });
     } catch { /* ignore */ }
     try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch { /* ignore */ }
-    const r = el.getBoundingClientRect();
-    const box = document.createElement("div");
-    box.id = "da-play-hl";
-    box.className = "da-play-hl";
-    Object.assign(box.style, {
-      position: "fixed",
-      left: `${Math.max(0, r.left - 3)}px`,
-      top: `${Math.max(0, r.top - 3)}px`,
-      width: `${Math.max(2, r.width + 6)}px`,
-      height: `${Math.max(2, r.height + 6)}px`,
-      border: `3px solid ${c}`,
-      boxShadow: `0 0 0 2px ${c}33, 0 0 14px ${c}88`,
-      pointerEvents: "none",
-      zIndex: "2147483646",
-      boxSizing: "border-box",
-      borderRadius: "4px"
-    });
-    document.documentElement.appendChild(box);
+    try {
+      el.style.setProperty("outline", `3px solid ${c}`, "important");
+      // A small positive offset keeps the ring clear of an element's own border so both stay visible.
+      el.style.setProperty("outline-offset", "2px", "important");
+      el.classList.add("da-play-hl");
+    } catch { /* ignore */ }
   }
 
   function elementMatchesState(el, need) {
@@ -4244,27 +4417,40 @@ function matchChildIframe(hop) {
  */
 function waitTabComplete(tabId, maxMs) {
   const limit = maxMs == null ? 15000 : Math.max(0, Number(maxMs) || 0);
+  // Already stopped: do not even arm a timer. Without this, a stop issued while a previous
+  // step was still settling would leave this wait to expire on its own.
+  if (playAbort) return Promise.resolve();
   if (limit === 0) return Promise.resolve();
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
+    // One teardown for every exit path (load event, timeout, abort) so a stopped run cannot
+    // leave this listener attached — a leaked onUpdated listener keeps firing on every tab
+    // change for the rest of the browser session.
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearInterval(abortPoll);
       chrome.tabs.onUpdated.removeListener(listener);
       resolve();
-    }, limit);
+    };
+
+    const timeout = setTimeout(finish, limit);
+
+    // This wait is the longest single blocking point in a step (up to 15 s), so it is where
+    // "توقف" used to feel broken: the pause/stop was honoured only after the page finished
+    // loading. Polling playAbort makes Stop take effect inside the wait, not after it.
+    // The 200 ms cadence matches sleepInterruptible().
+    const abortPoll = setInterval(() => {
+      if (playAbort) finish();
+    }, 200);
 
     function listener(id, info) {
-      if (id === tabId && info.status === "complete") {
-        clearTimeout(timeout);
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
+      if (id === tabId && info.status === "complete") finish();
     }
     chrome.tabs.onUpdated.addListener(listener);
     chrome.tabs.get(tabId).then((tab) => {
-      if (tab.status === "complete") {
-        clearTimeout(timeout);
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
+      if (tab.status === "complete") finish();
     }).catch(() => {});
   });
 }
