@@ -22,6 +22,7 @@ public class UsersController : Controller
     private readonly LicenseService _license;
     private readonly DeploymentBindingService _deploymentBinding;
     private readonly SystemSettingsService _settings;
+    private readonly TaskService _tasks;
     private readonly PasswordHasher<AppUser> _hasher = new();
 
     public UsersController(
@@ -30,7 +31,8 @@ public class UsersController : Controller
         PlaySessionTracker plays,
         LicenseService license,
         DeploymentBindingService deploymentBinding,
-        SystemSettingsService settings)
+        SystemSettingsService settings,
+        TaskService tasks)
     {
         _db = db;
         _events = events;
@@ -38,6 +40,7 @@ public class UsersController : Controller
         _license = license;
         _deploymentBinding = deploymentBinding;
         _settings = settings;
+        _tasks = tasks;
     }
 
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -256,6 +259,135 @@ public class UsersController : Controller
         TempData["Ok"] = "Saved.";
         return RedirectToAction(nameof(Index));
     }
+
+    /// <summary>
+    /// Removes a user together with everything that belongs to them.
+    /// </summary>
+    /// <remarks>
+    /// The database cascades only part of this. <c>ProcessShares</c>, <c>DeviceSessions</c> and the
+    /// user's own <c>DataSources</c> (and, through them, their cells) do cascade from the user row,
+    /// but the two things an admin most expects to disappear do not:
+    ///
+    /// <list type="bullet">
+    /// <item><description>
+    /// <c>Processes.CreatorUserId</c> is <c>SetNull</c>, so their processes would survive as
+    /// ownerless rows. Each one is removed explicitly — and, when a process is the "mother" of a
+    /// template, through <see cref="TaskService.DeleteAsync"/> so the template goes with it and the
+    /// children attached to that template are detached first (the <c>Process.TemplateId</c> relation
+    /// is <c>Restrict</c> and would otherwise refuse the delete).
+    /// </description></item>
+    /// <item><description>
+    /// <c>ProcessTemplates.CreatorUserId</c> is also <c>SetNull</c>, so templates the user published
+    /// are removed explicitly. Children of those templates are already detached by the process
+    /// delete above; any template authored from a process the user does not own is deleted here
+    /// with the same detach-first treatment.
+    /// </description></item>
+    /// </list>
+    ///
+    /// Two refusals are deliberate rather than incidental:
+    /// the acting admin cannot delete themselves (that would end the session mid-request), and the
+    /// last active administrator cannot be deleted because doing so would lock every admin page —
+    /// this one included — out of the system for good.
+    /// </remarks>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    {
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id, ct);
+        if (user is null) return NotFound();
+
+        if (user.Id == CurrentUserId)
+        {
+            TempData["Ok"] = "admin.users.deleteSelfBlocked";
+            return RedirectToAction(nameof(Index));
+        }
+
+        if (user.Role == UserRole.Admin && user.IsActive)
+        {
+            var otherActiveAdmins = await _db.Users
+                .CountAsync(u => u.Id != user.Id && u.Role == UserRole.Admin && u.IsActive, ct);
+            if (otherActiveAdmins == 0)
+            {
+                TempData["Ok"] = "admin.users.deleteLastAdminBlocked";
+                return RedirectToAction(nameof(Index));
+            }
+        }
+
+        var userName = user.UserName;
+
+        // Linked sources are Restrict on the DataSource side, so the join rows have to go before the
+        // source rows, and they have to go before the PROCESSES too: deleting a process cascades its
+        // own ProcessDataSources, which would otherwise collide with the Restrict rule.
+        var linkedSourceIds = await _db.ProcessDataSources
+            .Where(l => l.DataSource.OwnerUserId == user.Id)
+            .Select(l => l.DataSourceId)
+            .Distinct()
+            .ToListAsync(ct);
+        if (linkedSourceIds.Count > 0)
+        {
+            await _db.ProcessDataSources
+                .Where(l => linkedSourceIds.Contains(l.DataSourceId))
+                .ExecuteDeleteAsync(ct);
+        }
+
+        // Their processes, via the shared delete so a mother takes its template with it.
+        var ownedProcessIds = await _db.Processes
+            .Where(p => p.CreatorUserId == user.Id)
+            .Select(p => p.Id)
+            .ToListAsync(ct);
+        foreach (var processId in ownedProcessIds)
+            await _tasks.DeleteAsync(processId, ct);
+
+        // A template the user published from somebody else's process: cut its children loose first
+        // (Process.TemplateId is Restrict), then drop it.
+        var orphanTemplates = await _db.ProcessTemplates
+            .Where(t => t.CreatorUserId == user.Id)
+            .Select(t => t.Id)
+            .ToListAsync(ct);
+        foreach (var templateId in orphanTemplates)
+        {
+            var children = await _db.Processes.Where(p => p.TemplateId == templateId).ToListAsync(ct);
+            foreach (var child in children)
+            {
+                child.TemplateId = null;
+                child.TemplateVersion = null;
+                child.UpdatedAtUtc = DateTime.UtcNow;
+            }
+            await _db.ProcessTemplates.Where(t => t.Id == templateId).ExecuteDeleteAsync(ct);
+        }
+
+        // Any process they were merely the last editor of, or that still points at them, must let go
+        // of the id before the user row goes — these columns are SetNull, but the ids are held in
+        // the change tracker and would otherwise be re-written by the same SaveChanges.
+        await _db.Processes
+            .Where(p => p.CreatorUserId == user.Id || p.LastEditorUserId == user.Id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.CreatorUserId, (int?)null)
+                .SetProperty(p => p.LastEditorUserId, (int?)null), ct);
+        await _db.DataSources
+            .Where(d => d.LastEditorUserId == user.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.LastEditorUserId, (int?)null), ct);
+
+        // The user row itself. ProcessShares, DeviceSessions and their DataSources (and cells)
+        // cascade from here.
+        _db.Users.Remove(user);
+        await _db.SaveChangesAsync(ct);
+
+        // Audit after the delete, with a null user id: the row must outlive the account it
+        // describes, which is exactly what the denormalised UserName is for.
+        await _events.LogAsync("Audit", "System", "UserDeleted",
+            $"User '{userName}' (#{id}) deleted with all owned processes and data sources.",
+            userName: User.Identity?.Name, detailsJson: null, ct: ct);
+
+        TempData["Ok"] = "admin.users.deleted";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>The signed-in admin's id, or 0 when the claim is absent/unparsable.</summary>
+    private int CurrentUserId =>
+        int.TryParse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id)
+            ? id
+            : 0;
 
     private async Task FillPlans(CancellationToken ct)
     {

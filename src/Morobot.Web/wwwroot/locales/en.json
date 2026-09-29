@@ -946,7 +946,12 @@
       "lastSeen": "Last activity: {time}",
       "newPassword": "Set a new password",
       "passwordHint": "Fill in to change the password; leave blank to keep the current one. The user plan password policy is enforced.",
-      "reservedHint": "Reserved names (admin, free, pro, guest, test, …) cannot be used."
+      "reservedHint": "Reserved names (admin, free, pro, guest, test, …) cannot be used.",
+      "deleteTitle": "Delete user",
+      "deleteConfirm": "User \"{userName}\" and everything that belongs to them will be deleted: {processes} process(es) and {sources} data source(s), along with their cells. Their shares and registered devices go too. This cannot be undone. Continue?",
+      "deleted": "User deleted with all their processes and data sources.",
+      "deleteSelfBlocked": "You cannot delete your own account.",
+      "deleteLastAdminBlocked": "This is the only active administrator; deleting it would cut off access to the admin panel."
     },
     "prices": {
       "title": "Prices",

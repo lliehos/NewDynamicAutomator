@@ -830,6 +830,15 @@ label { font-size: .9rem; }
 .btn-admin.icon-only {
   padding: .4rem .55rem;
 }
+/* Row-level action buttons (edit / delete) sit side by side in one table cell. The delete action
+   is a form, so the wrapper is what keeps the two from stacking and keeps the form's own margin
+   out of the row height. */
+.admin-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+}
+.admin-row-actions form { margin: 0; }
 .admin-page-head {
   display: flex;
   flex-wrap: wrap;
