@@ -73,7 +73,7 @@ public sealed class TenantBrandingDto
     public bool IsLicensedBranding { get; set; }
 
     /// <summary>
-    /// The name, title and organization, one value per language.
+    /// The name and organization, one value per language.
     /// </summary>
     /// <remarks>
     /// The product is bilingual and was originally single-valued, so a Persian deployment and an
@@ -83,8 +83,6 @@ public sealed class TenantBrandingDto
     /// </remarks>
     public string? AppNameEn { get; set; }
     public string? AppNameFa { get; set; }
-    public string? BrandTitleEn { get; set; }
-    public string? BrandTitleFa { get; set; }
     public string? OrganizationNameEn { get; set; }
     public string? OrganizationNameFa { get; set; }
 

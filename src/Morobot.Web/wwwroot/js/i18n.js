@@ -16,6 +16,13 @@
     return typeof n === "string" && n.trim() ? n.trim() : "";
   }
 
+  /** Organization named by the licence (Admin → Branding). Empty on an unlicensed install. */
+  function orgName() {
+    const b = global.__MOROBOT_BRANDING;
+    const n = b && (b.organizationName || b.OrganizationName);
+    return typeof n === "string" && n.trim() ? n.trim() : "";
+  }
+
   function readCookie(name) {
     const m = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/([.$?*|{}()[\]\\/+^])/g, "\\$1") + "=([^;]*)"));
     return m ? decodeURIComponent(m[1]) : null;
@@ -78,6 +85,14 @@
     if (brand) {
       if (BRAND_NAME_KEYS.has(key)) text = brand;
       else if (text.indexOf("{brand}") >= 0) text = text.replace(/\{brand\}/g, brand);
+    }
+    // {org} is the licensee. An unlicensed install has none, so drop the separator with the token
+    // rather than leaving a dangling dash after the product name.
+    if (text.indexOf("{org}") >= 0) {
+      const org = orgName();
+      text = org
+        ? text.replace(/\{org\}/g, org)
+        : text.replace(/ — \{org\}/g, "").replace(/ - \{org\}/g, "").replace(/\{org\}/g, "").trim();
     }
     return text;
   }

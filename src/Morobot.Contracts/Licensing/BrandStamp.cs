@@ -36,7 +36,6 @@ public static class BrandStamp
         var material = string.Join('\u001f',
             dto.AppName, dto.BrandTitle, dto.OrganizationName,
             dto.AppNameFa, dto.AppNameEn,
-            dto.BrandTitleFa, dto.BrandTitleEn,
             dto.OrganizationNameFa, dto.OrganizationNameEn,
             dto.LogoUrl, dto.FaviconUrl,
             dto.ColorPrimary, dto.ColorPrimaryDark, dto.ColorPrimaryLight, dto.ColorAccent,

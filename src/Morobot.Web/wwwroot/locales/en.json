@@ -8,7 +8,7 @@
   "brand": {
     "name": "{brand}",
     "tagline": "Smart web process automation",
-    "copyright": "© {year} {brand} — Suras Software Group",
+    "copyright": "© {year} {brand} — {org}",
     "wordmark": "/img/brand/morobot-wordmark-en.svg",
     "heroImg": "/img/landing/hero-en.png",
     "featuresImg": "/img/landing/features-en.png"
@@ -743,8 +743,6 @@
       "assets": "Brand assets",
       "appNameEn": "App name (English)",
       "appNameFa": "App name (Persian)",
-      "brandTitleEn": "Brand title (English)",
-      "brandTitleFa": "Brand title (Persian)",
       "organizationEn": "Organization (English)",
       "organizationFa": "Organization (Persian)",
       "logo": "Logo",

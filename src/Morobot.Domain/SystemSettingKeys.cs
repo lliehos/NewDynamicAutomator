@@ -15,8 +15,6 @@ public static class SystemSettingKeys
     public const string BrandOrganization = "BrandOrganization";
     public const string BrandAppNameEn = "BrandAppNameEn";
     public const string BrandAppNameFa = "BrandAppNameFa";
-    public const string BrandTitleEn = "BrandTitleEn";
-    public const string BrandTitleFa = "BrandTitleFa";
     public const string BrandOrganizationEn = "BrandOrganizationEn";
     public const string BrandOrganizationFa = "BrandOrganizationFa";
     public const string BrandLogoPath = "BrandLogoPath";
@@ -552,8 +550,6 @@ public static class SystemSettingKeys
         BrandOrganization,
         BrandAppNameEn,
         BrandAppNameFa,
-        BrandTitleEn,
-        BrandTitleFa,
         BrandOrganizationEn,
         BrandOrganizationFa,
         BrandLogoPath,

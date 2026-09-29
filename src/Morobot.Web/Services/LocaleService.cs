@@ -70,6 +70,20 @@ public sealed class LocaleService : ILocaleService
         return string.IsNullOrWhiteSpace(name) ? null : name;
     }
 
+    /// <summary>
+    /// The organization named by the licence (Admin → Branding → Organization), or null when the
+    /// install is unlicensed or the licence carries no organization. Used by {org}, so the footer
+    /// credits whoever actually licensed the product instead of the vendor that wrote it.
+    /// </summary>
+    private string? LicensedOrganizationName()
+    {
+        var ctx = _http.HttpContext;
+        if (ctx is null) return null;
+        var branding = ctx.Items[BrandHeadModel.ItemKey] as BrandHeadModel;
+        var org = branding?.OrganizationName;
+        return string.IsNullOrWhiteSpace(org) ? null : org;
+    }
+
     public string Culture
     {
         get
@@ -119,6 +133,21 @@ public sealed class LocaleService : ILocaleService
             if (BrandNameKeys.Contains(key)) text = brand;
             else if (text.Contains("{brand}", StringComparison.Ordinal))
                 text = text.Replace("{brand}", brand, StringComparison.Ordinal);
+        }
+
+        // {org} is the licensee, not the product. It is only known once a licence is applied, so an
+        // unlicensed install must not print an empty gap after the dash — collapse the whole
+        // separator along with the token and leave just the product name.
+        if (text.Contains("{org}", StringComparison.Ordinal))
+        {
+            var org = LicensedOrganizationName();
+            if (string.IsNullOrEmpty(org))
+                text = text.Replace(" — {org}", "", StringComparison.Ordinal)
+                           .Replace(" - {org}", "", StringComparison.Ordinal)
+                           .Replace("{org}", "", StringComparison.Ordinal)
+                           .Trim();
+            else
+                text = text.Replace("{org}", org, StringComparison.Ordinal);
         }
 
         return text;

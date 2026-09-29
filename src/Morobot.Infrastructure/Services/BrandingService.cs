@@ -35,8 +35,6 @@ public sealed class BrandingService
                 FaviconUrl = await _settings.GetAsync(SystemSettingKeys.BrandFaviconPath, "", ct),
                 AppNameEn = await _settings.GetAsync(SystemSettingKeys.BrandAppNameEn, "", ct),
                 AppNameFa = await _settings.GetAsync(SystemSettingKeys.BrandAppNameFa, "", ct),
-                BrandTitleEn = await _settings.GetAsync(SystemSettingKeys.BrandTitleEn, "", ct),
-                BrandTitleFa = await _settings.GetAsync(SystemSettingKeys.BrandTitleFa, "", ct),
                 OrganizationNameEn = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationEn, "", ct),
                 OrganizationNameFa = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationFa, "", ct),
                 IsLicensedBranding = false,
@@ -60,8 +58,6 @@ public sealed class BrandingService
             FaviconUrl = string.IsNullOrWhiteSpace(favicon) ? null : favicon,
             AppNameEn = await _settings.GetAsync(SystemSettingKeys.BrandAppNameEn, "", ct),
             AppNameFa = await _settings.GetAsync(SystemSettingKeys.BrandAppNameFa, "", ct),
-            BrandTitleEn = await _settings.GetAsync(SystemSettingKeys.BrandTitleEn, "", ct),
-            BrandTitleFa = await _settings.GetAsync(SystemSettingKeys.BrandTitleFa, "", ct),
             OrganizationNameEn = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationEn, "", ct),
             OrganizationNameFa = await _settings.GetAsync(SystemSettingKeys.BrandOrganizationFa, "", ct),
             IsLicensedBranding = true,
@@ -175,10 +171,13 @@ public sealed class BrandingService
         // form no longer posts them, so writing would blank them with the model's default, and they
         // are the last-resort fallback for an install whose only value is the old one. They keep
         // whatever they already held.
+        //
+        // The per-language BRAND TITLE rows are gone for a different reason: the pair was a third way
+        // to say what the application name already says, and nothing displayed it. Its columns are no
+        // longer part of the DTO at all, so there is nothing to write back. Any value left in the
+        // settings table from an older install is simply ignored.
         await SetTrackedAsync(SystemSettingKeys.BrandAppNameEn, model.AppNameEn ?? "", ct);
         await SetTrackedAsync(SystemSettingKeys.BrandAppNameFa, model.AppNameFa ?? "", ct);
-        await SetTrackedAsync(SystemSettingKeys.BrandTitleEn, model.BrandTitleEn ?? "", ct);
-        await SetTrackedAsync(SystemSettingKeys.BrandTitleFa, model.BrandTitleFa ?? "", ct);
         await SetTrackedAsync(SystemSettingKeys.BrandOrganizationEn, model.OrganizationNameEn ?? "", ct);
         await SetTrackedAsync(SystemSettingKeys.BrandOrganizationFa, model.OrganizationNameFa ?? "", ct);
         if (!string.IsNullOrWhiteSpace(model.LogoUrl))

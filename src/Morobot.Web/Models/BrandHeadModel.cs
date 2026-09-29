@@ -70,9 +70,14 @@ public sealed class BrandHeadModel
         var app = Pick(isFa ? dto.AppNameFa : dto.AppNameEn,
                        isFa ? dto.AppNameEn : dto.AppNameFa,
                        DefaultAppName);
-        var title = Pick(isFa ? dto.BrandTitleFa : dto.BrandTitleEn,
-                         isFa ? dto.BrandTitleEn : dto.BrandTitleFa,
-                         app);
+        // The title follows the application name. The separate per-language title pair was removed:
+        // it was a second way to say what the name already says, nothing displayed it on its own, and
+        // having both meant a deployment could set a name and a mismatched title without noticing.
+        // The legacy single-value BrandTitle still wins when it is set, so an older install that only
+        // ever filled that box keeps showing what it always showed.
+        var title = !string.IsNullOrWhiteSpace(dto.BrandTitle) && dto.BrandTitle != dto.AppName
+            ? dto.BrandTitle
+            : app;
         var org = isFa
             ? Pick(dto.OrganizationNameFa, dto.OrganizationNameEn, null)
             : Pick(dto.OrganizationNameEn, dto.OrganizationNameFa, null);

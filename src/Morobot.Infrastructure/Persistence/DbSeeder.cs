@@ -258,8 +258,10 @@ public static class DbSeeder
         // legacy row above, so a deployment that fills only one side still shows a name in both.
         await Upsert(SystemSettingKeys.BrandAppNameFa, "", "Branding", "نام اپلیکیشن (فارسی)", "Application name (Persian)", "خالی = استفاده از مقدار انگلیسی", "Blank = use the English value");
         await Upsert(SystemSettingKeys.BrandAppNameEn, "", "Branding", "نام اپلیکیشن (انگلیسی)", "Application name (English)", "خالی = استفاده از مقدار فارسی", "Blank = use the Persian value");
-        await Upsert(SystemSettingKeys.BrandTitleFa, "", "Branding", "عنوان برند (فارسی)", "Brand title (Persian)", "خالی = استفاده از مقدار انگلیسی", "Blank = use the English value");
-        await Upsert(SystemSettingKeys.BrandTitleEn, "", "Branding", "عنوان برند (انگلیسی)", "Brand title (English)", "خالی = استفاده از مقدار فارسی", "Blank = use the Persian value");
+        // The per-language brand TITLE rows are gone: the title now follows the application name, so
+        // the pair was a second way to say the same thing that nothing displayed on its own. Rows left
+        // behind by an older install are simply ignored — the row is only ever read through the key
+        // constants, and those no longer exist.
         await Upsert(SystemSettingKeys.BrandOrganizationFa, "", "Branding", "نام سازمان (فارسی)", "Organization (Persian)", "خالی = استفاده از مقدار انگلیسی", "Blank = use the English value");
         await Upsert(SystemSettingKeys.BrandOrganizationEn, "", "Branding", "نام سازمان (انگلیسی)", "Organization (English)", "خالی = استفاده از مقدار فارسی", "Blank = use the Persian value");
         await Upsert(SystemSettingKeys.BrandLogoPath, "", "Branding", "مسیر لوگو", "Logo path", "/uploads/branding/logo.png", "/uploads/branding/logo.png");

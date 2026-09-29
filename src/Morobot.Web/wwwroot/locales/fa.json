@@ -8,7 +8,7 @@
   "brand": {
     "name": "{brand}",
     "tagline": "اتوماسیون هوشمند فرآیندهای وب",
-    "copyright": "© {year} {brand} — گروه نرم‌افزاری سوراس",
+    "copyright": "© {year} {brand} — {org}",
     "wordmark": "/img/brand/morobot-wordmark-fa.svg",
     "heroImg": "/img/landing/hero-fa.png",
     "featuresImg": "/img/landing/features-fa.png"
@@ -743,8 +743,6 @@
       "assets": "فایل‌های برند",
       "appNameEn": "نام اپلیکیشن (انگلیسی)",
       "appNameFa": "نام اپلیکیشن (فارسی)",
-      "brandTitleEn": "عنوان برند (انگلیسی)",
-      "brandTitleFa": "عنوان برند (فارسی)",
       "organizationEn": "نام سازمان (انگلیسی)",
       "organizationFa": "نام سازمان (فارسی)",
       "logo": "لوگو",

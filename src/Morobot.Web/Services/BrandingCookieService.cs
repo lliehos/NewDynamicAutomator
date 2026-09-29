@@ -131,8 +131,6 @@ public sealed class BrandingCookieService
         /// </remarks>
         public string? AppNameFa { get; set; }
         public string? AppNameEn { get; set; }
-        public string? BrandTitleFa { get; set; }
-        public string? BrandTitleEn { get; set; }
         public string? OrganizationNameFa { get; set; }
         public string? OrganizationNameEn { get; set; }
 
@@ -165,8 +163,6 @@ public sealed class BrandingCookieService
             OrganizationName = OrganizationName,
             AppNameFa = AppNameFa,
             AppNameEn = AppNameEn,
-            BrandTitleFa = BrandTitleFa,
-            BrandTitleEn = BrandTitleEn,
             OrganizationNameFa = OrganizationNameFa,
             OrganizationNameEn = OrganizationNameEn,
             LogoUrl = LogoUrl,
@@ -189,8 +185,6 @@ public sealed class BrandingCookieService
             OrganizationName = dto.OrganizationName,
             AppNameFa = dto.AppNameFa,
             AppNameEn = dto.AppNameEn,
-            BrandTitleFa = dto.BrandTitleFa,
-            BrandTitleEn = dto.BrandTitleEn,
             OrganizationNameFa = dto.OrganizationNameFa,
             OrganizationNameEn = dto.OrganizationNameEn,
             LogoUrl = dto.LogoUrl,
