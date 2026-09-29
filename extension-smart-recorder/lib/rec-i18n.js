@@ -22,7 +22,14 @@
       // in-page FAB
       "fab.stopThinking": "توقف فکر کردن",
       "fab.learningComplete": "یادگیری کامل شد",
-      "fab.save": "ذخیره",
+      "fab.save": "ذخیره در فرآیند",
+      "fab.copy": "کپی در حافظه (برای Paste در دیاگرام)",
+      "fab.saveOk": "فرآیند ذخیره شد.",
+      "fab.saveFail": "ذخیره انجام نشد — چیزی به فرآیند اضافه نشد.",
+      "fab.saveNoServer": "سرور در دسترس نیست؛ ذخیره انجام نشد.",
+      "fab.copyOk": "در حافظه ذخیره شد — در دیاگرام راست‌کلیک و «چسباندن فرآیند» را بزنید.",
+      "fab.copyFail": "کپی در حافظه انجام نشد.",
+      "fab.copyNoClipboard": "فرآیند آماده شد ولی مرورگر اجازهٔ نوشتن در حافظه نداد — از پورتال دکمهٔ کپی را بزنید.",
       "fab.markAlt": "مروبات",
       "fab.dragHint": "برای جابجایی بکشید",
       "fab.resize": "برای تغییر اندازه بکشید",
@@ -35,7 +42,10 @@
       "portal.noTask": "فرآیند هدف مشخص نیست.",
       "portal.started": "هوشمندسازی فرآیند #{id} شروع شد — لوگو = توقف فکر کردن.",
       "portal.serverDown": "سرور در دسترس نیست (404).",
-      "portal.startError": "خطا در شروع Smart Recorder"
+      "portal.startError": "خطا در شروع Smart Recorder",
+      "portal.noCopy": "فرآیند ضبط‌شده‌ای در حافظهٔ افزونه نیست.",
+      "portal.copied": "فرآیند ضبط‌شده در حافظه کپی شد — در دیاگرام راست‌کلیک و «چسباندن فرآیند» را بزنید.",
+      "portal.copyBlocked": "مرورگر اجازهٔ نوشتن در حافظه را نداد."
     },
     en: {
       "app.title": "Smart Recorder",
@@ -47,7 +57,14 @@
       "popup.hint": "Start from the process list. The mark on the page stops thinking. No logs.",
       "fab.stopThinking": "Stop thinking",
       "fab.learningComplete": "Learning complete",
-      "fab.save": "Save",
+      "fab.save": "Save to process",
+      "fab.copy": "Copy to memory (paste into the diagram)",
+      "fab.saveOk": "The process was saved.",
+      "fab.saveFail": "Save failed — nothing was added to the process.",
+      "fab.saveNoServer": "The server is not reachable; the save did not happen.",
+      "fab.copyOk": "Copied to memory — right-click the diagram and choose Paste process.",
+      "fab.copyFail": "Copy to memory failed.",
+      "fab.copyNoClipboard": "The process was prepared, but the browser blocked the clipboard write — use the portal's copy button.",
       "fab.markAlt": "Morobot",
       "fab.dragHint": "Drag to move",
       "fab.resize": "Drag to resize",
@@ -59,7 +76,10 @@
       "portal.noTask": "The target process is not specified.",
       "portal.started": "Smart processing of process #{id} started — the mark stops thinking.",
       "portal.serverDown": "Server is not reachable (404).",
-      "portal.startError": "Could not start Smart Recorder"
+      "portal.startError": "Could not start Smart Recorder",
+      "portal.noCopy": "There is no recorded process in extension memory.",
+      "portal.copied": "The recorded process was copied — right-click the diagram and choose Paste process.",
+      "portal.copyBlocked": "The browser blocked the clipboard write."
     }
   };
 

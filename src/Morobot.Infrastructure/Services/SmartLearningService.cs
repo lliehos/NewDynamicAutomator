@@ -155,16 +155,77 @@ public sealed class SmartLearningService
         };
     }
 
-    /// <summary>Soft stub — no graph until Microsoft LM pipeline exists.</summary>
+    /// <summary>
+    /// Build the process graph from the recorded contexts and hand it back to the caller, which owns
+    /// the actual persistence (the canvas lives behind the task repository, not behind this service).
+    ///
+    /// <c>Ok</c> is false when nothing usable was recorded. Previously this always answered false and
+    /// the caller could not tell "nothing to save" from "saved nothing", which is why the recorder
+    /// reported success while the process stayed empty.
+    /// </summary>
     public SmartSessionSaveResponse SaveResult(string sessionId)
     {
         var doc = Load(sessionId) ?? throw new KeyNotFoundException("session not found");
+        var graph = SmartLearningGraphFactory.Build(doc.Contexts, doc.TaskId, doc.TaskTitle);
+        if (graph is null)
+        {
+            return new SmartSessionSaveResponse
+            {
+                Ok = false,
+                Message = "هیچ تعاملی ضبط نشد — گرافی برای ذخیره وجود ندارد.",
+                TaskId = doc.TaskId,
+                Graph = null
+            };
+        }
+
+        lock (_gate)
+        {
+            doc.SuggestedGraph = graph;
+            doc.Status = "completed";
+            doc.LearningComplete = true;
+            doc.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            Save(doc);
+        }
+
         return new SmartSessionSaveResponse
         {
-            Ok = false,
-            Message = null,
+            Ok = true,
             TaskId = doc.TaskId,
-            Graph = null
+            Graph = graph
+        };
+    }
+
+    /// <summary>
+    /// Same graph as <see cref="SaveResult"/>, serialized for the clipboard.
+    ///
+    /// The save path and the copy path must agree on what the recording produced, so both call the
+    /// same factory. This one does not touch the canvas and does not need the process to be
+    /// writable, because pasting into a diagram is the user's own action.
+    /// </summary>
+    public SmartSessionCopyResponse CopyResult(string sessionId)
+    {
+        var doc = Load(sessionId) ?? throw new KeyNotFoundException("session not found");
+        var graph = SmartLearningGraphFactory.Build(doc.Contexts, doc.TaskId, doc.TaskTitle);
+        if (graph is null)
+        {
+            return new SmartSessionCopyResponse
+            {
+                Ok = false,
+                Message = "هیچ تعاملی ضبط نشد — چیزی برای کپی وجود ندارد.",
+                TaskId = doc.TaskId,
+                Text = null
+            };
+        }
+
+        // The `DAGRAPH1:` prefix is what the editor's paste handler looks for; the JSON after it is a
+        // plain canvas graph, so the text is also readable in a log or a ticket.
+        var text = "DAGRAPH1:" + JsonSerializer.Serialize(graph, JsonOpts);
+        return new SmartSessionCopyResponse
+        {
+            Ok = true,
+            TaskId = doc.TaskId,
+            Text = text,
+            Graph = graph
         };
     }
 

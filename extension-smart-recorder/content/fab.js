@@ -89,9 +89,15 @@ function waitForActiveSession(maxMs = 6000) {
         <span class="da-smart-guide-text" data-guide="action"></span>
       </span>
     </div>
-    <button type="button" class="da-smart-save" id="da-smart-save" title="Save" aria-label="Save" hidden>
-      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>
-    </button>
+    <div class="da-smart-notice" id="da-smart-notice" role="status" aria-live="polite" hidden></div>
+    <div class="da-smart-actions" id="da-smart-actions">
+      <button type="button" class="da-smart-copy" id="da-smart-copy" title="Copy" aria-label="Copy">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/></svg>
+      </button>
+      <button type="button" class="da-smart-save" id="da-smart-save" title="Save" aria-label="Save">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94a7.07 7.07 0 0 0 .06-.94 7.07 7.07 0 0 0-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94 0 .32.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.23.09.48 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>
+      </button>
+    </div>
     <button type="button" class="da-smart-logo-btn" id="da-smart-toggle" title="Stop thinking" aria-label="Stop thinking">
       <img src="${markUrl}" width="56" height="56" alt="${tr("fab.markAlt")}" />
     </button>
@@ -104,6 +110,9 @@ function waitForActiveSession(maxMs = 6000) {
 
   const logoBtn = root.querySelector("#da-smart-toggle");
   const saveBtn = root.querySelector("#da-smart-save");
+  const copyBtn = root.querySelector("#da-smart-copy");
+  const actionsEl = root.querySelector("#da-smart-actions");
+  const noticeEl = root.querySelector("#da-smart-notice");
   const guide = root.querySelector("#da-smart-guide");
 
   /**
@@ -385,6 +394,9 @@ function waitForActiveSession(maxMs = 6000) {
     const saveLabel = tr("fab.save");
     saveBtn.title = saveLabel;
     saveBtn.setAttribute("aria-label", saveLabel);
+    const copyLabel = tr("fab.copy");
+    copyBtn.title = copyLabel;
+    copyBtn.setAttribute("aria-label", copyLabel);
     // The resize handle is a control, so its label must follow the language too.
     const resizeEl = root.querySelector("#da-smart-resize");
     if (resizeEl) {
@@ -410,18 +422,20 @@ function waitForActiveSession(maxMs = 6000) {
     const state = await chrome.runtime.sendMessage({ type: "getSmartState" }).catch(() => ({}));
     const active = !!state.active;
     const learningComplete = !!state.learningComplete;
-    root.hidden = !active && !learningComplete;
+    // A save can fail after the session has already been torn down, which would hide the FAB and take
+    // the failure message with it — the one case where the user most needs to read it. While a notice
+    // is on screen the FAB therefore stays visible, even with no active session behind it.
+    const noticeShowing = !!noticeEl && !noticeEl.hidden;
+    root.hidden = !active && !learningComplete && !noticeShowing;
     logoBtn.classList.toggle("thinking", active && !learningComplete);
     logoBtn.classList.toggle("save-ready", learningComplete);
     applyLabels();
     applyGuideVisibility();
-    if (learningComplete) {
-      saveBtn.hidden = false;
-      saveBtn.classList.add("show");
-    } else {
-      saveBtn.hidden = true;
-      saveBtn.classList.remove("show");
-    }
+    // The whole action row appears together: copy and save are only meaningful once learning is
+    // complete, and showing one without the other would be a half-state the user cannot act on.
+    // Visibility is driven by the class only — the `hidden` attribute would be overridden by the
+    // `display` rule the class sets, so mixing the two would leave the row stuck either way.
+    actionsEl.classList.toggle("show", learningComplete);
   }
 
   logoBtn.addEventListener("click", async (e) => {
@@ -431,11 +445,111 @@ function waitForActiveSession(maxMs = 6000) {
     await refresh();
   });
 
+  /**
+   * Show a result from the background on the page.
+   *
+   * The save request used to be fired and forgotten: the background swallowed every error and
+   * always answered `ok`, so a failed save looked exactly like a successful one and the user was
+   * told nothing. Whatever the background reports now reaches the page as a notification.
+   *
+   * A page notification is easy to miss — it can expire, or the user may already be looking at the
+   * canvas rather than the recorded tab. So a failure is ALSO written onto the FAB itself and stays
+   * there until the next attempt, which guarantees the user is told even if they never saw the toast.
+   */
+  function report(res, okKey, failKey) {
+    const ok = !!res?.ok;
+    let msg;
+    if (ok) {
+      msg = tr(okKey);
+    } else if (res?.network) {
+      // The server was never reached. The background's message already names the specific cause
+      // (connection refused, certificate rejected, bad host), so it is used as the explanation under
+      // a fixed headline — that way the *kind* of failure is always stated, whatever the cause says.
+      msg = res?.error
+        ? `${tr("fab.saveNoServer")}\n${res.error}`
+        : tr("fab.saveNoServer");
+    } else {
+      // The server answered and refused. Its own message is the most useful thing to show; the
+      // generic wording is only for the case where it sent none.
+      msg = res?.error || tr(failKey);
+    }
+    setNotice(msg, ok ? "success" : "error");
+    try {
+      window.dispatchEvent(new CustomEvent("da-notify", {
+        detail: { message: msg, type: ok ? "success" : "error" }
+      }));
+    } catch { /* ignore */ }
+    return ok;
+  }
+
+  /**
+   * Put a message on the FAB and keep it there until the next action.
+   *
+   * The FAB had no output of its own, so a save that failed in a background tab was invisible. This
+   * is deliberately persistent rather than a timed toast: the failure is the only thing standing
+   * between the user and an empty process, so it must not vanish before it is read.
+   */
+  function setNotice(text, type) {
+    if (!noticeEl) return;
+    if (!text) {
+      noticeEl.hidden = true;
+      noticeEl.textContent = "";
+      return;
+    }
+    noticeEl.textContent = text;
+    noticeEl.hidden = false;
+    noticeEl.classList.toggle("is-error", type === "error");
+    noticeEl.classList.toggle("is-success", type === "success");
+  }
+
   saveBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    await chrome.runtime.sendMessage({ type: "saveSmartResult" }).catch(() => {});
+    saveBtn.disabled = true;
+    setNotice("", null);
+    const res = await chrome.runtime.sendMessage({ type: "saveSmartResult" }).catch((err) => ({
+      ok: false,
+      network: true,
+      error: err?.message || String(err)
+    }));
+    saveBtn.disabled = false;
+    // Only a real save clears the session. On failure the recording is still there, so the button
+    // must stay available instead of disappearing with the session state.
+    report(res, "fab.saveOk", "fab.saveFail");
     await refresh();
+  });
+
+  copyBtn.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    copyBtn.disabled = true;
+    setNotice("", null);
+    const res = await chrome.runtime.sendMessage({ type: "copySmartResult" }).catch((err) => ({
+      ok: false,
+      network: true,
+      error: err?.message || String(err)
+    }));
+
+    // The service worker cannot write the clipboard (no focused document, no user activation), so
+    // the text comes back here and the page writes it while the click is still the active gesture.
+    // The content script's own document is what counts for `writeText`, so this works on the
+    // recorded page without any extra permission.
+    let copied = false;
+    if (res?.ok && res.text) {
+      try {
+        await navigator.clipboard.writeText(res.text);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+    }
+    copyBtn.disabled = false;
+
+    if (res?.ok && !copied) {
+      report({ ok: false, error: tr("fab.copyNoClipboard") }, "fab.copyOk", "fab.copyFail");
+      return;
+    }
+    report(res, "fab.copyOk", "fab.copyFail");
   });
 
   chrome.runtime.onMessage.addListener((message) => {

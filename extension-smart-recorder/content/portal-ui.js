@@ -47,12 +47,37 @@
       const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
       if (res?.ok) {
         setPortalStatus(t("portal.started", { id: taskId }), "success");
-      } else if (res?.status === 404 || /404/.test(String(res?.error || ""))) {
-        setPortalStatus(t("portal.serverDown"), "error");
+      } else if (res?.network) {
+        // `network` means the server was never reached, so the reason it carries is the useful part
+        // (connection refused, certificate rejected, bad host) and it is shown verbatim. Testing for
+        // a literal 404 here no longer works: a transport failure is reported with status 0 now.
+        setPortalStatus(res?.error || t("portal.serverDown"), "error");
       } else {
         setPortalStatus(res?.error || t("portal.startError"), "error");
       }
     }
+    if (action === "copy-smart-record") {
+      ev.preventDefault();
+      // Copying the last recording back out of extension memory. This exists because the page on
+      // which the recording happened may never be visited again: without it, once the recorded tab
+      // is closed there is no way to reach the payload a second time. The text is already in
+      // storage (written by `copySmartResult`), so no server round-trip is needed.
+      const stored = await chrome.storage.local.get(["smartCopyText", "smartCopyAt"]).catch(() => ({}));
+      const text = stored?.smartCopyText;
+      if (!text) {
+        setPortalStatus(t("portal.noCopy"), "error");
+        return;
+      }
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch { ok = false; }
+      if (ok) setPortalStatus(t("portal.copied"), "success");
+      else setPortalStatus(t("portal.copyBlocked"), "error");
+      return;
+    }
+
     if (action === "check-smart") {
       ev.preventDefault();
       window.dispatchEvent(new CustomEvent("da-extension-recheck", { detail: { role: "smart" } }));

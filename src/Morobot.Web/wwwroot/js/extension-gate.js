@@ -4,6 +4,9 @@
 
   const titleEl = document.getElementById("da-ext-title");
   const descEl = document.getElementById("da-ext-desc");
+  // The path element is gone on purpose: the server's own extension folder was shown here, and it
+  // does not exist on the user's machine, so it could never be used. Only the download links remain.
+  // Both lookups stay null-tolerant so an older cached page still runs this script without error.
   const pathEl = document.getElementById("da-ext-modal-path");
   const pathLabelEl = document.getElementById("da-ext-path-label");
   const hintEl = document.getElementById("da-ext-modal-hint");
@@ -168,11 +171,10 @@
     modal.hidden = false;
     modal.classList.add("open");
 
-    const data = await ensureInstallPaths();
-    const path = pathForRole(data, activeRole);
-    if (pathEl) {
-      pathEl.textContent = path || t("editor.ds.noPathReady");
-    }
+    // Nothing path-related is awaited any more. The modal shows the download buttons that are already
+    // in the markup, which works even when the install-path API is unreachable — the previous flow
+    // left the modal stuck on "preparing" in exactly that case.
+    await ensureInstallPaths();
   }
 
   /**
@@ -225,18 +227,15 @@
   }
 
   async function copyPath() {
-    const data = await ensureInstallPaths();
-    const path = pathForRole(data, activeRole) || pathEl?.textContent?.trim() || "";
-    if (!path || /آماده‌سازی|آماده نشد|Preparing|not ready|noPath/i.test(path)) {
-      if (hintEl) hintEl.textContent = t("panel.extPathPreparing");
-      return;
-    }
+    // Copies install INSTRUCTIONS, not a path. The old behaviour copied the server's folder, which is
+    // meaningless on the user's machine — the file was there, the instruction was not.
+    const text = `${t("panel.extCopyInstruction")}` +
+      `\n${location.origin}/Panel/Extension/Install`;
     try {
-      await navigator.clipboard.writeText(path);
+      await navigator.clipboard.writeText(text);
     } catch {
-      copyTextFallback(path);
+      copyTextFallback(text);
     }
-    // Always close after a ready path — clipboard may be blocked in some hosts.
     hideGate();
   }
 

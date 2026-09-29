@@ -69,7 +69,15 @@
       <p id="da-ext-desc">@L["panel.extModalDesc"]</p>
       <div class="da-ext-path-box">
         <div class="da-ext-path-label" id="da-ext-path-label">@L["panel.extPathLabel"]</div>
-        <code id="da-ext-modal-path">@L["panel.extPathPreparing"]</code>
+        @* The download links replace the old path readout. The path shown used to be the SERVER's
+           extension folder, which does not exist on the machine the extension is actually loaded
+           into, so it could never be used. The package is what the user needs. *@
+        <div class="da-ext-downloads" id="da-ext-downloads">
+          <a class="btn-da btn-da-primary" id="da-ext-download-global"
+             href="/extension/download/global" download>⬇ @L["panel.extDownloadGlobal"]</a>
+          <a class="btn-da btn-da-ghost" id="da-ext-download-smart"
+             href="/extension/download/smart" download>⬇ @L["panel.extDownloadSmart"]</a>
+        </div>
       </div>
       <ol>
         <li data-i18n="panel.extStep1">@L["panel.extStep1"]</li>

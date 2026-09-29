@@ -4643,6 +4643,223 @@
     setStatus(`کپی «${copy.title}» نزدیک اصل ساخته شد`, "success");
   }
 
+  /* ------------------------------------------------------------------------------------------
+   * Paste a recorded process onto the diagram.
+   *
+   * The Smart Recorder copies a whole graph to the clipboard under the `DAGRAPH1:` scheme. The
+   * editor accepted no such payload before, so the user's recording had nowhere to land — the
+   * recorder's copy button could only fill the clipboard and nothing could read it back.
+   *
+   * The pasted nodes are re-identified and re-offset, exactly like `cloneDiagramNode` does for a
+   * single node: the recorded ids are meaningless in this diagram, and two copies of the same
+   * recording would otherwise collide on id. Edges are remapped through the same id map, and any
+   * edge pointing at a node the payload did not include is dropped rather than left dangling.
+   * ---------------------------------------------------------------------------------------- */
+
+  /** Parse clipboard text into a canvas graph, or null when it is not a recorded process. */
+  function parseRecordedGraph(text) {
+    const raw = String(text || "").trim();
+    if (!raw) return null;
+
+    // The scheme prefix is how the payload is recognised, but a bare JSON graph is accepted too so
+    // text pasted out of a log or a ticket still works. Anything else is not ours — returning null
+    // lets the caller stay silent instead of warning about unrelated clipboard content.
+    let body = raw;
+    if (raw.startsWith("DAGRAPH1:")) body = raw.slice("DAGRAPH1:".length);
+    let parsed;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      return null;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    if (!Array.isArray(parsed.nodes) || !parsed.nodes.length) return null;
+    if (!parsed.nodes.some((n) => n && typeof n === "object" && n.kind)) return null;
+    return parsed;
+  }
+
+  /**
+   * Merge a recorded graph into the current diagram.
+   *
+   * Nodes land in the CURRENT scope: a recording pasted while inside a group belongs to that group,
+   * which is what the user sees and expects, so `groupNodeId` is rewritten to the open scope rather
+   * than copied from the payload. The `contains` edges for a pasted group's own children are rebuilt
+   * from that same rewrite, so the recording's original scope is never trusted.
+   */
+  function applyPastedGraph(src, at) {
+    const nodeMap = {};
+    const inserted = [];
+    const targetScope = editingGroupId || null;
+
+    const rawNodes = src.nodes.filter((n) => n && typeof n === "object");
+
+    // The recording's own start and end are dropped: both are per-process scope markers, and a
+    // second start in this document would corrupt the graph. Their edges go with them, which is
+    // correct — the imported steps are appended as a detached block for the user to wire up, not
+    // spliced into the existing flow, because nothing here can know where they belong.
+    const dropped = new Set();
+    rawNodes.forEach((n) => {
+      if (n.kind === "start" || n.kind === "end") dropped.add(n.id);
+    });
+
+    rawNodes.forEach((n) => {
+      if (dropped.has(n.id)) return;
+      const copy = deepClonePlain(n);
+      const prefix = copy.kind === "group" ? "group"
+        : copy.kind === "condition" ? "condition"
+        : "action";
+      copy.id = tmpId(prefix);
+      delete copy.entityId;
+      nodeMap[n.id] = copy.id;
+
+      // The open scope replaces whatever scope the payload recorded, so the block lands where the
+      // user is looking instead of in a group that only existed in the recording.
+      copy.groupNodeId = targetScope;
+      if (targetScope && copy.kind === "group") {
+        // A pasted group is kept at the top level rather than placed inside the open group. Nesting
+        // is legal, but doing it implicitly would rewrite the recorded block's own structure in a way
+        // the user did not ask for, so the group stays where it can be seen and moved deliberately.
+        copy.groupNodeId = null;
+      }
+      copy.x = (Number(copy.x) || 0) + at.x;
+      copy.y = (Number(copy.y) || 0) + at.y;
+      graph.nodes.push(copy);
+      inserted.push(copy);
+    });
+
+    if (!inserted.length) return 0;
+
+    // Edges among the imported nodes only. Anything referencing a dropped or unknown node is
+    // discarded: leaving it would create an edge to a node that does not exist in this diagram.
+    (Array.isArray(src.edges) ? src.edges : []).forEach((e) => {
+      if (!e || !nodeMap[e.from] || !nodeMap[e.to]) return;
+      if (e.kind === "contains" && nodeMap[e.from] === nodeMap[e.to]) return;
+      graph.edges.push({
+        id: tmpId("e"),
+        from: nodeMap[e.from],
+        to: nodeMap[e.to],
+        kind: e.kind || "next"
+      });
+    });
+
+    // Containment edges for any pasted group's own children.
+    inserted.forEach((n) => {
+      if (n.kind !== "group") return;
+      graph.nodes.forEach((child) => {
+        if (child.groupNodeId === n.id && child.kind !== "start") {
+          graph.edges.push({ id: tmpId("e"), from: n.id, to: child.id, kind: "contains" });
+        }
+      });
+      ensureGroupStart(n.id);
+    });
+
+    selectedEdgeId = null;
+    selected = new Set(inserted.map((n) => n.id));
+    render();
+    return inserted.length;
+  }
+
+  /** Where a paste should land: the viewport centre, so it is somewhere the user can see. */
+  function pasteAnchorPoint() {
+    if (!canvasScroll) return { x: 120, y: 120 };
+    const rect = canvasScroll.getBoundingClientRect();
+    const wpt = clientToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return { x: Math.round(wpt.x), y: Math.round(wpt.y) };
+  }
+
+  /**
+   * Paste the recorded process from the clipboard.
+   *
+   * Silent on non-matching clipboard content: every ordinary copy in the app puts text there, and
+   * complaining about those would make Ctrl+V unusable for anything else.
+   */
+  async function pasteRecordedGraph() {
+    if (!canModify) { setStatus(t("editor.status.saveReadOnly"), "warn"); return false; }
+    if (structLocked) { setStatus(t("editor.child.locked"), "warn"); return false; }
+
+    let text = null;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      setStatus("دسترسی به حافظه ممکن نیست — از افزونه «کپی در حافظه» را بزنید یا مرورگر اجازهٔ خواندن کلیپ‌بورد را بدهد.", "warn");
+      return false;
+    }
+
+    const payload = parseRecordedGraph(text);
+    if (!payload) {
+      setStatus("در حافظه فرآیند ضبط‌شده‌ای نیست. در افزونه ضبط، دکمهٔ «کپی در حافظه» را بزنید.", "warn");
+      return false;
+    }
+
+    const count = applyPastedGraph(payload, pasteAnchorPoint());
+    if (!count) {
+      setStatus("فرآیند کپی‌شده گره قابل‌چسباندنی نداشت.", "warn");
+      return false;
+    }
+    setStatus(`${count} گره از فرآیند ضبط‌شده چسبانده شد — برای اعمال، ذخیره کنید.`, "success");
+    return true;
+  }
+
+  /**
+   * Canvas context menu — right-click on empty space.
+   *
+   * The node menu (`showCtx`) is attached per node, so right-clicking the background did nothing at
+   * all: no menu, and therefore no place for "paste". This adds the background menu the recorder's
+   * paste flow needs, and keeps it to the entries that make sense with no node under the cursor.
+   */
+  function showCanvasCtx(x, y) {
+    if (!ctxMenu) return;
+    const items = [];
+    items.push({
+      act: "paste-process",
+      label: "چسباندن فرآیند ضبط‌شده",
+      disabled: !canModify || structLocked,
+      title: structLocked
+        ? t("editor.child.locked")
+        : !canModify
+          ? "فقط مشاهده"
+          : "فرآیند کپی‌شده در حافظهٔ افزونهٔ ضبط را در همین نقطه می‌چسباند"
+    });
+    if (selected.size) {
+      items.push({ act: "deselect", label: "لغو انتخاب" });
+    }
+    items.push({
+      act: "fit",
+      label: "جای‌گیری در صفحه",
+      title: "نمودار را داخل کادر دید جا می‌دهد"
+    });
+
+    ctxMenu.innerHTML = items.map((it) =>
+      `<li data-act="${it.act}" class="${it.disabled ? "disabled" : ""}"${it.title ? ` title="${esc(it.title)}"` : ""}>${it.label}</li>`
+    ).join("");
+    ctxMenu.hidden = false;
+    ctxMenu.style.left = `${x}px`;
+    ctxMenu.style.top = `${y}px`;
+
+    requestAnimationFrame(() => {
+      const r = ctxMenu.getBoundingClientRect();
+      if (r.right > window.innerWidth - 8) ctxMenu.style.left = `${Math.max(8, window.innerWidth - r.width - 8)}px`;
+      if (r.bottom > window.innerHeight - 8) ctxMenu.style.top = `${Math.max(8, window.innerHeight - r.height - 8)}px`;
+    });
+
+    ctxMenu.querySelectorAll("li:not(.has-sub)").forEach((li) => {
+      li.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        if (li.classList.contains("disabled")) return;
+        ctxMenu.hidden = true;
+        const act = li.dataset.act;
+        if (act === "paste-process") await pasteRecordedGraph();
+        else if (act === "deselect") {
+          selected.clear();
+          selectedEdgeId = null;
+          render();
+        } else if (act === "fit") {
+          fitDiagramToView();
+        }
+      });
+    });
+  }
+
   function groupCanConvertToAction(gid) {
     const { actions, conditions, groups } = groupChildCounts(gid);
     return actions === 0 && conditions === 0 && groups === 0;
@@ -9529,6 +9746,25 @@
     updateMarqueeRect();
   });
 
+  /**
+   * Background right-click → canvas menu.
+   *
+   * Scoped exactly like the mousedown handler above, so the two agree on what "empty canvas" means:
+   * a right-click that lands on a node keeps the node menu, because `showCtx` is bound on the node
+   * itself and stops nothing — this handler must bail out for it, or both menus would open.
+   */
+  wrap.addEventListener("contextmenu", (ev) => {
+    if (ev.target.closest && ev.target.closest("g.node")) return;
+    const onScrollChrome = ev.target === canvasScroll;
+    const onEmpty = ev.target === svg || ev.target === wrap || onScrollChrome
+      || (ev.target.tagName === "rect"
+        && !ev.target.closest("g.node")
+        && !ev.target.classList?.contains("flow-marquee"));
+    if (!onEmpty) return;
+    ev.preventDefault();
+    showCanvasCtx(ev.clientX, ev.clientY);
+  });
+
   window.addEventListener("keydown", (ev) => {
     if (ev.code === "Space" && !ev.repeat && !ev.target.closest?.("input,textarea,select,[contenteditable]")) {
       spacePanHeld = true;
@@ -9956,6 +10192,16 @@
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
       ev.preventDefault();
       save();
+    }
+    // Ctrl+V pastes a recorded process. Skipped inside a field so the browser's own text paste keeps
+    // working in the inspector, and skipped while a modal is open for the same reason.
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "v") {
+      const tag = ev.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+        || ev.target?.isContentEditable) return;
+      if (document.querySelector(".ds-viewer:not([hidden])")) return;
+      ev.preventDefault();
+      pasteRecordedGraph();
     }
   });
 

@@ -47,6 +47,17 @@
   color: #4b465c;
   user-select: all;
 }
+/* Download links stand in for the old path readout — stacked so both fit on a narrow modal, and
+   styled as buttons because that is what they are (they trigger a file download). */
+#da-ext-modal .da-ext-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+#da-ext-modal .da-ext-downloads .btn-da {
+  text-decoration: none;
+  display: inline-block;
+}
 #da-ext-modal .da-ext-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 #da-ext-modal .da-ext-hint { margin-top: 10px; font-size: 12px; color: #28c76f; min-height: 1.2em; }
 #da-ext-modal .btn-da {

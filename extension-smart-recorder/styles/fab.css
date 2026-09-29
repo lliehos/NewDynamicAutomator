@@ -26,7 +26,8 @@
   cursor: grabbing;
 }
 .da-smart-root.is-dragging .da-smart-logo-btn img,
-.da-smart-root.is-dragging .da-smart-save {
+.da-smart-root.is-dragging .da-smart-save,
+.da-smart-root.is-dragging .da-smart-copy {
   pointer-events: none;
 }
 .da-smart-root.is-resizing .da-smart-logo-btn img {
@@ -144,12 +145,60 @@
   background: #28c76f;
   color: #fff;
   cursor: pointer;
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   box-shadow: 0 6px 16px rgba(40, 199, 111, 0.35);
 }
-.da-smart-save.show {
-  display: inline-flex;
-}
 .da-smart-save svg { display: block; }
+/* Persistent result banner.
+   A save that fails leaves the process empty, so the reason must stay on screen rather than expire
+   like a toast. It sits above the action row and wraps instead of clipping, because the message can
+   name a port and an error code. */
+.da-smart-notice {
+  max-width: 320px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff3f3;
+  color: #b42318;
+  border: 1px solid #f4c7c3;
+  font-size: 12px;
+  line-height: 1.6;
+  direction: rtl;
+  text-align: right;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.da-smart-notice.is-success {
+  background: #eafaf1;
+  color: #157347;
+  border-color: #b7e4c7;
+}
+/* The copy + save pair. The root stacks its children in a column, so the two actions need their own
+   row to sit side by side; without this wrapper the copy button would take a row of its own. */
+.da-smart-actions {
+  display: none;
+  align-items: center;
+  gap: 8px;
+}
+.da-smart-actions.show {
+  display: flex;
+}
+/* Copy to memory — a plain icon button beside Save. */
+.da-smart-copy {
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 12px;
+  background: #fff;
+  color: #4b465c;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+.da-smart-copy svg { display: block; }
+.da-smart-copy:disabled,
+.da-smart-save:disabled { opacity: 0.6; cursor: default; }

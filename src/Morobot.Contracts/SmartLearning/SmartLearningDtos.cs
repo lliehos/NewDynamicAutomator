@@ -60,3 +60,16 @@ public sealed class SmartSessionSaveResponse
     public long? TaskId { get; set; }
     public object? Graph { get; set; }
 }
+
+/// <summary>
+/// Result of turning a recording into text for the clipboard.
+/// <see cref="Text"/> carries the <c>DAGRAPH1:</c> payload the editor's paste handler understands.
+/// </summary>
+public sealed class SmartSessionCopyResponse
+{
+    public bool Ok { get; set; }
+    public string? Message { get; set; }
+    public long? TaskId { get; set; }
+    public string? Text { get; set; }
+    public object? Graph { get; set; }
+}
