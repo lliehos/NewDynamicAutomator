@@ -204,17 +204,19 @@
   // "this process is derived from something" rather than as another document action.
   const ICO_TPL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 3h9a1 1 0 0 1 1 1v1H6a2 2 0 0 0-2 2v11H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm4 4h9a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm1.6 3.2v1.6h1.5l-1.8 5.4h1.6l.6-2h1.9l.6 2h1.6l-1.8-5.4h1.5V10.2h-5.7z"/></svg>`;
   /**
-   * A padlock, for the edit action on a process whose structure is not this row's to change.
+   * A flow chart, for the edit action on a process whose structure belongs to a template.
    *
    * A child of a template inherits its graph from the mother, so its editor opens read-only. It used
-   * to keep the ordinary pencil, which promised an edit the page then refused - the user only found
-   * out after opening it. The eye glyph was not an option either: it already means "view the data
-   * source", and two different meanings on one icon is worse than the misleading pencil.
+   * to keep the ordinary pencil, which promised an edit the page then refused — the user only found
+   * out after opening it.
    *
-   * The padlock says "this is locked" before the click, and the row's chip still names the template
-   * it is bound to, so the reason is visible next to it.
+   * A flow chart says the right thing: what you would be opening is a *diagram*, and that diagram is
+   * the mother's. It also stays true to what the row actually is — you can still open it and read the
+   * flow, you just cannot rewire it here. A padlock (the first attempt) overstated it as "no access",
+   * and the eye glyph was never an option because it already means "view the data source" and one
+   * icon with two meanings is worse than the misleading pencil it replaced.
    */
-  const ICO_LOCK = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v2H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm0 2a3 3 0 0 1 3 3v2H9V7a3 3 0 0 1 3-3zm0 10.5a1.75 1.75 0 0 1 1 3.19V19h-2v-1.31a1.75 1.75 0 0 1 1-3.19z"/></svg>`;
+  const ICO_DIAGRAM = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 3h6a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm1 2v2h4V5H4zm11 0h6a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm1 2v2h4V7h-4zM8 15h8a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1zm1 2v2h6v-2H9zM11 9h2v2h-2V9zm-6.5 1.25h2v1.5h-2v-1.5zM4 11.25h1.5v4.25H4v-4.25zm7 0h1.5v4.25H11v-4.25z"/></svg>`;
 
   function iconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
@@ -513,12 +515,12 @@
       ? iconBtn("is-template", `${t("panel.colTemplate")}: ${task.templateTitle || ""}`.trim(), ICO_TPL,
           `data-da-template-row="${tid}"`)
       : "";
-    // A template child opens read-only, so its edit action is shown as a lock with the reason in the
-    // tooltip rather than as a pencil that leads to a page the user cannot change.
+    // A template child opens read-only, so its edit action is shown as a diagram glyph with the reason
+    // in the tooltip, rather than as a pencil that leads to a page the user cannot change.
     const editBtn = isChild
-      ? iconLink("is-edit is-locked",
+      ? iconLink("is-edit is-template-child",
           t("tasks.editLocked", { name: task.templateTitle || t("panel.colTemplate") }) || t("tasks.edit"),
-          `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_LOCK)
+          `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_DIAGRAM)
       : iconLink("is-edit", t("tasks.edit"), `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_EDIT);
     return `
       ${editBtn}

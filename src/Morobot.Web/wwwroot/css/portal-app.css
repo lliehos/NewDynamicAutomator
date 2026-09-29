@@ -1005,9 +1005,9 @@ html.light-style {
 }
 
 /* A template child's structure is owned by the mother, so its editor opens read-only. The action is
-   still there — it is how the row is opened — but muted, so the lock is not mistaken for the ordinary
-   edit pencil it replaced. */
-.da-task-actions .ds-icon-btn.is-locked {
+   still there — it is how the row is opened, and the diagram can still be read — but muted, so the
+   diagram glyph is not mistaken for the ordinary edit pencil it replaced. */
+.da-task-actions .ds-icon-btn.is-template-child {
   color: #94a3b8;
   background: transparent;
 }
