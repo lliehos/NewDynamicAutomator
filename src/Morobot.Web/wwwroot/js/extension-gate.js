@@ -171,10 +171,14 @@
     modal.hidden = false;
     modal.classList.add("open");
 
-    // Nothing path-related is awaited any more. The modal shows the download buttons that are already
-    // in the markup, which works even when the install-path API is unreachable — the previous flow
-    // left the modal stuck on "preparing" in exactly that case.
-    await ensureInstallPaths();
+    // `pathEl` only exists when the page was rendered for a LOCAL request, where the folder really is
+    // on this machine and the path is useful. Remotely the markup carries download links instead and
+    // there is nothing to fill in — so both outcomes are handled by the same null check.
+    const data = await ensureInstallPaths();
+    if (pathEl) {
+      const path = pathForRole(data, activeRole);
+      pathEl.textContent = path || t("editor.ds.noPathReady");
+    }
   }
 
   /**
@@ -227,10 +231,15 @@
   }
 
   async function copyPath() {
-    // Copies install INSTRUCTIONS, not a path. The old behaviour copied the server's folder, which is
-    // meaningless on the user's machine — the file was there, the instruction was not.
-    const text = `${t("panel.extCopyInstruction")}` +
-      `\n${location.origin}/Panel/Extension/Install`;
+    // In local mode the path element is present and holds the real folder, so it is copied verbatim.
+    // Otherwise the button copies install INSTRUCTIONS: the previous behaviour copied the server's
+    // folder, which does not exist on a remote user's machine — the file was correct, the instruction
+    // was not, so it sent people looking for a directory they could never find.
+    const data = await ensureInstallPaths();
+    let text = pathEl ? pathForRole(data, activeRole) : "";
+    if (!text || /آماده‌سازی|آماده نشد|Preparing|not ready|noPath/i.test(text)) {
+      text = `${t("panel.extCopyInstruction")}\n${location.origin}/Panel/Extension/Install`;
+    }
     try {
       await navigator.clipboard.writeText(text);
     } catch {

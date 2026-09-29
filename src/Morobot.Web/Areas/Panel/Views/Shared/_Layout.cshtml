@@ -67,17 +67,36 @@
     <div class="da-ext-card">
       <h2 id="da-ext-title">@L["panel.extModalTitle"]</h2>
       <p id="da-ext-desc">@L["panel.extModalDesc"]</p>
+      @{
+        /*
+         * Same two modes as the install page, and for the same reason: the extension folder exists on
+         * the machine running the app. A request from that same machine can be handed the path; a
+         * request from anywhere else cannot use it and gets the package instead. `IsLocal` is set here
+         * from the request host rather than the environment name, because the environment cannot tell
+         * whether the caller can actually see that directory.
+         */
+        var modalHost = Context.Request.Host.Host;
+        var modalIsLocal = string.Equals(modalHost, "localhost", StringComparison.OrdinalIgnoreCase)
+          || (System.Net.IPAddress.TryParse(modalHost, out var modalIp) && System.Net.IPAddress.IsLoopback(modalIp));
+      }
       <div class="da-ext-path-box">
         <div class="da-ext-path-label" id="da-ext-path-label">@L["panel.extPathLabel"]</div>
-        @* The download links replace the old path readout. The path shown used to be the SERVER's
-           extension folder, which does not exist on the machine the extension is actually loaded
-           into, so it could never be used. The package is what the user needs. *@
-        <div class="da-ext-downloads" id="da-ext-downloads">
-          <a class="btn-da btn-da-primary" id="da-ext-download-global"
-             href="/extension/download/global" download>⬇ @L["panel.extDownloadGlobal"]</a>
-          <a class="btn-da btn-da-ghost" id="da-ext-download-smart"
-             href="/extension/download/smart" download>⬇ @L["panel.extDownloadSmart"]</a>
-        </div>
+        @if (modalIsLocal)
+        {
+          @* Locally the folder is the fastest route, so the path is shown and copied as before. *@
+          <code id="da-ext-modal-path">@L["panel.extPathPreparing"]</code>
+        }
+        else
+        {
+          @* Remotely the server's folder does not exist for the reader, so a package is the only
+             thing that can work. The links rely on the download endpoint the app already exposes. *@
+          <div class="da-ext-downloads" id="da-ext-downloads">
+            <a class="btn-da btn-da-primary" id="da-ext-download-global"
+               href="/extension/download/global" download>⬇ @L["panel.extDownloadGlobal"]</a>
+            <a class="btn-da btn-da-ghost" id="da-ext-download-smart"
+               href="/extension/download/smart" download>⬇ @L["panel.extDownloadSmart"]</a>
+          </div>
+        }
       </div>
       <ol>
         <li data-i18n="panel.extStep1">@L["panel.extStep1"]</li>

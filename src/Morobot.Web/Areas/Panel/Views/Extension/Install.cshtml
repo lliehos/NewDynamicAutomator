@@ -6,17 +6,25 @@
     var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
     var globalExtName = $"{brandHead.AppName} Global";
     var smartExtName = $"{brandHead.AppName} Smart Recorder";
+
     /*
-     * The install path of the SERVER is deliberately not shown anywhere here.
+     * Two ways to hand the extension to a user, and the right one depends on WHERE THE BROWSER IS.
      *
-     * The extension folder is written under %LOCALAPPDATA% on the machine that runs the web app — the
-     * server — while the extension must be loaded into the browser on THIS machine. The two are
-     * different computers, so the server's path does not exist for the user and showing it only sent
-     * people looking for a folder that was never there. There is no way for the server to learn the
-     * user's own path either, so the page hands out the package and lets the user choose where to put
-     * it. `%LOCALAPPDATA%` is still given as the conventional location, with a helper that resolves
-     * it on the user's own machine.
-     */    /*
+     * The folder lives on whatever machine runs this app. When the page is opened from that same
+     * machine — locally, in Development — the folder path is real and the shortest route is to paste
+     * it straight into "Load unpacked". When the page is opened from anywhere else the server is a
+     * different computer from the reader's, the folder does not exist for them at all, and the only
+     * thing that can work is downloading a package and extracting it locally.
+     *
+     * `ShowLocalPath` is decided by the controller from the request host, not from the environment
+     * name: the environment alone cannot tell whether the caller can see that directory.
+     */
+    var showLocalPath = ViewBag.ShowLocalPath is true;
+    var globalPath = ViewBag.GlobalPath as string ?? "";
+    var smartPath = ViewBag.SmartPath as string ?? "";
+    var localPathReady = showLocalPath && !string.IsNullOrWhiteSpace(globalPath);
+
+    /*
      * A PowerShell one-liner that creates and opens the conventional folder on the USER's machine.
      * Built here as a plain string rather than inline in the markup: the command contains backslashes
      * and `$` tokens, and putting it directly in a Razor expression makes C# treat them as escape
@@ -29,7 +37,8 @@
         "$p = Join-Path $p '" + appKey + "'",
         "New-Item -ItemType Directory -Force -Path $p | Out-Null",
         "explorer $p"
-    });}
+    });
+}
 <div class="card mb-4">
   <div class="card-body">
     <h4 class="mb-3">افزونه‌های @brandHead.AppName</h4>
@@ -39,12 +48,22 @@
       <strong>@smartExtName</strong> جداگانه و اختیاری است.
     </div>
 
-    <div class="alert alert-warning mb-3 small">
-      <strong>این افزونه‌ها روی کامپیوتر خودتان نصب می‌شوند، نه روی سرور.</strong>
-      پس مسیر سرور اینجا نمایش داده نمی‌شود — آن پوشه روی کامپیوتر شما وجود ندارد.
-      بستهٔ زیر را دانلود و در یک پوشهٔ <strong>ثابت</strong> باز کنید (پوشه را بعداً جابجا یا پاک نکنید،
-      وگرنه کروم افزونه را از دست می‌دهد).
-    </div>
+    @if (localPathReady)
+    {
+      <div class="alert alert-success mb-3 small">
+        <strong>حالت توسعه (اجرای محلی):</strong> سرور و مرورگر روی همین کامپیوتر هستند، پس
+        مستقیم از مسیر پوشه استفاده کنید — نیازی به دانلود بسته نیست.
+      </div>
+    }
+    else
+    {
+      <div class="alert alert-warning mb-3 small">
+        <strong>این افزونه‌ها روی کامپیوتر خودتان نصب می‌شوند، نه روی سرور.</strong>
+        پس مسیر سرور نمایش داده نمی‌شود — آن پوشه روی کامپیوتر شما وجود ندارد.
+        بستهٔ زیر را دانلود و در یک پوشهٔ <strong>ثابت</strong> باز کنید (پوشه را بعداً جابجا یا پاک نکنید،
+        وگرنه کروم افزونه را از دست می‌دهد).
+      </div>
+    }
 
     <div class="row g-3">
       <div class="col-md-6">
@@ -55,7 +74,16 @@
           {
             <div class="small text-muted mb-2">نسخه: <code>@globalVer</code></div>
           }
-          <a class="btn btn-sm btn-primary w-100" href="/extension/download/global" download>⬇ دانلود بستهٔ Global (zip)</a>
+          @if (localPathReady)
+          {
+            <div class="fw-semibold mb-1">مسیر پوشه</div>
+            <code id="da-ext-path-global" class="user-select-all d-block small mb-2">@globalPath</code>
+            <button type="button" class="btn btn-sm btn-primary w-100" data-copy="#da-ext-path-global">کپی مسیر</button>
+          }
+          else
+          {
+            <a class="btn btn-sm btn-primary w-100" href="/extension/download/global" download>⬇ دانلود بستهٔ Global (zip)</a>
+          }
         </div>
       </div>
       <div class="col-md-6">
@@ -66,31 +94,55 @@
           {
             <div class="small text-muted mb-2">نسخه: <code>@smartVer</code></div>
           }
-          <a class="btn btn-sm btn-secondary w-100" href="/extension/download/smart" download>⬇ دانلود بستهٔ Smart Recorder (zip)</a>
+          @if (localPathReady)
+          {
+            <div class="fw-semibold mb-1">مسیر پوشه</div>
+            <code id="da-ext-path-smart" class="user-select-all d-block small mb-2">@smartPath</code>
+            <button type="button" class="btn btn-sm btn-secondary w-100" data-copy="#da-ext-path-smart">کپی مسیر</button>
+          }
+          else
+          {
+            <a class="btn btn-sm btn-secondary w-100" href="/extension/download/smart" download>⬇ دانلود بستهٔ Smart Recorder (zip)</a>
+          }
         </div>
       </div>
     </div>
 
     <h5 class="mt-4 mb-2">مراحل نصب</h5>
     <ol class="mb-3">
-      <li class="mb-2">بستهٔ بالا را دانلود و در یک پوشهٔ ثابت <strong>استخراج (Extract)</strong> کنید — مثلاً
-        <code>C:\@brandHead.AppName-ext\global</code>. پوشه را بعداً جابجا نکنید.</li>
-      <li class="mb-2"><code>chrome://extensions</code> یا <code>edge://extensions</code> را باز کنید.</li>
-      <li class="mb-2"><strong>Developer mode</strong> را روشن کنید.</li>
-      <li class="mb-2"><strong>Load unpacked</strong> → همان پوشه‌ای که استخراج کردید را انتخاب کنید.</li>
-      <li class="mb-2">اگر افزونه‌های قدیمی Recorder/Player/Selector را دارید، حذفشان کنید.</li>
-      <li class="mb-2">این پرتال را رفرش کنید.</li>
+      @if (localPathReady)
+      {
+        <li class="mb-2">مسیر بالا را کپی کنید — پوشه همین حالا روی این کامپیوتر آماده است.</li>
+        <li class="mb-2"><code>chrome://extensions</code> یا <code>edge://extensions</code> را باز کنید.</li>
+        <li class="mb-2"><strong>Developer mode</strong> را روشن کنید.</li>
+        <li class="mb-2"><strong>Load unpacked</strong> → همان مسیر را Paste کنید.</li>
+        <li class="mb-2">اگر افزونه‌های قدیمی Recorder/Player/Selector را دارید، حذفشان کنید.</li>
+        <li class="mb-2">این پرتال را رفرش کنید.</li>
+      }
+      else
+      {
+        <li class="mb-2">بستهٔ بالا را دانلود و در یک پوشهٔ ثابت <strong>استخراج (Extract)</strong> کنید — مثلاً
+          <code>C:\@brandHead.AppName-ext\global</code>. پوشه را بعداً جابجا نکنید.</li>
+        <li class="mb-2"><code>chrome://extensions</code> یا <code>edge://extensions</code> را باز کنید.</li>
+        <li class="mb-2"><strong>Developer mode</strong> را روشن کنید.</li>
+        <li class="mb-2"><strong>Load unpacked</strong> → همان پوشه‌ای که استخراج کردید را انتخاب کنید.</li>
+        <li class="mb-2">اگر افزونه‌های قدیمی Recorder/Player/Selector را دارید، حذفشان کنید.</li>
+        <li class="mb-2">این پرتال را رفرش کنید.</li>
+      }
     </ol>
 
-    <div class="border rounded p-3 mb-3">
-      <div class="fw-semibold mb-1">مسیر پیشنهادی روی کامپیوتر شما</div>
-      <p class="small text-muted mb-2">
-        برای اینکه اسم کاربری ویندوزتان را حدس نزنیم، این دستور را در
-        <strong>PowerShell</strong> اجرا کنید تا مسیر دقیق باز شود:
-      </p>
-      <code id="da-ext-suggested-path" class="user-select-all d-block small mb-2">@suggestedPathCommand</code>
-      <button type="button" class="btn btn-sm btn-outline-primary" data-copy="#da-ext-suggested-path">کپی دستور</button>
-    </div>
+    @if (!localPathReady)
+    {
+      <div class="border rounded p-3 mb-3">
+        <div class="fw-semibold mb-1">مسیر پیشنهادی روی کامپیوتر شما</div>
+        <p class="small text-muted mb-2">
+          برای اینکه اسم کاربری ویندوزتان را حدس نزنیم، این دستور را در
+          <strong>PowerShell</strong> اجرا کنید تا مسیر دقیق باز شود:
+        </p>
+        <code id="da-ext-suggested-path" class="user-select-all d-block small mb-2">@suggestedPathCommand</code>
+        <button type="button" class="btn btn-sm btn-outline-primary" data-copy="#da-ext-suggested-path">کپی دستور</button>
+      </div>
+    }
 
     <div class="d-flex gap-2 flex-wrap">
       <button type="button" class="btn btn-outline-primary" id="da-sync-now">همگام‌سازی سرور</button>
@@ -124,13 +176,17 @@
     try {
       const res = await fetch("/extension/sync", { method: "POST" });
       const data = await res.json();
-      // Only the versions are reported back. The server's own folder path is intentionally not
-      // echoed into the page, because it belongs to the server and not to the browser.
+      // Only versions (and, in local mode, the refreshed paths) are echoed back. The message is
+      // phrased for whichever mode this page rendered in, because "packages are ready to download"
+      // is wrong on a page that offers a folder to copy.
       if (status) {
         const g = data?.global?.version || data?.version || "";
         const s = data?.smart?.version || "";
+        const tail = @(localPathReady ? "true" : "false")
+          ? " مسیرها به‌روز شدند."
+          : " بسته‌ها آمادهٔ دانلود هستند.";
         status.textContent = data?.ok
-          ? `همگام شد — Global ${g}${s ? ` · Smart ${s}` : ""}. بسته‌ها آمادهٔ دانلود هستند.`
+          ? `همگام شد — Global ${g}${s ? ` · Smart ${s}` : ""}.${tail}`
           : (data?.error || "خطا در همگام‌سازی");
       }
     } catch (e) {

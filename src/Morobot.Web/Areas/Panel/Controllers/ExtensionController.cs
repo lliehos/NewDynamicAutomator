@@ -140,9 +140,46 @@ public class ExtensionController : Controller
         ViewBag.SelectorVersion = ViewBag.GlobalVersion;
         ViewBag.SmartVersion = _sync.GetStamp(ExtensionSyncService.RoleSmart, syncFirst: false).Version;
         ViewBag.AppInstanceKey = _sync.AppInstanceKey;
+        /*
+         * Whether to hand out the folder path instead of a download package.
+         *
+         * Only meaningful when the browser and the server are the SAME machine, because the folder
+         * lives on whatever machine runs this app. In Development that is the developer's own PC, so
+         * the path is real and saving a download round-trip is convenient. In Production the server
+         * is a different computer from the user's, the path does not exist for them, and the package
+         * download is the only thing that can work.
+         *
+         * The check is deliberately "is the request local" rather than `IsDevelopment()`. The
+         * environment name is not a reliable signal here - a machine can run with an unrelated
+         * profile name (this one uses `UpdateServerDatabase`), and a developer may reach a locally
+         * running app through localhost from the same box while the environment is not Development.
+         * Testing the actual host answers the only question that matters: can this browser see that
+         * folder?
+         */
+        ViewBag.ShowLocalPath = _env.IsDevelopment() && IsLocalRequest();
         ViewBag.IsDev = _env.IsDevelopment();
+        // Only populated for the local case; the view does not render these otherwise.
+        ViewBag.GlobalPath = _sync.InstallPathFor(ExtensionSyncService.RoleGlobal);
+        ViewBag.SmartPath = _sync.InstallPathFor(ExtensionSyncService.RoleSmart);
         ViewBag.ExtensionPath = ViewBag.GlobalPath;
         ViewBag.Version = ViewBag.GlobalVersion;
         return View();
+    }
+
+    /// <summary>
+    /// Whether this request came from the machine the app is running on.
+    ///
+    /// A loopback host means the browser and the server are the same computer, which is the only
+    /// situation where the server's extension folder is a usable path for the person reading the
+    /// page.
+    /// </summary>
+    private bool IsLocalRequest()
+    {
+        var host = Request.Host.Host;
+        if (string.IsNullOrWhiteSpace(host)) return false;
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)) return true;
+        if (System.Net.IPAddress.TryParse(host, out var ip))
+            return System.Net.IPAddress.IsLoopback(ip);
+        return false;
     }
 }
