@@ -185,6 +185,18 @@
 .da-smart-actions.show {
   display: flex;
 }
+/* Build stamp. Small and quiet, but on screen: it is the only way to tell which copy of the
+   extension the browser is actually running, since Load unpacked reports nothing back. */
+.da-smart-version {
+  font-size: 11px;
+  font-family: Tahoma, sans-serif;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 6px;
+  padding: 2px 6px;
+  direction: ltr;
+  user-select: all;
+}
 /* Copy to memory — a plain icon button beside Save. */
 .da-smart-copy {
   width: 42px;

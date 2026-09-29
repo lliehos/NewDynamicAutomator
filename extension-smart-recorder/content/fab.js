@@ -97,6 +97,7 @@ function waitForActiveSession(maxMs = 6000) {
       <button type="button" class="da-smart-save" id="da-smart-save" title="Save" aria-label="Save">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94a7.07 7.07 0 0 0 .06-.94 7.07 7.07 0 0 0-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94 0 .32.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.23.09.48 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>
       </button>
+      <span class="da-smart-version" id="da-smart-version"></span>
     </div>
     <button type="button" class="da-smart-logo-btn" id="da-smart-toggle" title="Stop thinking" aria-label="Stop thinking">
       <img src="${markUrl}" width="56" height="56" alt="${tr("fab.markAlt")}" />
@@ -113,6 +114,7 @@ function waitForActiveSession(maxMs = 6000) {
   const copyBtn = root.querySelector("#da-smart-copy");
   const actionsEl = root.querySelector("#da-smart-actions");
   const noticeEl = root.querySelector("#da-smart-notice");
+  const versionEl = root.querySelector("#da-smart-version");
   const guide = root.querySelector("#da-smart-guide");
 
   /**
@@ -397,6 +399,18 @@ function waitForActiveSession(maxMs = 6000) {
     const copyLabel = tr("fab.copy");
     copyBtn.title = copyLabel;
     copyBtn.setAttribute("aria-label", copyLabel);
+    // Stamp the build on the action row.
+    //
+    // Load unpacked loads whatever is on disk at that moment and gives no feedback about which copy
+    // it took, so "the extension looks unchanged" was impossible to tell apart from "Chrome is
+    // running an older copy from a different folder". Putting the version on screen makes the
+    // question answerable at a glance: if the number here is not the one in manifest.json, the
+    // browser is not running this build.
+    if (versionEl) {
+      let v = "";
+      try { v = chrome.runtime.getManifest().version || ""; } catch { v = ""; }
+      versionEl.textContent = v ? `v${v}` : "";
+    }
     // The resize handle is a control, so its label must follow the language too.
     const resizeEl = root.querySelector("#da-smart-resize");
     if (resizeEl) {

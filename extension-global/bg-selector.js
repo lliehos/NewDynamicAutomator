@@ -289,9 +289,17 @@ let ctxMenuQueued = false;
 /**
  * The portal origin, or "" when unknown. portalBase() lives in background.js (this file is
  * evaluated in the same worker scope, but is guarded so it also loads standalone in tests).
+ *
+ * Prefers a live session's bound server for the same reason `portalBase()` does: the shared value
+ * can be repointed by another portal tab, and a selector action belongs to the recording or play it
+ * was started from rather than to whichever portal happened to load last.
  */
 async function portalBaseSafe() {
   try {
+    if (globalThis.DaSessionScope) {
+      const bound = await DaSessionScope.recordPortalBase() || await DaSessionScope.playPortalBase();
+      if (bound) return bound;
+    }
     const { portalBase } = await chrome.storage.local.get("portalBase");
     return String(portalBase || "").replace(/\/$/, "");
   } catch {

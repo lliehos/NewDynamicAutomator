@@ -1,4 +1,4 @@
-importScripts("lib/branding.js", "player/engine.js", "bg-selector.js");
+importScripts("lib/branding.js", "lib/session-scope.js", "player/engine.js", "bg-selector.js");
 
 /** Morobot Global extension — record, play, and selector in one package. */
 const DEFAULT_PORTAL = "https://localhost:7201";
@@ -22,9 +22,32 @@ try {
 } catch { /* ignore */ }
 syncEngineCulture();
 
+/**
+ * The portal origin this extension is currently pointed at.
+ *
+ * Prefers a live session's own bound server over the shared `portalBase` value.
+ *
+ * `portalBase` is one key in `chrome.storage.local`, shared by every tab, and both
+ * `content/portal-bridge.js` and the token lookup write to it. With a local server and a remote one
+ * both open they overwrite each other, so a request made for a recording could be sent to whichever
+ * portal happened to be loaded last — showing up as "the session does not exist" or a stray 401.
+ *
+ * Resolving a live session's own base first closes that hole for every caller at once, which is why
+ * the preference lives here rather than at each of the ~25 request sites: a site that forgets to opt
+ * in would silently keep the old, broken behaviour.
+ */
 async function portalBase() {
   const { portalBase } = await chrome.storage.local.get("portalBase");
-  return portalBase || DEFAULT_PORTAL;
+  const globalBase = portalBase || DEFAULT_PORTAL;
+  if (globalThis.DaSessionScope) {
+    try {
+      // A recording outranks a play: a play can be started from the recorder's own portal, and while
+      // recording is in progress every request still belongs to that recording's server.
+      const bound = await DaSessionScope.recordPortalBase() || await DaSessionScope.playPortalBase();
+      if (bound) return bound;
+    } catch { /* fall through to the global value */ }
+  }
+  return globalBase;
 }
 
 /** All server calls go to the portal origin. */
@@ -32,10 +55,37 @@ async function apiBase() {
   return portalBase();
 }
 
-async function resolveAccessToken() {
-  const portal = await portalBase();
-  const urls = [
-    portal,
+/**
+ * The base URL for a request, honouring the session that owns it.
+ *
+ * `portalBase` is shared state that any portal tab can overwrite, so a request belonging to a
+ * recording must not read it directly: with a local server and a remote one both open, the value at
+ * the moment of the call may belong to the other one. When `kind` names a live session the base
+ * bound to that session wins, and the global value is only a fallback for requests with no session.
+ */
+async function baseFor(kind) {
+  const globalBase = await portalBase();
+  if (globalThis.DaSessionScope) {
+    return DaSessionScope.resolveBase(kind, globalBase);
+  }
+  return globalBase;
+}
+
+/**
+ * Resolve the auth token, optionally pinned to one origin.
+ *
+ * The cookie lookup order used to be `portal` followed by a hardcoded list of local ports, and the
+ * first hit won. When both a local and a remote portal are signed in, that could return the LOCAL
+ * cookie for a request aimed at the server — a 401 that looks like broken auth rather than a
+ * misrouted request. `origin` restricts the search to the one host that request actually targets.
+ *
+ * The write to `portalBase`/`apiBase` is also gone from here. This function runs in the middle of
+ * other requests, and updating global routing as a side effect of fetching a token is what let a
+ * single call silently repoint the whole extension at a different server.
+ */
+async function resolveAccessToken(origin) {
+  const wanted = String(origin || "").trim();
+  const known = [
     "https://localhost:7801",
     "http://localhost:7800",
     "https://localhost:7701",
@@ -51,11 +101,21 @@ async function resolveAccessToken() {
     "https://localhost/",
     "http://localhost/"
   ];
+  // A pinned origin is searched first and, on a hit, is the only one used — the whole point is to
+  // stop a cookie from a different server satisfying this request.
+  const urls = wanted ? [wanted] : [await portalBase(), ...known];
+
   for (const url of urls) {
     try {
       const cookie = await chrome.cookies.get({ url, name: "da_access" });
       if (cookie?.value) {
-        await chrome.storage.local.set({ token: cookie.value, portalBase: new URL(url).origin, apiBase: new URL(url).origin });
+        await chrome.storage.local.set({
+          token: cookie.value,
+          // Record which server issued the token, so `tokenForOrigin` can refuse to hand a local
+          // token to a remote request. Without this the token key has the same cross-server leak as
+          // `portalBase` had.
+          tokenPortalBase: new URL(url).origin
+        });
         return cookie.value;
       }
     } catch {
@@ -67,9 +127,17 @@ async function resolveAccessToken() {
   return token || null;
 }
 
-async function authHeaders() {
+async function authHeaders(kind) {
   const headers = { "Content-Type": "application/json", Accept: "application/json" };
-  const access = await resolveAccessToken();
+  const base = await baseFor(kind);
+  let access = await resolveAccessToken(base);
+  // Drop a token that belongs to a different portal, so a stale credential from the other server is
+  // not sent (and the request is not rejected as an auth failure it never was).
+  if (access && globalThis.DaSessionScope) {
+    const scoped = await DaSessionScope.tokenForOrigin(kind, base,
+      await chrome.storage.local.get(["recordToken", "playToken", "token", "tokenPortalBase"]));
+    access = scoped;
+  }
   if (access) headers.Authorization = `Bearer ${access}`;
   return headers;
 }
@@ -521,6 +589,14 @@ async function startRecordSession(message = {}) {
     steps: []
   }];
 
+  // Pin this recording to the portal it was started from, so a second portal opened later cannot
+  // move the save onto a different server. The base is read now, while the record button's own
+  // portal is still the one in context, and kept for the life of the session.
+  if (globalThis.DaSessionScope) {
+    const boundBase = await baseFor(null);
+    await DaSessionScope.bindSession("record", boundBase, await resolveAccessToken(boundBase).catch(() => null));
+  }
+
   await chrome.storage.local.set({
     recording: true,
     recordPhase: "recording",
@@ -648,6 +724,10 @@ async function finishRecord() {
 async function discardRecord(opts = {}) {
   const closeTab = opts.closeTab !== false;
   const { recordTabId } = await chrome.storage.local.get(["recordTabId"]);
+  // The recording is gone, so its server binding goes with it. `finishRecord` deliberately does NOT
+  // do this: finishing moves to review, and the save that follows still has to reach the portal the
+  // recording was made against.
+  if (globalThis.DaSessionScope) await DaSessionScope.unbindSession("record").catch(() => {});
   await chrome.storage.local.set({
     recording: false,
     recordPhase: "idle",
@@ -1185,6 +1265,10 @@ async function saveDraft(payload) {
       await injectRecordFab(recordTabId).catch(() => false);
     }
   } else {
+    // The recording is over and saved, so its server binding is released. `continueRecording` above
+    // deliberately keeps the binding, because the same recording is still open and must keep talking
+    // to the same portal.
+    if (globalThis.DaSessionScope) await DaSessionScope.unbindSession("record").catch(() => {});
     await chrome.storage.local.set({
       recording: false,
       recordPhase: "idle",

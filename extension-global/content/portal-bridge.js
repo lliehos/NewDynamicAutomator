@@ -192,14 +192,37 @@
     const culture = (readCookie("da_culture") || localStorage.getItem("da_culture") || "fa").toLowerCase() === "en"
       ? "en"
       : "fa";
-    chrome.storage.local.set({
-      portalBase: origin,
-      apiBase: origin,
-      localUser: user,
-      extensionRole: "global",
-      uiCulture: culture
+    /*
+     * This write is what made two servers interfere.
+     *
+     * `portalBase` is one key in shared extension storage, so every portal page load repointed the
+     * whole extension at itself: opening the local portal while a recording ran against the remote
+     * one silently moved the running session's requests to localhost (and the reverse). A recording
+     * pinned to its own portal by `DaSessionScope.bindSession` was still overridden here on the next
+     * page load.
+     *
+     * A session in progress therefore must not be repointed. The base is only updated when nothing
+     * is recording or playing, and the session's own binding takes precedence in the background
+     * regardless — this just stops the shared value from being rewritten out from under it.
+     */
+    chrome.storage.local.get(["recording", "playing"]).then((st) => {
+      const inSession = !!(st && (st.recording || st.playing));
+      const patch = {
+        localUser: user,
+        extensionRole: "global",
+        uiCulture: culture
+      };
+      if (!inSession) {
+        patch.portalBase = origin;
+        patch.apiBase = origin;
+      }
+      chrome.storage.local.set(patch);
+      // The session sync runs after the write: it reads the same storage to work out which portal it
+      // is talking to, so firing it first would have it resolve against the previous value.
+      chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
+    }).catch(() => {
+      chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
     });
-    chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
   } catch {
     /* ignore */
   }
