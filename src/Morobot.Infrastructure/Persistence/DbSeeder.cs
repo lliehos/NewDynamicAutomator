@@ -358,8 +358,6 @@ public static class DbSeeder
     private static async Task EnsureUsersAsync(AppDbContext db)
     {
         var hasher = new PasswordHasher<AppUser>();
-        var localPlan = await db.Plans.FirstAsync(p => p.Code == nameof(PlanCode.Local));
-        var freePlan = await db.Plans.FirstAsync(p => p.Code == nameof(PlanCode.Free));
         var proPlan = await db.Plans.FirstAsync(p => p.Code == nameof(PlanCode.Pro));
 
         async Task EnsureUser(string userName, string password, string first, string last,
@@ -387,17 +385,64 @@ public static class DbSeeder
                 user.PasswordHash = hasher.HashPassword(user, password);
         }
 
-        await EnsureUser("guest", "Guest123!", "کاربر", "مهمان", UserRole.User, localPlan);
+        // The administrator is the ONLY account a fresh install gets.
+        //
+        // The app has public self-registration, so every additional seeded account competes with it:
+        // the earlier set (guest/free/pro/pm) either gave away paid features for free or handed out a
+        // shared password that nobody was going to change. Seeding the administrator alone keeps the
+        // first-run decision in the admin's hands — sign in, then create whoever the deployment
+        // actually needs.
         await EnsureUser("admin", "Admin123!", "مدیر", "سیستم", UserRole.Admin, proPlan);
-        await EnsureUser("free", "Free123!", "کاربر", "رایگان", UserRole.User, freePlan);
-        await EnsureUser("pro", "Pro123!", "کاربر", "حرفه‌ای", UserRole.User, proPlan);
-        // A demo process manager. The role exists to own the shared templates without being a full
-        // administrator, and without an account that carries it there is no way to try that path —
-        // every other seeded user is a plain user or the administrator. Given the Pro plan because
-        // template work is part of the Pro feature set.
-        await EnsureUser("pm", "Pm123!", "کاربر", "مدیر فرآیند", UserRole.ProcessManager, proPlan);
+
+        // Demo accounts, only when they are asked for.
+        //
+        // They are still needed: the one-click dev login resolves each name to a fixed password, the
+        // handover and manual-test checklists walk through the Free/Pro/Local plans, and the
+        // ProcessManager role has no other way to be tried. Gating them behind a setting means a
+        // production install never carries a known-password account, while a dev machine can still
+        // have them by setting Morobot:SeedDemoUsers=true.
+        if (SeedDemoUsers())
+        {
+            var localPlan = await db.Plans.FirstAsync(p => p.Code == nameof(PlanCode.Local));
+            var freePlan = await db.Plans.FirstAsync(p => p.Code == nameof(PlanCode.Free));
+            await EnsureUser("guest", "Guest123!", "کاربر", "مهمان", UserRole.User, localPlan);
+            await EnsureUser("free", "Free123!", "کاربر", "رایگان", UserRole.User, freePlan);
+            await EnsureUser("pro", "Pro123!", "کاربر", "حرفه‌ای", UserRole.User, proPlan);
+            // A demo process manager. The role exists to own the shared templates without being a full
+            // administrator, and without an account that carries it there is no way to try that path.
+            // Given the Pro plan because template work is part of the Pro feature set.
+            await EnsureUser("pm", "Pm123!", "کاربر", "مدیر فرآیند", UserRole.ProcessManager, proPlan);
+        }
+
         await db.SaveChangesAsync();
 
         // Owner shares already have full ACL on create; no CanModify backfill after Canvas-first.
+    }
+
+    /// <summary>
+    /// Whether to also create the demo accounts (guest/free/pro/pm).
+    /// </summary>
+    /// <remarks>
+    /// Opt-in, and only in Development by default. The flag alone is not enough to enable them in
+    /// Production: these accounts share well-known passwords, so a misconfigured production
+    /// environment variable must not be able to reintroduce them silently. An operator who really
+    /// wants them in production can still set <c>Morobot:SeedDemoUsersForce=true</c>, which makes the
+    /// intent explicit rather than accidental.
+    /// </remarks>
+    private static bool SeedDemoUsers()
+    {
+        static string? Read(string key)
+            => Environment.GetEnvironmentVariable(key)
+               ?? Environment.GetEnvironmentVariable(key.Replace(":", "__"));
+
+        var optIn = string.Equals(Read("Morobot:SeedDemoUsers"), "true", StringComparison.OrdinalIgnoreCase);
+        if (!optIn) return false;
+
+        var isDevelopment = string.Equals(
+            Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+            "Development", StringComparison.OrdinalIgnoreCase);
+        var forced = string.Equals(Read("Morobot:SeedDemoUsersForce"), "true", StringComparison.OrdinalIgnoreCase);
+
+        return isDevelopment || forced;
     }
 }

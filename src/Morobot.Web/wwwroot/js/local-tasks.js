@@ -203,6 +203,18 @@
   // The template a row came from / was made into. A sheet with a stack behind it, so it reads as
   // "this process is derived from something" rather than as another document action.
   const ICO_TPL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 3h9a1 1 0 0 1 1 1v1H6a2 2 0 0 0-2 2v11H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm4 4h9a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm1.6 3.2v1.6h1.5l-1.8 5.4h1.6l.6-2h1.9l.6 2h1.6l-1.8-5.4h1.5V10.2h-5.7z"/></svg>`;
+  /**
+   * A padlock, for the edit action on a process whose structure is not this row's to change.
+   *
+   * A child of a template inherits its graph from the mother, so its editor opens read-only. It used
+   * to keep the ordinary pencil, which promised an edit the page then refused - the user only found
+   * out after opening it. The eye glyph was not an option either: it already means "view the data
+   * source", and two different meanings on one icon is worse than the misleading pencil.
+   *
+   * The padlock says "this is locked" before the click, and the row's chip still names the template
+   * it is bound to, so the reason is visible next to it.
+   */
+  const ICO_LOCK = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v2H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm0 2a3 3 0 0 1 3 3v2H9V7a3 3 0 0 1 3-3zm0 10.5a1.75 1.75 0 0 1 1 3.19V19h-2v-1.31a1.75 1.75 0 0 1 1-3.19z"/></svg>`;
 
   function iconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
@@ -501,8 +513,15 @@
       ? iconBtn("is-template", `${t("panel.colTemplate")}: ${task.templateTitle || ""}`.trim(), ICO_TPL,
           `data-da-template-row="${tid}"`)
       : "";
+    // A template child opens read-only, so its edit action is shown as a lock with the reason in the
+    // tooltip rather than as a pencil that leads to a page the user cannot change.
+    const editBtn = isChild
+      ? iconLink("is-edit is-locked",
+          t("tasks.editLocked", { name: task.templateTitle || t("panel.colTemplate") }) || t("tasks.edit"),
+          `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_LOCK)
+      : iconLink("is-edit", t("tasks.edit"), `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_EDIT);
     return `
-      ${iconLink("is-edit", t("tasks.edit"), `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_EDIT)}
+      ${editBtn}
       ${iconBtn("is-info", t("tasks.details"), ICO_INFO, `data-da-details="${tid}"`)}
       ${templateBtn}
       ${iconBtn("is-play", t("tasks.play"), ICO_PLAY, `data-da-action="play-task-menu" data-task-id="${tid}" aria-haspopup="menu"`)}

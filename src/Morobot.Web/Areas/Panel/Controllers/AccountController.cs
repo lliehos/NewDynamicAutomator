@@ -134,7 +134,15 @@ public class AccountController : Controller
         return RedirectToAction(nameof(Upgrade));
     }
 
-    /// <summary>Dev-only one-click login as seeded guest (Local plan).</summary>
+    /// <summary>
+    /// Dev-only one-click login as a seeded account.
+    /// </summary>
+    /// <remarks>
+    /// The demo accounts (guest/free/pro/pm) are no longer seeded by default — a fresh install gets
+    /// the administrator only — so this endpoint now signs in as <c>admin</c> unless a name is given
+    /// explicitly. It stays Development-only, and a name it cannot resolve simply fails the login
+    /// rather than being silently mapped to some other account.
+    /// </remarks>
     [HttpGet]
     [AllowAnonymous]
     public async Task<IActionResult> DevLogin(string? userName = null, string? returnUrl = null, CancellationToken ct = default)
@@ -142,16 +150,25 @@ public class AccountController : Controller
         if (!_env.IsDevelopment())
             return NotFound();
 
-        var name = string.IsNullOrWhiteSpace(userName) ? "guest" : userName.Trim();
+        var name = string.IsNullOrWhiteSpace(userName) ? "admin" : userName.Trim();
+        var password = name.ToLowerInvariant() switch
+        {
+            "admin" => "Admin123!",
+            "guest" => "Guest123!",
+            "free" => "Free123!",
+            "pro" => "Pro123!",
+            "pm" => "Pm123!",
+            // No fallback password: a name we do not know is a name we cannot sign in as, and guessing
+            // would either fail confusingly or — worse — succeed against an unintended account.
+            _ => null
+        };
+        if (password is null)
+            return Unauthorized();
+
         var (result, _) = await _auth.LoginAsync(new LoginRequest
         {
             UserName = name,
-            Password = name.Equals("guest", StringComparison.OrdinalIgnoreCase) ? "Guest123!"
-                : name.Equals("free", StringComparison.OrdinalIgnoreCase) ? "Free123!"
-                : name.Equals("pro", StringComparison.OrdinalIgnoreCase) ? "Pro123!"
-                : name.Equals("pm", StringComparison.OrdinalIgnoreCase) ? "Pm123!"
-                : name.Equals("admin", StringComparison.OrdinalIgnoreCase) ? "Admin123!"
-                : "Guest123!",
+            Password = password,
             Device = new DeviceFingerprintDto
             {
                 FingerprintHash = "devlogin",

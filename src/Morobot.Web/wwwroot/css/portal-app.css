@@ -1004,6 +1004,14 @@ html.light-style {
   background: var(--morobot-soft-2, var(--morobot-soft-2-default));
 }
 
+/* A template child's structure is owned by the mother, so its editor opens read-only. The action is
+   still there — it is how the row is opened — but muted, so the lock is not mistaken for the ordinary
+   edit pencil it replaced. */
+.da-task-actions .ds-icon-btn.is-locked {
+  color: #94a3b8;
+  background: transparent;
+}
+
 .da-task-actions .ds-icon-btn.is-view {
   color: var(--morobot-primary, var(--morobot-primary-default));
 }
