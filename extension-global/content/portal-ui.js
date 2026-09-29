@@ -501,6 +501,43 @@
       ev.preventDefault();
       await resumePlayFromPortal();
     }
+    if (action === "copy-record-memory") {
+      ev.preventDefault();
+      // Copy the last recording back OUT of extension memory.
+      //
+      // The copy button lives on the recorded page's HUD, and that page is often closed or navigated
+      // away before the user gets to the diagram. Without this, the payload captured by
+      // `saveMemoryDraft` would be unreachable and the user would have to record the process again.
+      // The text is already in storage (written by `saveMemoryDraft`), so nothing server-side is
+      // needed — but the clipboard write still has to happen on a page, because the background has
+      // no DOM.
+      const culture = (document.documentElement.dataset.culture || "fa").toLowerCase() === "en" ? "en" : "fa";
+      const pack = culture === "en"
+        ? {
+          none: "There is no recorded process in extension memory.",
+          copied: "The recorded process was copied — right-click the diagram and choose Paste process.",
+          blocked: "The browser blocked the clipboard write."
+        }
+        : {
+          none: "فرآیند ضبط‌شده‌ای در حافظهٔ افزونه نیست.",
+          copied: "فرآیند ضبط‌شده در حافظه کپی شد — در دیاگرام راست‌کلیک و «چسباندن فرآیند» را بزنید.",
+          blocked: "مرورگر اجازهٔ نوشتن در حافظه را نداد."
+        };
+
+      const stored = await chrome.storage.local.get(["recordMemoryText", "recordMemoryAt"]).catch(() => ({}));
+      const text = stored?.recordMemoryText;
+      if (!text) {
+        setPortalStatus(pack.none, "error");
+        return;
+      }
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch { ok = false; }
+      setPortalStatus(ok ? pack.copied : pack.blocked, ok ? "success" : "error");
+      return;
+    }
   });
 
   // postMessage path for ctx «اجرا/بررسی در مرورگر» (reliable tabId)

@@ -17,6 +17,9 @@
   <div id="da-page-rec-status" class="small text-muted mb-2">...</div>
   <div id="da-page-idle">
     <p class="small text-muted mb-0" data-i18n="record.idleHint">@L["record.idleHint"]</p>
+    @* Reachable without an active session on purpose: the HUD's copy button lives on the recorded
+       page, so once that tab is closed this is the only way back to the payload. *@
+    <button type="button" class="btn btn-sm btn-outline-primary w-100 mt-2" data-da-action="copy-record-memory" data-i18n="record.copyMemory">@L["record.copyMemory"]</button>
   </div>
   <div id="da-page-recording" hidden>
     <button type="button" class="btn btn-sm btn-warning w-100 mb-1" data-da-action="finish-record" data-i18n="record.stop">@L["record.stop"]</button>

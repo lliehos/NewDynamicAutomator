@@ -557,22 +557,56 @@ function normalizeTaskId(value) {
 }
 
 /**
- * Keep the reviewed steps in extension memory, without touching the process and without asking for a
- * name.
+ * Turn the reviewed steps into the `DAGRAPH1:` text the editor's paste handler understands.
  *
- * This is the "save to memory" action, and it is deliberately the mirror image of `saveDraft`:
+ * The editor does not read extension storage — it reads the OS clipboard, and it only accepts a
+ * payload carrying the `DAGRAPH1:` prefix (see `parseRecordedGraph` in wwwroot/editor/flow.js). The
+ * previous version of the copy action only wrote to `chrome.storage.local`, so it reported success
+ * and then the paste said "there is no recorded process in memory": the two sides were never
+ * talking about the same place.
+ *
+ * The graph is built in the same shape `saveDraft` merges — one group holding the steps — because
+ * that is what the editor expects to receive, and reusing the merge keeps a copy and a save of the
+ * same recording producing the same structure.
+ *
+ * It runs in the service worker, which has no DOM and therefore cannot touch the clipboard itself;
+ * the text is returned to the content script, which writes it while the click is still the active
+ * gesture.
+ */
+function buildRecordedGraphText(steps, groupTitle, taskId, title) {
+  const groupId = "group-1";
+  const nodes = steps.map((step, i) => ({
+    ...step,
+    id: step?.id || `step-${i + 1}`,
+    kind: step?.kind === "condition" ? "condition" : "action",
+    groupNodeId: groupId
+  }));
+
+  const graph = {
+    taskId: taskId != null ? Number(taskId) || taskId : null,
+    title: title || null,
+    nodes: [{ id: groupId, kind: "group", title: groupTitle, x: 0, y: 0 }, ...nodes],
+    edges: [],
+    viewport: { x: 0, y: 0, scale: 1 }
+  };
+
+  return "DAGRAPH1:" + JSON.stringify(graph);
+}
+
+/**
+ * Copy the reviewed steps to extension memory AND to the clipboard, without touching the process and
+ * without asking for a name.
+ *
+ * This is the "copy to memory" action, and it is deliberately the mirror image of `saveDraft`:
  *
  * - `saveDraft` writes INTO the target process. It needs a group title because that title becomes a
  *   visible group node on the canvas, so it must ask.
- * - This one writes NOWHERE. The steps are parked in `chrome.storage.local` so the user can paste
- *   them into a diagram later, exactly like the smart recorder's copy-to-memory. Nothing about the
- *   process changes, so there is nothing to name — and prompting for one (which the button used to
- *   do, by routing through `saveDraft`) both asked a question the user could not answer usefully and
- *   then failed when the title was left blank.
+ * - This one writes nothing to the process. The steps are parked in `chrome.storage.local` so they
+ *   survive the tab, and the same payload is handed back as `DAGRAPH1:` text for the content script
+ *   to place on the clipboard — which is the part the editor's paste actually reads.
  *
- * The stored payload is the same shape `saveDraft` merges, so a later "paste into diagram" can reuse
- * the merge path without a second translation step. It is keyed by the target process so a paste on
- * a different process cannot silently pick up another process's recording.
+ * The stored payload is keyed by the target process so a paste on a different process cannot
+ * silently pick up another process's recording.
  */
 async function saveMemoryDraft(payload) {
   const { recordingGroups, draft, recordTargetTaskId, recordTargetTitle, recordOptions } =
@@ -611,15 +645,23 @@ async function saveMemoryDraft(payload) {
     at: new Date().toISOString()
   };
 
+  // The text is what actually makes the paste work, so it is built here and returned for the
+  // content script to write. It is also stored alongside the memory so the payload survives a tab
+  // close and can be re-copied from the portal later.
+  const text = buildRecordedGraphText(allSteps, groupTitle, targetId, title);
+  memory.text = text;
+
   await chrome.storage.local.set({
     recordMemory: memory,
     recordMemoryAt: memory.at,
-    recordMemoryTaskId: targetId
+    recordMemoryTaskId: targetId,
+    recordMemoryText: text
   });
 
   await broadcastDraftUpdated();
   return {
     ok: true,
+    text,
     result: {
       taskId: targetId,
       groupTitle,

@@ -1011,6 +1011,7 @@
     "hint": "Recording always starts on a specific process. Stop and save controls live on the target tab.",
     "fabTitle": "Record",
     "idleHint": "Use Record on a process in the list.",
+    "copyMemory": "Copy the recorded process from memory",
     "stop": "Stop",
     "endSession": "End session",
     "reviewHint": "Pick items and save from the target-tab panel.",

@@ -643,6 +643,22 @@
     }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
 
     if (res?.ok) {
+      // The background cannot write the clipboard: a service worker has no DOM and no user
+      // activation. It returns the `DAGRAPH1:` text instead, and the write happens here while the
+      // click is still the active gesture. This step is the whole point of the button — the editor's
+      // paste reads the OS clipboard, not extension storage, so skipping it is what produced
+      // "copied" followed by "there is no recorded process in memory".
+      let copied = false;
+      if (res.text) {
+        try {
+          await navigator.clipboard.writeText(res.text);
+          copied = true;
+        } catch { copied = false; }
+      }
+      if (!copied) {
+        report(t("rec.copyNoClipboard"), "error");
+        return false;
+      }
       const n = res.result?.stepCount ?? indexes.length;
       report(t("rec.copiedMem", { n }), "success");
       userCollapsed = false;
