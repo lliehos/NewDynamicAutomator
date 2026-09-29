@@ -122,6 +122,11 @@
       </div>`;
     document.documentElement.appendChild(backdrop);
 
+    // The permission row is part of the markup above, so upgrade it here rather than waiting for
+    // da-switch's asynchronous pass: the modal is on screen from this moment and the row must already
+    // read as switches, not as native checkboxes that turn into switches a frame later.
+    window.DaSwitch?.refresh?.(backdrop);
+
     let selected = null;
     let searchTimer = null;
     /** Non-null while the permission row is editing an existing grant instead of adding a new one. */
@@ -141,17 +146,29 @@
       return readPermsFrom(backdrop.querySelector("#da-share-perms"));
     }
 
+    /**
+     * Re-render the permission row and upgrade its controls in the same tick.
+     *
+     * `da-switch.js` upgrades checkboxes asynchronously (it batches into a requestAnimationFrame), so
+     * a row written with `innerHTML` shows native checkboxes for a frame or two before turning into
+     * switches. On a row the user is about to click that flash is conspicuous — and if the module is
+     * not present the controls would simply stay checkboxes. Asking it for a synchronous pass after
+     * every write keeps the row consistent with the rest of the app the moment it appears.
+     */
+    function renderPerms(box, prefs) {
+      if (!box) return;
+      box.innerHTML = permBoxHtml(g, prefs);
+      window.DaSwitch?.refresh?.(box);
+    }
+
     /** Clear the permission row back to "add new share" defaults (view only). */
     function resetPerms() {
-      const box = backdrop.querySelector("#da-share-perms");
-      if (box) box.innerHTML = permBoxHtml(g, { view: true });
+      renderPerms(backdrop.querySelector("#da-share-perms"), { view: true });
     }
 
     /** Swap the permission row to an existing share's current grants so it can be edited. */
     function loadPermsFor(share) {
-      const box = backdrop.querySelector("#da-share-perms");
-      if (!box) return;
-      box.innerHTML = permBoxHtml(g, {
+      renderPerms(backdrop.querySelector("#da-share-perms"), {
         view: share.canView,
         edit: share.canEdit,
         del: share.canDelete,

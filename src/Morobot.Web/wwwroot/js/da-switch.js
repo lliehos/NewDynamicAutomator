@@ -78,26 +78,28 @@
     if (scope.tagName === "INPUT") upgrade(scope);
   }
 
-  var pendingRoot = null;
   var scheduled = false;
 
   /**
-   * Coalesce many mutation records into one pass. Subtrees accumulate so a
-   * batch of inserts anywhere under the document only costs a single sweep.
+   * Coalesce many mutation records into one pass.
+   *
+   * The sweep always covers the DOCUMENT, never the subtree a record happened to name. A subtree is
+   * the obvious scope to keep — it is smaller — but it is not safe, and the share modal is where
+   * that showed: it rebuilds its permission row with `innerHTML`, so the nodes named by the record
+   * are detached by the very next line. Sweeping that detached subtree upgrades nodes nobody can see
+   * and leaves the live ones as plain checkboxes, which is the bug where an existing grant's
+   * permissions render as checkboxes instead of switches.
+   *
+   * A document sweep has no such failure mode: whatever is in the page at the moment the pass runs is
+   * what gets upgraded, and `upgrade()` is idempotent (`daSwitched`), so re-covering already-handled
+   * nodes costs nothing.
    */
-  function schedule(root) {
-    if (root) {
-      // Prefer the document sweep when a root is already covered by it, so we
-      // never keep two competing scopes alive.
-      if (!pendingRoot || document.contains(pendingRoot) === false) pendingRoot = root;
-    }
+  function schedule() {
     if (scheduled) return;
     scheduled = true;
     var run = function () {
       scheduled = false;
-      var scope = pendingRoot || document;
-      pendingRoot = null;
-      upgradeAll(scope);
+      upgradeAll(document);
     };
     if (window.requestAnimationFrame) window.requestAnimationFrame(run);
     else window.setTimeout(run, 0);
@@ -109,7 +111,6 @@
     // Dynamic content: JS templates, modals, SignalR row inserts, editor inspector.
     if (window.MutationObserver) {
       var obs = new MutationObserver(function (records) {
-        var touched = false;
         for (var i = 0; i < records.length; i++) {
           var added = records[i].addedNodes;
           if (!added || !added.length) continue;
@@ -117,15 +118,14 @@
             var node = added[j];
             if (node.nodeType !== 1) continue;
             if (node.tagName === "INPUT" && node.type === "checkbox") {
+              // A bare input appears in no querySelectorAll on itself, so upgrade it directly. This
+              // is safe even if it is later detached, because it is the node itself that matters.
               upgrade(node);
-              touched = true;
             } else if (node.querySelector && node.querySelector('input[type="checkbox"]')) {
-              schedule(node);
-              touched = true;
+              schedule();
             }
           }
         }
-        void touched;
       });
       obs.observe(document.documentElement, { childList: true, subtree: true });
     }
