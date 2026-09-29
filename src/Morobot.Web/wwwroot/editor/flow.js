@@ -47,7 +47,9 @@
       Refresh: t("editor.actions.Refresh"),
       ScrollPage: t("editor.actions.ScrollPage"),
       RemoveElements: t("editor.actions.RemoveElements"),
-      LoadCaptcha: t("editor.actions.LoadCaptcha")
+      PressKey: t("editor.actions.PressKey"),
+      FocusElement: t("editor.actions.FocusElement"),
+      ScrollIntoView: t("editor.actions.ScrollIntoView")
     };
   }
 
@@ -82,7 +84,9 @@
       Refresh: t("editor.actionDesc.Refresh"),
       ScrollPage: t("editor.actionDesc.ScrollPage"),
       RemoveElements: t("editor.actionDesc.RemoveElements"),
-      LoadCaptcha: t("editor.actionDesc.LoadCaptcha")
+      PressKey: t("editor.actionDesc.PressKey"),
+      FocusElement: t("editor.actionDesc.FocusElement"),
+      ScrollIntoView: t("editor.actionDesc.ScrollIntoView")
     };
   }
 
@@ -6660,6 +6664,12 @@
           }
           renderInspector();
           return;
+        } else if (k === "alertType") {
+          // Accept / Dismiss / Prompt. Prompt is the only one with a text field, so the inspector is
+          // re-rendered to show or hide it rather than leaving a field that does nothing visible.
+          n.alertType = inp.value;
+          renderInspector();
+          return;
         } else if (k === "rowIndexType") {
           n.rowIndexType = inp.value;
           if (inp.value === "SpecificRow") {
@@ -7622,6 +7632,28 @@
       // A short "what this does" line under the picker, so the user can choose without guessing.
       actionDescriptionHtml(at);
 
+    // AlertAccept: which way to answer the browser dialog, and optional prompt text.
+    // It lives here rather than in stepValueSourceHtml because AlertAccept takes no value, so that
+    // function is never called for it — the fields would have been unreachable dead code.
+    if (at === "AlertAccept") {
+      const type = String(n.alertType || "Accept");
+      const isPrompt = type === "Prompt";
+      body += `<div class="insp-field"><label>نوع پاسخ</label>
+        <select data-k="alertType">
+          <option value="Accept" ${type === "Accept" ? "selected" : ""}>تأیید</option>
+          <option value="Dismiss" ${type === "Dismiss" ? "selected" : ""}>رد</option>
+          <option value="Prompt" ${isPrompt ? "selected" : ""}>تأیید و نوشتن متن</option>
+        </select>
+        <p class="palette-hint">«تأیید» دیالوگ را می‌بندد و «رد» آن را لغو می‌کند. اگر هیچ دیالوگی باز نباشد، مرحله خطا می‌دهد و طبق سوئیچ «چشم‌پوشی از خطا» ادامه یا توقف می‌شود.</p>
+      </div>`;
+      if (isPrompt) {
+        body += `<div class="insp-field"><label>متن prompt</label>
+          <input data-k="alertPromptText" value="${esc(n.alertPromptText || "")}" placeholder="متن دلخواه" />
+          <p class="palette-hint">این متن فقط برای دیالوگ <b>prompt</b> استفاده می‌شود. برای alert و confirm بی‌اثر است.</p>
+        </div>`;
+      }
+    }
+
     if (at === "NewPage") {
       body += `<p class="palette-hint">تب جدید باز می‌شود و به آدرس می‌رود.</p>`;
     }
@@ -7885,26 +7917,6 @@
         </select>
         <p class="palette-hint">المان‌های انتخاب‌شده از DOM حذف می‌شوند (نه پنهان). اگر هیچ المانی پیدا نشود، مرحله خطا می‌دهد.</p>
       </div>`;
-    }
-
-    // AlertAccept: which way to answer the browser dialog, and optional prompt text.
-    if (n.actionType === "AlertAccept") {
-      const type = String(n.alertType || "Accept");
-      const isPrompt = type === "Prompt";
-      html += `<div class="insp-field"><label>نوع پاسخ</label>
-        <select data-k="alertType">
-          <option value="Accept" ${type === "Accept" ? "selected" : ""}>تأیید</option>
-          <option value="Dismiss" ${type === "Dismiss" ? "selected" : ""}>رد</option>
-          <option value="Prompt" ${isPrompt ? "selected" : ""}>تأیید و نوشتن متن</option>
-        </select>
-        <p class="palette-hint">«تأیید» دیالوگ را می‌بندد و «رد» آن را لغو می‌کند. اگر هیچ دیالوگی باز نباشد، مرحله خطا می‌دهد و طبق سوئیچ «چشم‌پوشی از خطا» ادامه یا توقف می‌شود.</p>
-      </div>`;
-      if (isPrompt) {
-        html += `<div class="insp-field"><label>متن prompt</label>
-          <input data-k="alertPromptText" value="${esc(n.alertPromptText || "")}" placeholder="متن دلخواه" />
-          <p class="palette-hint">این متن فقط برای دیالوگ <b>prompt</b> استفاده می‌شود. برای alert و confirm بی‌اثر است.</p>
-        </div>`;
-      }
     }
 
     // DeleteRow: which row of which source is removed.
