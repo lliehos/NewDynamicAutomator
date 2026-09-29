@@ -19,102 +19,114 @@ function selectorHasDynPlaceholder(val) {
   const s = String(val || "");
   return s.includes(DYN_SEL_PLACEHOLDER) || /\{\{[^}]+\}\}/.test(s);
 }
-
-function stepIsCapture(actionType) {
-  return actionType === "TakeContent" || actionType === "SaveContent";
+/**
+ * The action spec table lives in `action-specs.js`, which BOTH this file and the editor page load.
+ * It used to be four helpers here (`stepReceivesValue`, `stepNeedsSelector`, `stepAllowsElementValue`,
+ * `stepShowsTargetSelector`) plus a second, separately-maintained copy in the editor's flow.js, and
+ * the two had already drifted. One file, one set of answers.
+ *
+ * These thin aliases keep the rest of this file readable; they resolve at call time, so the shared
+ * script only has to be loaded before the first action runs, not before this file is parsed.
+ */
+function actionSpec(actionType) {
+  return (typeof globalThis !== "undefined" && globalThis.actionSpec)
+    ? globalThis.actionSpec(actionType)
+    : {};
 }
 
-function stepIsUrlAction(actionType) {
-  return actionType === "GoToUrl" || actionType === "Navigate" || actionType === "NewPage";
+function stepNeedsSelector(actionType) {
+  return (typeof globalThis !== "undefined" && globalThis.stepNeedsSelector)
+    ? globalThis.stepNeedsSelector(actionType)
+    : false;
 }
 
 function stepReceivesValue(actionType) {
-  return [
-    "InputContent", "InsertContent", "LoadContent",
-    "WaitTime", "GoToUrl", "Navigate", "NewPage",
-    "SelectOption", "SetMemory", "PressKey"
-  ].includes(actionType || "");
-}
-
-/** Actions that operate on a page element and therefore need a selector. */
-function stepNeedsSelector(actionType) {
-  const at = actionType || "";
-  if (at === "WaitTime" || at === "NoAction" || at === "Breakpoint") return false;
-  if (stepIsUrlAction(at)) return false;
-  // SetMemory/GetMemory only touch the variable table and DeleteRow only touches the server store,
-  // so none of them acts on the page and demanding a selector would make them unauthorable.
-  if (at === "SetMemory" || at === "GetMemory" || at === "DeleteRow") return false;
-  return true;
-}
-
-function stepAllowsMemoryValue(actionType) {
-  return stepReceivesValue(actionType) || stepIsCapture(actionType);
+  return (typeof globalThis !== "undefined" && globalThis.stepReceivesValue)
+    ? globalThis.stepReceivesValue(actionType)
+    : false;
 }
 
 function stepAllowsElementValue(actionType) {
-  if (actionType === "WaitTime") return false;
-  return actionType === "InputContent" || actionType === "InsertContent" || actionType === "LoadContent"
-    || stepIsUrlAction(actionType) || stepIsCapture(actionType);
+  return (typeof globalThis !== "undefined" && globalThis.stepAllowsElementValue)
+    ? globalThis.stepAllowsElementValue(actionType)
+    : false;
+}
+
+function stepAllowsMemoryValue(actionType) {
+  return (typeof globalThis !== "undefined" && globalThis.stepAllowsMemoryValue)
+    ? globalThis.stepAllowsMemoryValue(actionType)
+    : false;
 }
 
 function stepAllowsSystemValue(actionType) {
-  if (actionType === "WaitTime") return false;
-  return stepReceivesValue(actionType) || stepIsCapture(actionType);
+  return (typeof globalThis !== "undefined" && globalThis.stepAllowsSystemValue)
+    ? globalThis.stepAllowsSystemValue(actionType)
+    : false;
 }
 
-function migrateCaptureNode(n) {
-  if (!n || !stepIsCapture(n.actionType)) return;
-  if (n.saveTargetType === "Memory" || n.saveTargetType === "DataSource") return;
-  if (n.contentSourceType === "Memory" || n.contentSourceType === "DataSource") {
-    n.saveTargetType = n.contentSourceType;
-    n.contentSourceType = "Elements";
-  } else {
-    n.saveTargetType = "Memory";
-  }
+function stepWritesToSource(actionType) {
+  return (typeof globalThis !== "undefined" && globalThis.stepWritesToSource)
+    ? globalThis.stepWritesToSource(actionType)
+    : false;
 }
 
-function normalizeSaveTarget(n) {
-  migrateCaptureNode(n);
-  let t = n.saveTargetType || "Memory";
-  if (t !== "DataSource") t = "Memory";
-  n.saveTargetType = t;
-  return t;
+function stepWritesToMemory(actionType) {
+  return (typeof globalThis !== "undefined" && globalThis.stepWritesToMemory)
+    ? globalThis.stepWritesToMemory(actionType)
+    : false;
 }
 
-function normalizeStepValueSource(n) {
-  migrateCaptureNode(n);
-  let src = n.contentSourceType;
-  const at = n.actionType || "";
-  if (!src || src === "None") {
-    src = n.valueFromSource ? "DataSource"
-      : (stepIsCapture(at) ? "Elements" : "Constant");
-  }
-  const allowed = new Set(["Constant", "DataSource"]);
-  if (stepAllowsElementValue(at)) allowed.add("Elements");
-  if (stepAllowsMemoryValue(at)) allowed.add("Memory");
-  if (stepAllowsSystemValue(at)) allowed.add("System");
-  if (!allowed.has(src)) src = stepIsCapture(at) ? "Elements" : "Constant";
-  n.contentSourceType = src;
-  n.valueFromSource = src === "DataSource";
-  return src;
+function stepIsUrlAction(actionType) {
+  return actionType === "GoToUrl" || actionType === "NewPage";
 }
 
 function stepShowsTargetSelector(n) {
   const at = (n && n.actionType) || "";
-  if (stepIsUrlAction(at)) return false;
-  if (at === "WaitTime" || at === "CloseFirstTab" || at === "CloseLastTab"
-    || at === "Refresh" || at === "NoAction" || !at) {
-    return false;
+  // A spec only says an action CAN take a selector. The two data-source actions additionally let
+  // the author choose where the value comes from, and a constant/memory value needs no element.
+  if (at === "LoadContent") return normalizeStepValueSource(n) === "Elements";
+  return stepNeedsSelector(at);
+}
+
+/**
+ * Where LoadContent puts the value it read: a page element or a memory variable.
+ *
+ * Kept as its own tiny helper because both the validator and the inspector must agree, and the
+ * answer is not derivable from the spec alone (the spec says both destinations are allowed; this
+ * says which one the author chose).
+ */
+function normalizeLoadTarget(n) {
+  const t = n.saveTargetType || n.loadTargetType || "Elements";
+  return t === "Memory" ? "Memory" : "Elements";
+}
+
+/**
+ * Normalize where a step's input value comes from, and report it.
+ *
+ * Only sources the action's spec actually allows are kept; anything else falls back to a constant,
+ * so a graph saved against an older rule set cannot quietly keep a source the action no longer
+ * supports. Returns the effective source: Constant | DataSource | Elements | Memory | System.
+ */
+function normalizeStepValueSource(n) {
+  const at = (n && n.actionType) || "";
+  const spec = actionSpec(at);
+
+  let src = n.contentSourceType;
+  if (!src || src === "None") {
+    src = n.valueFromSource ? "DataSource"
+      : (spec.elementVal ? "Elements" : "Constant");
   }
-  if (stepIsCapture(at)) {
-    migrateCaptureNode(n);
-    return normalizeStepValueSource(n) === "Elements";
-  }
-  return [
-    "Click", "DoubleClick", "RightClick", "Hover", "Enter",
-    "InputContent", "InsertContent", "LoadContent",
-    "WaitForLoading"
-  ].includes(at);
+
+  const allowed = new Set(["Constant"]);
+  if (spec.readsCell) allowed.add("DataSource");
+  if (spec.elementVal) allowed.add("Elements");
+  if (spec.memoryVal) allowed.add("Memory");
+  if (spec.systemVal) allowed.add("System");
+  if (!allowed.has(src)) src = "Constant";
+
+  n.contentSourceType = src;
+  n.valueFromSource = src === "DataSource";
+  return src;
 }
 
 function conditionNeedsCompare(ct) {
@@ -196,56 +208,30 @@ function validateActionNodeForPlay(n) {
     if (!v.ok) reasons.push(v.reason);
   }
 
-  if (stepIsCapture(at)) {
-    migrateCaptureNode(n);
+  // Where the step's INPUT value comes from. Every action that takes a value is checked the same
+  // way, whether it then writes that value into a page element, a source cell or a variable — the
+  // old split between "capture" actions and "value" actions was the same question asked twice.
+  if (stepReceivesValue(at)) {
     const src = normalizeStepValueSource(n);
     if (src === "Constant") {
-      if (!String(n.constantValue || "").trim()) reasons.push(tv("act.constantSaveEmpty"));
-    } else if (src === "Elements") {
-      const v = validateSelectorBlock(n, { labelKey: "label.pageElementSelector" });
-      if (!v.ok) reasons.push(v.reason);
-    } else if (src === "DataSource") {
-      const v = validateDataSourcePick(n);
-      if (!v.ok) reasons.push(v.reason);
-    } else if (src === "Memory") {
-      if (!String(n.sourceMemoryVariableName || "").trim()) {
-        reasons.push(tv("act.memSourceMissing"));
-      }
-    } else if (src === "System") {
-      if (!String(n.systemValueType || "").trim()) {
-        reasons.push(tv("act.sysTypeMissing"));
-      }
-    }
-    const dest = normalizeSaveTarget(n);
-    if (dest === "Memory") {
-      if (!String(n.memoryVariableName || "").trim()) {
-        reasons.push(tv("act.memDestMissing"));
-      }
-    } else {
-      const saveDs = n.saveDataSourceId != null ? n.saveDataSourceId : n.dataSourceId;
-      const saveCol = n.saveColumnName || (src === "DataSource" ? "" : n.dynamicSourceColumnName);
-      if (src === "DataSource") {
-        if (saveDs == null || saveDs === "") reasons.push(tv("act.saveDsMissing"));
-        if (!String(n.saveColumnName || "").trim()) reasons.push(tv("act.saveColMissing"));
-      } else {
-        const v = validateDataSourcePick({
-          dataSourceId: saveDs,
-          dynamicSourceColumnName: saveCol || n.dynamicSourceColumnName
-        }, { dsReason: tv("act.saveDsMissing"), colReason: tv("act.saveColMissing") });
-        if (!v.ok) reasons.push(v.reason);
-      }
-    }
-  } else if (stepReceivesValue(at)) {
-    const src = normalizeStepValueSource(n);
-    if (src === "Constant") {
-      if (at === "WaitTime") {
-        const ms = Number(n.constantValue);
-        if (!Number.isFinite(ms) || ms < 0 || String(n.constantValue ?? "").trim() === "") {
+      if (at === "WaitTime" || at === "Hold") {
+        // Both are durations in milliseconds. Hold's default comes from the diagram when the step
+        // leaves the field blank, so only a clearly invalid entry (negative, or not a number) is
+        // rejected rather than an empty one.
+        const raw = String(n.constantValue ?? "").trim();
+        const ms = Number(raw);
+        if (raw !== "" && (!Number.isFinite(ms) || ms < 0)) {
+          reasons.push(tv(at === "Hold" ? "act.holdInvalid" : "act.waitMissing"));
+        } else if (raw === "" && at === "WaitTime") {
           reasons.push(tv("act.waitMissing"));
         }
       } else if (stepIsUrlAction(at)) {
         const url = String(n.navigateUrl || n.constantValue || "").trim();
         if (!url) reasons.push(tv("act.urlEmpty"));
+      } else if (at === "ScrollPage") {
+        // A missing amount means "scroll by one screenful", which is the sensible default.
+        const raw = String(n.constantValue ?? "").trim();
+        if (raw !== "" && !Number.isFinite(Number(raw))) reasons.push(tv("act.scrollInvalid"));
       } else if (!String(n.constantValue || "").trim()) {
         reasons.push(tv("act.constantEmpty"));
       }
@@ -273,6 +259,31 @@ function validateActionNodeForPlay(n) {
         reasons.push(tv("act.sysTypeMissing"));
       }
     }
+  }
+
+  // Where the value GOES, for the actions that write somewhere other than the page element they
+  // already target. LoadContent always writes to a chosen target (element or variable);
+  // InsertContent and SetMemory write to a source cell / variable respectively.
+  if (at === "LoadContent") {
+    const dest = normalizeLoadTarget(n);
+    if (dest === "Memory") {
+      if (!String(n.memoryVariableName || "").trim()) reasons.push(tv("act.memDestMissing"));
+    } else {
+      const v = validateSelectorBlock(n, { labelKey: "label.targetSelector" });
+      if (!v.ok) reasons.push(v.reason);
+    }
+  }
+  if (stepWritesToSource(at)) {
+    const dsId = n.saveDataSourceId != null ? n.saveDataSourceId : n.dataSourceId;
+    const col = n.saveColumnName || n.dynamicSourceColumnName;
+    const v = validateDataSourcePick(
+      { dataSourceId: dsId, dynamicSourceColumnName: col },
+      { dsReason: tv("act.saveDsMissing"), colReason: tv("act.saveColMissing") }
+    );
+    if (!v.ok) reasons.push(v.reason);
+  }
+  if (stepWritesToMemory(at) && at !== "LoadContent") {
+    if (!String(n.memoryVariableName || "").trim()) reasons.push(tv("act.memDestMissing"));
   }
 
   return { ok: reasons.length === 0, reasons };
@@ -454,6 +465,8 @@ const ENGINE_MSG = {
     "act.saveDsMissing": "منبع مقصد ذخیره انتخاب نشده",
     "act.saveColMissing": "ستون مقصد ذخیره انتخاب نشده",
     "act.waitMissing": "زمان انتظار مشخص نیست",
+    "act.holdInvalid": "مدت نگه‌داشتن کلیک باید عددی و بزرگ‌تر یا مساوی صفر باشد",
+    "act.scrollInvalid": "میزان اسکرول باید عددی باشد",
     "act.urlEmpty": "آدرس ثابت خالی است",
     "act.constantEmpty": "مقدار ثابت خالی است",
     "act.memVarMissing": "متغیر حافظه مشخص نیست",
@@ -484,6 +497,9 @@ const ENGINE_MSG = {
     "run.saveTargetMissing": "منبع/ستون مقصد ذخیره مشخص نیست.",
     "run.noResult": "بدون نتیجه",
     "run.badSelector": "سلکتور نامعتبر: {sel}",
+    "run.removeNone": "المانی برای حذف پیدا نشد: {sel}",
+    "run.alertNotArmed": "گوش‌دادن به پیام هشدار مرورگر برای این تب فعال نیست؛ افزونهٔ Player را دوباره بارگذاری کنید.",
+    "run.alertNone": "پیام هشداری که باید تأیید شود دیده نشد.",
     "run.selectorEmpty": "سلکتور خالی است.",
     "run.unsupportedAction": "اکشن پشتیبانینشده: {action}",
     "run.notSelect": "المان انتخابی یک لیست کشویی (select) نیست.",
@@ -523,6 +539,8 @@ const ENGINE_MSG = {
     "act.saveDsMissing": "No destination data source selected",
     "act.saveColMissing": "No destination column selected",
     "act.waitMissing": "Wait duration is not set",
+    "act.holdInvalid": "Hold duration must be a number greater than or equal to zero",
+    "act.scrollInvalid": "Scroll amount must be a number",
     "act.urlEmpty": "Constant URL is empty",
     "act.constantEmpty": "Constant value is empty",
     "act.memVarMissing": "Memory variable is not set",
@@ -553,6 +571,9 @@ const ENGINE_MSG = {
     "run.saveTargetMissing": "Destination source/column is not specified.",
     "run.noResult": "No result",
     "run.badSelector": "Invalid selector: {sel}",
+    "run.removeNone": "No element to remove was found: {sel}",
+    "run.alertNotArmed": "Dialog handling is not armed for this tab; reload the Player extension.",
+    "run.alertNone": "No browser dialog was seen to accept.",
     "run.selectorEmpty": "Selector is empty.",
     "run.unsupportedAction": "Unsupported action: {action}",
     "run.notSelect": "The target element is not a dropdown (select).",
@@ -848,6 +869,12 @@ async function delayAfterNode(graph, nextId) {
 
 /** Minimum pause when a back-edge is taken, so a polling loop cannot hammer the page. */
 const LOOP_BACK_MIN_PAUSE_MS = 500;
+
+/** Hold with no duration set: a brief but perceptible press, long enough for a long-press handler. */
+const HOLD_DEFAULT_MS = 500;
+
+/** ScrollPage with no amount set: about one screenful, the usual "next page down" step. */
+const SCROLL_PAGE_DEFAULT_PX = 600;
 
 /**
  * Called just before moving to `nextId`. When that node has already run in this walk, the
@@ -1581,7 +1608,7 @@ async function ensurePlayTab(tabId, steps) {
       || /:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url);
     if (!onPortal) return tabId;
     const nav = steps.find((s) =>
-      (s.actionType === "GoToUrl" || s.actionType === "Navigate") && (s.navigateUrl || s.constantValue));
+      s.actionType === "GoToUrl" && (s.navigateUrl || s.constantValue));
     const target = nav?.navigateUrl || nav?.constantValue || "about:blank";
     const created = await chrome.tabs.create({ url: target, active: true });
     return created.id || tabId;
@@ -2179,7 +2206,7 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
     playTabId = activeTabId;
     await chrome.storage.local.set({ playTabId: activeTabId });
     await injectPlayFab(activeTabId);
-  } else if (outcome.navigated || step.actionType === "GoToUrl" || step.actionType === "Navigate") {
+  } else if (outcome.navigated || step.actionType === "GoToUrl") {
     await injectPlayFab(activeTabId);
   }
   appendPlayLog("ok", `انجام شد: ${label}`);
@@ -2748,7 +2775,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     return { ok: true, tabId: newId, navigated: true };
   }
 
-  if (actionType === "GoToUrl" || actionType === "Navigate") {
+  if (actionType === "GoToUrl") {
     let url = resolvedUrl;
     const cst0 = step.contentSourceType || "";
     if (cst0 === "Memory" || cst0 === "Elements" || cst0 === "System" || cst0 === "DataSource") {
@@ -2846,41 +2873,36 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     return { ok: true, rowDeleted: { dataSourceId: dsId, rowIndex: targetRow } };
   }
 
-  // A deliberate wait for an element to exist: no state requirements, and the wait
-  // budget comes from `waitMaxMs` rather than the per-step selector timeout.
-  if (actionType === "WaitForElement") {
-    const frameIdForWait = await resolveFramePath(tabId, framePath).catch(() => undefined);
-    const waitPayload = {
-      actionType,
-      selectorValue: resolvedSelector,
-      waitMaxMs: Math.max(0, Number(step.waitMaxMs) || 0),
-      highlightColor: resolveHighlightColor(graph)
-    };
-    const waited = await executeInFrame(tabId, frameIdForWait, waitPayload);
-    if (!waited || !waited.ok) {
-      return onUnexpected(runMode, {
-        taskId,
-        stepId: step.entityId,
-        reason: waited?.reason || "wait_timeout",
-        expectedSelector: resolvedSelector,
-        actualUrl: waited?.url || null,
-        framePathJson: step.framePathJson || JSON.stringify(framePath)
-      }, waited?.error);
-    }
-    return { ok: true };
+  // LoadContent: read one source cell and write it into a page element OR a memory variable.
+  // Its value comes from the source, so it never reads the step's own value plumbing.
+  if (actionType === "LoadContent") {
+    return runLoadContentStep(tabId, taskId, step, runMode, graph, rowIndex, framePath);
+  }
+
+  // InsertContent: write a value INTO one cell of a data source. It touches the server store and
+  // the current page only as a VALUE SOURCE, so it takes no target selector.
+  if (actionType === "InsertContent") {
+    return runInsertContentStep(tabId, taskId, step, runMode, graph, rowIndex, framePath);
   }
 
   const cst = step.contentSourceType || "";
   const needsAsyncValue = stepUsesDataSourceValue(step)
     || cst === "Memory" || cst === "Elements" || cst === "System"
-    || (actionType === "InsertContent" || actionType === "LoadContent" || actionType === "InputContent");
-  let valueForAction = needsAsyncValue
-    ? (await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath }) || "")
-    : (step.constantValue || "");
+    || (actionType === "InputContent" || actionType === "PressKey" || actionType === "SelectOption" || actionType === "Hold");
 
-  const isCapture = actionType === "TakeContent" || actionType === "SaveContent";
-  if (isCapture) {
-    return runCaptureStep(tabId, taskId, step, runMode, graph, rowIndex, framePath);
+  let valueForAction;
+  if (needsAsyncValue) {
+    valueForAction = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath }) || "";
+  } else if (actionType === "Hold") {
+    // A blank duration is not an error: fall back to the diagram's inter-step gap so a Hold step
+    // still means something the moment it is dropped on the canvas.
+    const raw = String(step.constantValue ?? "").trim();
+    valueForAction = raw === "" ? String(resolveStepDelayMs(graph) || HOLD_DEFAULT_MS) : raw;
+  } else if (actionType === "ScrollPage") {
+    const raw = String(step.constantValue ?? "").trim();
+    valueForAction = raw === "" ? String(SCROLL_PAGE_DEFAULT_PX) : raw;
+  } else {
+    valueForAction = step.constantValue || "";
   }
 
   let frameId;
@@ -2906,9 +2928,11 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     selectorValue: resolvedSelector,
     constantValue: valueForAction,
     navigateUrl: step.navigateUrl,
-    // SelectOption matches by value, label or position; PressKey needs the key name.
+    // SelectOption matches by value, label or position; PressKey needs the key name; every
+    // RemoveElements run needs to know whether one match or all of them go.
     selectBy: step.selectBy || "Value",
     keyName: step.keyName || "",
+    removeAllMatches: step.removeAllMatches !== false,
     highlightColor: resolveHighlightColor(graph),
     waitTimeoutMs,
     requireVisible: !!stateReq.requireVisible,
@@ -2944,82 +2968,122 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   return result;
 }
 
-/** Capture/save: resolve value from source, then store to Memory or DataSource. */
-async function runCaptureStep(tabId, taskId, step, runMode, graph, rowIndex, framePath) {
-  // Migrate legacy: contentSourceType was destination.
-  if (!step.saveTargetType && (step.contentSourceType === "Memory" || step.contentSourceType === "DataSource")) {
-    step.saveTargetType = step.contentSourceType;
-    step.contentSourceType = "Elements";
+/**
+ * LoadContent — read ONE cell of a data source and put it into a target.
+ *
+ * The target is either a page element (the cell's text is typed into it) or a memory variable
+ * (the cell's text is stored). The value always comes from the source, which is why this action
+ * does not read the step's own value-source plumbing — reading a cell into a cell would be
+ * InsertContent with a source-to-source copy, and that is not what this action is for.
+ *
+ * A failed read is a step error, never a silent empty string: substituting "" here would type
+ * nothing into a real form and look like it worked.
+ */
+async function runLoadContentStep(tabId, taskId, step, runMode, graph, rowIndex, framePath) {
+  const ds = findDataSourceForValue(step, graph);
+  const column = step.dynamicSourceColumnName || step.saveColumnName;
+  const text = await readDataSourceCellForPlay(ds, column, rowIndex ?? 0, step, graph);
+  if (text === undefined) {
+    // readDataSourceCellForPlay has already logged the reason; surface it as the step error.
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "data_source_unavailable",
+      expectedSelector: step.selectorValue || null, actualUrl: null,
+      framePathJson: step.framePathJson
+    }, dataSourceUnavailable(step, ds, column, rowIndex).message);
   }
-  const src = step.contentSourceType || "Elements";
-  let text = "";
 
-  if (src === "Elements") {
-    const resolvedSelector = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0);
-    if (!resolvedSelector) {
-      return onUnexpected(runMode, {
-        taskId, stepId: step.entityId, reason: "missing_selector",
-        expectedSelector: "", actualUrl: null, framePathJson: step.framePathJson
-      }, "سلکتور المان خالی است");
-    }
-    let frameId;
-    try {
-      frameId = await resolveFramePath(tabId, framePath || []);
-    } catch (err) {
-      return onUnexpected(runMode, {
-        taskId, stepId: step.entityId, reason: "frame_resolve_failed",
-        expectedSelector: resolvedSelector, actualUrl: null,
-        framePathJson: step.framePathJson
-      }, err.message);
-    }
-    const waitTimeoutMs = step.selectorWaitEnabled === true
-      ? Math.max(0, Number(step.selectorWaitMs) || 1000)
-      : 0;
-    const stateReq = selectorStateReqs(step);
-    const payload = {
-      actionType: "TakeContent",
-      selectorValue: resolvedSelector,
-      constantValue: "",
-      highlightColor: resolveHighlightColor(graph),
-      waitTimeoutMs,
-      requireVisible: !!stateReq.requireVisible,
-      requireEnabled: !!stateReq.requireEnabled,
-      requireClickable: !!stateReq.requireClickable
-    };
-    // Same single-path rule as runStep above — see the comment there.
-    const result = await (async () => {
-      await clearTabPlayHighlights(tabId);
-      return executeInFrame(tabId, frameId, payload);
-    })();
-    if (!result || !result.ok) {
+  const target = normalizeLoadTarget(step);
+  if (target === "Memory") {
+    const name = String(step.memoryVariableName || "").trim();
+    const saved = await setPlayMemoryVar(name, text);
+    if (!saved?.ok) {
       return onUnexpected(runMode, {
         taskId, stepId: step.entityId,
-        reason: result?.reason || "action_failed",
-        expectedSelector: resolvedSelector,
-        actualUrl: result?.url || null,
-        framePathJson: step.framePathJson
-      }, result?.error);
+        reason: saved?.reason || "missing_memory_name",
+        expectedSelector: null, actualUrl: null
+      });
     }
-    text = result.text != null ? String(result.text) : "";
-  } else {
-    text = await resolveStepParamAsync(step, graph, rowIndex ?? 0, {
-      tabId,
-      framePath,
-      memoryNameKey: src === "Memory" ? "sourceMemoryVariableName" : "memoryVariableName"
-    });
+    appendPlayLog("info", `مقدار سلول «${column}» در متغیر «${name}» ذخیره شد`);
+    return { ok: true, text, memorySet: { name, value: text } };
   }
 
-  const store = await storeCapturedContent(step, graph, text, rowIndex ?? 0);
+  // Target is a page element: type the cell's value into it, exactly as InputContent would.
+  const resolvedSelector = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0);
+  if (!resolvedSelector) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "missing_selector",
+      expectedSelector: "", actualUrl: null, framePathJson: step.framePathJson
+    }, "سلکتور المان مقصد خالی است");
+  }
+  let frameId;
+  try {
+    frameId = await resolveFramePath(tabId, framePath || []);
+  } catch (err) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "frame_resolve_failed",
+      expectedSelector: resolvedSelector, actualUrl: null, framePathJson: step.framePathJson
+    }, err.message);
+  }
+  const waitTimeoutMs = step.selectorWaitEnabled === true
+    ? Math.max(0, Number(step.selectorWaitMs) || 1000)
+    : 0;
+  const stateReq = selectorStateReqs(step);
+  const payload = {
+    // The page-side branch is InputContent's: both write a value into a field.
+    actionType: "InputContent",
+    selectorValue: resolvedSelector,
+    constantValue: text,
+    highlightColor: resolveHighlightColor(graph),
+    waitTimeoutMs,
+    requireVisible: !!stateReq.requireVisible,
+    requireEnabled: !!stateReq.requireEnabled,
+    requireClickable: !!stateReq.requireClickable
+  };
+  // Same single-path rule as runStep above — see the comment there.
+  const result = await (async () => {
+    await clearTabPlayHighlights(tabId);
+    return executeInFrame(tabId, frameId, payload);
+  })();
+  if (!result || !result.ok) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId,
+      reason: result?.reason || "action_failed",
+      expectedSelector: resolvedSelector,
+      actualUrl: result?.url || null,
+      framePathJson: step.framePathJson
+    }, result?.error);
+  }
+  return { ok: true, text, captured: true };
+}
+
+/**
+ * InsertContent — write the step's resolved value into ONE cell of a data source.
+ *
+ * The value comes from wherever the author chose (constant / page element / memory / system).
+ * An empty value is written as an empty cell rather than refused: blanking a cell is a legitimate
+ * thing to want, and it is the author's explicit choice.
+ */
+async function runInsertContentStep(tabId, taskId, step, runMode, graph, rowIndex, framePath) {
+  const text = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
+  const dsId = step.saveDataSourceId != null ? step.saveDataSourceId : step.dataSourceId;
+  const column = step.saveColumnName || step.dynamicSourceColumnName;
+  const sources = graph?.dataSources || [];
+  const ds = (dsId != null && sources.find((d) => Number(d.id) === Number(dsId)))
+    || findDataSourceForValue(step, graph);
+
+  const store = await storeCapturedContent(
+    { ...step, saveTargetType: "DataSource", saveColumnName: column },
+    graph, text, rowIndex ?? 0
+  );
   if (!store.ok) {
     return onUnexpected(runMode, {
       taskId, stepId: step.entityId,
       reason: store.reason || "capture_store_failed",
-      expectedSelector: step.selectorValue || null,
-      actualUrl: null,
-      framePathJson: step.framePathJson
+      expectedSelector: null, actualUrl: null, framePathJson: step.framePathJson
     }, store.error);
   }
-  return { ok: true, text, captured: true };
+  appendPlayLog("info", `مقدار در سلول «${column}» منبع ${ds?.id ?? dsId} درج شد`);
+  return { ok: true, text, inserted: true };
 }
 
 /**
@@ -3323,7 +3387,9 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
     }
     const eqReq = selectorStateReqs(step, { equal: true });
     const payload = {
-      actionType: "TakeContent",
+      // Internal verb: read an element's text as a VALUE. It is not an ActionType — reading a
+      // field is a sub-step of the actions that need a value, never something the author picks.
+      actionType: "ReadElementValue",
       selectorValue: valueSel,
       constantValue: "",
       waitTimeoutMs: step.equalSelectorWaitEnabled === true
@@ -4469,25 +4535,59 @@ async function playExecuteInjected(payload) {
   if (actionType === "WaitTime") return { ok: true, waitMs: Number(value) || 0 };
   if (actionType === "NoAction" || actionType === "Breakpoint") return { ok: true, skipped: true };
 
+  // ScrollPage: move the page (or the nearest scrollable ancestor) by the step's amount, in device
+  // pixels down the document. It runs before the selector guard because it acts on the document,
+  // not on an element — demanding a selector here would make the action unauthorable.
+  if (actionType === "ScrollPage") {
+    const amount = Number(value);
+    const dy = Number.isFinite(amount) && amount !== 0 ? amount : SCROLL_PAGE_DEFAULT_PX;
+    try {
+      window.scrollBy({ top: dy, left: 0, behavior: "instant" });
+    } catch {
+      try { window.scrollBy(0, dy); } catch { /* a page that refuses to scroll is not a failure */ }
+    }
+    return { ok: true, scrolledBy: dy };
+  }
+
+  // AlertAccept: close a browser dialog by accepting it.
+  //
+  // This is the one action that cannot be done from injected page code. A JS dialog
+  // (alert/confirm/prompt) BLOCKS the page's own script the moment it opens, so by the time any
+  // injected code runs the dialog is already up and only the browser itself can dismiss it. The
+  // extension dismisses it through a native dialog handler registered for the tab, so this branch
+  // reports what the handler saw rather than trying to click anything.
+  if (actionType === "AlertAccept") {
+    if (typeof window.__daAlertTake !== "function") {
+      return { ok: false, error: tv("run.alertNotArmed"), reason: "alert_not_armed" };
+    }
+    const seen = window.__daAlertTake();
+    if (!seen) {
+      // No dialog was observed. Reported as a clear outcome rather than a silent pass: this step
+      // exists to clear a dialog, so finding none usually means the page changed.
+      return { ok: false, error: tv("run.alertNone"), reason: "alert_not_found" };
+    }
+    return { ok: true, accepted: 1 };
+  }
+
+  // WaitForLoading: wait until the document reports itself complete, then return. The budget is
+  // bounded here as well as in the caller, so a page that never finishes cannot hang the run.
+  if (actionType === "WaitForLoading") {
+    const maxMs = Math.max(0, Number(value) || 0) || 15000;
+    const deadline = Date.now() + maxMs;
+    // `document.readyState === "complete"` is the same condition the browser fires `load` for.
+    while (document.readyState !== "complete" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (document.readyState !== "complete") {
+      return { ok: true, timedOut: true, note: "still_loading" };
+    }
+    return { ok: true };
+  }
+
   if (!selector) return { ok: false, error: tv("run.selectorEmpty"), reason: "missing_selector" };
 
   // A deliberate wait for an element to exist. It must run before the shared existence
   // check below, which uses the per-step selector timeout and would report the element
-  // as missing without honouring the step's own wait budget.
-  if (actionType === "WaitForElement") {
-    const maxMs = Math.max(0, Number(payload.waitMaxMs) || Number(waitTimeoutMs) || 0);
-    const deadline = Date.now() + maxMs;
-    for (;;) {
-      let nodes = [];
-      try { nodes = Array.from(document.querySelectorAll(selector)); } catch { nodes = []; }
-      if (nodes.length) return { ok: true };
-      if (Date.now() >= deadline) {
-        return { ok: false, error: tv("run.waitElementTimeout", { sel: selector }), reason: "wait_timeout" };
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-  }
-
   const found = await waitForElement(selector, waitTimeoutMs, stateReq);
   if (!found.ok) return found;
   const el = found.el;
@@ -4505,7 +4605,22 @@ async function playExecuteInjected(payload) {
     return { ok: true };
   }
 
-  if (actionType === "InputContent" || actionType === "InsertContent" || actionType === "LoadContent") {
+  // Internal verb, not an ActionType: read the element's text back as a value. The actions that
+  // need a value from the page (InputContent, InsertContent, SetMemory, GoToUrl as a URL…) all
+  // funnel their read through here instead of each having their own copy.
+  if (actionType === "ReadElementValue") {
+    let text = "";
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+      text = el.value || "";
+    } else {
+      text = (el.innerText || el.textContent || "").trim();
+    }
+    return { ok: true, text };
+  }
+
+  // One branch for every action that puts a value into a field: InputContent writes the author's
+  // value, and LoadContent (which types a source cell in) reuses it by sending InputContent.
+  if (actionType === "InputContent") {
     const v = value == null ? "" : String(value);
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -4522,19 +4637,59 @@ async function playExecuteInjected(payload) {
     return { ok: true };
   }
 
-  if (actionType === "TakeContent" || actionType === "SaveContent") {
-    let text = "";
-    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
-      text = el.value || "";
-    } else {
-      text = (el.innerText || el.textContent || "").trim();
-    }
-    return { ok: true, text };
-  }
-
   if (actionType === "Hover") {
     el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
     return { ok: true };
+  }
+
+  // Hold: press the element and keep the button down for the step's duration, then release. A page
+  // that reacts to a long press listens across the whole down..up window, so a plain click (down
+  // and up in the same tick) is never seen as one. Dispatching the down, waiting, then the up is
+  // what makes it work; the wait happens here because only this injected context can hold the
+  // press open while the page is live.
+  if (actionType === "Hold") {
+    const holdMs = Math.max(0, Number(value) || 0);
+    const r = el.getBoundingClientRect();
+    const opts = {
+      bubbles: true, cancelable: true, view: window, button: 0,
+      clientX: r.left + r.width / 2,
+      clientY: r.top + r.height / 2
+    };
+    try {
+      el.dispatchEvent(new MouseEvent("mousedown", opts));
+      // A pointerdown too: modern long-press handlers listen for pointer events, not mouse ones.
+      try { el.dispatchEvent(new PointerEvent("pointerdown", { ...opts, pointerId: 1, isPrimary: true })); } catch { /* older engines */ }
+      await new Promise((res) => setTimeout(res, holdMs));
+      el.dispatchEvent(new MouseEvent("mouseup", opts));
+      el.click();
+      try { el.dispatchEvent(new PointerEvent("pointerup", { ...opts, pointerId: 1, isPrimary: true })); } catch { /* ignore */ }
+    } catch (err) {
+      return { ok: false, error: String(err && err.message || err), reason: "hold_failed" };
+    }
+    return { ok: true, waitMs: 0, heldMs: holdMs };
+  }
+
+  // RemoveElements: delete the matched element(s) from the DOM. The page keeps whatever it does
+  // with a missing node — this is a real removal, not a hide, because a hidden element still
+  // occupies the layout and still answers queries, which is usually the opposite of the intent.
+  if (actionType === "RemoveElements") {
+    let nodes;
+    try {
+      nodes = Array.from(document.querySelectorAll(selector));
+    } catch {
+      return { ok: false, error: tv("run.badSelector", { sel: selector }), reason: "bad_selector" };
+    }
+    const wanted = payload.removeAllMatches !== false ? nodes : nodes.slice(0, 1);
+    let removed = 0;
+    for (const node of wanted) {
+      try {
+        if (node.parentNode) { node.parentNode.removeChild(node); removed += 1; }
+      } catch { /* a node we cannot detach is skipped rather than failing the whole step */ }
+    }
+    if (!removed) {
+      return { ok: false, error: tv("run.removeNone", { sel: selector }), reason: "element_not_found" };
+    }
+    return { ok: true, removed };
   }
 
   // A field usually has to be emptied before new text goes in: typing appends to whatever

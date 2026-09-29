@@ -1,4 +1,4 @@
-importScripts("lib/branding.js", "lib/session-scope.js", "player/engine.js", "bg-selector.js");
+importScripts("lib/branding.js", "lib/session-scope.js", "player/action-specs.js", "player/engine.js", "bg-selector.js");
 
 /** Morobot Global extension — record, play, and selector in one package. */
 const DEFAULT_PORTAL = "https://localhost:7201";
@@ -1087,15 +1087,21 @@ function recordedActionVerbFa(actionType) {
     case "DoubleClick": return "دبل‌کلیک";
     case "RightClick": return "کلیک‌راست";
     case "Hover": return "هاور";
+    case "Hold": return "نگه‌داشتن";
+    case "FocusElement": return "فوکوس";
     case "InputContent":
-    case "InsertContent":
-    case "LoadContent": return "متن";
-    case "TakeContent":
-    case "SaveContent": return "خواندن";
-    case "GoToUrl":
-    case "Navigate": return "رفتن به";
+    case "InsertContent": return "متن";
+    case "LoadContent": return "بارگذاری";
+    case "GoToUrl": return "رفتن به";
     case "NewPage": return "تب جدید";
     case "Refresh": return "رفرش";
+    case "ScrollPage":
+    case "ScrollIntoView": return "اسکرول";
+    case "RemoveElements": return "حذف المان";
+    case "AlertAccept": return "تأیید هشدار";
+    case "PressKey": return "کلید";
+    case "SelectOption": return "انتخاب گزینه";
+    case "ClearContent": return "پاک‌کردن";
     case "WaitTime": return "انتظار";
     case "WaitForLoading": return "انتظار لود";
     default: return t;
@@ -1122,7 +1128,7 @@ function buildRecordedActionTitle(step, index) {
   const verb = recordedActionVerbFa(at);
   const label = cleanRecordedLabel(step.elementLabel || "");
 
-  if (String(at).toLowerCase() === "gotourl" || at === "Navigate") {
+  if (String(at).toLowerCase() === "gotourl") {
     let host = "";
     try {
       host = new URL(String(step.url || step.value || "")).hostname || "";

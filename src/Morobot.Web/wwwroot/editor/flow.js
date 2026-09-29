@@ -35,8 +35,6 @@
       SelectOption: t("editor.actions.SelectOption"),
       InsertContent: t("editor.actions.InsertContent"),
       LoadContent: t("editor.actions.LoadContent"),
-      SaveContent: t("editor.actions.SaveContent"),
-      TakeContent: t("editor.actions.TakeContent"),
       DeleteRow: t("editor.actions.DeleteRow"),
       SetMemory: t("editor.actions.SetMemory"),
       GetMemory: t("editor.actions.GetMemory"),
@@ -73,8 +71,6 @@
       SelectOption: t("editor.actionDesc.SelectOption"),
       InsertContent: t("editor.actionDesc.InsertContent"),
       LoadContent: t("editor.actionDesc.LoadContent"),
-      SaveContent: t("editor.actionDesc.SaveContent"),
-      TakeContent: t("editor.actionDesc.TakeContent"),
       DeleteRow: t("editor.actionDesc.DeleteRow"),
       SetMemory: t("editor.actionDesc.SetMemory"),
       GetMemory: t("editor.actionDesc.GetMemory"),
@@ -165,18 +161,24 @@
   }
 
   // The action list is the DOMAIN enum (ActionType) — the same names the extensions switch on and
-  // the same ones stored in GraphJson. Members the old list invented (FocusElement, ScrollIntoView,
-  // PressKey, WaitForElement) never existed in the enum, so a step using one would have been dead on
-  // the page; they are gone. Everything the enum declares is listed, so nothing is unreachable.
+  // the same ones stored in GraphJson. The two must stay in step: an action the editor can pick but
+  // the player cannot run is a step that dies on the page, and one the player runs but the editor
+  // never offers is unreachable. Everything the enum declares is listed here.
+  //
+  // Removed because another action already covers them: `TakeContent`/`SaveContent` (one was a
+  // duplicate of the other, and reading into a target / writing to a cell is what `LoadContent`
+  // and `InsertContent` are for), `Enter` (it is one of `PressKey`'s keys), `Navigate` (a plain
+  // alias of `GoToUrl`), and `LoadCaptcha`, which had no implementation and no agreed behaviour.
   const ACTIONS = [
     "NoAction", "Click", "DoubleClick", "RightClick", "Hover", "Hold",
-    "Enter", "InputContent", "ClearContent", "SelectOption",
-    "InsertContent", "LoadContent", "SaveContent", "TakeContent",
+    "InputContent", "ClearContent", "SelectOption",
+    "InsertContent", "LoadContent",
     "DeleteRow", "SetMemory", "GetMemory",
-    "GoToUrl", "NewPage", "Refresh", "ScrollPage",
+    "GoToUrl", "NewPage", "Refresh", "ScrollPage", "ScrollIntoView",
     "CloseFirstTab", "CloseLastTab",
     "WaitTime", "WaitForLoading",
-    "AlertAccept", "Breakpoint", "RemoveElements", "LoadCaptcha"
+    "AlertAccept", "Breakpoint", "RemoveElements",
+    "PressKey", "FocusElement"
   ];
 
   function isActionNode(n) {
@@ -2762,12 +2764,7 @@
       case "InsertContent":
       case "LoadContent":
         return [{ d: "M12 5v10M8 11l4 4 4-4M6 19h12", ...stroke }];
-      case "SaveContent":
-        return [{ d: "M6 5h10l2 2v12H6zM9 5v4h6V5M9 14h6", ...stroke }];
-      case "TakeContent":
-        return [{ d: "M8 7h8v6H8zM10 17h4M12 13v4", ...stroke }];
       case "GoToUrl":
-      case "Navigate":
         return [{ d: "M10 14l4-4M8 12a4 4 0 105.5 3.5M16 12a4 4 0 10-5.5-3.5", ...stroke }];
       case "NewPage":
         return [{ d: "M8 5h6l3 3v11H8zM14 5v3h3M11 12h4M11 15h3", ...stroke }];
@@ -6777,7 +6774,7 @@
           || k === "sourceId" || k === "moveLoop" || k === "valueFromSource" || k === "dataSourceId"
           || k === "dynamicSourceColumnName" || k === "selectorDynamicColumn"
           || k === "equalSelectorDynamicColumn" || k === "memoryVariableName"
-          || k === "sourceMemoryVariableName" || k === "saveDataSourceId" || k === "saveColumnName"
+          || k === "saveDataSourceId" || k === "saveColumnName"
           || k === "hasAttribute" || k === "equalHasAttribute"
           || k === "attributeValueIsDynamic" || k === "equalAttributeValueIsDynamic"
           || k === "attributeDataSourceId" || k === "equalAttributeDataSourceId"
@@ -6876,38 +6873,65 @@
 
   const DYN_SEL_PLACEHOLDER = "{مقدار پویا}";
 
+  // The action spec table lives in the Player (extension-global/player/engine.js) so the editor and
+  // the engine cannot disagree about what a step needs. It used to be duplicated here, and the two
+  // copies had already drifted: the editor demanded a selector for ClearContent and SelectOption
+  // that the engine never required. `specHelpers` exposes the engine's own predicates; the small
+  // fallbacks keep the editor usable in the window before that script has loaded.
+  function specHelpers() {
+    const g = typeof globalThis !== "undefined" ? globalThis : window;
+    if (g && typeof g.actionSpec === "function") {
+      return {
+        spec: g.actionSpec,
+        needsSelector: g.stepNeedsSelector,
+        receivesValue: g.stepReceivesValue,
+        allowsElement: g.stepAllowsElementValue,
+        allowsMemory: g.stepAllowsMemoryValue,
+        allowsSystem: g.stepAllowsSystemValue,
+        writesSource: g.stepWritesToSource,
+        writesMemory: g.stepWritesToMemory
+      };
+    }
+    return null;
+  }
+
   function stepNeedsSelector(actionType) {
-    // Legacy helper — prefer stepShowsTargetSelector(node).
     return stepShowsTargetSelector({ actionType });
   }
 
   /**
-   * Target selector ("هدف روی صفحه"): element the action acts on.
-   * Capture: only when value source is page element.
+   * Target selector ("هدف روی صفحه"): the element the action acts on.
+   *
+   * Driven by the shared spec, so an action declares once whether it acts on an element. The one
+   * exception is LoadContent, whose selector only applies when the author chose a PAGE ELEMENT as
+   * the destination — with a memory variable as the target there is no element to point at.
    */
   function stepShowsTargetSelector(n) {
     const at = (n && n.actionType) || "";
-    if (stepIsUrlAction(at)) return false;
-    if (at === "WaitTime" || at === "CloseFirstTab" || at === "CloseLastTab"
-      || at === "Refresh" || at === "NoAction" || at === "SetMemory" || !at) {
-      return false;
-    }
-    if (stepIsCapture(at)) {
-      migrateCaptureNode(n);
-      return normalizeStepValueSource(n) === "Elements";
-    }
+    if (!at) return false;
+    if (at === "LoadContent") return normalizeLoadTarget(n) === "Elements";
+    const h = specHelpers();
+    if (h) return h.needsSelector(at) === true;
+    // Pre-engine fallback: the actions that act on an element.
     return [
-      "Click", "DoubleClick", "RightClick", "Hover", "Enter",
-      "InputContent", "InsertContent", "LoadContent",
-      "WaitForLoading",
-      "ClearContent", "SelectOption"
+      "Click", "DoubleClick", "RightClick", "Hover", "Hold", "FocusElement", "ScrollIntoView",
+      "ClearContent", "SelectOption", "PressKey", "InputContent", "RemoveElements"
     ].includes(at);
   }
 
-  /** Value-source selector: when مقدار comes from a page element (non-capture). */
+  /** Where LoadContent puts the value it read: a page element, or a memory variable. */
+  function normalizeLoadTarget(n) {
+    const t = (n && (n.saveTargetType || n.loadTargetType)) || "Elements";
+    return t === "Memory" ? "Memory" : "Elements";
+  }
+
+  /**
+   * Value-source selector: shown when the step's INPUT value comes from a page element, so the
+   * author has to say which element to read. Separate from the target selector because a step can
+   * legitimately have both (write into A the value read from B).
+   */
   function stepShowsValueSelector(n) {
     if (!n) return false;
-    if (stepIsCapture(n.actionType)) return false; // capture Elements uses هدف سلکتور
     if (!stepReceivesValue(n.actionType)) return false;
     if (!stepAllowsElementValue(n.actionType)) return false;
     return normalizeStepValueSource(n) === "Elements";
@@ -6915,40 +6939,57 @@
 
   /** Actions that consume a value (constant / element / datasource / memory / system). */
   function stepReceivesValue(actionType) {
+    const h = specHelpers();
+    if (h) return h.receivesValue(actionType) === true;
     return [
-      "InputContent", "InsertContent", "LoadContent",
-      "WaitTime", "GoToUrl", "Navigate", "NewPage",
-      "SelectOption", "SetMemory", "GetMemory"
+      "InputContent", "InsertContent", "WaitTime", "GoToUrl", "NewPage", "Hold",
+      "SelectOption", "SetMemory", "PressKey", "ScrollPage", "WaitForLoading"
     ].includes(actionType || "");
   }
 
   function stepNeedsValueSource(n) {
     const at = n?.actionType || "";
-    return stepReceivesValue(at) || stepIsCapture(at);
+    // LoadContent's value always comes from the source, so it has no «نوع مقدار» picker; it has a
+    // source + a target instead.
+    if (at === "LoadContent") return false;
+    return stepReceivesValue(at);
   }
 
-  function stepIsCapture(actionType) {
-    return actionType === "TakeContent" || actionType === "SaveContent";
+  /** True when the step writes into a data-source cell (so it picks a source + column). */
+  function stepWritesToSource(actionType) {
+    const h = specHelpers();
+    if (h) return h.writesSource(actionType) === true;
+    return actionType === "InsertContent";
+  }
+
+  /** True when the step writes into a memory variable (so it names the variable). */
+  function stepWritesToMemory(actionType) {
+    const h = specHelpers();
+    if (h) return h.writesMemory(actionType) === true;
+    return actionType === "SetMemory" || actionType === "GetMemory";
   }
 
   function stepIsUrlAction(actionType) {
-    return actionType === "GoToUrl" || actionType === "Navigate" || actionType === "NewPage";
+    return actionType === "GoToUrl" || actionType === "NewPage";
   }
 
   /** Memory variables available as value source wherever «نوع مقدار» exists. */
   function stepAllowsMemoryValue(actionType) {
-    return stepReceivesValue(actionType) || stepIsCapture(actionType);
+    const h = specHelpers();
+    if (h) return h.allowsMemory(actionType) === true;
+    return stepReceivesValue(actionType);
   }
 
   function stepAllowsElementValue(actionType) {
-    if (actionType === "WaitTime") return false;
-    return actionType === "InputContent" || actionType === "InsertContent" || actionType === "LoadContent"
-      || stepIsUrlAction(actionType) || stepIsCapture(actionType);
+    const h = specHelpers();
+    if (h) return h.allowsElement(actionType) === true;
+    return stepReceivesValue(actionType) && actionType !== "WaitTime";
   }
 
   function stepAllowsSystemValue(actionType) {
-    if (actionType === "WaitTime") return false;
-    return stepReceivesValue(actionType) || stepIsCapture(actionType);
+    const h = specHelpers();
+    if (h) return h.allowsSystem(actionType) === true;
+    return stepReceivesValue(actionType) && actionType !== "WaitTime";
   }
 
   const SYSTEM_VALUE_OPTIONS = [
@@ -7064,22 +7105,17 @@
 
   /** Legacy capture used contentSourceType as destination (Memory/DataSource). */
   function migrateCaptureNode(n) {
-    if (!n || !stepIsCapture(n.actionType)) return;
-    if (n.saveTargetType === "Memory" || n.saveTargetType === "DataSource") return;
+    if (!n) return;
+    // LoadContent is the only action with a "read a cell, put it somewhere" target. Older graphs
+    // recorded that destination in contentSourceType before the value-source split existed.
+    if (n.actionType !== "LoadContent") return;
+    if (n.saveTargetType === "Memory" || n.saveTargetType === "Elements") return;
     if (n.contentSourceType === "Memory" || n.contentSourceType === "DataSource") {
-      n.saveTargetType = n.contentSourceType;
-      n.contentSourceType = "Elements";
+      n.saveTargetType = n.contentSourceType === "Memory" ? "Memory" : "Elements";
+      n.contentSourceType = "DataSource";
     } else {
-      n.saveTargetType = "Memory";
+      n.saveTargetType = "Elements";
     }
-  }
-
-  function normalizeSaveTarget(n) {
-    migrateCaptureNode(n);
-    let t = n.saveTargetType || "Memory";
-    if (t !== "DataSource") t = "Memory";
-    n.saveTargetType = t;
-    return t;
   }
 
   /**
@@ -7291,57 +7327,25 @@
       if (!v.ok) reasons.push(v.reason);
     }
 
-    if (stepIsCapture(at)) {
-      migrateCaptureNode(n);
+    // Where the step's input value comes from. Every action that takes a value is checked the same
+    // way, whether it writes that value into a page element, a source cell or a variable.
+    if (stepReceivesValue(at)) {
       const src = normalizeStepValueSource(n);
       if (src === "Constant") {
-        if (!String(n.constantValue || "").trim()) reasons.push("مقدار ثابت ذخیره خالی است");
-      } else if (src === "Elements") {
-        const v = validateSelectorBlock(n, { label: "سلکتور المان صفحه" });
-        if (!v.ok) reasons.push(v.reason);
-      } else if (src === "DataSource") {
-        const v = validateDataSourcePick(n);
-        if (!v.ok) reasons.push(v.reason);
-      } else if (src === "Memory") {
-        if (!String(n.sourceMemoryVariableName || "").trim()) {
-          reasons.push("متغیر منبع حافظه مشخص نیست");
-        }
-      } else if (src === "System") {
-        if (!String(n.systemValueType || "").trim()) {
-          reasons.push("نوع مقدار پیش‌فرض سیستم مشخص نیست");
-        }
-      }
-      const dest = normalizeSaveTarget(n);
-      if (dest === "Memory") {
-        if (!String(n.memoryVariableName || "").trim()) {
-          reasons.push("نام متغیر مقصد حافظه مشخص نیست");
-        }
-      } else {
-        const saveDs = n.saveDataSourceId != null ? n.saveDataSourceId : n.dataSourceId;
-        const saveCol = n.saveColumnName || (src === "DataSource" ? "" : n.dynamicSourceColumnName);
-        // When value is also DataSource, destination must use save* fields
-        if (src === "DataSource") {
-          if (saveDs == null || saveDs === "") reasons.push("منبع مقصد ذخیره انتخاب نشده");
-          if (!String(n.saveColumnName || "").trim()) reasons.push("ستون مقصد ذخیره انتخاب نشده");
-        } else {
-          const v = validateDataSourcePick({
-            dataSourceId: saveDs,
-            dynamicSourceColumnName: saveCol || n.dynamicSourceColumnName
-          }, { dsReason: "منبع مقصد ذخیره انتخاب نشده", colReason: "ستون مقصد ذخیره انتخاب نشده" });
-          if (!v.ok) reasons.push(v.reason);
-        }
-      }
-    } else if (stepReceivesValue(at)) {
-      const src = normalizeStepValueSource(n);
-      if (src === "Constant") {
-        if (at === "WaitTime") {
-          const ms = Number(n.constantValue);
-          if (!Number.isFinite(ms) || ms < 0 || String(n.constantValue ?? "").trim() === "") {
+        if (at === "WaitTime" || at === "Hold") {
+          const raw = String(n.constantValue ?? "").trim();
+          const ms = Number(raw);
+          if (raw !== "" && (!Number.isFinite(ms) || ms < 0)) {
+            reasons.push(at === "Hold" ? "مدت نگه‌داشتن کلیک نامعتبر است" : "زمان انتظار مشخص نیست");
+          } else if (raw === "" && at === "WaitTime") {
             reasons.push("زمان انتظار مشخص نیست");
           }
         } else if (stepIsUrlAction(at)) {
           const url = String(n.navigateUrl || n.constantValue || "").trim();
           if (!url) reasons.push("آدرس ثابت خالی است");
+        } else if (at === "ScrollPage") {
+          const raw = String(n.constantValue ?? "").trim();
+          if (raw !== "" && !Number.isFinite(Number(raw))) reasons.push("میزان اسکرول باید عددی باشد");
         } else if (!String(n.constantValue || "").trim()) {
           reasons.push("مقدار ثابت خالی است");
         }
@@ -7369,6 +7373,28 @@
           reasons.push("نوع مقدار پیش‌فرض سیستم مشخص نیست");
         }
       }
+    }
+
+    // LoadContent reads a source cell and writes it to a chosen target (a page element or a
+    // variable). Its source pick is validated above as a DataSource value source.
+    if (at === "LoadContent") {
+      migrateCaptureNode(n);
+      if (normalizeLoadTarget(n) === "Memory") {
+        if (!String(n.memoryVariableName || "").trim()) reasons.push("نام متغیر مقصد مشخص نیست");
+      }
+    }
+    // InsertContent writes a value INTO a source cell, so it needs a destination source + column.
+    if (stepWritesToSource(at)) {
+      const saveDs = n.saveDataSourceId != null ? n.saveDataSourceId : n.dataSourceId;
+      const saveCol = n.saveColumnName || n.dynamicSourceColumnName;
+      const v = validateDataSourcePick(
+        { dataSourceId: saveDs, dynamicSourceColumnName: saveCol },
+        { dsReason: "منبع مقصد ذخیره انتخاب نشده", colReason: "ستون مقصد ذخیره انتخاب نشده" }
+      );
+      if (!v.ok) reasons.push(v.reason);
+    }
+    if (stepWritesToMemory(at) && at !== "LoadContent") {
+      if (!String(n.memoryVariableName || "").trim()) reasons.push("نام متغیر مقصد حافظه مشخص نیست");
     }
 
     return { ok: reasons.length === 0, reasons };
@@ -7453,7 +7479,7 @@
         const v = validateDataSourcePick(n);
         if (!v.ok) reasons.push(v.reason);
       } else if (src === "Memory") {
-        if (!String(n.memoryVariableName || n.sourceMemoryVariableName || "").trim()) {
+        if (!String(n.memoryVariableName || "").trim()) {
           reasons.push("متغیر حافظه مقایسه مشخص نیست");
         }
       } else if (src === "System") {
@@ -7552,24 +7578,22 @@
     (graph.nodes || []).forEach((n) => {
       if (!isActionNode(n)) return;
       if (n.memoryVariableName) names.add(String(n.memoryVariableName).trim());
-      if (n.sourceMemoryVariableName) names.add(String(n.sourceMemoryVariableName).trim());
     });
     return [...names].filter(Boolean).sort();
   }
 
   function normalizeStepValueSource(n) {
-    migrateCaptureNode(n);
     let src = n.contentSourceType;
     const at = n.actionType || "";
     if (!src || src === "None") {
       src = n.valueFromSource ? "DataSource"
-        : (stepIsCapture(at) ? "Elements" : "Constant");
+        : (stepAllowsElementValue(at) ? "Elements" : "Constant");
     }
     const allowed = new Set(["Constant", "DataSource"]);
     if (stepAllowsElementValue(at)) allowed.add("Elements");
     if (stepAllowsMemoryValue(at)) allowed.add("Memory");
     if (stepAllowsSystemValue(at)) allowed.add("System");
-    if (!allowed.has(src)) src = stepIsCapture(at) ? "Elements" : "Constant";
+    if (!allowed.has(src)) src = "Constant";
     n.contentSourceType = src;
     n.valueFromSource = src === "DataSource";
     return src;
@@ -7598,8 +7622,7 @@
     let body = field("عنوان", "title", n.title) +
       `<div class="insp-field"><label>${esc(t("editor.actionTypeLabel") || "نوع اقدام")}</label><select data-k="actionType" ${disabledAttr}>${optActions(at)}</select></div>` +
       // A short "what this does" line under the picker, so the user can choose without guessing.
-      actionDescriptionHtml(at) +
-      actionAliasHint(at);
+      actionDescriptionHtml(at);
 
     if (at === "NewPage") {
       body += `<p class="palette-hint">تب جدید باز می‌شود و به آدرس می‌رود.</p>`;
@@ -7609,11 +7632,14 @@
     }
 
     if (stepNeedsValueSource(n)) body += stepValueSourceHtml(n);
-    if (stepIsCapture(at)) body += stepCaptureTargetHtml(n);
+    // LoadContent puts its value into a chosen target, which may be a page element or a variable.
+    if (at === "LoadContent") body += stepLoadTargetHtml(n);
+    // InsertContent writes its value into a chosen cell, so it needs the destination source+column.
+    if (stepWritesToSource(at)) body += stepWriteTargetHtml(n);
 
-    // Target selector depends on action type (+ capture only when value = Elements).
+    // Target selector depends on action type (+ LoadContent only when its target is an element).
     if (stepShowsTargetSelector(n)) {
-      body += `<div class="insp-section-title">${stepIsCapture(at) ? "المان صفحه (مقدار)" : "هدف روی صفحه"}</div>`;
+      body += `<div class="insp-section-title">هدف روی صفحه</div>`;
       body += selectorFieldHtml(n, "سلکتور", { includeFramePath: true });
     }
 
@@ -7641,23 +7667,23 @@
       </div>`;
   }
 
-  function stepCaptureTargetHtml(n) {
+  /**
+   * LoadContent's destination: where the cell it read is written.
+   *
+   * Two destinations, and they are genuinely different — a page element gets the text typed into
+   * it (the "هیچ مقدار" case), while a memory variable holds it for later steps. That is why this
+   * is not folded into the value-source picker: it answers "where does the value go", which no
+   * other action apart from InsertContent (whose destination is a cell) needs to ask.
+   */
+  function stepLoadTargetHtml(n) {
     migrateCaptureNode(n);
-    const dest = normalizeSaveTarget(n);
-    const src = normalizeStepValueSource(n);
-    const saveDsId = n.saveDataSourceId != null ? n.saveDataSourceId : (src === "DataSource" ? null : n.dataSourceId);
-    const saveCol = n.saveColumnName || "";
-    const dsOpts = processDataSourceOptions(saveDsId);
-    const cols = dataSourceColumnKeys(saveDsId);
-    const colOpts = cols.map((c) =>
-      `<option value="${esc(c)}" ${saveCol === c ? "selected" : ""}>${esc(c)}</option>`
-    ).join("");
+    const dest = normalizeLoadTarget(n);
     return `
-      <div class="insp-section-title">مقصد ذخیره</div>
+      <div class="insp-section-title">مقصد مقدار</div>
       <div class="insp-field"><label>ذخیره در</label>
         <select data-k="saveTargetType">
+          <option value="Elements" ${dest === "Elements" ? "selected" : ""}>المان صفحه</option>
           <option value="Memory" ${dest === "Memory" ? "selected" : ""}>حافظه (متغیر)</option>
-          <option value="DataSource" ${dest === "DataSource" ? "selected" : ""}>منبع داده</option>
         </select>
       </div>
       ${dest === "Memory" ? `
@@ -7665,25 +7691,63 @@
           <input data-k="memoryVariableName" list="mem-var-list-dest" value="${esc(n.memoryVariableName || "")}" placeholder="مثلاً titleText" />
           <datalist id="mem-var-list-dest">${knownMemoryVariableNames().map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
         </div>
-        <p class="palette-hint">مقدار خوانده‌شده در این متغیر ذخیره می‌شود و بعداً قابل استفاده است.</p>
+        <p class="palette-hint">مقدار سلول منبع در این متغیر ذخیره می‌شود و بعداً قابل استفاده است.</p>
       ` : `
-        <div class="insp-field"><label>منبع مقصد</label>
-          <select data-k="saveDataSourceId"><option value="">—</option>${dsOpts}</select>
-        </div>
-        <div class="insp-field"><label>ستون مقصد</label>
-          <select data-k="saveColumnName"><option value="">—</option>${colOpts}</select>
-        </div>
+        <p class="palette-hint">مقدار سلول منبع در المان هدف (بخش «هدف روی صفحه» پایین‌تر) نوشته می‌شود.</p>
       `}`;
+  }
+
+  /**
+   * InsertContent's destination: which cell of which source the value is written into.
+   *
+   * Separate from the value picker above because InsertContent asks two different questions: what
+   * value goes in (نوع مقدار), and which cell it lands in. Folding them together is what made the
+   * old capture form unreadable when both were set to "data source".
+   */
+  function stepWriteTargetHtml(n) {
+    const saveDsId = n.saveDataSourceId != null ? n.saveDataSourceId : n.dataSourceId;
+    const saveCol = n.saveColumnName || "";
+    const dsOpts = processDataSourceOptions(saveDsId);
+    const cols = dataSourceColumnKeys(saveDsId);
+    const colOpts = cols.map((c) =>
+      `<option value="${esc(c)}" ${saveCol === c ? "selected" : ""}>${esc(c)}</option>`
+    ).join("");
+    if (!(graph.dataSources || []).length) {
+      return `<div class="insp-section-title">مقصد درج</div>
+        <p class="palette-hint">منبعی نیست — روی نود شروع اکسل اضافه کنید.</p>`;
+    }
+    return `
+      <div class="insp-section-title">مقصد درج</div>
+      <div class="insp-field"><label>منبع مقصد</label>
+        <select data-k="saveDataSourceId"><option value="">—</option>${dsOpts}</select>
+      </div>
+      <div class="insp-field"><label>ستون مقصد</label>
+        <select data-k="saveColumnName"><option value="">—</option>${colOpts}</select>
+      </div>
+      <p class="palette-hint">مقدار بالا در سلول ردیف جاری همین ستون نوشته می‌شود.</p>`;
   }
 
   function stepValueSourceHtml(n) {
     const at = n.actionType || "";
     const src = normalizeStepValueSource(n);
     const isUrl = stepIsUrlAction(at);
-    const isWait = at === "WaitTime";
-    const isCapture = stepIsCapture(at);
-    const sectionTitle = isCapture ? "مقدار برای ذخیره" : (isUrl ? "آدرس" : (isWait ? "زمان انتظار" : "مقدار"));
-    const constLabel = isUrl ? "آدرس ثابت" : (isWait ? "میلی‌ثانیه (ثابت)" : "مقدار ثابت");
+    const isWait = at === "WaitTime" || at === "Hold" || at === "WaitForLoading";
+    const isScroll = at === "ScrollPage";
+    const isPressKey = at === "PressKey";
+    const sectionTitle = isUrl ? "آدرس"
+      : at === "WaitTime" ? "زمان انتظار"
+      : at === "Hold" ? "مدت نگه‌داشتن"
+      : at === "WaitForLoading" ? "حداکثر انتظار"
+      : isScroll ? "میزان اسکرول"
+      : isPressKey ? "کلید"
+      : "مقدار";
+    const constLabel = isUrl ? "آدرس ثابت"
+      : at === "WaitTime" ? "میلی‌ثانیه (ثابت)"
+      : at === "Hold" ? "میلی‌ثانیه (خالی = پیش‌فرض دیاگرام)"
+      : at === "WaitForLoading" ? "میلی‌ثانیه (خالی = ۱۵۰۰۰)"
+      : isScroll ? "پیکسل (خالی = یک صفحه)"
+      : isPressKey ? "نام کلید (مثلاً Enter)"
+      : "مقدار ثابت";
     const constKey = isUrl ? "navigateUrl" : "constantValue";
     const constVal = isUrl ? (n.navigateUrl || n.constantValue || "") : (n.constantValue || "");
 
@@ -7705,7 +7769,7 @@
         <select data-k="contentSourceType">
           <option value="Constant" ${src === "Constant" ? "selected" : ""}>ثابت</option>
           ${stepAllowsElementValue(at) ? `<option value="Elements" ${src === "Elements" ? "selected" : ""}>عنصر صفحه</option>` : ""}
-          <option value="DataSource" ${src === "DataSource" ? "selected" : ""}>منبع داده</option>
+          ${stepReceivesValue(at) ? `<option value="DataSource" ${src === "DataSource" ? "selected" : ""}>منبع داده</option>` : ""}
           ${stepAllowsMemoryValue(at) ? `<option value="Memory" ${src === "Memory" ? "selected" : ""}>حافظه (متغیر)</option>` : ""}
           ${stepAllowsSystemValue(at) ? `<option value="System" ${src === "System" ? "selected" : ""}>پیش‌فرض سیستم</option>` : ""}
         </select>
@@ -7713,8 +7777,14 @@
 
     if (src === "Constant") {
       html += `<div class="insp-field"><label>${constLabel}</label>
-        <input data-k="${constKey}" value="${esc(constVal)}" placeholder="${isUrl ? "https://..." : (isWait ? "مثلاً 1000" : "")}" />
+        <input data-k="${constKey}" value="${esc(constVal)}" placeholder="${isUrl ? "https://..." : (isWait || isScroll ? "مثلاً 1000" : (isPressKey ? "Enter" : ""))}" />
       </div>`;
+      if (at === "Hold") {
+        html += `<p class="palette-hint">المان هدف در بخش «هدف روی صفحه» پایین‌تر انتخاب می‌شود. دکمهٔ ماوس این مدت نگه داشته و سپس رها می‌شود.</p>`;
+      }
+      if (isScroll) {
+        html += `<p class="palette-hint">مقدار مثبت به پایین و منفی به بالا اسکرول می‌کند. خالی یعنی یک صفحه به پایین.</p>`;
+      }
     } else if (src === "Elements" && stepShowsValueSelector(n)) {
       html += selectorFieldHtml(n, isUrl ? "سلکتور المان (آدرس)" : "سلکتور عنصر منبع مقدار", {
         valueKey: "equalSelectorValue",
@@ -7737,8 +7807,6 @@
       if (isUrl) {
         html += `<p class="palette-hint">متن/مقدار این المان به‌عنوان آدرس استفاده می‌شود.</p>`;
       }
-    } else if (src === "Elements" && isCapture) {
-      html += `<p class="palette-hint">سلکتور المان در بخش پایین («المان صفحه») تنظیم می‌شود.</p>`;
     } else if (src === "DataSource") {
       html += `
         <div class="insp-field"><label>منبع داده</label>
@@ -7750,10 +7818,8 @@
         ${emptyDs}
         <p class="palette-hint">در اجرا مقدار سلول ردیف جاری خوانده می‌شود.</p>`;
     } else if (src === "Memory") {
-      const memKey = isCapture ? "sourceMemoryVariableName" : "memoryVariableName";
-      const memVal = isCapture ? (n.sourceMemoryVariableName || "") : (n.memoryVariableName || "");
-      html += `<div class="insp-field"><label>متغیر حافظه${isCapture ? " (منبع)" : ""}</label>
-        <input data-k="${memKey}" list="mem-var-list" value="${esc(memVal)}" placeholder="نام متغیر" />
+      html += `<div class="insp-field"><label>متغیر حافظه</label>
+        <input data-k="memoryVariableName" list="mem-var-list" value="${esc(n.memoryVariableName || "")}" placeholder="نام متغیر" />
         <datalist id="mem-var-list">${memNames.map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
       </div>
       ${!memNames.length
@@ -7794,6 +7860,32 @@
         <input data-k="memoryVariableName" list="mem-var-list" value="${esc(n.memoryVariableName || "")}" placeholder="${esc(t("editor.actions.memoryNamePlaceholder"))}" />
         <datalist id="mem-var-list">${memNames.map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
         <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.getMemoryHint")}</p>
+      </div>`;
+    }
+
+    // PressKey: which key is sent. The key is one of this action's settings, which is why Enter is
+    // no longer an action of its own — picking it here is the same thing.
+    if (n.actionType === "PressKey") {
+      const key = String(n.keyName || "Enter");
+      const opts = ["Enter", "Tab", "Escape", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+        "Backspace", "Delete", "Home", "End", "PageUp", "PageDown"]
+        .map((k) => `<option value="${k}" ${key === k ? "selected" : ""}>${k}</option>`).join("");
+      html += `<div class="insp-field"><label>کلید</label>
+        <input data-k="keyName" list="key-name-list" value="${esc(key)}" placeholder="Enter" />
+        <datalist id="key-name-list">${opts}</datalist>
+        <p class="palette-hint">هر نام کلید استاندارد مرورگر پذیرفته می‌شود (مثلاً Enter، Tab، Escape، a). فشردن Enter فرم را هم ارسال می‌کند.</p>
+      </div>`;
+    }
+
+    // RemoveElements: whether every match goes or only the first.
+    if (n.actionType === "RemoveElements") {
+      const all = n.removeAllMatches !== false;
+      html += `<div class="insp-field"><label>دامنه حذف</label>
+        <select data-k="removeAllMatches">
+          <option value="true" ${all ? "selected" : ""}>همهٔ المان‌های مطابق سلکتور</option>
+          <option value="false" ${!all ? "selected" : ""}>فقط اولین المان مطابق</option>
+        </select>
+        <p class="palette-hint">المان‌های انتخاب‌شده از DOM حذف می‌شوند (نه پنهان). اگر هیچ المانی پیدا نشود، مرحله خطا می‌دهد.</p>
       </div>`;
     }
 
@@ -9010,35 +9102,6 @@
   }
   function isFaUi() {
     return currentCulture() !== "en";
-  }
-
-  /**
-   * The picker offers every ActionType, and several of them are processed by the same branch
-   * of the player, so a user cannot tell them apart from the names alone. Rather than hide
-   * options (which would silently rewrite existing tasks), the duplicates are spelled out
-   * here, next to the UI element they appear in.
-   */
-  const ACTION_ALIAS_KEYS = [
-    // One "write into the field" branch in the player: all three call the same code path.
-    { ids: ["InputContent", "InsertContent", "LoadContent"], key: "editor.actions.aliasWrite" },
-    // One "read the field" branch: both return the element's text to the value table.
-    { ids: ["TakeContent", "SaveContent"], key: "editor.actions.aliasRead" }
-  ];
-
-  function actionAliasHint(at) {
-    const hit = ACTION_ALIAS_KEYS.find((g) => g.ids.includes(at));
-    if (!hit) return "";
-    const others = hit.ids.filter((x) => x !== at).map(actionTypeLabel);
-    // The separator differs per language, so it is not baked into the locale string.
-    const sep = isFaUi() ? "، " : ", ";
-    const names = others.map((x) => `<b>${esc(x)}</b>`).join(sep);
-    const raw = t(hit.key);
-    const head = raw.split("{list}")[0];
-    const tail = raw.split("{list}")[1] || "";
-    // The hint is a sentence about the UI, so it follows the UI language rather than the
-    // page default (which is RTL because the product is Persian-first).
-    const dir = isFaUi() ? "rtl" : "ltr";
-    return `<p class="palette-hint insp-alias-hint" dir="${dir}">${esc(head)}${names}${esc(tail)}</p>`;
   }
 
   /**
