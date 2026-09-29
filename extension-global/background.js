@@ -1,4 +1,4 @@
-importScripts("lib/branding.js", "lib/session-scope.js", "player/action-specs.js", "player/engine.js", "bg-selector.js");
+importScripts("lib/branding.js", "lib/session-scope.js", "lib/alert-dialog.js", "player/action-specs.js", "player/engine.js", "bg-selector.js");
 
 /** Morobot Global extension — record, play, and selector in one package. */
 const DEFAULT_PORTAL = "https://localhost:7201";
@@ -277,6 +277,15 @@ async function handleMessage(message, sender) {
       return getPlayStatus();
     case "clearPlayLogs":
       return clearPlayLogs();
+    // AlertAccept's three calls. The Player cannot answer a browser dialog from inside the page
+    // (a dialog blocks the page's own script), so it asks the extension to do it — see
+    // lib/alert-dialog.js for why the answer is pre-set rather than decided on the fly.
+    case "armAlertDialog":
+      return MorobotAlerts.armAlertDialog(message.tabId, message.alertType);
+    case "setAlertAnswer":
+      return MorobotAlerts.setAlertAnswer(message.tabId, message.alertType, message.alertPromptText);
+    case "readAlertResult":
+      return MorobotAlerts.readAlertResult(message.tabId);
     case "persistPlayDataSources":
       return persistPlayDataSourcesMessage(message);
     case "readDataSourceCell":
@@ -965,6 +974,10 @@ async function handlePlayTabClosed(tabId) {
 
   const wasPlaying = !!st.playing || !!(typeof playStatus !== "undefined" && playStatus?.playing);
   if (!wasPlaying) return;
+
+  // The tab is gone, so there is nothing left to disarm — but the tracking map must not keep the
+  // dead tab id, or a later run reusing that id would inherit a stale arming record.
+  try { MorobotAlerts.clearAllAlertArming(); } catch { /* module may not be loaded yet */ }
 
   await chrome.storage.local.set({ playing: false, playPaused: false, playTabId: null });
   if (typeof playStatus !== "undefined" && playStatus) {

@@ -1388,7 +1388,6 @@
       "WaitForLoading": "Wait for loading to finish",
       "Refresh": "Reload the page",
       "ScrollPage": "Scroll the page",
-      "Breakpoint": "Breakpoint (pause for you)",
       "RemoveElements": "Remove page elements",
       "selectBy": "Match option by",
       "selectByValue": "Value",

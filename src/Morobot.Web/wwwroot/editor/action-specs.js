@@ -65,12 +65,14 @@
     // --- timing / flow -------------------------------------------------------
     WaitTime:       { value: true, memoryVal: true, systemVal: true, readsCell: true },
     WaitForLoading: { value: true },
-    Breakpoint:     {},
     NoAction:       {},
 
     // --- page surgery --------------------------------------------------------
     // RemoveElements deletes the matched element(s) from the DOM; the selector picks which ones.
     RemoveElements: { selector: true },
+    // AlertAccept answers a browser dialog. It needs no selector and no value: a JS dialog blocks
+    // the page, so there is no element to point at, and what it answers (accept or dismiss, plus
+    // optional prompt text) comes from the step's own fields rather than the value plumbing.
     AlertAccept:    {}
   };
 

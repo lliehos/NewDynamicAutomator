@@ -38,7 +38,8 @@ public enum ActionType
     NewPage = 17,
     ScrollPage = 18,
     // 19 was LoadCaptcha — removed. It had no implementation and no agreed behaviour.
-    Breakpoint = 20,
+    // 20 was Breakpoint — removed. It did nothing (the player returned skipped), so it was a step
+    // that looked like it paused the run but never did.
     WaitForLoading = 21,
     CloseLastTab = 22,
     CloseFirstTab = 23,

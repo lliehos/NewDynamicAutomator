@@ -100,6 +100,57 @@ function normalizeLoadTarget(n) {
   return t === "Memory" ? "Memory" : "Elements";
 }
 
+/** True when the graph has at least one AlertAccept step. */
+function graphUsesAlertDialog(graph) {
+  return (graph?.nodes || []).some((n) =>
+    isActionNode(n) && n.actionType === "AlertAccept" && n.isActive !== false);
+}
+
+/**
+ * Arm the browser-dialog override for this run, if the graph needs it.
+ *
+ * The override itself lives in the extension (lib/alert-dialog.js) because a JS dialog blocks the
+ * page's own script — see that file for why. This only decides WHETHER to arm, and reports failure
+ * honestly: a tab that cannot take a MAIN-world script (chrome://, a PDF viewer) means the action
+ * cannot work, and saying so here is better than a later step failing with no explanation.
+ */
+async function armAlertDialogsIfNeeded(graph, tabId) {
+  if (!graphUsesAlertDialog(graph)) return;
+  if (tabId == null) return;
+  const first = (graph.nodes || []).find((n) =>
+    isActionNode(n) && n.actionType === "AlertAccept" && n.isActive !== false);
+  const type = String(first?.alertType || "Accept");
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "armAlertDialog", tabId, alertType: type
+    });
+    if (res && res.ok === false) {
+      appendPlayLog("warn", `فعال‌سازی پاسخ به دیالوگ مرورگر ناموفق بود: ${res.error || "دلیل نامشخص"}`);
+    }
+  } catch (err) {
+    appendPlayLog("warn", `فعال‌سازی پاسخ به دیالوگ مرورگر ناموفق بود: ${err?.message || err}`);
+  }
+}
+
+/**
+ * Put the armed tab's answer in step with the step about to run.
+ *
+ * Each AlertAccept step carries its own accept/dismiss choice and optional prompt text, so the
+ * answer is pushed on the tab immediately before that step runs rather than fixed once at start.
+ */
+async function setAlertAnswerForStep(tabId, step) {
+  if (tabId == null) return { ok: true };
+  const type = String(step?.alertType || "Accept");
+  const promptText = step?.alertPromptText == null ? "" : String(step.alertPromptText);
+  try {
+    return await chrome.runtime.sendMessage({
+      type: "setAlertAnswer", tabId, alertType: type, alertPromptText: promptText
+    }) || { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
 /**
  * Normalize where a step's input value comes from, and report it.
  *
@@ -877,6 +928,15 @@ const HOLD_DEFAULT_MS = 500;
 const SCROLL_PAGE_DEFAULT_PX = 600;
 
 /**
+ * How long AlertAccept waits for the dialog to appear before reporting that none was seen.
+ *
+ * A dialog is raised by the page in response to an earlier action, usually within a frame or two,
+ * so this is a settle window rather than a real wait. It is short on purpose: the step reports a
+ * miss as a failure, and a long default would make that failure slow to surface.
+ */
+const ALERT_SETTLE_MS = 400;
+
+/**
  * Called just before moving to `nextId`. When that node has already run in this walk, the
  * edge being followed is a loop-back, so this logs the iteration and enforces a floor on the
  * pause. Without the floor a "wait until the condition is true" loop would re-evaluate as
@@ -1504,6 +1564,14 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     };
   }
   await ensurePlayMemory(graph);
+
+  // Arm browser-dialog handling only when this graph actually contains an AlertAccept step.
+  //
+  // Arming unconditionally would mean overriding window.alert/confirm/prompt for EVERY run, so a
+  // dialog the author never asked about would be answered silently instead of shown — a bug that
+  // only appears on the pages that happen to raise one. Scoping it to the runs that use it keeps
+  // every other run behaving exactly as before.
+  await armAlertDialogsIfNeeded(graph, tabId);
 
   const lastPlayRequest = {
     taskId: String(graph.taskId || taskId || ""),
@@ -2885,6 +2953,13 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     return runInsertContentStep(tabId, taskId, step, runMode, graph, rowIndex, framePath);
   }
 
+  // AlertAccept: answer a browser dialog. It touches neither the page nor a selector — a JS dialog
+  // blocks the page outright, so the extension arms the tab (see armAlertDialogsIfNeeded) and this
+  // step only sets which way to answer, then reports what was actually seen.
+  if (actionType === "AlertAccept") {
+    return runAlertAcceptStep(tabId, taskId, step, runMode);
+  }
+
   const cst = step.contentSourceType || "";
   const needsAsyncValue = stepUsesDataSourceValue(step)
     || cst === "Memory" || cst === "Elements" || cst === "System"
@@ -3054,6 +3129,66 @@ async function runLoadContentStep(tabId, taskId, step, runMode, graph, rowIndex,
     }, result?.error);
   }
   return { ok: true, text, captured: true };
+}
+
+/**
+ * AlertAccept — answer a browser dialog (alert / confirm / prompt).
+ *
+ * The dialog cannot be answered from inside the page: a JS dialog blocks the page's own script, so
+ * by the time any injected code runs only the browser could dismiss it. The extension therefore
+ * overrides window.alert/confirm/prompt on the target tab while a run that uses this action is
+ * active (see lib/alert-dialog.js), and this step tells that override which way to answer.
+ *
+ * Contract, deliberately the same as every other action:
+ *   ok:true            a dialog was seen and answered
+ *   ok:false           no dialog was found, or the tab could not be armed
+ * The caller applies the step's «چشمپوشی از خطا» switch, so whether a miss stops the run is the
+ * author's choice rather than a special case hidden in here.
+ */
+async function runAlertAcceptStep(tabId, taskId, step, runMode) {
+  const armed = await setAlertAnswerForStep(tabId, step);
+  if (armed && armed.ok === false) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "alert_not_armed",
+      expectedSelector: null, actualUrl: null
+    }, armed.error);
+  }
+
+  // A short settle window: the dialog is raised by the page in response to an earlier action, so it
+  // is normally already there. Waiting briefly avoids reporting a miss on a one-frame delay.
+  const waitMs = Math.max(0, Number(step.alertWaitMs) || 0) || ALERT_SETTLE_MS;
+  await sleepInterruptible(waitMs);
+
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: "readAlertResult", tabId });
+  } catch (err) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "alert_read_failed",
+      expectedSelector: null, actualUrl: null
+    }, err?.message || String(err));
+  }
+
+  if (res && res.armed === false) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "alert_not_armed",
+      expectedSelector: null, actualUrl: null
+    }, tv("run.alertNotArmed"));
+  }
+
+  const seen = res?.dialog || null;
+  if (!seen) {
+    // No dialog. A failure, not a quiet pass: the step exists to answer one, so finding none means
+    // the page did not do what the diagram expected.
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "alert_not_found",
+      expectedSelector: null, actualUrl: null
+    }, tv("run.alertNone"));
+  }
+
+  const dismissing = String(step.alertType || "Accept") === "Dismiss";
+  appendPlayLog("info", `دیالوگ مرورگر «${seen.kind || "alert"}» ${dismissing ? "رد" : "تأیید"} شد`);
+  return { ok: true, alertHandled: { kind: seen.kind, message: seen.message, answer: dismissing ? "Dismiss" : "Accept" } };
 }
 
 /**
@@ -4533,7 +4668,7 @@ async function playExecuteInjected(payload) {
   }
 
   if (actionType === "WaitTime") return { ok: true, waitMs: Number(value) || 0 };
-  if (actionType === "NoAction" || actionType === "Breakpoint") return { ok: true, skipped: true };
+  if (actionType === "NoAction") return { ok: true, skipped: true };
 
   // ScrollPage: move the page (or the nearest scrollable ancestor) by the step's amount, in device
   // pixels down the document. It runs before the selector guard because it acts on the document,
@@ -4549,25 +4684,11 @@ async function playExecuteInjected(payload) {
     return { ok: true, scrolledBy: dy };
   }
 
-  // AlertAccept: close a browser dialog by accepting it.
-  //
-  // This is the one action that cannot be done from injected page code. A JS dialog
-  // (alert/confirm/prompt) BLOCKS the page's own script the moment it opens, so by the time any
-  // injected code runs the dialog is already up and only the browser itself can dismiss it. The
-  // extension dismisses it through a native dialog handler registered for the tab, so this branch
-  // reports what the handler saw rather than trying to click anything.
-  if (actionType === "AlertAccept") {
-    if (typeof window.__daAlertTake !== "function") {
-      return { ok: false, error: tv("run.alertNotArmed"), reason: "alert_not_armed" };
-    }
-    const seen = window.__daAlertTake();
-    if (!seen) {
-      // No dialog was observed. Reported as a clear outcome rather than a silent pass: this step
-      // exists to clear a dialog, so finding none usually means the page changed.
-      return { ok: false, error: tv("run.alertNone"), reason: "alert_not_found" };
-    }
-    return { ok: true, accepted: 1 };
-  }
+  // AlertAccept is NOT handled here on purpose. A JS dialog blocks the page's own script, so this
+  // injected context could never answer one — the extension does it, in lib/alert-dialog.js, and
+  // runAlertAcceptStep in this file drives it. Reaching this point with an AlertAccept means the
+  // step was dispatched by a path that skipped runStep, which is a bug worth seeing rather than
+  // papering over with a second implementation.
 
   // WaitForLoading: wait until the document reports itself complete, then return. The budget is
   // bounded here as well as in the caller, so a page that never finishes cannot hang the run.
@@ -4767,9 +4888,6 @@ async function playExecuteInjected(payload) {
     }
     return { ok: true };
   }
-
-  // A breakpoint is a marker an operator steps past, not a page interaction.
-  if (actionType === "Breakpoint") return { ok: true, skipped: true };
 
   return { ok: false, error: tv("run.unsupportedAction", { action: actionType }), reason: "unsupported_action" };
 }
