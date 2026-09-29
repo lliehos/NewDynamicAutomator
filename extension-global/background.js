@@ -567,7 +567,10 @@ function normalizeTaskId(value) {
  *
  * The graph is built in the same shape `saveDraft` merges — one group holding the steps — because
  * that is what the editor expects to receive, and reusing the merge keeps a copy and a save of the
- * same recording producing the same structure.
+ * same recording producing the same structure. What it must NOT be is a bag of nodes with no edges:
+ * a node reaches its successors only through the edges between them, so a payload with an empty
+ * `edges` array pastes as an isolated group plus free-floating actions that the player never runs.
+ * The steps are therefore chained start → step → step → … in capture order.
  *
  * It runs in the service worker, which has no DOM and therefore cannot touch the clipboard itself;
  * the text is returned to the content script, which writes it while the click is still the active
@@ -575,19 +578,76 @@ function normalizeTaskId(value) {
  */
 function buildRecordedGraphText(steps, groupTitle, taskId, title) {
   const groupId = "group-1";
-  const nodes = steps.map((step, i) => ({
-    ...step,
-    id: step?.id || `step-${i + 1}`,
-    kind: step?.kind === "condition" ? "condition" : "action",
-    groupNodeId: groupId
-  }));
+  const startId = "start-1";
+  const endId = "end-1";
+
+  // A single left-to-right column at a fixed pitch, the same readable starting arrangement the smart
+  // recorder's factory produces. The editor lets the user drag nodes anywhere, so an exact layout is
+  // not worth inferring — only one that does not stack every node on a single point.
+  const X_START = 80;
+  const X_PITCH = 240;
+  const Y = 220;
+
+  const nodes = [
+    // The group is a real node, not just a label on its children: the editor draws it, and it is the
+    // node the paste wires the scope's `contains` edges from. Leaving it out (which an earlier
+    // version did) is why the pasted steps arrived with no group around them.
+    { id: groupId, kind: "group", title: groupTitle, x: X_START, y: Y },
+    { id: startId, kind: "start", title: groupTitle, x: X_START, y: Y, groupNodeId: groupId }
+  ];
+  const edges = [];
+
+  let previous = startId;
+  let x = X_START + X_PITCH;
+  let seq = 0;
+
+  steps.forEach((step, i) => {
+    const id = step?.id || `step-${i + 1}`;
+    const kind = step?.kind === "condition" ? "condition" : "action";
+    nodes.push({
+      ...step,
+      id,
+      kind,
+      x,
+      y: Y,
+      groupNodeId: groupId
+    });
+    // Every step is entered from the previous one. A condition also needs a `success` branch below,
+    // but it still needs this inbound edge to be reachable at all.
+    edges.push({ id: `e${++seq}`, from: previous, to: id, kind: "next" });
+    previous = id;
+    x += X_PITCH;
+  });
+
+  nodes.push({ id: endId, kind: "end", title: "پایان", x, y: Y, groupNodeId: groupId });
+
+  // A condition's `success` branch is what carries the flow onward. Wiring it to the end keeps the
+  // graph runnable as recorded instead of stopping at the first check, and it matches capture order:
+  // the steps that followed were performed after the condition passed. The `fail` branch is left
+  // unwired, which the editor treats as a clean termination because an `end` is present.
+  const last = steps[steps.length - 1];
+  const lastIsCondition = !!last && last.kind === "condition";
+  steps.forEach((step) => {
+    if (!step || step.kind !== "condition") return;
+    edges.push({ id: `e${++seq}`, from: step.id || "", to: endId, kind: "success" });
+  });
+
+  // Close the chain, unless a condition's success branch already closed it — a condition must not be
+  // given both a `success` and a `next` edge, because having both would make the recorded order
+  // ambiguous.
+  if (!lastIsCondition) {
+    edges.push({ id: `e${++seq}`, from: previous, to: endId, kind: "next" });
+  }
 
   const graph = {
     taskId: taskId != null ? Number(taskId) || taskId : null,
     title: title || null,
-    nodes: [{ id: groupId, kind: "group", title: groupTitle, x: 0, y: 0 }, ...nodes],
-    edges: [],
-    viewport: { x: 0, y: 0, scale: 1 }
+    designOrigin: "Recorded",
+    nodes,
+    edges,
+    viewport: { zoom: 1 },
+    dataSources: [],
+    repeatSourceType: "None"
   };
 
   return "DAGRAPH1:" + JSON.stringify(graph);

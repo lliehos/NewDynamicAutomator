@@ -4694,13 +4694,48 @@
     const rawNodes = src.nodes.filter((n) => n && typeof n === "object");
 
     // The recording's own start and end are dropped: both are per-process scope markers, and a
-    // second start in this document would corrupt the graph. Their edges go with them, which is
-    // correct — the imported steps are appended as a detached block for the user to wire up, not
-    // spliced into the existing flow, because nothing here can know where they belong.
+    // second start in this document would corrupt the graph.
+    //
+    // Dropping them must NOT drop the flow they carried. The recording chains its steps
+    // start → step → … → end, so the first step was reachable only through the start's edge and the
+    // last was only closed by the end's. Removing the two nodes without reconnecting left the steps
+    // as free-floating boxes wired to nothing that could reach them — which is exactly what a paste
+    // produced: one loose group plus a row of detached actions.
+    //
+    // So the ends are folded onto their neighbours instead: whatever the start pointed at becomes an
+    // entry into the block, and whatever pointed at the end now closes it. Conditions are left out of
+    // the rewiring on purpose, because their branches are the recorded semantics (a `success` branch
+    // means "and then", a `fail` branch means "otherwise") and rerouting them would invent a flow the
+    // user never performed.
     const dropped = new Set();
     rawNodes.forEach((n) => {
       if (n.kind === "start" || n.kind === "end") dropped.add(n.id);
     });
+
+    /**
+     * Follow a dropped node through the edges it carried, to the first step that survives.
+     *
+     * A recording can legitimately start or end on a marker whose only neighbour is another marker,
+     * so this walks rather than looking one hop ahead. The seen-set guards a malformed payload that
+     * points back at itself, which would otherwise loop forever.
+     */
+    function survivorThrough(id, seen = new Set()) {
+      if (seen.has(id) || !dropped.has(id)) return nodeMap[id] || null;
+      seen.add(id);
+      for (const e of (Array.isArray(src.edges) ? src.edges : [])) {
+        if (e && e.from === id && dropped.has(e.to)) {
+          const found = survivorThrough(e.to, seen);
+          if (found) return found;
+        }
+        if (e && e.from === id && !dropped.has(e.to)) return nodeMap[e.to] || null;
+      }
+      return null;
+    }
+
+    // Which recorded node was the container of the block, so the pasted group can adopt the steps
+    // that were inside it. Only meaningful at the top level: inside an open group the steps belong to
+    // that group instead, which is what the user is looking at.
+    const recordedGroupId = rawNodes.find((n) => n.kind === "group" && !dropped.has(n.id))?.id || null;
 
     rawNodes.forEach((n) => {
       if (dropped.has(n.id)) return;
@@ -4720,6 +4755,12 @@
         // is legal, but doing it implicitly would rewrite the recorded block's own structure in a way
         // the user did not ask for, so the group stays where it can be seen and moved deliberately.
         copy.groupNodeId = null;
+      } else if (!targetScope && copy.kind !== "group" && recordedGroupId) {
+        // Pasted at the top level: the steps keep the group they were recorded in. They cannot point
+        // at the recorded id (it is meaningless here), so they point at the pasted group's own new id
+        // — which is what makes the group actually contain them instead of being an empty box with
+        // the steps floating beside it.
+        copy.groupNodeId = nodeMap[recordedGroupId] || null;
       }
       copy.x = (Number(copy.x) || 0) + at.x;
       copy.y = (Number(copy.y) || 0) + at.y;
@@ -4742,7 +4783,63 @@
       });
     });
 
-    // Containment edges for any pasted group's own children.
+    // Fold the dropped start/end onto their surviving neighbours, so the block is a connected chain
+    // rather than a pile of nodes.
+    //
+    // This is the half that the reported bug lived in. The recording chains its steps
+    // start → step → … → end, so the FIRST step is reachable only through the start's outgoing edge.
+    // Dropping the start and then discarding that edge (on the grounds that its source no longer
+    // exists) left the first step with no inbound edge at all — the block pasted as a loose group
+    // plus a row of actions that the player can never reach.
+    //
+    // So the edge is kept and re-pointed at the node that took the marker's place: an outgoing
+    // `next` from a dropped start becomes the entry into the block, and anything pointing at a
+    // dropped end is closed off. `contains` is skipped here because the group's containment edges are
+    // rebuilt from `groupNodeId` below; a condition's `success`/`fail` branches are the recorded
+    // semantics and are never invented or rerouted.
+    const droppedTarget = (id) => {
+      const n = rawNodes.find((x) => x.id === id);
+      return n ? n.kind : null;
+    };
+
+    // Concrete targets that were reached only through a dropped marker (usually a start). The group
+    // pass below wires these to the group's own start, which is what makes them reachable.
+    const entriesViaDroppedMarker = new Set();
+
+    (Array.isArray(src.edges) ? src.edges : []).forEach((e) => {
+      if (!e || !e.from) return;
+      const kind = e.kind || "next";
+      if (kind === "contains") return;
+
+      const fromMapped = nodeMap[e.from] || null;
+      const toMapped = nodeMap[e.to] || null;
+
+      // Both ends survive: the main loop above already emitted this edge.
+      if (fromMapped && toMapped) return;
+
+      // The source was a dropped marker (normally the recording's `start`). It has no node left to
+      // hang the edge on, so that edge IS the block's entry point: the target is recorded here and
+      // wired to the pasted group's start further down. Discarding it — which is what produced the
+      // reported bug — left the first step of the recording with no inbound edge at all.
+      if (!fromMapped) {
+        if (toMapped) entriesViaDroppedMarker.add(toMapped);
+        return;
+      }
+
+      // The target was a marker (an `end`, or a start that was dropped).
+      if (droppedTarget(e.to) === "end") {
+        // The chain already terminates on the last real step; a closing edge to a node that no longer
+        // exists is correctly not reproduced. Dropping it does not orphan anything.
+        return;
+      }
+      const target = survivorThrough(e.to);
+      if (target && target !== fromMapped) {
+        graph.edges.push({ id: tmpId("e"), from: fromMapped, to: target, kind });
+      }
+    });
+
+    // Containment edges for any pasted group's own children, plus the wiring that makes the block
+    // runnable: the group's start is connected to the step the recording's own start pointed at.
     inserted.forEach((n) => {
       if (n.kind !== "group") return;
       graph.nodes.forEach((child) => {
@@ -4750,7 +4847,20 @@
           graph.edges.push({ id: tmpId("e"), from: n.id, to: child.id, kind: "contains" });
         }
       });
-      ensureGroupStart(n.id);
+      const groupStart = ensureGroupStart(n.id);
+
+      // Every node the recording entered from its own start is an entry into this block. Without
+      // this the chain would exist but nothing would ever walk into it — the group start would point
+      // only at whatever `ensureGroupStart` happened to pick from the containment edges.
+      if (groupStart) {
+        entriesViaDroppedMarker.forEach((entryId) => {
+          if (!nodeById(entryId)) return;
+          const exists = graph.edges.some((e) => e.from === groupStart.id && e.to === entryId);
+          if (!exists) {
+            graph.edges.push({ id: tmpId("e"), from: groupStart.id, to: entryId, kind: "next" });
+          }
+        });
+      }
     });
 
     selectedEdgeId = null;
