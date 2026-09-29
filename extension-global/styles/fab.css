@@ -159,6 +159,13 @@
   background: #28c76f !important;
   color: #fff !important;
 }
+/* Save to memory. Blue, because it is neither the green "act on the process" action nor the red
+   destructive one: it only parks the recording so it can be pasted later. Keeping it green (which
+   is what the shared da-fab-play class did) made it read as a second save-into-process button. */
+.da-fab-mem {
+  background: #0d6efd !important;
+  color: #fff !important;
+}
 .da-fab-pause {
   background: #ff9f43 !important;
   color: #fff !important;
@@ -335,6 +342,17 @@
   margin-bottom: 0;
   flex: 1 1 auto;
   min-width: 0;
+}
+/* Outcome of the last action. The colour carries the same information as the wording, so a failure
+   is visible even at a glance or in a screenshot. `!important` because the base rule above sets the
+   colour and the status line is also styled by the shared HUD head. */
+.da-fab-status.is-error {
+  color: #ea5455 !important;
+  font-weight: 600;
+}
+.da-fab-status.is-success {
+  color: #28c76f !important;
+  font-weight: 600;
 }
 .da-fab-head {
   display: flex;

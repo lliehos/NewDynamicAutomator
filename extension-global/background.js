@@ -247,6 +247,8 @@ async function handleMessage(message, sender) {
       return discardRecord();
     case "saveDraft":
       return saveDraft(message.payload);
+    case "saveMemoryDraft":
+      return saveMemoryDraft(message.payload);
     case "session":
       return checkSession();
     case "syncPortalSession":
@@ -552,6 +554,79 @@ function normalizeTaskId(value) {
   if (value == null || value === "") return null;
   const s = String(value).trim();
   return s || null;
+}
+
+/**
+ * Keep the reviewed steps in extension memory, without touching the process and without asking for a
+ * name.
+ *
+ * This is the "save to memory" action, and it is deliberately the mirror image of `saveDraft`:
+ *
+ * - `saveDraft` writes INTO the target process. It needs a group title because that title becomes a
+ *   visible group node on the canvas, so it must ask.
+ * - This one writes NOWHERE. The steps are parked in `chrome.storage.local` so the user can paste
+ *   them into a diagram later, exactly like the smart recorder's copy-to-memory. Nothing about the
+ *   process changes, so there is nothing to name — and prompting for one (which the button used to
+ *   do, by routing through `saveDraft`) both asked a question the user could not answer usefully and
+ *   then failed when the title was left blank.
+ *
+ * The stored payload is the same shape `saveDraft` merges, so a later "paste into diagram" can reuse
+ * the merge path without a second translation step. It is keyed by the target process so a paste on
+ * a different process cannot silently pick up another process's recording.
+ */
+async function saveMemoryDraft(payload) {
+  const { recordingGroups, draft, recordTargetTaskId, recordTargetTitle, recordOptions } =
+    await chrome.storage.local.get([
+      "recordingGroups", "draft", "recordTargetTaskId", "recordTargetTitle", "recordOptions"
+    ]);
+
+  let allSteps = currentStepsFromStorage(recordingGroups, draft);
+  const indexes = Array.isArray(payload?.selectedIndexes) ? payload.selectedIndexes : null;
+  if (indexes != null) {
+    if (!indexes.length) {
+      return { ok: false, error: "هیچ موردی برای ذخیره انتخاب نشده است." };
+    }
+    const pick = new Set(indexes.map(Number).filter((n) => Number.isFinite(n)));
+    allSteps = allSteps.filter((_, i) => pick.has(i));
+  }
+  if (!allSteps.length) {
+    return { ok: false, error: "هیچ موردی برای ذخیره انتخاب نشده است." };
+  }
+
+  const targetId = normalizeTaskId(payload?.taskId) || normalizeTaskId(recordTargetTaskId);
+  const title = recordTargetTitle || (targetId ? `فرآیند #${targetId}` : null);
+
+  // The group title is generated rather than asked for. It is not shown to the user here (nothing is
+  // written to the canvas yet), but keeping it means the stored payload is already a valid group and
+  // a later paste does not have to invent one.
+  const groupTitle = (payload?.groupTitle || "").trim()
+    || (title ? `گروه ضبط — ${title}` : "گروه ضبط");
+
+  const memory = {
+    taskId: targetId,
+    title,
+    groupTitle,
+    steps: allSteps,
+    options: defaultRecordOptions(recordOptions),
+    at: new Date().toISOString()
+  };
+
+  await chrome.storage.local.set({
+    recordMemory: memory,
+    recordMemoryAt: memory.at,
+    recordMemoryTaskId: targetId
+  });
+
+  await broadcastDraftUpdated();
+  return {
+    ok: true,
+    result: {
+      taskId: targetId,
+      groupTitle,
+      stepCount: allSteps.length,
+      title
+    }
+  };
 }
 
 async function startRecordSession(message = {}) {

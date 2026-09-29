@@ -22,9 +22,11 @@
   if (I18n) await I18n.init();
 
   const ICO_SAVE = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>`;
-  // A gear, distinct from the floppy above. The two save buttons differ only in what happens after
-  // the save, and a second floppy would be impossible to tell apart in the toolbar.
-  const ICO_SAVE_END = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94a7.07 7.07 0 0 0 .06-.94 7.07 7.07 0 0 0-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94 0 .32.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.23.09.48 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>`;
+  // Copy, not a save/memory glyph. What this button really does is copy the reviewed steps into
+  // extension memory so they can be pasted into a diagram later — nothing is written to the process,
+  // so a floppy (or a database) would promise a save that never happens. The two-pages glyph is the
+  // same one the smart recorder uses for its copy action, which keeps the two extensions consistent.
+  const ICO_COPY = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/></svg>`;
   const ICO_CLOSE = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M18.3 5.7L12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>`;
 
   const root = document.createElement("div");
@@ -62,8 +64,8 @@
           <button type="button" id="da-fab-save" class="da-ico-btn da-fab-play" title="${t("rec.save")}" aria-label="${t("rec.save")}" hidden>
             ${ICO_SAVE}
           </button>
-          <button type="button" id="da-fab-save-end" class="da-ico-btn da-fab-play" title="${t("rec.saveEnd")}" aria-label="${t("rec.saveEnd")}" hidden>
-            ${ICO_SAVE_END}
+          <button type="button" id="da-fab-save-end" class="da-ico-btn da-fab-mem" title="${t("rec.copyMem")}" aria-label="${t("rec.copyMem")}" hidden>
+            ${ICO_COPY}
           </button>
           <button type="button" id="da-fab-resume" class="da-ico-btn da-fab-rec" title="${t("rec.resume")}" aria-label="${t("rec.resume")}" hidden>
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 6a6 6 0 1 1 0 12 6 6 0 0 1 0-12zm0-2a8 8 0 1 0 0 16 8 8 0 0 0 0-16z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg>
@@ -454,6 +456,54 @@
       .filter((n) => Number.isFinite(n));
   }
 
+  /**
+   * The indexes a save/copy will act on, in the same order the save path resolves them.
+   *
+   * Shared by both actions so "nothing is selected" means the same thing (and reads the same) in
+   * both. The fall-back to every step is deliberate — a recording usually wants all of it, and the
+   * review list can be re-rendered by an incoming `draftUpdated` between ticking a box and pressing
+   * the button, which would otherwise silently drop the selection the user made.
+   */
+  function resolveIndexes() {
+    const picked = selectedIndexes();
+    if (picked.length) return picked;
+    return [...resultsEl.querySelectorAll(".da-rec-step-cb")]
+      .map((el) => Number(el.getAttribute("data-idx")))
+      .filter((n) => Number.isFinite(n));
+  }
+
+  /**
+   * Put the outcome of an action on the HUD, coloured, and mirror it as a toast.
+   *
+   * Every action that can fail reports through here rather than writing to `status` directly. The
+   * old code wrote a bare string, which looked identical whether the action had succeeded, been
+   * refused by the server, or never run at all — so a broken button and a working one with an empty
+   * selection were indistinguishable. The status line also gets a class so the colour carries the
+   * same information, and the message stays until the next action instead of being overwritten by
+   * the next `refresh()`.
+   */
+  function report(text, type) {
+    if (status) {
+      status.textContent = text;
+      status.classList.toggle("is-error", type === "error");
+      status.classList.toggle("is-success", type === "success");
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("da-notify", {
+        detail: { message: text, type: type === "error" ? "error" : type === "success" ? "success" : "info" }
+      }));
+    } catch { /* ignore */ }
+  }
+
+  /** Turn a background reply into an error the user can act on, rather than a bare failure. */
+  function describeFailure(res, fallbackKey) {
+    // `network` is set by the background only when the portal was never reached, so the specific
+    // cause it carries (connection refused, certificate rejected, bad host) is the useful part.
+    if (res?.network) return res?.error || t("rec.portalDown");
+    // The server answered and refused: its own message explains why better than a generic line.
+    return res?.error || t(fallbackKey);
+  }
+
   async function pushOptions() {
     await chrome.runtime.sendMessage({
       type: "setRecordOptions",
@@ -514,30 +564,28 @@
   /**
    * Save the selected review steps into the target process.
    *
-   * Shared by both save buttons, which differ only in `continueRecording`: the floppy keeps the
-   * recorder open for another pass, the gear finishes here. Everything else — the selection, the
-   * group name, the error handling — has to behave identically, and duplicating it would let the two
-   * buttons drift apart.
+   * Unlike the copy action this one keeps its name dialog: the title becomes a visible group node on
+   * the canvas, so the user is the only one who can choose it. It shares the selection resolution and
+   * the failure reporting with the copy path through `resolveIndexes`/`report`/`describeFailure`.
    */
   async function saveReviewedSteps({ continueRecording }) {
     // Capture selection BEFORE prompt — prompt can cause re-renders that wipe checkboxes.
-    let indexes = selectedIndexes();
+    const indexes = resolveIndexes();
     if (!indexes.length) {
-      const all = [...resultsEl.querySelectorAll(".da-rec-step-cb")]
-        .map((el) => Number(el.getAttribute("data-idx")))
-        .filter((n) => Number.isFinite(n));
-      indexes = all;
-    }
-    if (!indexes.length) {
-      status.textContent = t("rec.reviewEmpty");
+      report(t("rec.reviewEmpty"), "error");
       return false;
     }
     const defName = t("rec.groupTitleDefault");
     const asked = window.prompt(t("rec.groupTitlePrompt"), defName);
-    if (asked == null) return false;
+    if (asked == null) {
+      // A dismissed dialog is a deliberate cancel, not a failure: say so instead of silently doing
+      // nothing, which was indistinguishable from the button being broken.
+      report(t("rec.saveCancelled"), "info");
+      return false;
+    }
     const groupTitle = String(asked).trim();
     if (!groupTitle) {
-      status.textContent = t("rec.groupTitleRequired");
+      report(t("rec.groupTitleRequired"), "error");
       return false;
     }
 
@@ -552,16 +600,55 @@
       }
     });
     if (res?.ok) {
-      status.textContent = continueRecording
-        ? t("rec.saved", { n: res.result?.stepCount ?? res.result?.groupCount ?? "?" })
-        : t("rec.savedEnd", { n: res.result?.stepCount ?? res.result?.groupCount ?? "?" });
+      const n = res.result?.stepCount ?? res.result?.groupCount ?? "?";
+      report(continueRecording ? t("rec.saved", { n }) : t("rec.savedEnd", { n }), "success");
       userCollapsed = false;
       if (continueRecording) {
         renderResults({ recordPhase: "recording", steps: [], count: 0 });
       }
       return true;
     }
-    status.textContent = res?.error || t("rec.saveError");
+    // A per-reason message beats a generic one: "the target process was not found in the portal" and
+    // "the server refused the save" need different things from the user, and the background already
+    // distinguishes them.
+    report(describeFailure(res, "rec.saveError"), "error");
+    return false;
+  }
+
+  /**
+   * Copy the reviewed steps into extension memory, without touching the process and without asking
+   * for a name.
+   *
+   * Split out from `saveReviewedSteps` because it shares only the *selection* half of that function
+   * and must not share the prompt: the group title in `saveReviewedSteps` becomes a visible group
+   * node on the canvas, so it has to be asked for — whereas nothing is written here, so a name would
+   * be a question with no consequence. Routing this button through the shared path (which it used to
+   * do) meant it asked for a title and then failed whenever the dialog was dismissed or left blank,
+   * which is exactly the "nothing happens" the user saw.
+   */
+  async function copyReviewedSteps() {
+    const indexes = resolveIndexes();
+    if (!indexes.length) {
+      report(t("rec.reviewEmpty"), "error");
+      return false;
+    }
+
+    const st = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({}));
+    const res = await chrome.runtime.sendMessage({
+      type: "saveMemoryDraft",
+      payload: {
+        taskId: st?.targetTaskId ?? null,
+        selectedIndexes: indexes
+      }
+    }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+
+    if (res?.ok) {
+      const n = res.result?.stepCount ?? indexes.length;
+      report(t("rec.copiedMem", { n }), "success");
+      userCollapsed = false;
+      return true;
+    }
+    report(describeFailure(res, "rec.copyMemError"), "error");
     return false;
   }
 
@@ -577,19 +664,12 @@
     }
   });
 
-  /**
-   * Save and finish.
-   *
-   * The existing button only offers "save and keep recording", so ending a recording cleanly meant
-   * saving and *then* hunting for the separate end button — two steps for one intent, with an extra
-   * review screen in between that the user did not ask for.
-   */
   saveEndBtn.addEventListener("click", async (e) => {
     e.preventDefault();
     e.stopPropagation();
     saveEndBtn.disabled = true;
     try {
-      await saveReviewedSteps({ continueRecording: false });
+      await copyReviewedSteps();
     } finally {
       saveEndBtn.disabled = false;
       await refresh();
@@ -638,8 +718,8 @@
     stopBtn.setAttribute("aria-label", t("rec.stop"));
     saveBtn.title = t("rec.save");
     saveBtn.setAttribute("aria-label", t("rec.save"));
-    saveEndBtn.title = t("rec.saveEnd");
-    saveEndBtn.setAttribute("aria-label", t("rec.saveEnd"));
+    saveEndBtn.title = t("rec.copyMem");
+    saveEndBtn.setAttribute("aria-label", t("rec.copyMem"));
     resumeBtn.title = t("rec.resume");
     resumeBtn.setAttribute("aria-label", t("rec.resume"));
     endBtn.title = t("rec.end");
@@ -737,9 +817,14 @@
 
     renderResults(state);
 
-    status.textContent = phase === "review"
-      ? t("rec.statusReview")
-      : `${t("rec.fallbackTitle")} v${ver} · ${user}`;
+    // A report outranks the idle status line. Every action calls `refresh()` in its `finally`, so
+    // without this the success/error message just written would be replaced immediately by the
+    // generic "review / recording" text and the user would never see the outcome.
+    if (!status.classList.contains("is-error") && !status.classList.contains("is-success")) {
+      status.textContent = phase === "review"
+        ? t("rec.statusReview")
+        : `${t("rec.fallbackTitle")} v${ver} · ${user}`;
+    }
   }
 
   refresh();
