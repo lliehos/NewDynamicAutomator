@@ -22,6 +22,9 @@
   if (I18n) await I18n.init();
 
   const ICO_SAVE = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>`;
+  // A gear, distinct from the floppy above. The two save buttons differ only in what happens after
+  // the save, and a second floppy would be impossible to tell apart in the toolbar.
+  const ICO_SAVE_END = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94a7.07 7.07 0 0 0 .06-.94 7.07 7.07 0 0 0-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94 0 .32.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.23.09.48 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>`;
   const ICO_CLOSE = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M18.3 5.7L12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>`;
 
   const root = document.createElement("div");
@@ -59,6 +62,9 @@
           <button type="button" id="da-fab-save" class="da-ico-btn da-fab-play" title="${t("rec.save")}" aria-label="${t("rec.save")}" hidden>
             ${ICO_SAVE}
           </button>
+          <button type="button" id="da-fab-save-end" class="da-ico-btn da-fab-play" title="${t("rec.saveEnd")}" aria-label="${t("rec.saveEnd")}" hidden>
+            ${ICO_SAVE_END}
+          </button>
           <button type="button" id="da-fab-resume" class="da-ico-btn da-fab-rec" title="${t("rec.resume")}" aria-label="${t("rec.resume")}" hidden>
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 6a6 6 0 1 1 0 12 6 6 0 0 1 0-12zm0-2a8 8 0 1 0 0 16 8 8 0 0 0 0-16z"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></svg>
           </button>
@@ -89,6 +95,7 @@
   const switchesEl = root.querySelector("#da-fab-switches");
   const stopBtn = root.querySelector("#da-fab-stop");
   const saveBtn = root.querySelector("#da-fab-save");
+  const saveEndBtn = root.querySelector("#da-fab-save-end");
   const resumeBtn = root.querySelector("#da-fab-resume");
   const endBtn = root.querySelector("#da-fab-end");
   const toggleBtn = root.querySelector("#da-fab-toggle");
@@ -504,9 +511,15 @@
     }
   });
 
-  saveBtn.addEventListener("click", async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
+  /**
+   * Save the selected review steps into the target process.
+   *
+   * Shared by both save buttons, which differ only in `continueRecording`: the floppy keeps the
+   * recorder open for another pass, the gear finishes here. Everything else — the selection, the
+   * group name, the error handling — has to behave identically, and duplicating it would let the two
+   * buttons drift apart.
+   */
+  async function saveReviewedSteps({ continueRecording }) {
     // Capture selection BEFORE prompt — prompt can cause re-renders that wipe checkboxes.
     let indexes = selectedIndexes();
     if (!indexes.length) {
@@ -517,37 +530,68 @@
     }
     if (!indexes.length) {
       status.textContent = t("rec.reviewEmpty");
-      return;
+      return false;
     }
     const defName = t("rec.groupTitleDefault");
     const asked = window.prompt(t("rec.groupTitlePrompt"), defName);
-    if (asked == null) return;
+    if (asked == null) return false;
     const groupTitle = String(asked).trim();
     if (!groupTitle) {
       status.textContent = t("rec.groupTitleRequired");
-      return;
+      return false;
     }
+
+    const st = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({}));
+    const res = await chrome.runtime.sendMessage({
+      type: "saveDraft",
+      payload: {
+        taskId: st?.targetTaskId ?? null,
+        selectedIndexes: indexes,
+        continueRecording,
+        groupTitle
+      }
+    });
+    if (res?.ok) {
+      status.textContent = continueRecording
+        ? t("rec.saved", { n: res.result?.stepCount ?? res.result?.groupCount ?? "?" })
+        : t("rec.savedEnd", { n: res.result?.stepCount ?? res.result?.groupCount ?? "?" });
+      userCollapsed = false;
+      if (continueRecording) {
+        renderResults({ recordPhase: "recording", steps: [], count: 0 });
+      }
+      return true;
+    }
+    status.textContent = res?.error || t("rec.saveError");
+    return false;
+  }
+
+  saveBtn.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     saveBtn.disabled = true;
     try {
-      const st = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => ({}));
-      const res = await chrome.runtime.sendMessage({
-        type: "saveDraft",
-        payload: {
-          taskId: st?.targetTaskId ?? null,
-          selectedIndexes: indexes,
-          continueRecording: true,
-          groupTitle
-        }
-      });
-      if (res?.ok) {
-        status.textContent = t("rec.saved", { n: res.result?.stepCount ?? res.result?.groupCount ?? "?" });
-        userCollapsed = false;
-        renderResults({ recordPhase: "recording", steps: [], count: 0 });
-      } else {
-        status.textContent = res?.error || t("rec.saveError");
-      }
+      await saveReviewedSteps({ continueRecording: true });
     } finally {
       saveBtn.disabled = false;
+      await refresh();
+    }
+  });
+
+  /**
+   * Save and finish.
+   *
+   * The existing button only offers "save and keep recording", so ending a recording cleanly meant
+   * saving and *then* hunting for the separate end button — two steps for one intent, with an extra
+   * review screen in between that the user did not ask for.
+   */
+  saveEndBtn.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    saveEndBtn.disabled = true;
+    try {
+      await saveReviewedSteps({ continueRecording: false });
+    } finally {
+      saveEndBtn.disabled = false;
       await refresh();
     }
   });
@@ -594,6 +638,8 @@
     stopBtn.setAttribute("aria-label", t("rec.stop"));
     saveBtn.title = t("rec.save");
     saveBtn.setAttribute("aria-label", t("rec.save"));
+    saveEndBtn.title = t("rec.saveEnd");
+    saveEndBtn.setAttribute("aria-label", t("rec.saveEnd"));
     resumeBtn.title = t("rec.resume");
     resumeBtn.setAttribute("aria-label", t("rec.resume"));
     endBtn.title = t("rec.end");
@@ -681,8 +727,11 @@
     if (switchesEl) switchesEl.hidden = phase !== "recording";
     stopBtn.hidden = phase !== "recording";
     stopBtn.disabled = false;
+    // Both save buttons belong to the review step: they act on the steps the user is reviewing.
     saveBtn.hidden = phase !== "review";
     saveBtn.disabled = false;
+    saveEndBtn.hidden = phase !== "review";
+    saveEndBtn.disabled = false;
     resumeBtn.hidden = phase !== "review";
     endBtn.hidden = false;
 
