@@ -298,6 +298,8 @@ async function handleMessage(message, sender) {
       return patchDataSourceCellMessage(message);
     case "deleteDataSourceRow":
       return deleteDataSourceRowMessage(message);
+    case "insertDataSourceRow":
+      return insertDataSourceRowMessage(message);
     case "broadcastDsCellEvent":
       return broadcastDsCellEventMessage(message);
     case "reloadPlayerNow":
@@ -1101,18 +1103,20 @@ function recordedActionVerbFa(actionType) {
     case "RightClick": return "کلیک‌راست";
     case "Hover": return "هاور";
     case "Hold": return "نگه‌داشتن";
-    case "FocusElement": return "فوکوس";
     case "InputContent":
     case "InsertContent": return "متن";
     case "LoadContent": return "بارگذاری";
     case "GoToUrl": return "رفتن به";
-    case "NewPage": return "تب جدید";
+    case "GoBack": return "بازگشت";
+    case "GoForward": return "جلورفتن";
+    case "CloseTab": return "بستن تب";
+    case "InsertRow": return "درج ردیف";
+    case "DeleteRow": return "حذف ردیف";
+    case "SetMemory": return "ذخیره در حافظه";
     case "Refresh": return "رفرش";
-    case "ScrollPage":
-    case "ScrollIntoView": return "اسکرول";
+    case "ScrollPage": return "اسکرول";
     case "RemoveElements": return "حذف المان";
     case "AlertAccept": return "تأیید هشدار";
-    case "PressKey": return "کلید";
     case "SelectOption": return "انتخاب گزینه";
     case "ClearContent": return "پاک‌کردن";
     case "WaitTime": return "انتظار";
@@ -1843,6 +1847,39 @@ async function deleteDataSourceRowMessage(message) {
     const res = await fetch(`${portal}/api/datasources/${id}/rows/${rowIndex}`, {
       method: "DELETE",
       headers: await authHeaders()
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401 || res.status === 403) return { ok: false, error: "auth" };
+    if (body?.code === "source-limit") return { ok: false, limit: true, message: body.message || null, body };
+    if (!res.ok) return { ok: false, error: body.message || `http ${res.status}`, body };
+    return { ok: true, body };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+/**
+ * Insert a blank row at a chosen position — the InsertRow action.
+ *
+ * `rowIndex` is where the row ends up, expressed 0-based, which is what the row pointer on the step
+ * already resolves to. The server's contract is "insert BEFORE this index", so the index is passed
+ * straight through: asking for row 2 must put the new row at position 2, not after it.
+ */
+async function insertDataSourceRowMessage(message) {
+  const id = Number(message?.dataSourceId);
+  const rowIndex = Number(message?.rowIndex);
+  if (!id || !Number.isFinite(rowIndex) || rowIndex < 0) return { ok: false, error: "invalid" };
+  let portal;
+  try {
+    portal = String(await portalBase()).replace(/\/$/, "");
+  } catch {
+    return { ok: false, error: "no_portal" };
+  }
+  try {
+    const res = await fetch(`${portal}/api/datasources/${id}/rows/add`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+      body: JSON.stringify({ beforeIndex: rowIndex, count: 1 })
     });
     const body = await res.json().catch(() => ({}));
     if (res.status === 401 || res.status === 403) return { ok: false, error: "auth" };

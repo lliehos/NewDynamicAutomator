@@ -29,27 +29,23 @@
       Hover: t("editor.actions.Hover"),
       Hold: t("editor.actions.Hold"),
       AlertAccept: t("editor.actions.AlertAccept"),
-      Enter: t("editor.actions.Enter"),
       InputContent: t("editor.actions.InputContent"),
       ClearContent: t("editor.actions.ClearContent"),
       SelectOption: t("editor.actions.SelectOption"),
       InsertContent: t("editor.actions.InsertContent"),
       LoadContent: t("editor.actions.LoadContent"),
+      InsertRow: t("editor.actions.InsertRow"),
       DeleteRow: t("editor.actions.DeleteRow"),
       SetMemory: t("editor.actions.SetMemory"),
-      GetMemory: t("editor.actions.GetMemory"),
       GoToUrl: t("editor.actions.GoToUrl"),
-      NewPage: t("editor.actions.NewPage"),
-      CloseFirstTab: t("editor.actions.CloseFirstTab"),
-      CloseLastTab: t("editor.actions.CloseLastTab"),
+      GoBack: t("editor.actions.GoBack"),
+      GoForward: t("editor.actions.GoForward"),
+      CloseTab: t("editor.actions.CloseTab"),
       WaitTime: t("editor.actions.WaitTime"),
       WaitForLoading: t("editor.actions.WaitForLoading"),
       Refresh: t("editor.actions.Refresh"),
       ScrollPage: t("editor.actions.ScrollPage"),
-      RemoveElements: t("editor.actions.RemoveElements"),
-      PressKey: t("editor.actions.PressKey"),
-      FocusElement: t("editor.actions.FocusElement"),
-      ScrollIntoView: t("editor.actions.ScrollIntoView")
+      RemoveElements: t("editor.actions.RemoveElements")
     };
   }
 
@@ -66,27 +62,23 @@
       Hover: t("editor.actionDesc.Hover"),
       Hold: t("editor.actionDesc.Hold"),
       AlertAccept: t("editor.actionDesc.AlertAccept"),
-      Enter: t("editor.actionDesc.Enter"),
       InputContent: t("editor.actionDesc.InputContent"),
       ClearContent: t("editor.actionDesc.ClearContent"),
       SelectOption: t("editor.actionDesc.SelectOption"),
       InsertContent: t("editor.actionDesc.InsertContent"),
       LoadContent: t("editor.actionDesc.LoadContent"),
+      InsertRow: t("editor.actionDesc.InsertRow"),
       DeleteRow: t("editor.actionDesc.DeleteRow"),
       SetMemory: t("editor.actionDesc.SetMemory"),
-      GetMemory: t("editor.actionDesc.GetMemory"),
       GoToUrl: t("editor.actionDesc.GoToUrl"),
-      NewPage: t("editor.actionDesc.NewPage"),
-      CloseFirstTab: t("editor.actionDesc.CloseFirstTab"),
-      CloseLastTab: t("editor.actionDesc.CloseLastTab"),
+      GoBack: t("editor.actionDesc.GoBack"),
+      GoForward: t("editor.actionDesc.GoForward"),
+      CloseTab: t("editor.actionDesc.CloseTab"),
       WaitTime: t("editor.actionDesc.WaitTime"),
       WaitForLoading: t("editor.actionDesc.WaitForLoading"),
       Refresh: t("editor.actionDesc.Refresh"),
       ScrollPage: t("editor.actionDesc.ScrollPage"),
-      RemoveElements: t("editor.actionDesc.RemoveElements"),
-      PressKey: t("editor.actionDesc.PressKey"),
-      FocusElement: t("editor.actionDesc.FocusElement"),
-      ScrollIntoView: t("editor.actionDesc.ScrollIntoView")
+      RemoveElements: t("editor.actionDesc.RemoveElements")
     };
   }
 
@@ -171,16 +163,18 @@
   // duplicate of the other, and reading into a target / writing to a cell is what `LoadContent`
   // and `InsertContent` are for), `Enter` (it is one of `PressKey`'s keys), `Navigate` (a plain
   // alias of `GoToUrl`), and `LoadCaptcha`, which had no implementation and no agreed behaviour.
+  // Later rounds removed `GetMemory` (a value source already covers it), `NewPage`, `ScrollIntoView`
+  // (now ScrollPage's "to element" type), `PressKey`/`FocusElement`, and merged the two close-tab
+  // actions into one `CloseTab` with a target.
   const ACTIONS = [
     "NoAction", "Click", "DoubleClick", "RightClick", "Hover", "Hold",
     "InputContent", "ClearContent", "SelectOption",
-    "InsertContent", "LoadContent",
-    "DeleteRow", "SetMemory", "GetMemory",
-    "GoToUrl", "NewPage", "Refresh", "ScrollPage", "ScrollIntoView",
-    "CloseFirstTab", "CloseLastTab",
+    "InsertContent", "LoadContent", "InsertRow", "DeleteRow",
+    "SetMemory",
+    "GoToUrl", "GoBack", "GoForward", "Refresh", "ScrollPage",
+    "CloseTab",
     "WaitTime", "WaitForLoading",
-    "AlertAccept", "RemoveElements",
-    "PressKey", "FocusElement"
+    "AlertAccept", "RemoveElements"
   ];
 
   function isActionNode(n) {
@@ -2759,8 +2753,6 @@
         ];
       case "Hover":
         return [{ d: "M8 14c2-6 6-8 10-6M10 18h8", ...stroke }];
-      case "Enter":
-        return [{ d: "M5 12h10M12 8l4 4-4 4M5 7v10", ...stroke }];
       case "InputContent":
         return [{ d: "M5 7h14v10H5zM8 17v2M16 17v2M9 12h6", ...stroke }];
       case "InsertContent":
@@ -2768,11 +2760,11 @@
         return [{ d: "M12 5v10M8 11l4 4 4-4M6 19h12", ...stroke }];
       case "GoToUrl":
         return [{ d: "M10 14l4-4M8 12a4 4 0 105.5 3.5M16 12a4 4 0 10-5.5-3.5", ...stroke }];
-      case "NewPage":
-        return [{ d: "M8 5h6l3 3v11H8zM14 5v3h3M11 12h4M11 15h3", ...stroke }];
-      case "CloseFirstTab":
-      case "CloseLastTab":
-        return [{ d: "M7 7l10 10M17 7L7 17", ...stroke }];
+      case "GoBack":
+        return [{ d: "M11 6l-5 6 5 6M18 6l-5 6 5 6", ...stroke }];
+      case "GoForward":
+        return [{ d: "M13 6l5 6-5 6M6 6l5 6-5 6", ...stroke }];
+      case "CloseTab":
       case "WaitTime":
         return [{ d: "M12 7v5l3 2M12 4a8 8 0 110 16 8 8 0 010-16z", ...stroke }];
       case "WaitForLoading":
@@ -5877,8 +5869,14 @@
     if (!actionType) return buildRefusal("build.noElement");
     if (!selector) return buildRefusal("build.noElement");
 
-    // Conditions and actions are different node kinds; the type decides which.
+    // The type arrives from the extension's context menu, which keeps its own list. A name that is
+    // neither an action the player can run nor a condition it can evaluate would build a node that
+    // dies at run time with "unsupported_action" — the graph would look fine and fail on the page.
+    // Refusing it here is what keeps a stale menu entry from reaching a saved process.
     const isCondition = CONDITION_TYPES.has(actionType);
+    if (!isCondition && ACTIONS.indexOf(actionType) < 0) {
+      return buildRefusal("build.unknownType", `${actionType} پشتیبانی نمی‌شود`);
+    }
     const scopeId = currentScopeId();
     const siblings = graph.nodes.filter((n) =>
       isActionNode(n) && (n.groupNodeId || null) === (scopeId || null)
@@ -6681,9 +6679,10 @@
           } else {
             n.specificRowIndex = null;
           }
-          // DeleteRow shows its own index field for a specific row; keep the two in step.
+          // Insert/DeleteRow show a numeric field only for a fixed row; renderInspector() below
+          // redraws the whole block, so this only covers the frame in which it is still mounted.
           const delIdx = document.getElementById("insp-delete-row-idx");
-          if (delIdx && n.actionType === "DeleteRow") {
+          if (delIdx && (n.actionType === "DeleteRow" || n.actionType === "InsertRow")) {
             delIdx.style.display = inp.value === "SpecificRow" ? "" : "none";
           }
           renderInspector();
@@ -6897,7 +6896,8 @@
         allowsMemory: g.stepAllowsMemoryValue,
         allowsSystem: g.stepAllowsSystemValue,
         writesSource: g.stepWritesToSource,
-        writesMemory: g.stepWritesToMemory
+        writesMemory: g.stepWritesToMemory,
+        readsCell: g.stepReadsCell
       };
     }
     return null;
@@ -6910,20 +6910,24 @@
   /**
    * Target selector ("هدف روی صفحه"): the element the action acts on.
    *
-   * Driven by the shared spec, so an action declares once whether it acts on an element. The one
-   * exception is LoadContent, whose selector only applies when the author chose a PAGE ELEMENT as
-   * the destination — with a memory variable as the target there is no element to point at.
+   * Driven by the shared spec, so an action declares once whether it acts on an element. Two
+   * exceptions narrow a spec that says "can":
+   *   - LoadContent: the selector only applies when the author chose a PAGE ELEMENT as the
+   *     destination — with a memory variable as the target there is no element to point at.
+   *   - ScrollPage: the selector only applies when its type is "to element"; an amount scroll has
+   *     nothing to point at.
    */
   function stepShowsTargetSelector(n) {
     const at = (n && n.actionType) || "";
     if (!at) return false;
     if (at === "LoadContent") return normalizeLoadTarget(n) === "Elements";
+    if (at === "ScrollPage") return String((n && n.scrollType) || "Amount") === "ToElement";
     const h = specHelpers();
     if (h) return h.needsSelector(at) === true;
     // Pre-engine fallback: the actions that act on an element.
     return [
-      "Click", "DoubleClick", "RightClick", "Hover", "Hold", "FocusElement", "ScrollIntoView",
-      "ClearContent", "SelectOption", "PressKey", "InputContent", "RemoveElements"
+      "Click", "DoubleClick", "RightClick", "Hover", "Hold",
+      "ClearContent", "SelectOption", "InputContent", "RemoveElements"
     ].includes(at);
   }
 
@@ -6950,8 +6954,8 @@
     const h = specHelpers();
     if (h) return h.receivesValue(actionType) === true;
     return [
-      "InputContent", "InsertContent", "WaitTime", "GoToUrl", "NewPage", "Hold",
-      "SelectOption", "SetMemory", "PressKey", "ScrollPage", "WaitForLoading"
+      "InputContent", "InsertContent", "WaitTime", "GoToUrl", "Hold",
+      "SelectOption", "SetMemory", "ScrollPage", "WaitForLoading"
     ].includes(actionType || "");
   }
 
@@ -6974,11 +6978,27 @@
   function stepWritesToMemory(actionType) {
     const h = specHelpers();
     if (h) return h.writesMemory(actionType) === true;
-    return actionType === "SetMemory" || actionType === "GetMemory";
+    return actionType === "SetMemory";
+  }
+
+  /**
+   * True when the step may read its INPUT value from a data-source cell.
+   *
+   * Separate from stepReceivesValue on purpose: InsertContent takes a value, but every sensible
+   * value for it is a constant, a page element, a variable or the system. Offering «منبع داده»
+   * there would mean "copy one cell of a table into another cell of the same table", which is not a
+   * job this action is for — so the source picker is left out of that action's value menu.
+   */
+  function stepReadsCell(actionType) {
+    const h = specHelpers();
+    if (h) return h.readsCell(actionType) === true;
+    return actionType === "InputContent" || actionType === "SelectOption"
+      || actionType === "SetMemory" || actionType === "GoToUrl"
+      || actionType === "WaitTime" || actionType === "LoadContent";
   }
 
   function stepIsUrlAction(actionType) {
-    return actionType === "GoToUrl" || actionType === "NewPage";
+    return actionType === "GoToUrl";
   }
 
   /** Memory variables available as value source wherever «نوع مقدار» exists. */
@@ -7405,6 +7425,34 @@
       if (!String(n.memoryVariableName || "").trim()) reasons.push("نام متغیر مقصد حافظه مشخص نیست");
     }
 
+    // InsertRow / DeleteRow act on a source row, so they need both a source and a row pointer.
+    // Without a pointer check a step saved with a blank rowIndexType would fall through to the
+    // engine's "loop row" default and quietly touch a row the author never chose.
+    if (at === "InsertRow" || at === "DeleteRow") {
+      const dsId = n.dataSourceId ?? n.saveDataSourceId ?? graph.dataSourceId;
+      if (dsId == null || dsId === "") {
+        reasons.push("منبع داده برای " + (at === "InsertRow" ? "درج" : "حذف") + " ردیف انتخاب نشده");
+      }
+      const pointer = String(n.rowIndexType || "");
+      if (!pointer) {
+        reasons.push("نوع ردیف برای " + (at === "InsertRow" ? "درج" : "حذف") + " مشخص نشده");
+      } else if (pointer === "SpecificRow") {
+        const idx = Number(n.specificRowIndex);
+        if (!Number.isFinite(idx) || idx < 0) {
+          reasons.push("شماره ردیف ثابت نامعتبر است");
+        } else {
+          // A fixed row must exist, or the server call addresses a row that is not there.
+          const rc = dataSourceRowCount(dsId);
+          if (rc > 0 && idx > rc - 1) {
+            reasons.push(`شماره ردیف ثابت ${idx} خارج از بازهٔ منبع است (0 تا ${rc - 1})`);
+          }
+        }
+      } else if (pointer !== "FirstRow" && pointer !== "LastRow"
+        && pointer !== "CurrentLoop" && pointer !== "ProcessLoop") {
+        reasons.push("نوع ردیف نامعتبر است: " + pointer);
+      }
+    }
+
     return { ok: reasons.length === 0, reasons };
   }
 
@@ -7654,11 +7702,72 @@
       }
     }
 
-    if (at === "NewPage") {
-      body += `<p class="palette-hint">تب جدید باز می‌شود و به آدرس می‌رود.</p>`;
+    // InsertRow / DeleteRow: which source, and where in it the row goes or comes out.
+    //
+    // These live here rather than in stepValueSourceHtml because neither action takes a value, so
+    // that function is never called for them — the fields would have been unreachable, which is
+    // exactly the bug AlertAccept had. The two share one builder because a row position means the
+    // same thing whether a row is being added or lost.
+    if (at === "InsertRow" || at === "DeleteRow") {
+      const isInsert = at === "InsertRow";
+      const dsOpts = processDataSourceOptions(n.dataSourceId);
+      body += `<div class="insp-section-title">${isInsert ? t("editor.actions.insertRowSource") : t("editor.actions.deleteRowSection")}</div>
+        <div class="insp-field"><label>${t("editor.actions.deleteRowSource")}</label>
+          <select data-k="dataSourceId"><option value="">— ${t("editor.actions.pickSource")} —</option>${dsOpts}</select>
+        </div>
+        <div class="insp-field"><label>${isInsert ? t("editor.actions.insertRowTarget") : t("editor.actions.deleteRowTarget")}</label>
+          <select data-k="rowIndexType">
+            <option value="FirstRow" ${n.rowIndexType === "FirstRow" ? "selected" : ""}>${esc(t("editor.row.firstRow") || "ردیف اول")}</option>
+            <option value="LastRow" ${n.rowIndexType === "LastRow" ? "selected" : ""}>${esc(t("editor.row.lastRow") || "ردیف آخر")}</option>
+            <option value="CurrentLoop" ${(n.rowIndexType || "CurrentLoop") === "CurrentLoop" ? "selected" : ""}>${esc(t("editor.row.groupLoop") || "ردیف اجرای گروه")}</option>
+            <option value="ProcessLoop" ${n.rowIndexType === "ProcessLoop" ? "selected" : ""}>${esc(t("editor.row.processLoop") || "ردیف اجرای فرآیند")}</option>
+            <option value="SpecificRow" ${n.rowIndexType === "SpecificRow" ? "selected" : ""}>${esc(t("editor.row.specificRow") || "ردیف ثابت (مقدار مشخص)")}</option>
+          </select>
+        </div>
+        <div class="insp-field" id="insp-delete-row-idx" style="${n.rowIndexType === "SpecificRow" ? "" : "display:none"}">
+          <label>${esc(t("editor.row.specificIndex") || "شماره ردیف")}</label>
+          <input type="number" min="0" data-k="specificRowIndex" value="${esc(n.specificRowIndex == null ? 0 : n.specificRowIndex)}" />
+        </div>
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${isInsert
+          ? t("editor.row.insertRowHint")
+          : t("editor.row.deleteRowHint")}</p>`;
     }
-    if (at === "CloseFirstTab" || at === "CloseLastTab") {
-      body += `<p class="palette-hint">${at === "CloseFirstTab" ? "اولین تب پنجره بسته می‌شود." : "آخرین تب پنجره بسته می‌شود."}</p>`;
+
+    // CloseTab: which tab is closed, relative to the tab the run executes in.
+    if (at === "CloseTab") {
+      const tgt = String(n.closeTabTarget || "Last");
+      body += `<div class="insp-field"><label>تب هدف</label>
+        <select data-k="closeTabTarget">
+          <option value="First" ${tgt === "First" ? "selected" : ""}>اولین تب پنجره</option>
+          <option value="Last" ${tgt === "Last" ? "selected" : ""}>آخرین تب پنجره</option>
+          <option value="Next" ${tgt === "Next" ? "selected" : ""}>تب بعدی نسبت به تب اجرا</option>
+          <option value="Previous" ${tgt === "Previous" ? "selected" : ""}>تب قبلی نسبت به تب اجرا</option>
+        </select>
+        <p class="palette-hint">تبی که فرآیند روی آن اجرا می‌شود بسته نمی‌شود، مگر خودش هدف باشد. اگر فقط یک تب باز باشد، مرحله خطا می‌دهد.</p>
+      </div>`;
+    }
+
+    // ScrollPage: what kind of scroll, and — for "to element" — which element.
+    if (at === "ScrollPage") {
+      const kind = String(n.scrollType || "Amount");
+      body += `<div class="insp-field"><label>نوع اسکرول</label>
+        <select data-k="scrollType">
+          <option value="Amount" ${kind === "Amount" ? "selected" : ""}>مقدار ثابت (پیکسل)</option>
+          <option value="ToElement" ${kind === "ToElement" ? "selected" : ""}>تا المان</option>
+        </select>
+      </div>`;
+    }
+
+    // InputContent: fill the field all at once, or one character at a time.
+    if (at === "InputContent") {
+      const perChar = n.typeMode === "PerCharacter";
+      body += `<div class="insp-field"><label>روش پر کردن</label>
+        <select data-k="typeMode">
+          <option value="Instant" ${!perChar ? "selected" : ""}>یک‌جا (سریع)</option>
+          <option value="PerCharacter" ${perChar ? "selected" : ""}>کاراکتر به کاراکتر</option>
+        </select>
+        <p class="palette-hint">«یک‌جا» مقدار را مستقیم می‌گذارد. «کاراکتر به کاراکتر» برای هر نویسه کلید واقعی می‌فرستد؛ برای سایت‌هایی که به هر کلید واکنش نشان می‌دهند (تکمیل خودکار، جست‌وجوی زنده).</p>
+      </div>`;
     }
 
     if (stepNeedsValueSource(n)) body += stepValueSourceHtml(n);
@@ -7763,20 +7872,17 @@
     const isUrl = stepIsUrlAction(at);
     const isWait = at === "WaitTime" || at === "Hold" || at === "WaitForLoading";
     const isScroll = at === "ScrollPage";
-    const isPressKey = at === "PressKey";
     const sectionTitle = isUrl ? "آدرس"
       : at === "WaitTime" ? "زمان انتظار"
       : at === "Hold" ? "مدت نگه‌داشتن"
       : at === "WaitForLoading" ? "حداکثر انتظار"
       : isScroll ? "میزان اسکرول"
-      : isPressKey ? "کلید"
       : "مقدار";
     const constLabel = isUrl ? "آدرس ثابت"
       : at === "WaitTime" ? "میلی‌ثانیه (ثابت)"
       : at === "Hold" ? "میلی‌ثانیه (خالی = پیش‌فرض دیاگرام)"
       : at === "WaitForLoading" ? "میلی‌ثانیه (خالی = ۱۵۰۰۰)"
       : isScroll ? "پیکسل (خالی = یک صفحه)"
-      : isPressKey ? "نام کلید (مثلاً Enter)"
       : "مقدار ثابت";
     const constKey = isUrl ? "navigateUrl" : "constantValue";
     const constVal = isUrl ? (n.navigateUrl || n.constantValue || "") : (n.constantValue || "");
@@ -7799,7 +7905,7 @@
         <select data-k="contentSourceType">
           <option value="Constant" ${src === "Constant" ? "selected" : ""}>ثابت</option>
           ${stepAllowsElementValue(at) ? `<option value="Elements" ${src === "Elements" ? "selected" : ""}>عنصر صفحه</option>` : ""}
-          ${stepReceivesValue(at) ? `<option value="DataSource" ${src === "DataSource" ? "selected" : ""}>منبع داده</option>` : ""}
+          ${stepReadsCell(at) ? `<option value="DataSource" ${src === "DataSource" ? "selected" : ""}>منبع داده</option>` : ""}
           ${stepAllowsMemoryValue(at) ? `<option value="Memory" ${src === "Memory" ? "selected" : ""}>حافظه (متغیر)</option>` : ""}
           ${stepAllowsSystemValue(at) ? `<option value="System" ${src === "System" ? "selected" : ""}>پیش‌فرض سیستم</option>` : ""}
         </select>
@@ -7807,7 +7913,7 @@
 
     if (src === "Constant") {
       html += `<div class="insp-field"><label>${constLabel}</label>
-        <input data-k="${constKey}" value="${esc(constVal)}" placeholder="${isUrl ? "https://..." : (isWait || isScroll ? "مثلاً 1000" : (isPressKey ? "Enter" : ""))}" />
+        <input data-k="${constKey}" value="${esc(constVal)}" placeholder="${isUrl ? "https://..." : (isWait || isScroll ? "مثلاً 1000" : "")}" />
       </div>`;
       if (at === "Hold") {
         html += `<p class="palette-hint">المان هدف در بخش «هدف روی صفحه» پایین‌تر انتخاب می‌شود. دکمهٔ ماوس این مدت نگه داشته و سپس رها می‌شود.</p>`;
@@ -7884,29 +7990,6 @@
       </div>`;
     }
 
-    // GetMemory: reads a variable into the step's value without touching the page.
-    if (n.actionType === "GetMemory") {
-      html += `<div class="insp-field"><label>${t("editor.actions.memoryName")}</label>
-        <input data-k="memoryVariableName" list="mem-var-list" value="${esc(n.memoryVariableName || "")}" placeholder="${esc(t("editor.actions.memoryNamePlaceholder"))}" />
-        <datalist id="mem-var-list">${memNames.map((name) => `<option value="${esc(name)}"></option>`).join("")}</datalist>
-        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.getMemoryHint")}</p>
-      </div>`;
-    }
-
-    // PressKey: which key is sent. The key is one of this action's settings, which is why Enter is
-    // no longer an action of its own — picking it here is the same thing.
-    if (n.actionType === "PressKey") {
-      const key = String(n.keyName || "Enter");
-      const opts = ["Enter", "Tab", "Escape", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-        "Backspace", "Delete", "Home", "End", "PageUp", "PageDown"]
-        .map((k) => `<option value="${k}" ${key === k ? "selected" : ""}>${k}</option>`).join("");
-      html += `<div class="insp-field"><label>کلید</label>
-        <input data-k="keyName" list="key-name-list" value="${esc(key)}" placeholder="Enter" />
-        <datalist id="key-name-list">${opts}</datalist>
-        <p class="palette-hint">هر نام کلید استاندارد مرورگر پذیرفته می‌شود (مثلاً Enter، Tab، Escape، a). فشردن Enter فرم را هم ارسال می‌کند.</p>
-      </div>`;
-    }
-
     // RemoveElements: whether every match goes or only the first.
     if (n.actionType === "RemoveElements") {
       const all = n.removeAllMatches !== false;
@@ -7917,27 +8000,6 @@
         </select>
         <p class="palette-hint">المان‌های انتخاب‌شده از DOM حذف می‌شوند (نه پنهان). اگر هیچ المانی پیدا نشود، مرحله خطا می‌دهد.</p>
       </div>`;
-    }
-
-    // DeleteRow: which row of which source is removed.
-    if (n.actionType === "DeleteRow") {
-      const dsOpts = processDataSourceOptions(n.dataSourceId);
-      html += `<div class="insp-field"><label>${t("editor.actions.deleteRowSource")}</label>
-          <select data-k="dataSourceId"><option value="">— ${t("editor.actions.pickSource")} —</option>${dsOpts}</select>
-        </div>
-        <div class="insp-field"><label>${t("editor.actions.deleteRowTarget")}</label>
-          <select data-k="rowIndexType">
-            <option value="CurrentLoop" ${(n.rowIndexType || "CurrentLoop") === "CurrentLoop" ? "selected" : ""}>${esc(t("editor.row.currentLoop") || "ردیف حلقهٔ فعلی")}</option>
-            <option value="LastRow" ${n.rowIndexType === "LastRow" ? "selected" : ""}>${esc(t("editor.row.lastRow") || "آخرین ردیف منبع")}</option>
-            <option value="FirstRow" ${n.rowIndexType === "FirstRow" ? "selected" : ""}>${esc(t("editor.row.firstRow") || "اولین ردیف منبع")}</option>
-            <option value="SpecificRow" ${n.rowIndexType === "SpecificRow" ? "selected" : ""}>${esc(t("editor.row.specificRow") || "یک ردیف مشخص")}</option>
-          </select>
-        </div>
-        <div class="insp-field" id="insp-delete-row-idx" style="${n.rowIndexType === "SpecificRow" ? "" : "display:none"}">
-          <label>${esc(t("editor.row.specificIndex") || "شماره ردیف")}</label>
-          <input type="number" min="0" data-k="specificRowIndex" value="${esc(n.specificRowIndex == null ? 0 : n.specificRowIndex)}" />
-        </div>
-        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.deleteRowHint")}</p>`;
     }
 
     // ناوبری: سوئیچ انتظار برای تکمیل بارگذاری + سقف انتظار (فقط وقتی روشن است).

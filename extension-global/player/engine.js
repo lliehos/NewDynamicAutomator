@@ -76,15 +76,23 @@ function stepWritesToMemory(actionType) {
     : false;
 }
 
+function stepReadsCell(actionType) {
+  return (typeof globalThis !== "undefined" && globalThis.stepReadsCell)
+    ? globalThis.stepReadsCell(actionType)
+    : false;
+}
+
 function stepIsUrlAction(actionType) {
-  return actionType === "GoToUrl" || actionType === "NewPage";
+  return actionType === "GoToUrl";
 }
 
 function stepShowsTargetSelector(n) {
   const at = (n && n.actionType) || "";
-  // A spec only says an action CAN take a selector. The two data-source actions additionally let
-  // the author choose where the value comes from, and a constant/memory value needs no element.
+  // A spec only says an action CAN take a selector. Two of them let the author choose a mode where
+  // no element is involved, and only then is the selector dropped:
+  //   LoadContent with a memory target, and ScrollPage with an amount instead of an element.
   if (at === "LoadContent") return normalizeStepValueSource(n) === "Elements";
+  if (at === "ScrollPage") return String((n && n.scrollType) || "Amount") === "ToElement";
   return stepNeedsSelector(at);
 }
 
@@ -766,6 +774,9 @@ let playStatus = {
   stepTotal: 0,
   loopIndex: 0,
   loopTotal: 1,
+  // The row the process loop is on, kept apart from loopIndex so a row pointer inside a group can
+  // still name the OUTER row. threadRowPointer/executeFlow maintain it per step.
+  processRow: 0,
   repeatType: "None",
   currentNodeId: null,
   lastError: null,
@@ -935,6 +946,16 @@ const SCROLL_PAGE_DEFAULT_PX = 600;
  * miss as a failure, and a long default would make that failure slow to surface.
  */
 const ALERT_SETTLE_MS = 400;
+
+/**
+ * How long a back/forward step waits for the history navigation to settle.
+ *
+ * The browser fires no event when history.go() completes and the call itself returns immediately,
+ * so there is nothing to await. A short settle is the honest option: the step reports "the command
+ * was issued", not "the page changed", and the per-step selector wait covers any page that is still
+ * loading afterwards.
+ */
+const HISTORY_SETTLE_MS = 600;
 
 /**
  * Called just before moving to `nextId`. When that node has already run in this walk, the
@@ -1616,6 +1637,7 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     stepTotal: scopedSingle ? 1 : Math.max(steps.length, 1),
     loopIndex: 0,
     loopTotal: iterations.total,
+    processRow: 0,
     repeatType: iterations.type,
     currentNodeId: null,
     lastError: null,
@@ -1956,8 +1978,14 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       playStatus.stepIndex = stepOrdinal;
       if (stepOrdinal > playStatus.stepTotal) playStatus.stepTotal = stepOrdinal;
       playStatus.currentNodeId = node.id;
+      // The row the process loop is on travels with the step so a row pointer inside a group can
+      // still mean the OUTER row rather than the group's. At the top level there is no marker and
+      // rowIndex already is the process row, so the marker is simply the same value.
+      const processRow = Number.isFinite(Number(opts._processRow)) ? Number(opts._processRow) : rowIndex;
+      playStatus.processRow = processRow;
       const outcome = await runOneAction(
-        activeTabId, graph, node, rowIndex, loopIndex, loopTotal, stepOrdinal, playStatus.stepTotal
+        activeTabId, graph, { ...node, _processRow: processRow },
+        rowIndex, loopIndex, loopTotal, stepOrdinal, playStatus.stepTotal
       );
       if (outcome.tabId) {
         activeTabId = outcome.tabId;
@@ -2123,7 +2151,10 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
             ...opts,
             _insideGroupId: node.id,
             _groupLoopIndex: gi + 1,
-            _groupLoopTotal: groupIters.total
+            _groupLoopTotal: groupIters.total,
+            // The outer row, so a "process loop row" pointer inside this group still means the row
+            // the PROCESS is on rather than the row this group's own repeat source produced.
+            _processRow: parentRow
           });
           activeTabId = inner.tabId || activeTabId;
           if (inner.stepFailed) {
@@ -2796,7 +2827,19 @@ async function readElementText(tabId, node, graph, rowIndex) {
   }
 }
 
-async function closeWindowTab(currentTabId, which) {
+/**
+ * Close one tab of the run's own window.
+ *
+ * `target` is one of First | Last | Next | Previous. First and Last are absolute positions in the
+ * window; Next and Previous are measured from the tab the run is executing in, which is what an
+ * author means by "the tab after this one" — the alternative, the browser's active tab, changes
+ * whenever the user clicks somewhere and would make the step unpredictable.
+ *
+ * The run's tab is not protected: if it is the target it is closed, and the caller is told which
+ * tab to continue in. Closing the LAST tab of a window is refused rather than silently ending the
+ * session, because Chrome would close the window with it.
+ */
+async function closeWindowTab(currentTabId, target) {
   let tab;
   try {
     tab = await chrome.tabs.get(currentTabId);
@@ -2809,14 +2852,72 @@ async function closeWindowTab(currentTabId, which) {
   if (ordered.length <= 1) {
     return { ok: false, error: tv("run.lastTab"), reason: "last_tab" };
   }
-  const target = which === "first" ? ordered[0] : ordered[ordered.length - 1];
-  const next = ordered.find((t) => t.id !== target.id) || ordered[0];
-  await chrome.tabs.remove(target.id);
-  const continueId = target.id === currentTabId ? next.id : currentTabId;
+
+  const here = ordered.findIndex((t) => Number(t.id) === Number(currentTabId));
+  let victim = null;
+  switch (String(target || "Last")) {
+    case "First":
+      victim = ordered[0];
+      break;
+    case "Next":
+      victim = here >= 0 ? ordered[here + 1] || null : null;
+      break;
+    case "Previous":
+      victim = here >= 0 ? ordered[here - 1] || null : null;
+      break;
+    case "Last":
+    default:
+      victim = ordered[ordered.length - 1];
+      break;
+  }
+
+  if (!victim) {
+    // Next from the last tab, or Previous from the first: there is nothing there. Reported as a
+    // step failure rather than quietly closing a different tab, which would be the worse surprise.
+    return {
+      ok: false,
+      error: target === "Next" ? tv("run.noNextTab") : tv("run.noPrevTab"),
+      reason: "no_such_tab"
+    };
+  }
+
+  // Closing the run's own tab would leave the walk with no page to act on. Chrome would also pick a
+  // neighbour for us, which is not necessarily the one the diagram expects, so the caller is told
+  // explicitly which tab to continue in.
+  const next = ordered.find((t) => t.id !== victim.id) || null;
+  await chrome.tabs.remove(victim.id);
+  const continueId = victim.id === currentTabId ? (next ? next.id : null) : currentTabId;
   if (continueId) {
     try { await chrome.tabs.update(continueId, { active: true }); } catch { /* ignore */ }
   }
   return { ok: true, tabId: continueId };
+}
+
+/**
+ * Walk one entry back or forward in the tab's own browser history.
+ *
+ * This is `history.back()` / `history.forward()` on the target tab, not a tab switch: the two are
+ * easy to confuse and the action names would be ambiguous otherwise, so the choice is documented
+ * here and in the action's description.
+ *
+ * The injected call cannot tell whether history actually moved — the browser exposes no event for
+ * that — so the step waits for the document to settle and reports that instead of claiming a
+ * navigation happened.
+ */
+async function runHistoryStep(tabId, direction, step) {
+  const dir = direction === "back" ? -1 : 1;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (d) => { try { window.history.go(d); } catch { /* ignore */ } },
+      args: [dir]
+    });
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err), reason: "history_failed" };
+  }
+  // History navigation is asynchronous and has no completion event we can await, so settle briefly.
+  await sleepInterruptible(Math.max(0, Number(step?.waitMaxMs) || 0) || HISTORY_SETTLE_MS);
+  return { ok: true, navigated: true };
 }
 
 async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
@@ -2827,21 +2928,14 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
 
   logDynamicSelectorResolution(step, resolvedSelector, rowIndex ?? 0);
 
-  if (actionType === "CloseFirstTab" || actionType === "CloseLastTab") {
-    return closeWindowTab(tabId, actionType === "CloseFirstTab" ? "first" : "last");
+  // One close-tab action with a target, replacing the old first/last pair who differed only here.
+  if (actionType === "CloseTab") {
+    return closeWindowTab(tabId, step.closeTabTarget || "Last");
   }
 
-  if (actionType === "NewPage") {
-    let url = resolvedUrl || "about:blank";
-    const cst0 = step.contentSourceType || "";
-    if (cst0 === "Memory" || cst0 === "Elements" || cst0 === "System" || cst0 === "DataSource") {
-      url = (await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath })) || "about:blank";
-    }
-    const created = await chrome.tabs.create({ url, active: true });
-    const newId = created.id;
-    if (newId) await waitTabComplete(newId, resolveNavigationWaitMs(step));
-    return { ok: true, tabId: newId, navigated: true };
-  }
+  // Back / forward in the tab's own history (not a tab switch — see runHistoryStep).
+  if (actionType === "GoBack") return runHistoryStep(tabId, "back", step);
+  if (actionType === "GoForward") return runHistoryStep(tabId, "forward", step);
 
   if (actionType === "GoToUrl") {
     let url = resolvedUrl;
@@ -2895,27 +2989,14 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     return { ok: true, memorySet: { name, value: value == null ? "" : String(value) } };
   }
 
-  // Reads a variable into the step's value. Like SetMemory this never touches the page, so it
-  // returns before the selector plumbing — a selector here would be meaningless.
-  if (actionType === "GetMemory") {
-    const name = String(step.memoryVariableName || "").trim();
-    if (!name) {
-      return onUnexpected(runMode, {
-        taskId, stepId: step.entityId, reason: "missing_memory_name",
-        expectedSelector: null, actualUrl: null
-      });
-    }
-    const stored = await chrome.storage.local.get("playMemory").catch(() => ({}));
-    const mem = stored?.playMemory;
-    const vars = (mem && mem.schema === PLAY_MEMORY_SCHEMA ? mem.vars : null) || {};
-    // A variable that was never written reads as empty rather than failing: "not set yet" is a
-    // normal state for a first iteration, and failing here would stop a run that is otherwise fine.
-    return { ok: true, memoryGet: { name, value: vars[name] == null ? "" : String(vars[name]) } };
-  }
-
   // Removes one row from a library data source. The server owns the store, so this is a plain
   // request; the row is picked with the same pointer vocabulary the inspector offers.
-  if (actionType === "DeleteRow") {
+  // DeleteRow / InsertRow share everything except the server call: the source, and which row the
+  // pointer selects. The pointer vocabulary — first / last / the process loop's row / the group
+  // loop's row / a fixed index — means the same thing either way, so it is resolved once and only
+  // the operation differs.
+  if (actionType === "DeleteRow" || actionType === "InsertRow") {
+    const isInsert = actionType === "InsertRow";
     const dsId = Number(step.dataSourceId || step.saveDataSourceId || 0);
     if (!dsId) {
       return onUnexpected(runMode, {
@@ -2923,22 +3004,37 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
         expectedSelector: null, actualUrl: null
       });
     }
+    // rowIndex is the row the current flow walk sits on: the group's row when the step lives inside
+    // a group, the process loop's row otherwise. processRow travels separately (see executeFlow's
+    // _processRow) so "process loop row" still means the outer loop when read from inside a group.
+    const groupRow = rowIndex;
+    const processRow = processStatusRow(step, rowIndex);
     const pointer = resolveDedicatedRow({ ...step, dedicatedRow: true }, graph, {
-      groupRow: rowIndex, parentRow: rowIndex, loopIndex, groupIndex: loopIndex
+      groupRow,
+      parentRow: processRow,
+      processRow,
+      loopIndex,
+      groupIndex: loopIndex
     });
     const targetRow = pointer != null ? pointer : (Number(rowIndex) || 0);
-    const removed = await chrome.runtime.sendMessage({
-      type: "deleteDataSourceRow", dataSourceId: dsId, rowIndex: targetRow
+    const res = await chrome.runtime.sendMessage({
+      type: isInsert ? "insertDataSourceRow" : "deleteDataSourceRow",
+      dataSourceId: dsId,
+      rowIndex: targetRow
     }).catch(() => null);
-    if (!removed?.ok) {
+    if (!res?.ok) {
       return onUnexpected(runMode, {
         taskId, stepId: step.entityId,
-        reason: removed?.limit ? "source_limit" : (removed?.error || "delete_row_failed"),
+        reason: res?.limit ? "source_limit" : (res?.error || (isInsert ? "insert_row_failed" : "delete_row_failed")),
         expectedSelector: null, actualUrl: null
-      }, removed?.message || null);
+      }, res?.message || null);
     }
-    appendPlayLog("info", `ردیف ${targetRow} از منبع ${dsId} حذف شد`);
-    return { ok: true, rowDeleted: { dataSourceId: dsId, rowIndex: targetRow } };
+    appendPlayLog("info", isInsert
+      ? `ردیف خالی در جای ${targetRow} منبع ${dsId} درج شد`
+      : `ردیف ${targetRow} از منبع ${dsId} حذف شد`);
+    return isInsert
+      ? { ok: true, rowInserted: { dataSourceId: dsId, rowIndex: targetRow } }
+      : { ok: true, rowDeleted: { dataSourceId: dsId, rowIndex: targetRow } };
   }
 
   // LoadContent: read one source cell and write it into a page element OR a memory variable.
@@ -2963,7 +3059,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   const cst = step.contentSourceType || "";
   const needsAsyncValue = stepUsesDataSourceValue(step)
     || cst === "Memory" || cst === "Elements" || cst === "System"
-    || (actionType === "InputContent" || actionType === "PressKey" || actionType === "SelectOption" || actionType === "Hold");
+    || (actionType === "InputContent" || actionType === "SelectOption" || actionType === "Hold");
 
   let valueForAction;
   if (needsAsyncValue) {
@@ -3003,10 +3099,12 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     selectorValue: resolvedSelector,
     constantValue: valueForAction,
     navigateUrl: step.navigateUrl,
-    // SelectOption matches by value, label or position; PressKey needs the key name; every
-    // RemoveElements run needs to know whether one match or all of them go.
-    selectBy: step.selectBy || "Value",
-    keyName: step.keyName || "",
+    // SelectOption matches by value, label or position; every RemoveElements run needs to know
+    // whether one match or all of them go.
+    // ScrollPage's mode, and InputContent's typing mode, both travel with the step.
+    scrollType: step.scrollType || "Amount",
+    typeMode: step.typeMode || "Instant",
+    typeDelayMs: Math.max(0, Number(step.typeDelayMs) || 0),
     removeAllMatches: step.removeAllMatches !== false,
     highlightColor: resolveHighlightColor(graph),
     waitTimeoutMs,
@@ -3018,11 +3116,9 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   // ONE execution path, deliberately.
   //
   // This used to try chrome.tabs.sendMessage into a content-script engine first and fall back to
-  // executeInFrame. The two engines had drifted: the content script never learned SelectOption,
-  // PressKey, ClearContent, ScrollIntoView or FocusElement, so whether those actions worked
-  // depended on which path won the race — the same step could succeed on one run and come back
-  // "unsupported_action" on the next. The injected engine is the complete one and needs no
-  // content script to be present, so it is now the only path.
+  // executeInFrame. The two engines had drifted — the content script never learned every action —
+  // so whether a step worked depended on which path won the race. The injected engine is the
+  // complete one and needs no content script to be present, so it is now the only path.
   const result = await (async () => {
     await clearTabPlayHighlights(tabId);
     return executeInFrame(tabId, frameId, payload);
@@ -3104,10 +3200,13 @@ async function runLoadContentStep(tabId, taskId, step, runMode, graph, rowIndex,
     : 0;
   const stateReq = selectorStateReqs(step);
   const payload = {
-    // The page-side branch is InputContent's: both write a value into a field.
+    // The page-side branch is InputContent's: both write a value into a field, so LoadContent
+    // inherits its typing mode rather than having a second implementation of it.
     actionType: "InputContent",
     selectorValue: resolvedSelector,
     constantValue: text,
+    typeMode: step.typeMode || "Instant",
+    typeDelayMs: Math.max(0, Number(step.typeDelayMs) || 0),
     highlightColor: resolveHighlightColor(graph),
     waitTimeoutMs,
     requireVisible: !!stateReq.requireVisible,
@@ -4322,12 +4421,23 @@ function collectReachableFromStart(graph) {
 function resolveDedicatedRow(startNode, graph, ctx) {
   if (!startNode || startNode.dedicatedRow !== true) return null;
   const pointer = String(startNode.rowIndexType || "None");
-  const { groupRow, parentRow, loopIndex, groupIndex } = ctx || {};
+  const { groupRow, parentRow, processRow, loopIndex, groupIndex } = ctx || {};
   switch (pointer) {
     case "CurrentLoop":
       return Number.isFinite(Number(groupRow)) ? Number(groupRow) : null;
     case "ParentLoop":
       return Number.isFinite(Number(parentRow)) ? Number(parentRow) : null;
+    // The two loop rows, kept distinct on purpose. "GroupLoop" is the row the GROUP's own repeat
+    // source produced, "ProcessLoop" is the row the outer process loop is on. From outside a group
+    // the two coincide; from inside one they are different rows, and an author writing "the row the
+    // process is on" means the outer one even when the step sits several groups deep.
+    case "GroupLoop":
+      return Number.isFinite(Number(groupRow)) ? Number(groupRow) : null;
+    case "ProcessLoop": {
+      const r = Number(processRow);
+      if (Number.isFinite(r)) return r;
+      return Number.isFinite(Number(loopIndex)) ? Number(loopIndex) : null;
+    }
     // "TotalLoop" is an index into the whole loop run, so it reuses the outer loop position rather
     // than the source row the group happens to be on.
     case "TotalLoop":
@@ -4357,6 +4467,22 @@ function resolveDedicatedRow(startNode, graph, ctx) {
     default:
       return null;
   }
+}
+
+/**
+ * The row the PROCESS loop sits on, from inside whatever group the step happens to live in.
+ *
+ * executeFlow threads the outer row down as `_processRow`; a step at the top level has no such
+ * marker and its own rowIndex already IS the process row. The difference only shows up inside a
+ * group, where rowIndex has been rebound to the group's row — and there, reading the outer row
+ * requires this marker rather than a guess.
+ */
+function processStatusRow(step, fallback) {
+  const threaded = Number(step?._processRow);
+  if (Number.isFinite(threaded)) return threaded;
+  const fromStatus = Number(playStatus?.processRow);
+  if (Number.isFinite(fromStatus)) return fromStatus;
+  return Number(fallback) || 0;
 }
 
 /** The source a row pointer resolves against: the node's own pick, else the process default. */
@@ -4670,10 +4796,27 @@ async function playExecuteInjected(payload) {
   if (actionType === "WaitTime") return { ok: true, waitMs: Number(value) || 0 };
   if (actionType === "NoAction") return { ok: true, skipped: true };
 
-  // ScrollPage: move the page (or the nearest scrollable ancestor) by the step's amount, in device
-  // pixels down the document. It runs before the selector guard because it acts on the document,
-  // not on an element — demanding a selector here would make the action unauthorable.
+  // ScrollPage: two modes, chosen on the step.
+  //   Amount    — move the document by a pixel amount. Needs no element, so it is handled here
+  //               before the selector guard.
+  //   ToElement — bring a chosen element into view. That one DOES need a selector, so if no selector
+  //               was resolved it is reported as such rather than silently scrolling nowhere.
   if (actionType === "ScrollPage") {
+    const mode = String(payload.scrollType || "Amount");
+    if (mode === "ToElement") {
+      if (!selector) {
+        return { ok: false, error: tv("run.scrollNeedsSelector"), reason: "missing_selector" };
+      }
+      // The shared element wait handles "not there yet"; its failure is the step's failure.
+      const found = await waitForElement(selector, waitTimeoutMs, stateReq);
+      if (!found.ok) return found;
+      try {
+        found.el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+      } catch {
+        try { found.el.scrollIntoView(); } catch { /* a detached node cannot be scrolled to */ }
+      }
+      return { ok: true, scrolledToElement: selector };
+    }
     const amount = Number(value);
     const dy = Number.isFinite(amount) && amount !== 0 ? amount : SCROLL_PAGE_DEFAULT_PX;
     try {
@@ -4741,21 +4884,77 @@ async function playExecuteInjected(payload) {
 
   // One branch for every action that puts a value into a field: InputContent writes the author's
   // value, and LoadContent (which types a source cell in) reuses it by sending InputContent.
+  //
+  // Two ways to write, chosen on the step:
+  //   Instant      — set the value directly. Fast, and the right default.
+  //   PerCharacter — focus the field and send a real key event per character. Slower, but it is the
+  //                  only thing that works on a field the page is watching keystroke by keystroke
+  //                  (live search, autocomplete, a masked input, an input with a key handler). The
+  //                  instant path cannot fake that: setting .value fires one `input` event and the
+  //                  page never sees the individual keys.
   if (actionType === "InputContent") {
     const v = value == null ? "" : String(value);
+    const perChar = String(payload.typeMode || "Instant") === "PerCharacter";
+
+    if (!perChar) {
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const desc = Object.getOwnPropertyDescriptor(proto, "value");
+        if (desc && desc.set) desc.set.call(el, v);
+        else el.value = v;
+      } else if (el.tagName.toLowerCase() === "select") {
+        el.value = v;
+      } else if (el.isContentEditable) {
+        el.textContent = v;
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return { ok: true };
+    }
+
+    // --- per character ------------------------------------------------------------------------
+    const canType = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable;
+    if (!canType) {
+      return { ok: false, error: tv("run.cannotType", { tag: el.tagName.toLowerCase() }), reason: "not_typeable" };
+    }
+    try { el.focus({ preventScroll: false }); } catch { /* a detached node cannot take focus */ }
+    // Start from an empty field: typing APPENDS, so a pre-filled box would concatenate otherwise.
+    // This mirrors ClearContent's behaviour rather than leaving the author to add a step for it.
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       const desc = Object.getOwnPropertyDescriptor(proto, "value");
-      if (desc && desc.set) desc.set.call(el, v);
-      else el.value = v;
-    } else if (el.tagName.toLowerCase() === "select") {
-      el.value = v;
-    } else if (el.isContentEditable) {
-      el.textContent = v;
+      if (desc && desc.set) desc.set.call(el, "");
+      else el.value = "";
+    } else {
+      el.textContent = "";
     }
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const keystrokeDelay = Math.max(0, Number(payload.typeDelayMs) || 0);
+    for (const ch of Array.from(v)) {
+      const init = { key: ch, bubbles: true, cancelable: true };
+      try {
+        el.dispatchEvent(new KeyboardEvent("keydown", init));
+        // beforeinput/input carry the character the page's own handlers read; without them a
+        // controlled React/Vue input reverts the change.
+        try { el.dispatchEvent(new InputEvent("beforeinput", { ...init, data: ch, inputType: "insertText" })); } catch { /* older engines */ }
+        el.dispatchEvent(new KeyboardEvent("keypress", init));
+        if (el.isContentEditable) {
+          el.textContent = (el.textContent || "") + ch;
+        } else {
+          // The native setter, so a framework's value tracker still sees the change.
+          const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const desc = Object.getOwnPropertyDescriptor(proto, "value");
+          const next = (el.value || "") + ch;
+          if (desc && desc.set) desc.set.call(el, next);
+          else el.value = next;
+        }
+        try { el.dispatchEvent(new InputEvent("input", { ...init, data: ch, inputType: "insertText" })); } catch { el.dispatchEvent(new Event("input", { bubbles: true })); }
+        el.dispatchEvent(new KeyboardEvent("keyup", init));
+      } catch { /* one character failing must not abandon the rest */ }
+      if (keystrokeDelay > 0) await new Promise((r) => setTimeout(r, keystrokeDelay));
+    }
     el.dispatchEvent(new Event("change", { bubbles: true }));
-    return { ok: true };
+    return { ok: true, typed: v.length };
   }
 
   if (actionType === "Hover") {
@@ -4829,19 +5028,6 @@ async function playExecuteInjected(payload) {
     return { ok: true };
   }
 
-  if (actionType === "FocusElement") {
-    try { el.focus({ preventScroll: false }); } catch { /* a detached node cannot take focus */ }
-    return { ok: true };
-  }
-
-  // Scrolling matters because a click on an off-screen element can land on the wrong
-  // target: the page still scrolls on click, but the coordinates were measured first.
-  if (actionType === "ScrollIntoView") {
-    try { el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" }); }
-    catch { try { el.scrollIntoView(); } catch { /* ignore */ } }
-    return { ok: true };
-  }
-
   if (actionType === "SelectOption") {
     if (!(el instanceof HTMLSelectElement)) {
       return { ok: false, error: tv("run.notSelect"), reason: "not_select" };
@@ -4866,26 +5052,6 @@ async function playExecuteInjected(payload) {
     el.selectedIndex = index;
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
-    return { ok: true };
-  }
-
-  if (actionType === "PressKey") {
-    const key = String(payload.keyName || value || "Enter");
-    const target = el || document.activeElement || document.body;
-    const init = { key, bubbles: true, cancelable: true };
-    try {
-      target.dispatchEvent(new KeyboardEvent("keydown", init));
-      target.dispatchEvent(new KeyboardEvent("keypress", init));
-      target.dispatchEvent(new KeyboardEvent("keyup", init));
-    } catch { /* ignore */ }
-    // Enter inside a form is the one key a page cannot observe from JS, so it is
-    // submitted explicitly; every other key is left to the page's own handlers.
-    if (key === "Enter") {
-      const form = target.form || (target.closest && target.closest("form"));
-      if (form && typeof form.requestSubmit === "function") {
-        try { form.requestSubmit(); } catch { /* ignore */ }
-      }
-    }
     return { ok: true };
   }
 
@@ -4964,7 +5130,7 @@ function waitTabComplete(tabId, maxMs) {
   });
 }
 
-/** GoToUrl / NewPage: wait for load unless the step switched it off; cap by waitMaxMs. */
+/** GoToUrl: wait for load unless the step switched it off; cap by waitMaxMs. */
 function resolveNavigationWaitMs(step) {
   if (!step || step.waitForLoad === false) return 0;
   const raw = Number(step.waitMaxMs);

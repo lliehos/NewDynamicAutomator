@@ -171,10 +171,11 @@ const BUILD_ITEMS = [
   ["DoubleClick", "build.doubleClick"],
   ["RightClick", "build.rightClick"],
   ["Hover", "build.hover"],
+  ["Hold", "build.hold"],
   ["InputContent", "build.inputContent"],
   ["ClearContent", "build.clearContent"],
   ["SelectOption", "build.selectOption"],
-  ["PressKey", "build.pressKey"],
+  ["RemoveElements", "build.removeElements"],
   ["GoToUrl", "build.goToUrl"],
   ["FindElement", "build.findElement"],
   ["NotFindElement", "build.notFindElement"],
@@ -222,10 +223,11 @@ const CTX_LABELS = {
     "build.doubleClick": "دبل‌کلیک روی المان",
     "build.rightClick": "کلیک راست روی المان",
     "build.hover": "نگه‌داشتن نشانگر روی المان",
+    "build.hold": "فشردن و نگه‌داشتن المان",
     "build.inputContent": "پر کردن فیلد المان",
     "build.clearContent": "پاک کردن متن فیلد",
     "build.selectOption": "انتخاب گزینه از لیست",
-    "build.pressKey": "فشردن اینتر روی المان",
+    "build.removeElements": "حذف المان‌های صفحه",
     "build.goToUrl": "رفتن به آدرس",
     "build.findElement": "شرط: وجود المان",
     "build.notFindElement": "شرط: نبود المان",
@@ -235,7 +237,8 @@ const CTX_LABELS = {
     "build.noEditor": "ابتدا ادیتور فرآیند را باز کنید.",
     "build.manyEditors": "بیش از یک ادیتور باز است؛ فقط یکی را باز بگذارید.",
     "build.locked": "این فرآیند قفل است و نود جدید نمی‌پذیرد.",
-    "build.noElement": "المانی انتخاب نشده است. ابتدا روی آن راست‌کلیک کنید."
+    "build.noElement": "المانی انتخاب نشده است. ابتدا روی آن راست‌کلیک کنید.",
+    "build.unknownType": "این نوع اقدام پشتیبانی نمی‌شود؛ افزونه را به‌روز کنید."
   },
   en: {
     "ctx.parent": "Copy selector",
@@ -251,10 +254,11 @@ const CTX_LABELS = {
     "build.doubleClick": "Double-click the element",
     "build.rightClick": "Right-click the element",
     "build.hover": "Hover the element",
+    "build.hold": "Press and hold the element",
     "build.inputContent": "Fill the element's field",
     "build.clearContent": "Clear the field's text",
     "build.selectOption": "Select an option from the list",
-    "build.pressKey": "Press Enter on the element",
+    "build.removeElements": "Remove page elements",
     "build.goToUrl": "Go to URL",
     "build.findElement": "Condition: element exists",
     "build.notFindElement": "Condition: element is absent",
@@ -264,7 +268,8 @@ const CTX_LABELS = {
     "build.noEditor": "Open the process editor first.",
     "build.manyEditors": "More than one editor is open; keep only one.",
     "build.locked": "This process is locked and cannot take a new node.",
-    "build.noElement": "No element selected. Right-click one first."
+    "build.noElement": "No element selected. Right-click one first.",
+    "build.unknownType": "This action type is not supported; update the extension."
   }
 };
 

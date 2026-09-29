@@ -30,17 +30,14 @@
     DoubleClick:    { selector: true },
     RightClick:     { selector: true },
     Hover:          { selector: true },
-    FocusElement:   { selector: true },
-    ScrollIntoView: { selector: true },
     // Hold is a click held down for a while, so beyond the element it needs a duration.
     Hold:           { selector: true, value: true },
     ClearContent:   { selector: true },
     SelectOption:   { selector: true, value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true },
 
-    // PressKey always names a key; it may also read the key from a source.
-    PressKey:       { selector: true, value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true },
-
     // --- writing into a page element -----------------------------------------
+    // InputContent fills a page element. It also carries a typing mode (all at once, or one key at a
+    // time) which the page-side code reads from the same payload.
     InputContent:   { selector: true, value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true },
 
     // LoadContent reads one source cell and puts it into a TARGET that is either a page element or a
@@ -48,19 +45,26 @@
     LoadContent:    { selector: true, readsCell: true, writesMem: true },
 
     // --- data source ---------------------------------------------------------
-    // InsertContent writes a value INTO a source cell. The value may come from anywhere.
+    // InsertContent writes a value INTO a source cell. The value may come from a constant, a page
+    // element, a memory variable or the system — but NOT from a data source: writing a cell by
+    // reading another cell of the same table is a copy, which this action does not offer.
     InsertContent:  { value: true, elementVal: true, memoryVal: true, systemVal: true, writesSrc: true },
+    // Which row is chosen on the step (first / last / the loop's row), so no value and no selector.
     DeleteRow:      {},
+    // Adds a blank row at a chosen position. The columns come from the source, so nothing to pick.
+    InsertRow:      {},
     SetMemory:      { value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true, writesMem: true },
-    GetMemory:      { writesMem: true },
 
     // --- navigation / tabs ---------------------------------------------------
     GoToUrl:        { value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true },
-    NewPage:        { value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true },
+    GoBack:         {},
+    GoForward:      {},
     Refresh:        {},
-    ScrollPage:     { value: true },
-    CloseFirstTab:  {},
-    CloseLastTab:   {},
+    // ScrollPage's selector only applies when its type is "to element", so the editor asks
+    // stepShowsTargetSelector, which narrows this by the step's own scrollType.
+    ScrollPage:     { value: true, selector: true },
+    // Which tab to close is a step field, not a value and not a selector.
+    CloseTab:       {},
 
     // --- timing / flow -------------------------------------------------------
     WaitTime:       { value: true, memoryVal: true, systemVal: true, readsCell: true },
@@ -89,8 +93,8 @@
   function stepWritesToSource(at) { return actionSpec(at).writesSrc === true; }
   function stepWritesToMemory(at) { return actionSpec(at).writesMem === true; }
   function stepReadsCell(at) { return actionSpec(at).readsCell === true; }
-  /** The navigation actions that replace the current tab's URL. */
-  function stepIsUrlAction(at) { return at === "GoToUrl" || at === "NewPage"; }
+  /** Actions whose whole job is a browser navigation, so they take a URL rather than a value. */
+  function stepIsUrlAction(at) { return at === "GoToUrl"; }
 
   var api = {
     ACTION_SPECS: ACTION_SPECS,

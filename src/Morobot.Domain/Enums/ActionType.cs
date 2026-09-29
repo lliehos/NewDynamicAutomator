@@ -35,34 +35,48 @@ public enum ActionType
     // LoadContent, writing a value into a source cell is InsertContent.
     WaitTime = 15,
     GoToUrl = 16,
-    NewPage = 17,
+    // 17 was NewPage — removed. Opening a tab belongs to the run's own navigation, not to a step.
     ScrollPage = 18,
     // 19 was LoadCaptcha — removed. It had no implementation and no agreed behaviour.
     // 20 was Breakpoint — removed. It did nothing (the player returned skipped), so it was a step
     // that looked like it paused the run but never did.
     WaitForLoading = 21,
-    CloseLastTab = 22,
-    CloseFirstTab = 23,
-    /// <summary>Delete one row from a library data source.</summary>
+    /// <summary>
+    /// Close one tab. Which one is chosen on the step: first, last, next or previous.
+    /// </summary>
+    /// <remarks>
+    /// 22/23 were CloseLastTab and CloseFirstTab. They differed only in which tab they closed, so
+    /// the two became one action with a target — the same reasoning that removed the per-language
+    /// brand titles. The numbers are left as gaps rather than reused.
+    /// </remarks>
+    CloseTab = 22,
+    /// <summary>Delete one row from a library data source. Which row is chosen on the step.</summary>
     DeleteRow = 24,
     /// <summary>Write a value into a memory variable.</summary>
     SetMemory = 25,
-    /// <summary>Read a value out of a memory variable (without touching the page).</summary>
-    GetMemory = 26,
+    // 26 was GetMemory — removed. Reading a variable back only fed the step's own value, which
+    // every value-taking action can already do by choosing «حافظه» as its value source.
     /// <summary>Clear the text of a page element.</summary>
     ClearContent = 27,
     /// <summary>Select an option in a &lt;select&gt; element.</summary>
     SelectOption = 28,
-    /// <summary>Send one keystroke to a page element. The key is chosen on the step.</summary>
-    PressKey = 29,
-    /// <summary>Move keyboard focus to a page element.</summary>
-    FocusElement = 30,
-    /// <summary>Scroll a page element into view.</summary>
-    ScrollIntoView = 31
+    // 29 was PressKey — removed. Sending a key is not a job of its own once Enter is gone.
+    // 30 was FocusElement — removed.
+    // 31 was ScrollIntoView — removed. It is ScrollPage with its type set to "to element".
     // 32 was WaitForElement — removed. The per-step selector wait (selectorWaitEnabled /
     // selectorWaitMs) already gives every element action a wait budget, so a dedicated action
     // duplicated a setting every step already had.
     //
     // "Navigate" was never a member. The player accepted it as an alias of GoToUrl, which meant a
     // graph could name an action the editor could not produce and the enum did not declare.
+
+    /// <summary>Go back one entry in the tab's browser history.</summary>
+    GoBack = 33,
+    /// <summary>Go forward one entry in the tab's browser history.</summary>
+    GoForward = 34,
+    /// <summary>
+    /// Insert a blank row into a library data source, at a chosen position.
+    /// The columns come from the source itself; the new row starts empty.
+    /// </summary>
+    InsertRow = 35
 }
