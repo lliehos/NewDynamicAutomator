@@ -1,5 +1,5 @@
 /** Morobot Smart Recorder — blank tab + soft API stub (Microsoft LM later). */
-importScripts("lib/branding.js");
+importScripts("lib/branding.js", "lib/session-scope.js");
 
 const DEFAULT_PORTAL = "https://localhost:7201";
 const FLUSH_MS = 1200;
@@ -16,9 +16,29 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * The portal origin this extension is currently pointed at.
+ *
+ * Prefers a live session's own bound server over the shared `portalBase` value.
+ *
+ * `portalBase` is one key in `chrome.storage.local`, shared by every tab, and both
+ * `content/portal-bridge.js` and the token lookup write to it. With a local server and a published
+ * one both open they overwrite each other, so a request made for a recording could be sent to
+ * whichever portal happened to load last — showing up as "the session does not exist" or a stray
+ * 401, with nothing on screen to explain it.
+ *
+ * Resolving a live session's base first closes that hole for every caller at once, rather than
+ * relying on each request site to opt in: one that forgot would silently keep the broken behaviour.
+ */
 async function portalBase() {
   const { portalBase } = await chrome.storage.local.get("portalBase");
-  return portalBase || DEFAULT_PORTAL;
+  const globalBase = portalBase || DEFAULT_PORTAL;
+  if (globalThis.DaSessionScope) {
+    try {
+      return await DaSessionScope.resolveBase(globalBase);
+    } catch { /* fall through to the global value */ }
+  }
+  return globalBase;
 }
 
 async function resolveAccessToken() {
@@ -28,7 +48,14 @@ async function resolveAccessToken() {
     try {
       const cookie = await chrome.cookies.get({ url, name: "da_access" });
       if (cookie?.value) {
-        await chrome.storage.local.set({ token: cookie.value, portalBase: new URL(url).origin });
+        // `tokenPortalBase` records which server issued the token, so a local token is not later
+        // attached to a remote request. The write to `portalBase` that used to happen here is gone:
+        // this runs mid-request, and repointing global routing as a side effect of fetching a token
+        // is what let one call silently move the whole extension to a different server.
+        await chrome.storage.local.set({
+          token: cookie.value,
+          tokenPortalBase: new URL(url).origin
+        });
         return cookie.value;
       }
     } catch { /* next */ }
@@ -55,7 +82,15 @@ async function currentLocalUser() {
 async function apiFetch(path, options = {}) {
   const base = await portalBase();
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  const token = await resolveAccessToken();
+  let token = await resolveAccessToken();
+  // Drop a token that belongs to a different portal. A credential issued by the other server is
+  // rejected there, which surfaces as an auth failure rather than the misrouted request it really
+  // is — the least diagnosable possible symptom.
+  if (token && globalThis.DaSessionScope) {
+    token = await DaSessionScope.tokenForOrigin(base, await chrome.storage.local.get([
+      "smartToken", "token", "tokenPortalBase"
+    ]));
+  }
   if (token) headers.Authorization = `Bearer ${token}`;
   const user = await currentLocalUser();
   headers["X-Da-Local-User"] = user;
@@ -301,6 +336,14 @@ async function startSmartSession(message = {}) {
     return { ok: false, status: 200, error: "سرور جلسهٔ ضبط را نساخت — نسخهٔ سرور را بررسی کنید." };
   }
 
+  // Pin this session to the portal it was created on, so opening another portal later cannot move
+  // the save onto a different server. The base is read now, while the record button's own portal is
+  // still the one in context, and kept for the life of the session.
+  const boundBase = await portalBase();
+  if (globalThis.DaSessionScope) {
+    await DaSessionScope.bindSession(boundBase, await resolveAccessToken().catch(() => null));
+  }
+
   await chrome.storage.local.set({
     smartActive: true,
     smartSessionId: sessionId,
@@ -309,7 +352,9 @@ async function startSmartSession(message = {}) {
     smartTaskTitle: taskTitle,
     smartLearningComplete: false,
     smartStatus: "thinking",
-    portalBase: await portalBase()
+    // Kept for the FAB's "am I on the portal page" check. The authoritative per-session copy is
+    // `smartPortalBase`, written by DaSessionScope above.
+    portalBase: boundBase
   });
   contextQueue = [];
   await broadcastSmartState();
@@ -391,6 +436,9 @@ async function stopSmartThinking() {
     smartLearningComplete: false,
     smartStatus: "stopped"
   });
+  // `smartSessionId` is deliberately KEPT here, and so is the session's server binding: stopping
+  // only ends the learning pass, and the save that usually follows must still reach the portal this
+  // session was created on. The binding is released by the save and the copy, which consume session.
   await broadcastSmartState();
   return { ok: true, learningComplete: false, tabId: smartTabId || null };
 }
@@ -467,6 +515,9 @@ async function saveSmartResult() {
 
   // The session is only cleared once the result really landed, so a failed save leaves the
   // recording intact and the button available for a retry.
+  // The server binding is released at the same time: the session is finished with, and leaving it
+  // behind would let a later, unrelated request inherit the wrong portal.
+  if (globalThis.DaSessionScope) await DaSessionScope.unbindSession().catch(() => {});
   await chrome.storage.local.set({
     smartActive: false,
     smartSessionId: null,
@@ -543,8 +594,10 @@ async function copySmartResult() {
     smartCopySessionId: smartSessionId
   });
 
-  // Stop the session the same way a save does. The session file is kept so the text can be re-read
-  // and copied again without re-recording.
+  // Stop the session the same way a save does. The session id AND its server binding are both kept
+  // here: the text can be re-read and copied again without re-recording, and that second copy must
+  // still go to the portal the session was made on. `saveSmartResult` is what clears both, because
+  // saving is what actually consumes the session.
   await chrome.storage.local.set({
     smartActive: false,
     smartTabId: null,

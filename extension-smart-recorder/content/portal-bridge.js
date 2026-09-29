@@ -41,13 +41,35 @@
   }
 
   try {
-    chrome.storage.local.set({
-      portalBase: location.origin,
-      apiBase: location.origin,
-      extensionRole: ROLE,
-      uiCulture: currentCulture()
+    /*
+     * This write is what made two servers interfere.
+     *
+     * `portalBase` is one key in shared extension storage, so every portal page load repointed the
+     * whole extension at itself: opening the local portal while a session ran against the published
+     * one silently moved that session's requests to localhost (and the reverse). A session pinned to
+     * its own portal by `DaSessionScope.bindSession` was still overridden here on the next page load.
+     *
+     * A session in progress therefore must not be repointed. The base is only updated when there is
+     * no session, and the session's own binding takes precedence in the background regardless — this
+     * stops the shared value from being rewritten out from under it.
+     */
+    chrome.storage.local.get(["smartActive", "smartSessionId"]).then((st) => {
+      const inSession = !!(st && (st.smartActive || st.smartSessionId));
+      const patch = {
+        extensionRole: ROLE,
+        uiCulture: currentCulture()
+      };
+      if (!inSession) {
+        patch.portalBase = location.origin;
+        patch.apiBase = location.origin;
+      }
+      chrome.storage.local.set(patch);
+      // The session sync runs after the write: it resolves which portal it is talking to from the
+      // same storage, so firing it first would have it read the previous value.
+      chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
+    }).catch(() => {
+      chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
     });
-    chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
   } catch { /* ignore */ }
 
   mark();
