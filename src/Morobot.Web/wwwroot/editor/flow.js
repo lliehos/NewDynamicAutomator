@@ -7219,12 +7219,24 @@
     return { ok: true, reasons: [] };
   }
 
-  /** True if any descendant inside this group (nested groups included) fails leaf validation. */
-  function groupHasInvalidContent(groupId) {
+  /**
+   * True if any descendant inside this group (nested groups included) fails leaf validation.
+   *
+   * `seen` guards the descent. Group nesting is expressed by `groupNodeId`, which nothing in the
+   * format forces to be acyclic: a graph can say A's parent is B while B's parent is A. Without a
+   * guard this recursion never terminates and the EDITOR dies with "Maximum call stack size
+   * exceeded" while merely drawing the canvas — the same class of failure the player had, reached
+   * through a different door. A group already being inspected is skipped rather than re-entered,
+   * which is the only answer that terminates on a cycle.
+   */
+  function groupHasInvalidContent(groupId, seen) {
+    const visited = seen || new Set();
+    if (visited.has(groupId)) return false;
+    visited.add(groupId);
     const kids = (graph.nodes || []).filter((x) => x.groupNodeId === groupId);
     for (const kid of kids) {
       if (kid.kind === "group") {
-        if (groupHasInvalidContent(kid.id)) return true;
+        if (groupHasInvalidContent(kid.id, visited)) return true;
         continue;
       }
       if (!validateNodeLeaf(kid).ok) return true;
@@ -7240,8 +7252,48 @@
     return { ok: reasons.length === 0, reasons };
   }
 
+  /**
+   * Structural faults that make the diagram impossible to walk, checked before anything about the
+   * node's own settings.
+   *
+   * Mirrors validateStructureForPlay in the player. A node whose flow edge points at itself sends
+   * the run back onto the node it is already executing; for a group that means descending into
+   * itself, which is how "Maximum call stack size exceeded" reached the user. The editor already
+   * refuses to CREATE such a link (resolveLink), so this exists for graphs that arrived from
+   * GraphJson — an import, a hand edit, or an older build — and for the case where a node and its
+   * edges were moved between groups and the wiring no longer makes sense.
+   *
+   * Reporting it here is what turns a fatal crash into an ordinary invalid node the author can see
+   * and fix on the canvas.
+   */
+  function structuralReasons(n) {
+    const reasons = [];
+    if (!n || !n.id) return reasons;
+    const outs = (graph.edges || []).filter(
+      (e) => e.from === n.id && e.kind !== "contains" && e.kind !== "parent"
+    );
+    if (outs.some((e) => e.to === n.id)) {
+      reasons.push("یال خروجی به خود همین نود وصل است — اجرا در حلقهٔ بی‌پایان گیر می‌کند");
+    }
+    if (n.kind === "group") {
+      const innerStart = (graph.nodes || []).find(
+        (x) => x.kind === "start" && x.groupNodeId === n.id
+      );
+      const contains = (graph.edges || []).find(
+        (e) => e.from === n.id && e.kind === "contains" && e.to !== n.id
+      );
+      const entryId = innerStart?.id || contains?.to || null;
+      if (entryId === n.id) {
+        reasons.push("ورودی این گروه به خود گروه برمی‌گردد و اجرا نمی‌تواند وارد آن شود");
+      }
+    }
+    return reasons;
+  }
+
   function validateNode(n) {
     if (!n) return { ok: true, reasons: [] };
+    const structural = structuralReasons(n);
+    if (structural.length) return { ok: false, reasons: structural };
     if (isActionNode(n)) return validateActionNode(n);
     if (n.kind === "condition") return validateConditionNode(n);
     if (n.kind === "start") return validateStartNode(n);

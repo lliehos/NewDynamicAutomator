@@ -25,61 +25,75 @@ function selectorHasDynPlaceholder(val) {
  * `stepShowsTargetSelector`) plus a second, separately-maintained copy in the editor's flow.js, and
  * the two had already drifted. One file, one set of answers.
  *
- * These thin aliases keep the rest of this file readable; they resolve at call time, so the shared
- * script only has to be loaded before the first action runs, not before this file is parsed.
+ * THE CAPTURE BELOW IS LOAD-BEARING — do not "simplify" it back to reading globals at call time.
+ *
+ * `action-specs.js` publishes its helpers on `globalThis`. In a service worker `globalThis` IS
+ * `self`, i.e. the same object these wrappers are declared on. So a wrapper that looked up
+ * `globalThis.actionSpec()` at call time resolved to ITSELF, and every call recursed until the
+ * stack blew: "Maximum call stack size exceeded" on any run, the moment a step needed a spec.
+ *
+ * Reading the shared functions ONCE, here, into private names is what breaks that cycle: the
+ * wrapper body then refers to the real implementation rather than to itself. `importScripts` runs
+ * action-specs.js before this file (see the list in background.js), so the globals are already
+ * present at this point and the capture is complete.
+ *
+ * The fallbacks keep this file loadable on its own (tests, the editor's bundling) without the
+ * shared script: without them the capture would throw at parse time and take the whole worker down.
  */
+const _sharedActionSpec = (typeof globalThis !== "undefined" && typeof globalThis.actionSpec === "function")
+  ? globalThis.actionSpec : null;
+const _sharedStepNeedsSelector = (typeof globalThis !== "undefined" && typeof globalThis.stepNeedsSelector === "function")
+  ? globalThis.stepNeedsSelector : null;
+const _sharedStepReceivesValue = (typeof globalThis !== "undefined" && typeof globalThis.stepReceivesValue === "function")
+  ? globalThis.stepReceivesValue : null;
+const _sharedStepAllowsElementValue = (typeof globalThis !== "undefined" && typeof globalThis.stepAllowsElementValue === "function")
+  ? globalThis.stepAllowsElementValue : null;
+const _sharedStepAllowsMemoryValue = (typeof globalThis !== "undefined" && typeof globalThis.stepAllowsMemoryValue === "function")
+  ? globalThis.stepAllowsMemoryValue : null;
+const _sharedStepAllowsSystemValue = (typeof globalThis !== "undefined" && typeof globalThis.stepAllowsSystemValue === "function")
+  ? globalThis.stepAllowsSystemValue : null;
+const _sharedStepWritesToSource = (typeof globalThis !== "undefined" && typeof globalThis.stepWritesToSource === "function")
+  ? globalThis.stepWritesToSource : null;
+const _sharedStepWritesToMemory = (typeof globalThis !== "undefined" && typeof globalThis.stepWritesToMemory === "function")
+  ? globalThis.stepWritesToMemory : null;
+const _sharedStepReadsCell = (typeof globalThis !== "undefined" && typeof globalThis.stepReadsCell === "function")
+  ? globalThis.stepReadsCell : null;
+
+/** Spec for an action, or an empty spec so an unknown action never crashes a run or a render. */
 function actionSpec(actionType) {
-  return (typeof globalThis !== "undefined" && globalThis.actionSpec)
-    ? globalThis.actionSpec(actionType)
-    : {};
+  return _sharedActionSpec ? _sharedActionSpec(actionType) : {};
 }
 
 function stepNeedsSelector(actionType) {
-  return (typeof globalThis !== "undefined" && globalThis.stepNeedsSelector)
-    ? globalThis.stepNeedsSelector(actionType)
-    : false;
+  return _sharedStepNeedsSelector ? _sharedStepNeedsSelector(actionType) : false;
 }
 
 function stepReceivesValue(actionType) {
-  return (typeof globalThis !== "undefined" && globalThis.stepReceivesValue)
-    ? globalThis.stepReceivesValue(actionType)
-    : false;
+  return _sharedStepReceivesValue ? _sharedStepReceivesValue(actionType) : false;
 }
 
 function stepAllowsElementValue(actionType) {
-  return (typeof globalThis !== "undefined" && globalThis.stepAllowsElementValue)
-    ? globalThis.stepAllowsElementValue(actionType)
-    : false;
+  return _sharedStepAllowsElementValue ? _sharedStepAllowsElementValue(actionType) : false;
 }
 
 function stepAllowsMemoryValue(actionType) {
-  return (typeof globalThis !== "undefined" && globalThis.stepAllowsMemoryValue)
-    ? globalThis.stepAllowsMemoryValue(actionType)
-    : false;
+  return _sharedStepAllowsMemoryValue ? _sharedStepAllowsMemoryValue(actionType) : false;
 }
 
 function stepAllowsSystemValue(actionType) {
-  return (typeof globalThis !== "undefined" && globalThis.stepAllowsSystemValue)
-    ? globalThis.stepAllowsSystemValue(actionType)
-    : false;
+  return _sharedStepAllowsSystemValue ? _sharedStepAllowsSystemValue(actionType) : false;
 }
 
 function stepWritesToSource(actionType) {
-  return (typeof globalThis !== "undefined" && globalThis.stepWritesToSource)
-    ? globalThis.stepWritesToSource(actionType)
-    : false;
+  return _sharedStepWritesToSource ? _sharedStepWritesToSource(actionType) : false;
 }
 
 function stepWritesToMemory(actionType) {
-  return (typeof globalThis !== "undefined" && globalThis.stepWritesToMemory)
-    ? globalThis.stepWritesToMemory(actionType)
-    : false;
+  return _sharedStepWritesToMemory ? _sharedStepWritesToMemory(actionType) : false;
 }
 
 function stepReadsCell(actionType) {
-  return (typeof globalThis !== "undefined" && globalThis.stepReadsCell)
-    ? globalThis.stepReadsCell(actionType)
-    : false;
+  return _sharedStepReadsCell ? _sharedStepReadsCell(actionType) : false;
 }
 
 function stepIsUrlAction(actionType) {
@@ -479,8 +493,78 @@ function validateStartNodeForPlay(n, graph) {
   return { ok: reasons.length === 0, reasons };
 }
 
+/**
+ * Flow edges of a graph, ignoring the structural kinds.
+ *
+ * `contains` (group → its child) and `parent` (group → group) describe nesting, not control flow.
+ * The walk never follows them by `kind`, but a node's own list of OUTGOING edges would otherwise
+ * count them, which matters for the self-reference checks below: a group legitimately has a
+ * `contains` edge pointing at one of its own children and that must not look like a loop.
+ */
+function flowOutgoing(edges, fromId) {
+  return (edges || []).filter(
+    (e) => e.from === fromId && e.kind !== "contains" && e.kind !== "parent"
+  );
+}
+
+/**
+ * Structural integrity of the edges around one node — the checks that keep the WORK walk finite.
+ *
+ * `executeFlow` is a recursive walk: entering a group calls `executeFlow` again for the inner
+ * entry, and the group's `next` edge is followed when that inner walk returns. That makes two
+ * shapes lethal, not merely wrong:
+ *
+ *   - a node whose flow edge points at ITSELF (`from === to`), and
+ *   - a group whose inner entry is the group itself.
+ *
+ * Either one makes the walk re-enter without ever moving on, so the JS call stack overflows and
+ * the run dies with "Maximum call stack size exceeded" — an error that names neither the process
+ * nor the offending node, and that the loop-back budget cannot catch because that budget is
+ * counted per `executeFlow` invocation rather than per graph.
+ *
+ * A graph can reach this state without the editor ever agreeing to it: the editor blocks
+ * self-links interactively (`resolveLink` returns "نمیتوان به خود وصل کرد"), so a stored
+ * self-edge comes from hand-edited GraphJson, an older build, or an import. Reporting it as an
+ * invalid node is the honest answer — it stops the run with a message the user can act on,
+ * which is exactly what the user asked for: an unusable node must be INVALID, never fatal.
+ */
+function validateStructureForPlay(n, graph) {
+  const reasons = [];
+  if (!n) return { ok: true, reasons };
+  const edges = (graph && graph.edges) || [];
+
+  const outs = flowOutgoing(edges, n.id);
+
+  // A node that flows into itself: the walk would step from it straight back to it and, for a
+  // group, recurse into itself. Checked by id equality rather than by kind so it holds for every
+  // node type, including a condition wired success → itself.
+  if (outs.some((e) => sameNodeId(e.to, n.id))) {
+    reasons.push(tv("struct.selfLoop"));
+  }
+
+  // A group whose inner start IS the group, or whose entry edge points back at the group. The
+  // recursive descent would never reach an inner node, so the stack grows until it overflows.
+  if (n.kind === "group") {
+    const nodes = (graph && graph.nodes) || [];
+    const innerStart = nodes.find(
+      (x) => x.kind === "start" && sameNodeId(x.groupNodeId, n.id)
+    );
+    const entryTarget = flowEdge(edges, n.id, ["contains", "next"]);
+    const entryId = innerStart?.id || entryTarget?.to || null;
+    if (entryId && sameNodeId(entryId, n.id)) {
+      reasons.push(tv("struct.groupEntriesItself"));
+    }
+  }
+
+  return { ok: reasons.length === 0, reasons };
+}
+
 function validateNodeLeafForPlay(n, graph) {
   if (!n) return { ok: true, reasons: [] };
+  // Structure first: the per-action rules below are about settings, and a node that cannot be
+  // walked at all should lead with that rather than with a missing-selector message.
+  const struct = validateStructureForPlay(n, graph);
+  if (!struct.ok) return struct;
   if (isActionNode(n)) return validateActionNodeForPlay(n);
   if (n.kind === "condition") return validateConditionNodeForPlay(n, graph);
   if (n.kind === "start") return validateStartNodeForPlay(n, graph);
@@ -549,6 +633,9 @@ const ENGINE_MSG = {
     "start.loopBad": "تعداد تکرار حلقه نامعتبر است",
     "start.dsMissing": "منبع پیشفرض برای تکرار مشخص نشده",
     "start.elementsOnlyInGroup": "تکرار با المان صفحه فقط داخل گروه مجاز است",
+
+    "struct.selfLoop": "یال خروجی این نود به خودش وصل است — همین باعث میشد اجرا در حلقهٔ بیپایان گیر کند. اتصال را باز و به نود درست وصل کنید",
+    "struct.groupEntriesItself": "ورودی این گروه به خود گروه برمیگردد و اجرا نمیتواند وارد آن شود — اتصال ورودی گروه را اصلاح کنید",
 
     "run.tabNotFound": "تب فعلی پیدا نشد.",
     "run.lastTab": "فقط یک تب باز است؛ قابل بستن نیست.",
@@ -623,6 +710,9 @@ const ENGINE_MSG = {
     "start.loopBad": "Loop repeat count is invalid",
     "start.dsMissing": "No default data source selected for the repeat",
     "start.elementsOnlyInGroup": "Repeating by page elements is only allowed inside a group",
+
+    "struct.selfLoop": "This node's outgoing edge points at itself, which made the run loop forever. Re-wire the edge to the correct node",
+    "struct.groupEntriesItself": "This group's entry leads back to the group itself, so the run cannot descend into it. Fix the group's entry edge",
 
     "run.tabNotFound": "Current tab not found.",
     "run.lastTab": "Only one tab is open; it cannot be closed.",
@@ -1067,6 +1157,9 @@ async function stopPlay(reason) {
   wakePlayResumeWaiters();
   clearPlayCellReadInflight();
   clearPlayCellWriteChains();
+  // The run ended on purpose, so its liveness record goes with it. Leaving it behind would make a
+  // later worker start read a stale timestamp and report a phantom interruption.
+  await clearPlayHeartbeat();
   if (playAbortPoll) {
     clearInterval(playAbortPoll);
     playAbortPoll = null;
@@ -1607,6 +1700,20 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   };
   await chrome.storage.local.set({ lastPlayRequest });
 
+  // Claim the run with a liveness record, so a worker that is killed mid-run can be told apart
+  // from one that is simply busy.
+  //
+  // MV3 terminates an idle service worker, and a long step (an upload, a slow page) can look idle
+  // to Chrome even though our promise chain is very much alive. When that happens the worker is
+  // torn down and the run stops dead: `playing` stays true forever, the target page keeps the HUD,
+  // and the operator sees a run that says "running" and never moves. Nothing in the run can catch
+  // that from the inside — being killed is not an exception.
+  //
+  // A heartbeat is the standard answer: a timestamp the run refreshes as it progresses. On the next
+  // worker start we can compare it against the wall clock and know whether we were interrupted. It
+  // is written at start here and refreshed by the abort watch below, which already ticks.
+  await markPlayHeartbeat(graph.taskId || taskId, 1);
+
   playAbort = false;
   playPaused = false;
   playResumeWaiters = [];
@@ -1855,6 +1962,10 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
     playStatus.currentNodeId = null;
     playPaused = false;
     wakePlayResumeWaiters();
+    // Reached on success, on failure, and on stop — every way a run ends normally. The only way
+    // this is skipped is the worker being killed, which is exactly the case the heartbeat exists
+    // to catch, so clearing it here is what makes the two distinguishable.
+    await clearPlayHeartbeat();
     if (playAbortPoll) {
       clearInterval(playAbortPoll);
       playAbortPoll = null;
@@ -1889,9 +2000,30 @@ function resolvePlayEntryId(graph, opts = {}) {
   return processStartNode(graph)?.id || null;
 }
 
+/**
+ * First edge from `fromId` whose kind is in `preferredKinds`.
+ *
+ * A SELF-EDGE IS NEVER RETURNED. That is the one rule this helper owns, and it is a safety rule
+ * rather than a preference: the walk in executeFlow uses the result to decide where to go next, so
+ * returning `fromId → fromId` makes it step onto the node it is already standing on. For a group
+ * that means recursing into itself, which grows the JS stack with no bound and ends the run with
+ * "Maximum call stack size exceeded".
+ *
+ * Nothing legitimate is lost. A node that flows into itself is never a valid shape — the editor
+ * refuses to create one ("نمیتوان به خود وصل کرد") — so the only graphs that contain one are
+ * hand-edited, imported, or written by an older build. For those, stopping here is what keeps the
+ * failure diagnosable; the graph is also reported as invalid before the run starts, by
+ * validateStructureForPlay.
+ *
+ * Skipping rather than returning is deliberate: an author who wired `A → A` most likely meant to
+ * wire the NEXT edge and left the self-edge behind, so continuing to a later valid edge is closer
+ * to their intent than declaring the node terminal.
+ */
 function flowEdge(edges, fromId, preferredKinds) {
   for (const kind of preferredKinds) {
-    const e = edges.find((x) => x.from === fromId && x.kind === kind);
+    const e = (edges || []).find(
+      (x) => x.from === fromId && x.kind === kind && !sameNodeId(x.to, fromId)
+    );
     if (e) return e;
   }
   return null;
@@ -1926,19 +2058,140 @@ function resolveLoopBackLimit(graph) {
  * exit condition, which stops the run with a message naming the node rather than silently
  * ending it as a "duplicate loop" would.
  */
+/**
+ * How deep groups may nest before the walk refuses to descend any further.
+ *
+ * Descending into a group calls executeFlow again, so the group nesting depth IS the recursion
+ * depth. Nothing in the diagram format bounds it, and a graph whose groups reference each other in
+ * a cycle (A contains B, B's entry leads back into A) never returns from the descent — the stack
+ * grows until the engine dies with "Maximum call stack size exceeded".
+ *
+ * The per-node visit budget cannot help here: it is counted per executeFlow invocation, so each
+ * fresh descent starts from zero and the cycle is invisible to it. This backstop is a property of
+ * the walk as a whole, which is what the failure actually is.
+ *
+ * 50 is far beyond any real automation flow (the editor's own nesting is a handful of levels) and
+ * still shallow enough that the stack has room for the frames a step adds on top.
+ */
+const MAX_GROUP_DEPTH = 50;
+
+/**
+ * Walk the flow diagram from entryId — ITERATIVELY, with an explicit frame stack.
+ *
+ * start → next, action → next, condition → success|fail, group → inner then next.
+ *
+ * WHY THIS IS NOT RECURSIVE.
+ *
+ * It used to call itself to descend into a group. That made the group NESTING depth equal to the
+ * JS call-stack depth, and a graph whose groups reference each other in a cycle therefore grew the
+ * stack until the browser threw "Maximum call stack size exceeded" — an error that named neither
+ * the process nor the offending node, and which no amount of validation could reliably prevent,
+ * because the failure is a property of the walk rather than of any one node.
+ *
+ * The descent is now a `stack` of frames in a `while` loop. Every frame is heap data, so the walk
+ * can nest as deeply as the diagram says and the browser's stack is never touched. `MAX_GROUP_DEPTH`
+ * is kept, but as a DIAGNOSTIC limit on a diagram that is almost certainly cyclic rather than as
+ * the only thing standing between a bad graph and a crash.
+ *
+ * Re-entering a node is allowed (a loop-back edge is a supported shape) and bounded by a per-node
+ * visit budget — see resolveLoopBackLimit. The budget is now counted in ONE map for the whole walk
+ * rather than per invocation, which is what finally makes a group-cycle detectable: previously each
+ * descent started a fresh counter, so a cycle was invisible to it.
+ *
+ * @returns {{tabId:number, stepFailed?:boolean, error?:string, authFailure?:boolean}}
+ */
 async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal, opts = {}) {
   const nodes = new Map((graph.nodes || []).map((n) => [n.id, n]));
   const edges = graph.edges || [];
   let activeTabId = tabId;
-  let cur = entryId;
-  let guard = 0;
   let stepOrdinal = 0;
-  const visitCounts = new Map();
   const loopBackLimit = resolveLoopBackLimit(graph);
 
-  while (cur && !playAbort && !playStatus.lastError && guard++ < 100000) {
+  // ONE visit budget for the entire walk, so a cycle that crosses a group boundary is still seen.
+  const visitCounts = new Map();
+  // Total node steps, a second independent backstop against a walk that never settles.
+  let guard = 0;
+
+  /**
+   * One nesting level. `cur` is the next node to visit at this level; when a `next` edge is taken
+   * the frame is updated in place, and when the level's chain ends the frame is popped and the
+   * parent continues with ITS pending successor.
+   */
+  const stack = [{
+    cur: entryId,
+    // Row context for this level. A group's repeat may rebind the row for the level below.
+    row: rowIndex,
+    insideGroupId: (opts && opts._insideGroupId) || null,
+    // Remaining group iterations at this level: [] means this is a plain (non-group) level.
+    pendingGroupRows: null,
+    pendingGroupIndex: 0,
+    pendingGroupTotal: 0,
+    moveLoop: true,
+    groupStart: null,
+    groupNodeId: null
+  }];
+
+  /** Push a frame's successor work onto the parent, if the parent has anything left to do. */
+  const parentPendingNext = (frame) => frame && frame.pendingGroupRows ? "group" : null;
+
+  while (stack.length && !playAbort && !playStatus.lastError && guard++ < 100000) {
     await waitIfPaused();
     if (playAbort) break;
+
+    const frame = stack[stack.length - 1];
+
+    // --- a group level that still has iterations to run -------------------------------------
+    if (frame.pendingGroupRows && frame.cur == null) {
+      if (frame.pendingGroupIndex >= frame.pendingGroupRows.length) {
+        // Iterations exhausted: leave the group and continue after it.
+        const afterId = flowEdge(edges, frame.groupNodeId, ["next"])?.to || null;
+        stack.pop();
+        const parent = stack[stack.length - 1];
+        if (parent) parent.cur = afterId;
+        if (!afterId) continue;
+        await delayAfterNode(graph, afterId);
+        await paceLoopBack(graph, afterId, visitCounts, loopBackLimit);
+        continue;
+      }
+      const gi = frame.pendingGroupIndex++;
+      const gRow = frame.pendingGroupRows[gi];
+      const parentRow = frame.row;
+      const pinnedRow = resolveDedicatedRow(frame.groupStart, graph, {
+        groupRow: gRow,
+        parentRow,
+        loopIndex,
+        loopTotal,
+        groupIndex: gi,
+        groupTotal: frame.pendingGroupTotal
+      });
+      const effectiveRow = pinnedRow != null ? pinnedRow : (frame.moveLoop ? gRow : parentRow);
+      if (frame.pendingGroupTotal > 1) {
+        appendPlayLog(
+          "info",
+          `تکرار گروه «${frame.groupStart?.title || frame.groupNodeId}» ${gi + 1}/${frame.pendingGroupTotal} (${frame.groupStart?.repeatSourceType || ""})`
+        );
+      }
+      // Descend: the group's own iterations are driven by this same frame, and the inner chain
+      // gets a fresh child frame.
+      stack.push({
+        cur: frame.entryId,
+        row: effectiveRow,
+        insideGroupId: frame.groupNodeId,
+        pendingGroupRows: null,
+        pendingGroupIndex: 0,
+        pendingGroupTotal: 0,
+        moveLoop: true,
+        groupStart: null,
+        groupNodeId: null
+      });
+      continue;
+    }
+
+    const cur = frame.cur;
+    if (!cur) {
+      stack.pop();
+      continue;
+    }
 
     const visits = (visitCounts.get(cur) || 0) + 1;
     visitCounts.set(cur, visits);
@@ -1955,21 +2208,25 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     }
 
     const node = nodes.get(cur);
-    if (!node) break;
+    if (!node) {
+      stack.pop();
+      continue;
+    }
 
     if (node.kind === "end") {
       // Terminal marker: the author has said this path stops here. It carries no work and no
-      // outgoing edge, so the walk simply ends — and ends as a SUCCESS, not an error. Logged
-      // explicitly because a silent return would look identical to a graph that fell off the
-      // end of its edges, which is the failure mode this node exists to make deliberate.
-      appendPlayLog("info", `نود «پایان» — مسیر در «${nodes.get(cur)?.title || "پایان"}» خاتمه یافت.`);
-      break;
+      // outgoing edge, so this level's chain ends — and ends as a SUCCESS, not an error. Logged
+      // explicitly because a silent stop would look identical to a graph that fell off the end of
+      // its edges, which is the failure mode this node exists to make deliberate.
+      appendPlayLog("info", `نود «پایان» — مسیر در «${node.title || "پایان"}» خاتمه یافت.`);
+      frame.cur = null;
+      continue;
     }
 
     if (node.kind === "start") {
       const e = flowEdge(edges, cur, ["next"]);
       // No delay after start — first step runs immediately; delay is after real steps.
-      cur = e?.to || null;
+      frame.cur = e?.to || null;
       continue;
     }
 
@@ -1981,19 +2238,20 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       // The row the process loop is on travels with the step so a row pointer inside a group can
       // still mean the OUTER row rather than the group's. At the top level there is no marker and
       // rowIndex already is the process row, so the marker is simply the same value.
-      const processRow = Number.isFinite(Number(opts._processRow)) ? Number(opts._processRow) : rowIndex;
+      const processRow = Number.isFinite(Number(frame.row)) ? Number(frame.row) : rowIndex;
       playStatus.processRow = processRow;
       const outcome = await runOneAction(
         activeTabId, graph, { ...node, _processRow: processRow },
-        rowIndex, loopIndex, loopTotal, stepOrdinal, playStatus.stepTotal
+        frame.row, loopIndex, loopTotal, stepOrdinal, playStatus.stepTotal
       );
       if (outcome.tabId) {
         activeTabId = outcome.tabId;
         playTabId = activeTabId;
       }
       if (!outcome.ok) {
-        // Non-ignored step error → end this iteration (like continue); loop decides next.
-        // `authFailure` travels with it so the loop's ignore policy cannot override a dead session.
+        // Non-ignored step error → end the whole run; the outer loop's policy decides whether to
+        // continue to the next row. `authFailure` travels with it so that policy cannot override a
+        // dead session.
         return {
           tabId: activeTabId,
           stepFailed: true,
@@ -2005,7 +2263,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       // Delay after the step finished, before the next node.
       await delayAfterNode(graph, nextId);
       await paceLoopBack(graph, nextId, visitCounts, loopBackLimit);
-      cur = nextId;
+      frame.cur = nextId;
       continue;
     }
 
@@ -2015,7 +2273,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       // Conditions never fail the run: any exception → false (fail branch).
       let pass = false;
       try {
-        pass = await evaluateCondition(activeTabId, node, graph, rowIndex);
+        pass = await evaluateCondition(activeTabId, node, graph, frame.row);
       } catch (err) {
         lastConditionError = err?.message || String(err);
         appendPlayLog("warn", `شرط «${node.title || node.id}»: اکسپشن → fail — ${lastConditionError}`);
@@ -2033,7 +2291,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         t: Date.now(),
         loop: loopIndex,
         loopTotal,
-        rowIndex,
+        rowIndex: frame.row,
         step: stepOrdinal,
         stepTotal: playStatus.stepTotal,
         title: node.title || "شرط",
@@ -2065,7 +2323,8 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
             `شرط «${node.title || node.id}»: نتیجهٔ ${pass ? "موفق" : "ناموفق"} شد و شاخهٔ ` +
             `«${pass ? "موفق" : "ناموفق"}» وصل نیست — مسیر خاتمه یافت.`
           );
-          break;
+          frame.cur = null;
+          continue;
         }
       }
 
@@ -2096,7 +2355,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
           t: Date.now(),
           loop: loopIndex,
           loopTotal,
-          rowIndex,
+          rowIndex: frame.row,
           step: stepOrdinal,
           stepTotal: playStatus.stepTotal,
           title: node.title || "شرط",
@@ -2111,69 +2370,49 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       const nextId = e.to || null;
       await delayAfterNode(graph, nextId);
       await paceLoopBack(graph, nextId, visitCounts, loopBackLimit);
-      cur = nextId;
+      frame.cur = nextId;
       continue;
     }
 
     if (node.kind === "group") {
       playStatus.currentNodeId = node.id;
       broadcastPlayState();
+      // Nesting depth is now measured from the frame stack — see MAX_GROUP_DEPTH. Reported as a
+      // likely-cyclic diagram rather than left to overflow the JS stack.
+      if (stack.length > MAX_GROUP_DEPTH) {
+        const label = node.title || node.id;
+        appendPlayLog(
+          "error",
+          `عمق تودرتویی گروه‌ها از ${MAX_GROUP_DEPTH} گذشت (گروه «${label}») — احتمالاً گروه‌ها به هم بازمی‌گردند. اجرا متوقف شد.`
+        );
+        playStatus.lastError = `عمق تودرتویی گروه‌ها بیش از حد مجاز است (گروه «${label}»)`;
+        break;
+      }
       appendPlayLog("info", `ورود به گروه «${node.title || node.id}»`);
       const innerEntry = (graph.nodes || []).find((n) => n.kind === "start" && n.groupNodeId === node.id)?.id
         || flowEdge(edges, node.id, ["contains"])?.to
         || findGroupEntryFallback(graph, node.id);
-      if (innerEntry) {
-        const gStart = (graph.nodes || []).find((n) => n.kind === "start" && sameNodeId(n.groupNodeId, node.id))
-          || findGraphNode(graph, innerEntry);
-        const groupIters = await expandGroupByRepeatSource(activeTabId, gStart || node, graph);
-        const moveLoop = gStart?.moveLoop !== false && node.moveLoop !== false;
-        const parentRow = rowIndex;
-        for (let gi = 0; gi < groupIters.indices.length; gi++) {
-          if (playAbort) break;
-          await waitIfPaused();
-          const gRow = groupIters.indices[gi];
-          // "Dedicated row" pins the row this group works on, either to a source position (first /
-          // last / an explicit index) or to a loop position (this / parent / total). When the switch
-          // is off the group keeps following its loop exactly as before.
-          const pinnedRow = resolveDedicatedRow(gStart, graph, {
-            groupRow: gRow,
-            parentRow,
-            loopIndex,
-            loopTotal,
-            groupIndex: gi,
-            groupTotal: groupIters.total
-          });
-          const effectiveRow = pinnedRow != null ? pinnedRow : (moveLoop ? gRow : parentRow);
-          if (groupIters.total > 1) {
-            appendPlayLog("info", `تکرار گروه «${node.title || node.id}» ${gi + 1}/${groupIters.total} (${groupIters.label || groupIters.type})`);
-          }
-          const inner = await executeFlow(activeTabId, graph, innerEntry, effectiveRow, loopIndex, loopTotal, {
-            ...opts,
-            _insideGroupId: node.id,
-            _groupLoopIndex: gi + 1,
-            _groupLoopTotal: groupIters.total,
-            // The outer row, so a "process loop row" pointer inside this group still means the row
-            // the PROCESS is on rather than the row this group's own repeat source produced.
-            _processRow: parentRow
-          });
-          activeTabId = inner.tabId || activeTabId;
-          if (inner.stepFailed) {
-            return {
-              tabId: activeTabId,
-              stepFailed: true,
-              error: inner.error || "خطای مرحله",
-              authFailure: inner.authFailure === true
-            };
-          }
-          if (playStatus.lastError) break;
-        }
-      } else {
+      if (!innerEntry) {
         appendPlayLog("warn", `گروه «${node.title || node.id}» ورودی ندارد`);
+        const afterId = flowEdge(edges, node.id, ["next"])?.to || null;
+        await delayAfterNode(graph, afterId);
+        await paceLoopBack(graph, afterId, visitCounts, loopBackLimit);
+        frame.cur = afterId;
+        continue;
       }
-      const nextId = flowEdge(edges, node.id, ["next"])?.to || null;
-      await delayAfterNode(graph, nextId);
-      await paceLoopBack(graph, nextId, visitCounts, loopBackLimit);
-      cur = nextId;
+      const gStart = (graph.nodes || []).find((n) => n.kind === "start" && sameNodeId(n.groupNodeId, node.id))
+        || findGraphNode(graph, innerEntry);
+      const groupIters = await expandGroupByRepeatSource(activeTabId, gStart || node, graph);
+      // Turn this frame into the group's driver: it now owns the remaining iterations and the
+      // entry node for each. The frame's `cur` is cleared so the driver branch runs next.
+      frame.cur = null;
+      frame.pendingGroupRows = groupIters.indices;
+      frame.pendingGroupIndex = 0;
+      frame.pendingGroupTotal = groupIters.total;
+      frame.moveLoop = gStart?.moveLoop !== false && node.moveLoop !== false;
+      frame.groupStart = gStart || node;
+      frame.groupNodeId = node.id;
+      frame.entryId = innerEntry;
       continue;
     }
 
@@ -4118,6 +4357,9 @@ function startPlayAbortWatch(taskId) {
   registerPlayOnServer(taskId).catch(() => {});
   playAbortPoll = setInterval(async () => {
     if (!playStatus.playing) return;
+    // Refresh liveness on the tick we already pay for. This is what lets detectOrphanedPlay tell a
+    // worker that was killed from one that is merely in a long step — see PLAY_HEARTBEAT_KEY.
+    markPlayHeartbeat(taskId, playStatus.stepIndex);
     try {
       const res = await portalFetch(`/Panel/Tasks/PlayAbort?taskId=${encodeURIComponent(taskId)}`, { method: "GET" });
       if (!res || !res.ok) return;
@@ -4128,6 +4370,69 @@ function startPlayAbortWatch(taskId) {
       }
     } catch { /* ignore */ }
   }, 1500);
+}
+
+/**
+ * Liveness record for an in-flight run.
+ *
+ * Written under one storage key so a worker that starts up later can decide, without any in-memory
+ * state (which a terminated worker has lost), whether a run it sees marked `playing` is actually
+ * still being driven or was killed mid-step. See markPlayHeartbeat and detectOrphanedPlay.
+ */
+const PLAY_HEARTBEAT_KEY = "playHeartbeat";
+
+/** How long a run may go without a heartbeat before a fresh worker treats it as dead. */
+const PLAY_HEARTBEAT_STALE_MS = 30000;
+
+async function markPlayHeartbeat(taskId, stepOrdinal) {
+  try {
+    await chrome.storage.local.set({
+      [PLAY_HEARTBEAT_KEY]: {
+        taskId: String(taskId || "").trim(),
+        at: Date.now(),
+        step: Number(stepOrdinal) || 0
+      }
+    });
+  } catch { /* a heartbeat that cannot be written must never fail the step it describes */ }
+}
+
+async function clearPlayHeartbeat() {
+  try { await chrome.storage.local.remove(PLAY_HEARTBEAT_KEY); } catch { /* ignore */ }
+}
+
+/**
+ * Is a run marked `playing` actually still alive?
+ *
+ * Called once per worker start. `false` means the worker was terminated mid-run (the heartbeat
+ * stopped advancing) and the stored `playing: true` is now a lie: nothing is driving the run, and
+ * leaving it set blocks every future run with "پخش در حال اجراست." and leaves the target page's HUD
+ * up. Clearing it is the honest correction, and it is logged as an interruption so the operator is
+ * not left wondering why the run stopped.
+ *
+ * A missing heartbeat is treated as ALIVE, not dead: it means the run predates this record or has
+ * not reached its first write yet, and clearing a live run would be far worse than leaving a stale
+ * flag for the user to stop.
+ */
+async function detectOrphanedPlay() {
+  try {
+    const st = await chrome.storage.local.get(["playing", PLAY_HEARTBEAT_KEY]);
+    if (!st.playing) return false;
+    const hb = st[PLAY_HEARTBEAT_KEY];
+    if (!hb || !hb.at) return false;
+    const age = Date.now() - Number(hb.at);
+    if (!Number.isFinite(age) || age < PLAY_HEARTBEAT_STALE_MS) return false;
+    console.warn("[Morobot Global] orphaned play detected", hb);
+    await chrome.storage.local.set({ playing: false, playPaused: false });
+    await chrome.storage.local.remove(PLAY_HEARTBEAT_KEY);
+    appendPlayLog(
+      "error",
+      "اجرای قبلی نیمه‌کاره ماند (سرویس‌ورکر افزونه توسط مرورگر بسته شد) و پاک‌سازی شد. " +
+      "به‌خاطر امنیت، اجرا از ابتدا شروع نمی‌شود — دوباره اجرا بزنید."
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellValue, stepTitle) {
@@ -4300,41 +4605,49 @@ function collectPlaySteps(graph, opts = {}) {
   const nodes = new Map((graph.nodes || []).map((n) => [n.id, n]));
   const edges = graph.edges || [];
   const steps = [];
+
+  /**
+   * Iterative depth-first walk with an explicit stack.
+   *
+   * This used to recurse with a `depth > 400` cut-off. The cut-off bounded the DAMAGE but not the
+   * recursion: 400 nested frames is already deep enough to be a stack risk in a service worker, and
+   * a perfectly valid long linear chain would reach it. An explicit stack moves the depth onto the
+   * heap, so the walk is bounded by the graph rather than by the browser.
+   *
+   * `seen` keeps it linear: every node is expanded at most once, which is also correct for a
+   * HUD step-count estimate — a node re-entered by a loop-back must not be counted twice.
+   */
   const seen = new Set();
+  function walk(rootId) {
+    const stack = [rootId];
+    while (stack.length) {
+      const nodeId = stack.pop();
+      if (!nodeId || seen.has(nodeId)) continue;
+      seen.add(nodeId);
+      const node = nodes.get(nodeId);
+      if (!node) continue;
 
-  function walk(nodeId, depth) {
-    if (!nodeId || depth > 400 || seen.has(nodeId)) return;
-    seen.add(nodeId);
-    const node = nodes.get(nodeId);
-    if (!node) return;
+      if (isActionNode(node)) steps.push(node);
 
-    if (node.kind === "start") {
-      const e = flowEdge(edges, nodeId, ["next"]);
-      if (e) walk(e.to, depth + 1);
-      return;
-    }
-    if (isActionNode(node)) {
-      steps.push(node);
-      const e = flowEdge(edges, nodeId, ["next"]);
-      if (e) walk(e.to, depth + 1);
-      return;
-    }
-    if (node.kind === "condition") {
-      const e = flowEdge(edges, nodeId, ["success", "next"]);
-      if (e) walk(e.to, depth + 1);
-      return;
-    }
-    if (node.kind === "group") {
-      const gStart = [...nodes.values()].find((n) => n.kind === "start" && n.groupNodeId === node.id);
-      const contains = flowEdge(edges, nodeId, ["contains"]);
-      if (gStart) walk(gStart.id, depth + 1);
-      else if (contains) walk(contains.to, depth + 1);
-      else {
-        const entry = findGroupEntryFallback(graph, node.id);
-        if (entry) walk(entry, depth + 1);
+      // Successors, pushed in reverse so the first-listed is visited first (order only affects the
+      // sequence of `steps`; the count the HUD shows is order-independent).
+      const next = [];
+      if (node.kind === "group") {
+        const gStart = [...nodes.values()].find((n) => n.kind === "start" && n.groupNodeId === node.id);
+        const contains = flowEdge(edges, nodeId, ["contains"]);
+        const entry = gStart?.id || contains?.to || findGroupEntryFallback(graph, node.id);
+        if (entry) next.push(entry);
+        const after = flowEdge(edges, nodeId, ["next"]);
+        if (after) next.push(after.to);
+      } else if (node.kind === "condition") {
+        const e = flowEdge(edges, nodeId, ["success", "next"]);
+        if (e) next.push(e.to);
+      } else {
+        // start and action nodes both continue along `next`.
+        const e = flowEdge(edges, nodeId, ["next"]);
+        if (e) next.push(e.to);
       }
-      const after = flowEdge(edges, nodeId, ["next"]);
-      if (after) walk(after.to, depth + 1);
+      for (let i = next.length - 1; i >= 0; i -= 1) stack.push(next[i]);
     }
   }
 

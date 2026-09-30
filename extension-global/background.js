@@ -18,6 +18,22 @@ try {
     if (area === "local" && changes.uiCulture && typeof setPlayCulture === "function") {
       setPlayCulture(changes.uiCulture.newValue);
     }
+    // Drive the dev poll from the RUN state rather than from each start/stop call site.
+    //
+    // `recording` and `playing` are the single source of truth for "a run is in progress", and
+    // every path that begins or ends one already writes them — the engine, the FAB, the portal,
+    // and the resume-after-reload logic. Hooking the storage event therefore covers all of them at
+    // once, including the paths that are easy to forget (a crash teardown, a tab close, a stop
+    // issued from a different tab). A call-site-by-call-site approach would have missed the ones
+    // that matter most: the abnormal exits.
+    if (area === "local" && (changes.recording || changes.playing)) {
+      chrome.storage.local.get(["recording", "playing"])
+        .then(({ recording, playing }) => {
+          if (recording || playing) suspendDevPoll();
+          else resumeDevPoll();
+        })
+        .catch(() => { /* storage gone: leave the poll as it is rather than guess */ });
+    }
   });
 } catch { /* ignore */ }
 syncEngineCulture();
@@ -797,6 +813,10 @@ async function startRecordSession(message = {}) {
     recordOptions: defaultRecordOptions(prevOpts)
   });
 
+  // A recorder is now live: hold the dev poll off for the duration so it cannot wake the worker
+  // (or queue a reload) while the recording is being driven. Resumed in finish/discard.
+  suspendDevPoll();
+
   const requestedTabId = message.tabId != null && message.tabId !== ""
     ? Number(message.tabId)
     : null;
@@ -904,6 +924,8 @@ async function finishRecord() {
     recording: false,
     recordPhase: "review"
   });
+  // Recording is over, so the dev poll may run again (see suspendDevPoll).
+  resumeDevPoll();
   const state = await broadcastRecordState();
   setTimeout(() => pollDevReload(), 400);
   return { ok: true, count: countRecordedSteps(recordingGroups, draft), ...state };
@@ -916,6 +938,8 @@ async function discardRecord(opts = {}) {
   // do this: finishing moves to review, and the save that follows still has to reach the portal the
   // recording was made against.
   if (globalThis.DaSessionScope) await DaSessionScope.unbindSession("record").catch(() => {});
+  // Recording is over, so the dev poll may run again (see suspendDevPoll).
+  resumeDevPoll();
   await chrome.storage.local.set({
     recording: false,
     recordPhase: "idle",
@@ -2328,6 +2352,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.url || changeInfo.title || changeInfo.status === "complete" || changeInfo.status === "loading") {
     scheduleOpenTabsBroadcast(changeInfo.url ? "url" : "update");
   }
+  // Opening or closing the portal page is what changes whether the fast dev-poll cadence is worth
+  // paying for, so re-evaluate on the events that can change that answer. Cheap: it only ever
+  // happens on a navigation, and the no-op case is a single interval re-arm.
+  if (changeInfo.url) applyDevPollCadence();
   if (changeInfo.status === "complete") {
     reinjectPlayHudForTab(tabId, "tabs.onUpdated").catch(() => {});
   }
@@ -2356,6 +2384,9 @@ chrome.tabs.onCreated.addListener(() => scheduleOpenTabsBroadcast("created"));
  */
 chrome.tabs.onRemoved.addListener((tabId) => {
   scheduleOpenTabsBroadcast("removed");
+  // Closing a tab can close the portal (dropping the poll back to idle) or end a run (letting it
+  // resume), so both answers are re-evaluated here.
+  applyDevPollCadence();
   handleRecordTabClosed(tabId).catch((err) => console.warn("[Morobot Global] record tab close", err));
   handlePlayTabClosed(tabId).catch((err) => console.warn("[Morobot Global] play tab close", err));
 });
@@ -2365,8 +2396,15 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 });
 
 /** Dev/local auto-reload: only when portal (app) is open and not recording/playing.
- *  Refreshing a recorded external page must NOT reload the extension. */
-const DEV_POLL_MS = 2500;
+ *  Refreshing a recorded external page must NOT reload the extension.
+ *
+ *  Two cadences on purpose. The IDLE poll runs all the time, so it is deliberately slow: it is a
+ *  dev convenience, and every tick wakes the MV3 service worker. The ACTIVE cadence is used only
+ *  while the portal page is open, which is the one situation where an author is actually waiting
+ *  for a rebuild to land — and it is turned off entirely during a run (see stopDevPoll).
+ */
+const DEV_POLL_MS_IDLE = 10000;
+const DEV_POLL_MS_ACTIVE = 2500;
 const DEV_STAMP_URLS = [
   "https://localhost:7201/extension/dev-stamp/recorder",
   "http://localhost:5201/extension/dev-stamp/recorder",
@@ -2404,6 +2442,23 @@ async function hasOpenPortalAppTab() {
 }
 
 async function pollDevReload() {
+  // Never overlap two polls. A poll does a storage read plus up to four network fetches, and the
+  // 2.5 s interval is shorter than a slow one can take, so without this the polls stack up and the
+  // worker accumulates in-flight work it can never drain — one more way for it to be killed
+  // mid-operation by Chrome.
+  if (devPollInFlight) return;
+  devPollInFlight = true;
+  try {
+    await pollDevReloadInner();
+  } catch (err) {
+    // A dev-only convenience must never take the worker down with it.
+    console.warn("[DA] dev poll failed", err);
+  } finally {
+    devPollInFlight = false;
+  }
+}
+
+async function pollDevReloadInner() {
   const { recording, playing, pendingDevReload, pendingDevStamp } =
     await chrome.storage.local.get(["recording", "playing", "pendingDevReload", "pendingDevStamp"]);
 
@@ -2438,6 +2493,93 @@ async function pollDevReload() {
 
   await detectDevStampChange({ queueOnly: false });
 }
+
+/** True while a dev poll is running; see pollDevReload. */
+let devPollInFlight = false;
+/** Handle for the repeating poll, so a play/record session can pause it. */
+let devPollTimer = null;
+/** Set while a run is in progress: the poll is suspended and touches nothing. */
+let devPollSuspended = false;
+
+/**
+ * Pause or resume the dev poll around a run.
+ *
+ * A rebuild landing mid-run is never useful — the poll already refuses to reload while
+ * `recording`/`playing` — but it still WAKES the worker every tick to make that decision, and a
+ * worker that is being woken and torn down while it is driving a live run is the situation that
+ * ends with "service worker terminated" in the middle of a step. Suspending for the duration
+ * removes the churn from the one window where it actually hurts.
+ */
+function suspendDevPoll() {
+  devPollSuspended = true;
+  stopDevPoll();
+}
+
+function resumeDevPoll() {
+  devPollSuspended = false;
+  // Pick the cadence for the current situation: fast only while the portal page is actually open,
+  // which is the one moment an author is waiting for a rebuild to land. Everywhere else the slow
+  // idle cadence keeps the worker from being woken for a stamp nobody is watching for.
+  applyDevPollCadence();
+}
+
+/**
+ * Choose the poll cadence from what is on screen right now.
+ *
+ * A no-op while a run is in progress: the poll is off for the duration, and re-arming it here would
+ * undo suspendDevPoll.
+ */
+function applyDevPollCadence() {
+  if (devPollSuspended) return;
+  hasOpenPortalAppTab()
+    .then((open) => {
+      if (devPollSuspended) return;
+      startDevPoll(open ? DEV_POLL_MS_ACTIVE : DEV_POLL_MS_IDLE);
+    })
+    .catch(() => { startDevPoll(DEV_POLL_MS_IDLE); });
+}
+
+/**
+ * Start (or restart) the repeating dev poll, at the SLOW cadence.
+ *
+ * Why slow: this poll is a development convenience — it auto-reloads the unpacked extension when
+ * the server rebuilds it. In an MV3 service worker a `setInterval` does NOT keep the worker alive
+ * the way it did in MV2, but a fast one still means the worker is woken constantly, which is the
+ * expensive pattern Chrome's own guidance warns about and makes the worker far more likely to be
+ * stopped at an inconvenient moment. 2.5 s only made sense when the poll WAS the keep-alive.
+ * The portal-open case opts into the fast cadence below, and only while it is actually useful.
+ */
+function startDevPoll(ms) {
+  if (devPollSuspended) return;
+  if (devPollTimer) clearInterval(devPollTimer);
+  devPollTimer = setInterval(pollDevReload, Math.max(1000, Number(ms) || DEV_POLL_MS_IDLE));
+}
+
+/** Stop the dev poll. Called when a run starts: a reload during a run is never wanted anyway. */
+function stopDevPoll() {
+  if (devPollTimer) clearInterval(devPollTimer);
+  devPollTimer = null;
+}
+
+/**
+ * A worker that dies with an unhandled rejection loses whatever run it was driving.
+ *
+ * This is a last line of defence, not a substitute for handling errors at the source: every path
+ * the engine takes is expected to catch its own failures. But MV3 gives a service worker no
+ * "restart where you left off" — if a stray rejected promise escapes, Chrome can tear the worker
+ * down and an in-flight run stops with no explanation. Logging it keeps the worker (and the run)
+ * alive and leaves a trace the operator can actually read.
+ */
+self.addEventListener("unhandledrejection", (ev) => {
+  console.warn("[DA] unhandled rejection in service worker", ev.reason);
+});
+
+pollDevReload().catch(() => {});
+// Cadence-aware on boot: a worker that starts while the portal is open should poll at the fast
+// rate immediately, and one that starts with no portal open should stay on the slow rate rather
+// than paying for a wake-up every 2.5 s to learn nothing changed.
+applyDevPollCadence();
+resumePendingPlayAfterReload();
 
 async function detectDevStampChange({ queueOnly }) {
   const portal = await portalBase().catch(() => DEFAULT_PORTAL);
@@ -2500,8 +2642,17 @@ async function pullBrandingFromPortal() {
 }
 pullBrandingFromPortal().catch(() => {});
 
-pollDevReload();
-setInterval(pollDevReload, DEV_POLL_MS);
+// The dev poll is started by the lifecycle block near pollDevReload (see startDevPoll). It is NOT
+// started here: this point runs on every worker wake-up, so starting it again would stack timers
+// onto a worker that has just been revived rather than keeping exactly one poll alive.
+//
+// This runs on EVERY worker start, which is why it is the right place to check for a run that was
+// killed: the only way to observe a terminated worker is from the worker that comes after it.
+detectOrphanedPlay()
+  .then((wasOrphaned) => {
+    if (wasOrphaned) console.info("[DA] cleared an interrupted play run at startup");
+  })
+  .catch(() => {});
 resumePendingPlayAfterReload();
 
 // Context-menu selector copy lives in extension-selector (dedicated package).
