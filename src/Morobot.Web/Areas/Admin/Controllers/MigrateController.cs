@@ -171,8 +171,8 @@ public class MigrateController : Controller
             return View("Index");
         }
 
-        var (user, process, groups, error) = await _import.ListProcessDetailsAsync(connectionString, taskId, ct);
-        if (user is null || process is null || groups is null)
+        var (user, process, groups, sources, error) = await _import.ListProcessDetailsAsync(connectionString, taskId, ct);
+        if (user is null || process is null || groups is null || sources is null)
         {
             ViewBag.Error = error ?? _locale["admin.migrate.connectFailed"];
             ViewBag.ConnectionString = connectionString;
@@ -183,6 +183,7 @@ public class MigrateController : Controller
         ViewBag.LegacyUser = user;
         ViewBag.Process = process;
         ViewBag.Groups = groups;
+        ViewBag.Sources = sources;
         ViewBag.UserIds = userIds ?? Array.Empty<int>();
         return View("ProcessDetails");
     }

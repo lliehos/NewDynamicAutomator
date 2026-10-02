@@ -202,13 +202,15 @@ public static class CanvasBackfillService
         var hasMoove = await ColumnExistsAsync(conn, "Groups", "MooveLoop", ct);
         var hasMove = await ColumnExistsAsync(conn, "Groups", "MoveLoop", ct);
 
-        var groups = new List<(int Id, string Title, int Priority, int? ParentId, string SourceType, bool MoveLoop, int? DataSourceId, int? SelectorId)>();
+        var groups = new List<(int Id, string Title, int Priority, int? ParentId, string SourceType, bool MoveLoop, int? DataSourceId, int? SelectorId, int? CopyFromId)>();
+        var hasCopyFrom = await ColumnExistsAsync(conn, "Groups", "CopyFromId", ct);
         await using (var cmd = new SqlCommand(
                          "SELECT Id, Title, Priority"
                          + (hasParrent ? ", ParrentGroupId" : hasParent ? ", ParentGroupId" : ", CAST(NULL AS int) AS ParrentGroupId")
                          + ", SourceType"
                          + (hasMoove ? ", MooveLoop" : hasMove ? ", MoveLoop" : ", CAST(0 AS bit) AS MooveLoop")
                          + ", DataSourceId, SelectorId"
+                         + (hasCopyFrom ? ", CopyFromId" : ", CAST(NULL AS int) AS CopyFromId")
                          + " FROM Groups WHERE TaskId = @id ORDER BY Priority, Id", conn))
         {
             cmd.Parameters.AddWithValue("@id", taskId);
@@ -223,7 +225,8 @@ public static class CanvasBackfillService
                     r.IsDBNull(4) ? "None" : Convert.ToString(r.GetValue(4)) ?? "None",
                     !r.IsDBNull(5) && r.GetBoolean(5),
                     r.IsDBNull(6) ? null : r.GetInt32(6),
-                    r.IsDBNull(7) ? null : r.GetInt32(7)
+                    r.IsDBNull(7) ? null : r.GetInt32(7),
+                    r.IsDBNull(8) ? null : r.GetInt32(8)
                 ));
             }
         }
@@ -266,11 +269,24 @@ public static class CanvasBackfillService
             childGroups[key] = childGroups[key].OrderBy(x => x.Priority).ThenBy(x => x.Id).ToList();
         }
 
-        // A guard that fails at the end of its chain falls through to the group's next groups
-        // (the legacy first branch executed them); a router branch with no target group simply
-        // stopped — there the new graph ends.
+        // What runs when a group's step chain ends: the old engine executed the group's child
+        // groups (Task.Groups where ParrentGroupId = this group) — and a branch without a target
+        // group was a no-op that simply let the chain continue.
         string GroupExitTarget(int groupId)
             => childGroups.TryGetValue(groupId, out var kids) && kids.Count > 0 ? $"group-{kids[0].Id}" : "end";
+
+        // The legacy walk is a CALL tree that unwinds: a router branch enters another group and,
+        // when that group's chain finishes (no children / no route), control RETURNS to the
+        // calling chain and continues with what follows the router. The flat graph has no call
+        // stack, so the importer records every call site and later re-points each group's
+        // residual "end" edges to the caller's continuation — otherwise hundreds of arrows
+        // would falsely land on the terminal node (owner, 2026-10-03).
+        var callSites = new Dictionary<int, List<string>>();           // target group → caller cond ids
+        var condGroupOf = new Dictionary<string, int>();               // cond id → owning group id
+        var chainSeqByGroup = new Dictionary<int, List<string>>();     // group id → chain entries in order
+        var residualExitEdges = new List<(int GroupId, string EdgeId)>();
+        var routerEntryByGroup = new Dictionary<int, string>();        // group id → its inter-group entry (cond or target group)
+        var groupRouterTerminated = new Dictionary<int, bool>();       // a permanent («در هر صورت») transfer already happened
 
         var groupNodes = new Dictionary<int, JsonObject>();
 
@@ -333,12 +349,18 @@ public static class CanvasBackfillService
             var pendingGuardFails = new List<string>();                        // guards awaiting the skip target
             var pendingBranches = new List<(string CondId, string Branch)>();  // branches with no explicit target
             var skippedInactive = new List<string>();
+            var skippedUnreachable = new List<string>();
             var groupNotes = new List<string>();
 
             double CondX(string sid) => StartX(sid, StartX(gid, gx - 360) + 28) + 220;
             double CondY(string sid) => StartY(sid, StartY(gid, 80) + 70 + sy);
 
-            JsonObject CreateConditionNode(LegacyConditionGroupRow cg, string sid)
+            // Two lookups the branch wiring needs: the created condition node per id (to attach
+            // repair notes) and a cache for route targets that live in the ORIGINAL task of a clone.
+            var condNodeById = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+            var resolvedBranchTargets = new Dictionary<int, string?>();
+
+            JsonObject CreateConditionNode(LegacyConditionGroupRow cg, string sid, bool interGroup = false)
             {
                 var cid = $"cond-{cg.Id}";
                 var plan = LegacySelectorNormalizer.MapConditionGroup(cg.Conditions);
@@ -351,10 +373,12 @@ public static class CanvasBackfillService
                     ["kind"] = "condition",
                     ["entityId"] = cg.Id,
                     ["title"] = string.IsNullOrWhiteSpace(cg.Title) ? "شرط" : cg.Title,
-                    ["groupNodeId"] = gid,
-                    ["x"] = StartX(cid, CondX(sid)),
+                    ["x"] = StartX(cid, interGroup ? gx + 620 : CondX(sid)),
                     ["y"] = StartY(cid, CondY(sid))
                 };
+                // Inter-group conditions live OUTSIDE the group container: in the new panel a
+                // condition inside a group cannot point at another group (owner, 2026-10-03).
+                if (!interGroup) condNode["groupNodeId"] = gid;
 
                 ApplyConditionPlan(condNode, plan);
 
@@ -367,26 +391,125 @@ public static class CanvasBackfillService
                         "نتیجهٔ شرط در نسخهٔ قدیم می‌توانست حلقه را بشکند؛ به‌عنوان یادداشت نگه داشته شد.");
 
                 nodesOut.Add(condNode);
+                condNodeById[cid] = condNode;
+                condGroupOf[cid] = g.Id;
                 return condNode;
             }
 
-            void WireBranch(LegacyConditionGroupRow cg, string condId, bool success)
+            // A clone made with CloneObjectType.WithoutSources keeps the ORIGINAL task's group ids
+            // in its condition routes — the legacy editor's Normalize step that re-mapped them was
+            // not always run (task 919: 44 of its routes point outside the task). Resolve such a
+            // target to the local counterpart through CopyFromId, exactly like the old Normalize:
+            // original id → local group whose CopyFromId equals it.
+            async Task<string?> ResolveBranchTargetAsync(int targetId)
+            {
+                if (groupById.ContainsKey(targetId)) return $"group-{targetId}";
+                if (resolvedBranchTargets.TryGetValue(targetId, out var cached)) return cached;
+                string? resolved = null;
+                try
+                {
+                    int originalId = targetId;
+                    await using (var tcmd = new SqlCommand("SELECT CopyFromId FROM Groups WHERE Id = @id", conn))
+                    {
+                        tcmd.Parameters.AddWithValue("@id", targetId);
+                        var v = await tcmd.ExecuteScalarAsync(ct);
+                        if (v is not null && v is not DBNull) originalId = Convert.ToInt32(v);
+                    }
+                    var local = groups.FirstOrDefault(x => x.CopyFromId == originalId);
+                    if (local.Id != 0) resolved = $"group-{local.Id}";
+                }
+                catch { /* keep unresolved — the branch falls back to the chain */ }
+                resolvedBranchTargets[targetId] = resolved;
+                return resolved;
+            }
+
+            async Task WireBranchAsync(LegacyConditionGroupRow cg, string condId, bool success)
             {
                 var explicitId = success ? cg.SuccessGroupId : cg.FailedGroupId;
-                if (explicitId is int eid && groupById.ContainsKey(eid))
+                if (explicitId is int eid)
                 {
-                    edgesOut.Add(Edge($"e-{(success ? "ok" : "fail")}-{cg.Id}", condId,
-                        $"group-{eid}", success ? "success" : "fail"));
+                    var target = await ResolveBranchTargetAsync(eid);
+                    if (target is not null)
+                    {
+                        if (string.Equals(target, gid, StringComparison.Ordinal))
+                        {
+                            // The route points back to the step's OWN group. The engine re-enters
+                            // the group at its first node, so the line is drawn from the condition
+                            // straight to the group itself — the group that runs before it
+                            // (owner, 2026-10-03).
+                            edgesOut.Add(Edge($"e-{(success ? "ok" : "fail")}-{cg.Id}", condId,
+                                gid, success ? "success" : "fail"));
+                            if (condNodeById.TryGetValue(condId, out var selfOn))
+                                AppendNodeNote(selfOn,
+                                    "این شرط به خود همین گروه برمی‌گردد؛ خط همان شرط به خود گروه رسم شد (گروه از ابتدا دوباره اجرا می‌شود).");
+                            return;
+                        }
+                        edgesOut.Add(Edge($"e-{(success ? "ok" : "fail")}-{cg.Id}", condId,
+                            target, success ? "success" : "fail"));
+                        // A router branch is a CALL in the legacy walk: record the call site so the
+                        // target group's return can later be wired to this chain's continuation.
+                        if (target.Length > 6 && int.TryParse(target.Substring(6), out var targetGroupId))
+                        {
+                            if (!callSites.TryGetValue(targetGroupId, out var sites))
+                            {
+                                sites = new List<string>();
+                                callSites[targetGroupId] = sites;
+                            }
+                            sites.Add(condId);
+                        }
+                        if (!groupById.ContainsKey(eid) && condNodeById.TryGetValue(condId, out var repairedOn))
+                        {
+                            var localTitle = groups.First(x => $"group-{x.Id}" == target).Title;
+                            AppendNodeNote(repairedOn,
+                                $"این مسیر در بانک قدیم به گروه نسخهٔ اصلی (#{eid}) اشاره می‌کرد؛ به گروه متناظر «{localTitle}» در همین فرآیند وصل شد.");
+                        }
+                        return;
+                    }
+                    if (condNodeById.TryGetValue(condId, out var missingOn))
+                        AppendNodeNote(missingOn,
+                            $"گروه مقصد این مسیر (#{eid}) جزء این فرآیند نیست (کپی ناقص)؛ مسیر به ادامهٔ زنجیره وصل شد.");
                 }
-                else
+                // No target group: the walk continues where the step would have continued.
+                pendingBranches.Add((condId, success ? "success" : "fail"));
+            }
+
+            void TrackChain(string entryId)
+            {
+                // Remember the group's chain order: a caller chain's continuation is the next
+                // entry that was attached after the calling condition.
+                if (!chainSeqByGroup.TryGetValue(g.Id, out var seqList))
                 {
-                    // No target group: the walk continues where the step would have continued.
-                    pendingBranches.Add((condId, success ? "success" : "fail"));
+                    seqList = new List<string>();
+                    chainSeqByGroup[g.Id] = seqList;
                 }
+                if (seqList.Count == 0 || !string.Equals(seqList[^1], entryId, StringComparison.Ordinal))
+                    seqList.Add(entryId);
+            }
+
+            int FlushPendingEdges(string target)
+            {
+                // Branches without a target group are no-ops in the old engine: the walk simply
+                // continues with the next step (or the next condition of the same step).
+                var wired = 0;
+                foreach (var guardId in pendingGuardFails)
+                {
+                    edgesOut.Add(Edge($"e-skp-{guardId}", guardId, target, "fail"));
+                    wired++;
+                }
+                pendingGuardFails.Clear();
+                foreach (var (pendingCond, branch) in pendingBranches)
+                {
+                    edgesOut.Add(Edge($"e-{branch}-{pendingCond}", pendingCond, target, branch));
+                    wired++;
+                }
+                pendingBranches.Clear();
+                return wired;
             }
 
             void AttachEntry(string entryId)
             {
+                TrackChain(entryId);
+
                 if (chainEntry is null && !chainBroken)
                 {
                     chainEntry = entryId;
@@ -395,24 +518,38 @@ public static class CanvasBackfillService
                 {
                     edgesOut.Add(Edge($"e-n-{chainTail}-{entryId}", chainTail, entryId, "next"));
                 }
-                else if (chainBroken)
+
+                var wired = FlushPendingEdges(entryId);
+
+                if (wired > 0)
+                {
+                    // The deferred branches live on: the chain continues from this entry.
+                    chainTail = entryId;
+                    chainBroken = false;
+                }
+                else if (chainBroken && chainEntry is not null && !string.Equals(entryId, chainEntry, StringComparison.Ordinal))
                 {
                     const string brokenNote =
-                        "بعد از یک مرحلهٔ شرطی، مرحله‌های بعدی همین گروه در نسخهٔ قدیم هم‌زمان با مسیر شرط اجرا می‌شدند؛ در گراف جدید فقط از مسیر شرط قابل دسترسی‌اند.";
+                        "هر دو شاخهٔ مرحلهٔ شرطی قبلی به گروه می‌روند؛ در نسخهٔ قدیم بعد از اجرای مقصد شرط، مرحله‌های بعدی همین گروه هم اجرا می‌شدند — در گراف جدید این مرحله از این مسیر قابل دسترسی نیست.";
                     if (!groupNotes.Contains(brokenNote)) groupNotes.Add(brokenNote);
                 }
-
-                // Whatever was waiting for "what comes after the guarded/routed step" now knows.
-                foreach (var guardId in pendingGuardFails)
-                    edgesOut.Add(Edge($"e-skp-{guardId}", guardId, entryId, "fail"));
-                pendingGuardFails.Clear();
-                foreach (var (pendingCond, branch) in pendingBranches)
-                    edgesOut.Add(Edge($"e-{branch}-{pendingCond}", pendingCond, entryId, branch));
-                pendingBranches.Clear();
             }
 
-            foreach (var s in steps)
+            // Pre-load each step's action and condition groups: whether a routing (no-action) step
+            // can move OUT of its group depends on the steps that follow it.
+            var stepMeta = new List<(List<LegacyConditionGroupRow> Cgs, Act? Action, bool IsNoAction, bool IsRouter)>();
+            foreach (var s0 in steps)
             {
+                var action0 = s0.ActionId is int aid0 ? await LoadActionAsync(conn, aid0, ct) : null;
+                var isNoAction0 = action0 is null || string.Equals(action0.Kind, "NoAction", StringComparison.Ordinal);
+                var cgs0 = await LoadConditionGroupsForStepAsync(conn, s0.Id, ct);
+                var routesOutside0 = cgs0.Any(c => c.SuccessGroupId is > 0 || c.FailedGroupId is > 0);
+                stepMeta.Add((cgs0, action0, isNoAction0, !s0.IsConditional && cgs0.Count > 0 && (isNoAction0 || routesOutside0)));
+            }
+
+            for (var stepIndex = 0; stepIndex < steps.Count; stepIndex++)
+            {
+                var s = steps[stepIndex];
                 var sid = $"step-{s.Id}";
                 if (!s.IsActive)
                 {
@@ -421,9 +558,16 @@ public static class CanvasBackfillService
                     continue;
                 }
 
-                var action = s.ActionId is int aid ? await LoadActionAsync(conn, aid, ct) : null;
-                var isNoAction = action is null || string.Equals(action.Kind, "NoAction", StringComparison.Ordinal);
-                var cgs = await LoadConditionGroupsForStepAsync(conn, s.Id, ct);
+                if (groupRouterTerminated.TryGetValue(g.Id, out var terminated) && terminated)
+                {
+                    // The old walk had already permanently jumped away («در هر صورت» transfer):
+                    // anything after that point in the group never ran.
+                    skippedUnreachable.Add(s.Title);
+                    continue;
+                }
+
+                var (cgs0, action, isNoAction, isRouterStep) = stepMeta[stepIndex];
+                var cgs = new List<LegacyConditionGroupRow>(cgs0);
                 // A conditional no-action step is a plain pass-through in the old engine: its
                 // condition groups were never evaluated (nothing to guard).
                 var cgSuppressed = s.IsConditional && isNoAction && cgs.Count > 0;
@@ -445,71 +589,139 @@ public static class CanvasBackfillService
                     ["x"] = StartX(sid, StartX(gid, gx - 360) + 28),
                     ["y"] = StartY(sid, StartY(gid, 80) + 70 + sy)
                 };
+                var saveLike = string.Equals(action?.Kind, "InsertContent", StringComparison.Ordinal);
                 if (action != null)
                 {
                     if (!string.IsNullOrWhiteSpace(action.LegacyActionType))
                         node["legacyActionType"] = action.LegacyActionType;
 
-                    if (!string.IsNullOrWhiteSpace(action.ContentSourceType)
-                        && !action.ContentSourceType.Equals("none", StringComparison.OrdinalIgnoreCase))
-                        node["contentSourceType"] = action.ContentSourceType;
-                    if (!string.IsNullOrWhiteSpace(action.DynamicColumn))
-                        node["dynamicSourceColumnName"] = action.DynamicColumn;
-
-                    if (action.SaveSourceId is int srid && srid > 0)
+                    if (saveLike)
                     {
-                        node["saveDataSourceId"] = srid;
-                        node["saveColumnName"] = action.DynamicColumn;
-                        // When the value comes FROM the source, the same binding is its reader.
-                        if (string.Equals(action.ContentSourceType, "DataSource", StringComparison.OrdinalIgnoreCase))
-                            node["dataSourceId"] = srid;
+                        MapSaveLikeAction(node, action);
                     }
-
-                    var pointer = MapRowPointer(action.RowIndexType);
-                    if (pointer is not null)
+                    else
                     {
-                        node["dedicatedRow"] = true;
-                        node["rowIndexType"] = pointer;
-                    }
+                        if (!string.IsNullOrWhiteSpace(action.ContentSourceType)
+                            && !action.ContentSourceType.Equals("none", StringComparison.OrdinalIgnoreCase))
+                            node["contentSourceType"] = action.ContentSourceType;
+                        if (!string.IsNullOrWhiteSpace(action.DynamicColumn))
+                            node["dynamicSourceColumnName"] = action.DynamicColumn;
 
-                    if (!string.IsNullOrWhiteSpace(action.CloseTabTarget))
-                        node["closeTabTarget"] = action.CloseTabTarget;
+                        if (action.SaveSourceId is int srid && srid > 0)
+                        {
+                            node["saveDataSourceId"] = srid;
+                            node["saveColumnName"] = action.DynamicColumn;
+                            // When the value comes FROM the source, the same binding is its reader.
+                            if (string.Equals(action.ContentSourceType, "DataSource", StringComparison.OrdinalIgnoreCase))
+                                node["dataSourceId"] = srid;
+                        }
 
-                    if (action.WaitMs is int wms && wms > 0
-                        && string.Equals(action.Kind, "WaitTime", StringComparison.Ordinal))
-                    {
-                        node["constantValue"] = wms.ToString();
-                        node["contentSourceType"] = "Constant";
+                        var pointer = MapRowPointer(action.RowIndexType);
+                        if (pointer is not null)
+                        {
+                            node["dedicatedRow"] = true;
+                            node["rowIndexType"] = pointer;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(action.CloseTabTarget))
+                            node["closeTabTarget"] = action.CloseTabTarget;
+
+                        if (action.WaitMs is int wms && wms > 0
+                            && string.Equals(action.Kind, "WaitTime", StringComparison.Ordinal))
+                        {
+                            node["constantValue"] = wms.ToString();
+                            node["contentSourceType"] = "Constant";
+                        }
                     }
 
                     if (action.Notes.Count > 0)
                         node["conversionNotes"] = new JsonArray(action.Notes.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray());
                 }
-                if (action?.Selector != null)
+                if (action?.Selector != null && !saveLike)
                 {
                     ApplySelector(node, action.Selector);
                 }
-                if (isNoAction && !s.IsConditional && hadCg)
+                if (isRouterStep && hadCg)
                 {
-                    // A no-action step with condition groups is a ROUTER: the old app had no
-                    // standalone condition node, so routing lived on an empty step. Here the
-                    // condition node takes that step's place; the step node itself is dropped.
-                    var first = true;
+                    // A step whose condition groups ROUTE (reference another group) is a router:
+                    // the old app had no standalone condition node, so routing lived on the step.
+                    // In the new panel a condition inside a group cannot point at another group,
+                    // so the routing conditions become INTER-GROUP conditions OUTSIDE the container
+                    // (owner, 2026-10-03). The action of the step — when it has one — stays INSIDE
+                    // the group as its own node: «روتر دارای اقدام = یک اقدام داخل گروه + یک شرط
+                    // بین‌گروهی» (owner). The group's own `next` edge leads into the condition
+                    // chain; every active group of the step is checked in turn and a branch
+                    // without a target falls through to the next condition.
+                    if (!isNoAction)
+                    {
+                        // The action stays on the group's chain, right at its priority position.
+                        nodesOut.Add(node);
+                        AttachEntry(sid);
+                        chainTail = sid;
+                    }
+
+                    var firstOfStep = true;
                     foreach (var cg in cgs)
                     {
-                        var cond = CreateConditionNode(cg, sid);
-                        if (first)
+                        // A condition group with NO active conditions always passed in the old
+                        // engine and jumped permanently to its success group — the «در هر صورت»
+                        // conditions. They carry no meaning here: the condition is dropped and the
+                        // transfer becomes a direct line from the owning group to the target
+                        // (owner, 2026-10-03). Everything after such a transfer never ran.
+                        if (cg.Conditions.Count == 0)
                         {
-                            AttachEntry(cond["id"]!.GetValue<string>());
-                            first = false;
+                            var directTarget = cg.SuccessGroupId is int dg && dg > 0
+                                ? await ResolveBranchTargetAsync(dg)
+                                : null;
+                            if (directTarget is null)
+                            {
+                                // Always-true and without a target: completely without effect.
+                                groupNotes.Add("شرط بدون زیرشرط و بدون مقصد که هیچ اثری نداشت حذف شد.");
+                                continue;
+                            }
+                            var isFirstElement = !routerEntryByGroup.ContainsKey(g.Id);
+                            FlushPendingEdges(directTarget);
+                            if (!isFirstElement && chainTail is not null)
+                                edgesOut.Add(Edge($"e-n-{chainTail}-{directTarget}", chainTail, directTarget, "next"));
+                            if (isFirstElement)
+                                routerEntryByGroup[g.Id] = directTarget;
+                            groupNotes.Add("شرط «" + (string.IsNullOrWhiteSpace(cg.Title) ? "بدون شرط" : cg.Title.Trim())
+                                + "» در نسخهٔ قدیم بدون زیرشرط بود و همیشه به گروه مقصد منتقل می‌کرد؛ شرط حذف و انتقال مستقیم از خود گروه به گروه مقصد رسم شد.");
+                            chainTail = null;
+                            groupRouterTerminated[g.Id] = true;
+                            break; // the transfer is permanent — the rest of the chain is unreachable
                         }
-                        else
+
+                        var condId = $"cond-{cg.Id}";
+                        var cond = CreateConditionNode(cg, sid, interGroup: true);
+                        var wiredN = FlushPendingEdges(condId);
+                        var firstCondOfGroup = !routerEntryByGroup.ContainsKey(g.Id);
+                        if (!firstCondOfGroup && chainTail is not null)
+                        {
+                            // A router tucked between in-chain stages (e.g. after the action it
+                            // replaced): draw its inbound lane explicitly, right after that stage.
+                            edgesOut.Add(Edge($"e-n-{chainTail}-{condId}", chainTail, condId, "next"));
+                        }
+                        else if (!firstCondOfGroup && wiredN == 0)
                         {
                             AppendNodeNote(cond,
-                                "در نسخهٔ قدیم این شرط هم‌زمان با شرط اول بررسی می‌شد؛ اینجا به‌عنوان شاخهٔ اضافی رسم شده است.");
+                                "شاخه‌های شرط قبلی مقصد دارند؛ این شرط در گراف جدید از این مسیر قابل دسترسی نیست.");
                         }
-                        WireBranch(cg, cond["id"]!.GetValue<string>(), true);
-                        WireBranch(cg, cond["id"]!.GetValue<string>(), false);
+                        if (firstCondOfGroup && firstOfStep)
+                        {
+                            AppendNodeNote(cond, isNoAction
+                                ? "این مرحله بدون اقدام، شرط انتقال داشت؛ به‌صورت «شرط بین‌گروهی» بیرون از گروه رسم شد — شرط داخل گروه در پنل جدید نمی‌تواند به گروه‌های دیگر اشاره کند. موتور از خط خود گروه به این شرط می‌رسد."
+                                : "این مرحله هم اقدام دارد و هم شرط انتقال؛ اقدامش داخل گروه ماند و شرطش به‌صورت «شرط بین‌گروهی» بیرون از گروه رسم شد (شرط داخل گروه در پنل جدید نمی‌تواند به گروه‌های دیگر اشاره کند).");
+                            groupNotes.Add(isNoAction
+                                ? "مرحله‌های بدون اقدام که شرط انتقال دارند به‌صورت شرط بین‌گروهی بیرون از این گروه رسم شده‌اند؛ از خط خود گروه وارد آن‌ها می‌شوید."
+                                : "مرحله‌های دارای اقدام که شرط انتقال دارند: اقدام داخل گروه مانده و شرط انتقال به‌صورت شرط بین‌گروهی بیرون از گروه رسم شده است.");
+                        }
+                        TrackChain(condId);
+                        if (firstCondOfGroup) routerEntryByGroup[g.Id] = condId;
+                        chainTail = null;
+                        await WireBranchAsync(cg, condId, true);
+                        await WireBranchAsync(cg, condId, false);
+                        firstOfStep = false;
                     }
                     chainBroken = true;
                     chainTail = null;
@@ -526,37 +738,82 @@ public static class CanvasBackfillService
                         // Conditional step = GUARD: the action runs only when EVERY active group
                         // passes; any failure skips the action and continues with the next step.
                         var guardIds = new List<string>();
+                        var emptyGuards = 0;
                         foreach (var cg in cgs)
-                            guardIds.Add(CreateConditionNode(cg, sid)["id"]!.GetValue<string>());
-                        for (var i = 0; i + 1 < guardIds.Count; i++)
-                            edgesOut.Add(Edge($"e-gs-{guardIds[i]}", guardIds[i], guardIds[i + 1], "success"));
-                        edgesOut.Add(Edge($"e-gs-{s.Id}", guardIds[^1], sid, "success"));
-                        AttachEntry(guardIds[0]);
-                        pendingGuardFails.AddRange(guardIds);
-                        chainTail = sid;
+                        {
+                            // An always-true group (no active conditions) could never skip the step:
+                            // drop it instead of drawing a pointless condition (owner, 2026-10-03).
+                            if (cg.Conditions.Count == 0) { emptyGuards++; continue; }
+                            var guardNode = CreateConditionNode(cg, sid);
+                            guardIds.Add(guardNode["id"]!.GetValue<string>());
+                            // A CONDITIONAL step's groups could never route in the old engine — they
+                            // only decided whether THIS step ran (owner, 2026-10-03). A target here
+                            // is stale data and is deliberately ignored.
+                            if (cg.SuccessGroupId is > 0 || cg.FailedGroupId is > 0)
+                                AppendNodeNote(guardNode,
+                                    "در نسخهٔ قدیم شرط‌های یک مرحلهٔ شرطی فقط اجرا/عدم اجرای همان مرحله را کنترل می‌کردند و گروه موفق/ناموفق نداشتند؛ مقصد گروه در این داده نادیده گرفته شد.");
+                        }
+                        if (emptyGuards > 0)
+                            AppendNodeNote(node,
+                                "گروه شرطی بدون زیرشرط این مرحله همیشه برقرار بود و هرگز مرحله را رد نمی‌کرد؛ بدون شرط منتقل شد.");
+                        if (guardIds.Count == 0)
+                        {
+                            AttachEntry(sid);
+                            chainTail = sid;
+                        }
+                        else
+                        {
+                            for (var i = 0; i + 1 < guardIds.Count; i++)
+                                edgesOut.Add(Edge($"e-gs-{guardIds[i]}", guardIds[i], guardIds[i + 1], "success"));
+                            edgesOut.Add(Edge($"e-gs-{s.Id}", guardIds[^1], sid, "success"));
+                            AttachEntry(guardIds[0]);
+                            pendingGuardFails.AddRange(guardIds);
+                            chainTail = sid;
+                        }
                     }
                     else if (!isNoAction && hadCg)
                     {
-                        // The action runs first; its condition groups then route to the target groups.
-                        var first = true;
-                        foreach (var cg in cgs)
+                        // The action runs first; condition groups with real conditions are then
+                        // evaluated in turn (each may route) and the chain continues afterwards.
+                        // Always-true groups (no active conditions) would never route here — they
+                        // are dropped (owner, 2026-10-03).
+                        AttachEntry(sid);
+                        chainTail = sid;
+
+                        var realCgs = cgs.Where(x => x.Conditions.Count > 0).ToList();
+                        if (realCgs.Count == 0)
                         {
+                            AppendNodeNote(node,
+                                "گروه‌های شرطی این مرحله بدون زیرشرط بودند و همیشه برقرار می‌شدند؛ بدون شرط منتقل شد.");
+                        }
+                        var first = true;
+                        foreach (var cg in realCgs)
+                        {
+                            var condId = $"cond-{cg.Id}";
                             var cond = CreateConditionNode(cg, sid);
                             if (first)
                             {
-                                edgesOut.Add(Edge($"e-sc-{s.Id}-{cg.Id}", sid, cond["id"]!.GetValue<string>(), "next"));
+                                AttachEntry(condId);
+                                chainTail = condId;
                                 first = false;
                             }
                             else
                             {
-                                AppendNodeNote(cond,
-                                    "در نسخهٔ قدیم این شرط هم‌زمان با شرط اول بررسی می‌شد؛ اینجا به‌عنوان شاخهٔ اضافی رسم شده است.");
+                                var hadCarry = pendingBranches.Count > 0 || pendingGuardFails.Count > 0;
+                                AttachEntry(condId);
+                                AppendNodeNote(cond, hadCarry
+                                    ? "در نسخهٔ قدیم همهٔ شرط‌های این مرحله هم‌زمان بررسی می‌شدند؛ در گراف جدید این شرط از ادامهٔ شاخه‌های بدون مقصد شرط قبلی اجرا می‌شود."
+                                    : "در نسخهٔ قدیم همهٔ شرط‌های این مرحله هم‌زمان و مستقل بررسی می‌شدند؛ چون شاخه‌های شرط قبلی مقصد دارند، این شرط در گراف جدید از این مسیر قابل دسترسی نیست.");
                             }
-                            WireBranch(cg, cond["id"]!.GetValue<string>(), true);
-                            WireBranch(cg, cond["id"]!.GetValue<string>(), false);
+                            chainTail = null;
+                            await WireBranchAsync(cg, condId, true);
+                            await WireBranchAsync(cg, condId, false);
                         }
-                        chainBroken = true;
-                        chainTail = null;
+                        if (realCgs.Count > 0)
+                        {
+                            chainBroken = true;
+                            chainTail = null;
+                        }
                     }
                     else
                     {
@@ -567,14 +824,20 @@ public static class CanvasBackfillService
                 sy += 110;
             }
 
-            // Chain end: guard failures fall through to the group's next groups; a router branch
-            // with no target stopped the legacy walk, so it ends at the terminal marker here.
+            // Chain end: a step whose no-target branch ran out of steps hands over to the group's
+            // next groups (the old engine ran the group's children after its chain finished).
             var groupExit = GroupExitTarget(g.Id);
             foreach (var guardId in pendingGuardFails)
+            {
                 edgesOut.Add(Edge($"e-skp-{guardId}", guardId, groupExit, "fail"));
+                residualExitEdges.Add((g.Id, $"e-skp-{guardId}"));
+            }
             pendingGuardFails.Clear();
             foreach (var (pendingCond, branch) in pendingBranches)
-                edgesOut.Add(Edge($"e-{branch}-{pendingCond}", pendingCond, "end", branch));
+            {
+                edgesOut.Add(Edge($"e-{branch}-{pendingCond}", pendingCond, groupExit, branch));
+                residualExitEdges.Add((g.Id, $"e-{branch}-{pendingCond}"));
+            }
             pendingBranches.Clear();
 
             if (chainEntry is not null)
@@ -582,6 +845,8 @@ public static class CanvasBackfillService
 
             if (skippedInactive.Count > 0)
                 groupNotes.Add("مراحل غیرفعال که در نسخهٔ قدیم اجرا نمی‌شدند و منتقل نشدند: " + string.Join("، ", skippedInactive));
+            if (skippedUnreachable.Count > 0)
+                groupNotes.Add("مرحله‌هایی که بعد از انتقال «در هر صورت» هرگز اجرا نمی‌شدند و منتقل نشدند: " + string.Join("، ", skippedUnreachable));
             if (groupNotes.Count > 0)
                 groupNodes[g.Id]["conversionNotes"] = new JsonArray(groupNotes.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray());
         }
@@ -591,9 +856,17 @@ public static class CanvasBackfillService
         // inner walk finishes, so every group gets one — leaf groups hand over to the end marker.
         foreach (var g in groups)
         {
+            if (routerEntryByGroup.TryGetValue(g.Id, out var routerEntry))
+            {
+                // The group hands over to its inter-group router element — the first condition, or
+                // a direct target when the first element was an always-true «در هر صورت» transfer.
+                edgesOut.Add(Edge($"e-gn-{g.Id}", $"group-{g.Id}", routerEntry, "next"));
+                continue;
+            }
             if (!childGroups.TryGetValue(g.Id, out var kids) || kids.Count == 0)
             {
                 edgesOut.Add(Edge($"e-gn-{g.Id}", $"group-{g.Id}", "end", "next"));
+                residualExitEdges.Add((g.Id, $"e-gn-{g.Id}"));
                 continue;
             }
 
@@ -605,15 +878,21 @@ public static class CanvasBackfillService
                     "این گروه در نسخهٔ قدیم چند گروه بعدی داشت و همه اجرا می‌شدند؛ در گراف جدید فقط اولین ادامه اجرا می‌شود — بقیه به‌عنوان شاخه رسم شده‌اند.");
         }
 
-        // Entry group mirrors the old FormMain: `Groups.FirstOrDefault(ParrentGroupId == null)` —
-        // FirstGroupId is carried when present (it is NULL across the Windows-era databases).
+        // Entry group: FirstGroupId when the task carries one (NULL across the Windows-era DBs).
+        // Otherwise the group that ran first: the old group list was ordered by Priority, and
+        // running a task started at its top row — so the entry is the parent-less group with the
+        // smallest Priority (NOT the smallest id; in the judgment process the smallest id is a
+        // helper group «بستن تب وخطا» and the real entry is the priority-0 data-row decision).
         var entryGroupId = firstGroupId is int fg2 && groupById.ContainsKey(fg2)
             ? fg2
-            : groups.Where(x => x.ParentId is null).OrderBy(x => x.Id).Select(x => (int?)x.Id).FirstOrDefault()
-              ?? groups.OrderBy(x => x.Id).Select(x => (int?)x.Id).FirstOrDefault();
+            : groups.Where(x => x.ParentId is null).OrderBy(x => x.Priority).ThenBy(x => x.Id).Select(x => (int?)x.Id).FirstOrDefault()
+              ?? groups.OrderBy(x => x.Priority).ThenBy(x => x.Id).Select(x => (int?)x.Id).FirstOrDefault();
         if (entryGroupId is int entryId)
         {
             edgesOut.Add(Edge("e-start", "start", $"group-{entryId}", "next"));
+            if (firstGroupId is null)
+                AppendNodeNote(startNode,
+                    "گروه شروع بر اساس کمترین اولویت گروه‌ها انتخاب شد — همان ترتیب فهرست گروه‌های نسخهٔ قدیم.");
 
             // The legacy process carried NO repeat of its own: the repeat configuration of the
             // FIRST executed group drove the whole run (owner, 2026-10-02). Move that config onto
@@ -650,16 +929,83 @@ public static class CanvasBackfillService
             }
         }
 
-        // Terminal marker: the player treats it as a clean stop and lets unwired router branches
-        // end there instead of failing the run.
-        nodesOut.Add(new JsonObject
+        // Flatten the call-return: every residual exit of a group with exactly ONE call site is
+        // re-pointed to that call site's continuation — the next node of the calling chain (or,
+        // when the caller was the chain's last node, the caller group's own resolved exit).
+        // A return that cannot be resolved to a single continuation (several call sites — the
+        // hub / state-machine centres) goes back to the process cycle's entry group: the legacy
+        // task looped over its rows and re-entered that same state machine, and the author's own
+        // tail conditions loop back to it as well. Only the entry group's own exit is the end
+        // of one pass.
+        var entryTarget = entryGroupId is int eid3 ? $"group-{eid3}" : "end";
+        var exitMemo = new Dictionary<int, string>();
+        var exitVisiting = new HashSet<int>();
+        string ResolveExit(int groupId)
         {
-            ["id"] = "end",
-            ["kind"] = "end",
-            ["title"] = "پایان",
-            ["x"] = StartX("end", gx + 80),
-            ["y"] = StartY("end", 220)
-        });
+            if (exitMemo.TryGetValue(groupId, out var memo)) return memo;
+            if (entryGroupId == groupId) return exitMemo[groupId] = "end";
+            if (!exitVisiting.Add(groupId)) return entryTarget;
+            var res = entryTarget;
+            if (callSites.TryGetValue(groupId, out var sites))
+            {
+                var distinct = sites.Distinct(StringComparer.Ordinal).ToList();
+                if (distinct.Count == 1)
+                {
+                    var condId = distinct[0];
+                    if (condGroupOf.TryGetValue(condId, out var host) && host != groupId)
+                    {
+                        if (chainSeqByGroup.TryGetValue(host, out var seq))
+                        {
+                            var idx = seq.IndexOf(condId);
+                            res = idx >= 0 && idx + 1 < seq.Count ? seq[idx + 1] : ResolveExit(host);
+                        }
+                        else
+                        {
+                            res = ResolveExit(host);
+                        }
+                    }
+                }
+            }
+            exitVisiting.Remove(groupId);
+            exitMemo[groupId] = res;
+            return res;
+        }
+
+        if (residualExitEdges.Count > 0)
+        {
+            var edgeById = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+            foreach (var e in edgesOut)
+            {
+                var eid2 = e?["id"]?.GetValue<string>();
+                if (eid2 is not null && e is JsonObject eo) edgeById[eid2] = eo;
+            }
+            foreach (var (ownerGroup, edgeId) in residualExitEdges)
+            {
+                if (!edgeById.TryGetValue(edgeId, out var edge)) continue;
+                var target = ResolveExit(ownerGroup);
+                if (string.Equals(target, "end", StringComparison.Ordinal)) continue;
+                edge["to"] = target;
+                if (groupNodes.TryGetValue(ownerGroup, out var ownerNode))
+                    AppendNodeNote(ownerNode, string.Equals(target, entryTarget, StringComparison.Ordinal)
+                        ? "انتهای این گروه در نسخهٔ قدیم به فراخوان برمی‌گشت؛ چون مسیر برگشت یکتا نیست، مسیر برگشت به ابتدای چرخهٔ فرآیند («گروه شروع») وصل شد تا چرخهٔ وضعیت ادامه یابد."
+                        : "انتهای این گروه در نسخهٔ قدیم به فراخوان برمی‌گشت و مسیر همان شاخه ادامه می‌یافت؛ مسیر برگشت به ادامهٔ همان شاخه وصل شد.");
+            }
+        }
+
+        // Terminal marker: the player treats it as a clean stop and lets unwired router branches
+        // end there instead of failing the run. Graphs where nothing points at the terminal do
+        // not get the isolated node at all.
+        if (edgesOut.Any(e => string.Equals(e?["to"]?.GetValue<string>(), "end", StringComparison.Ordinal)))
+        {
+            nodesOut.Add(new JsonObject
+            {
+                ["id"] = "end",
+                ["kind"] = "end",
+                ["title"] = "پایان",
+                ["x"] = StartX("end", gx + 80),
+                ["y"] = StartY("end", 220)
+            });
+        }
 
         // Root groups the legacy chain never reached (they were started from the group list by
         // hand) stay visible but get an explanatory note.
@@ -684,6 +1030,11 @@ public static class CanvasBackfillService
 
         var dataSources = await LoadDataSourcesAsync(conn, taskId, ct);
 
+        // Task-level source links (old TaskDataSources): the run could pick such a source even when
+        // no node binds it (the old start dialog asked for it). Keeping them as references makes the
+        // transfer bring the sources along and the wizard show them next to the process.
+        var taskSourceIds = await LoadTaskSourceIdsAsync(conn, taskId, ct);
+
         var root = new JsonObject
         {
             ["taskId"] = taskId,
@@ -694,7 +1045,32 @@ public static class CanvasBackfillService
             ["edges"] = edgesOut,
             ["dataSources"] = dataSources
         };
+        if (taskSourceIds.Count > 0)
+        {
+            var taskRefs = new JsonArray();
+            foreach (var tsi in taskSourceIds) taskRefs.Add(tsi);
+            root["taskSourceIds"] = taskRefs;
+        }
         return root.ToJsonString(JsonOpts);
+    }
+
+    /// <summary>Task-level source links from the old TaskDataSources table (both column spellings probed).</summary>
+    private static async Task<List<int>> LoadTaskSourceIdsAsync(SqlConnection conn, int taskId, CancellationToken ct)
+    {
+        var ids = new List<int>();
+        if (!await TableExistsAsync(conn, "TaskDataSources", ct)) return ids;
+        var taskCol = await ColumnExistsAsync(conn, "TaskDataSources", "TaskId", ct) ? "TaskId"
+            : await ColumnExistsAsync(conn, "TaskDataSources", "TasksId", ct) ? "TasksId" : null;
+        var dsCol = await ColumnExistsAsync(conn, "TaskDataSources", "DataSourceId", ct) ? "DataSourceId"
+            : await ColumnExistsAsync(conn, "TaskDataSources", "DataSourcesId", ct) ? "DataSourcesId" : null;
+        if (taskCol is null || dsCol is null) return ids;
+        await using var cmd = new SqlCommand(
+            $"SELECT DISTINCT {dsCol} FROM TaskDataSources WHERE {taskCol} = @id AND {dsCol} IS NOT NULL", conn);
+        cmd.Parameters.AddWithValue("@id", taskId);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+            ids.Add(Convert.ToInt32(r.GetValue(0)));
+        return ids;
     }
 
     private static JsonObject Edge(string id, string from, string to, string kind) => new()
@@ -807,6 +1183,111 @@ public static class CanvasBackfillService
         notes.AddRange(selector.ExtraNotes);
         if (notes.Count > 0)
             node["selectorNotes"] = new JsonArray(notes.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray());
+    }
+
+    /// <summary>
+    /// Stamp a node with the VALUE-selector fields the editor shows for the «عنصر صفحه»
+    /// (Elements) value source — `equalSelector*` — mirroring <see cref="ApplySelector"/>.
+    /// The legacy SaveContent/InsertContent read their value from exactly this element.
+    /// </summary>
+    private static void ApplyEqualSelector(JsonObject node, Sel selector)
+    {
+        var n = selector.Normalized;
+        node["equalSelectorValue"] = n.Value;
+        if (n.Managed)
+            node["equalSelectorNeedsReview"] = true;
+        if (!string.IsNullOrWhiteSpace(n.LegacyValue) && !string.Equals(n.LegacyValue, n.Value, StringComparison.Ordinal))
+            node["equalSelectorLegacyValue"] = n.LegacyValue;
+        node["framePathJson"] = selector.FramePathJson;
+        if (selector.IsDynamic)
+        {
+            node["equalSelectorIsDynamic"] = true;
+            if (!string.IsNullOrWhiteSpace(selector.DynamicColumn))
+                node["equalSelectorDynamicColumn"] = selector.DynamicColumn;
+            if (selector.DynamicSourceId is int dynSrc && dynSrc > 0)
+                node["equalSelectorDataSourceId"] = dynSrc;
+        }
+        var notes = new List<string>(n.Notes);
+        notes.AddRange(selector.ExtraNotes);
+        if (notes.Count > 0)
+            node["selectorNotes"] = new JsonArray(notes.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray());
+    }
+
+    /// <summary>
+    /// Map a legacy SaveContent / InsertContent action — the two wrote a value into ONE cell of
+    /// <c>Action.SaveSourceId</c> (column <c>DynamicSourceColumnName</c>).
+    ///
+    /// The old dispatch (ActionExtentions.SaveContent) IGNORED the ContentSourceType column for
+    /// these actions: it read the PAGE ELEMENT (input → its value, otherwise its text) and fell
+    /// back to ConstantValue only when the element was not found:
+    /// <c>el = Selector.FindOne(...); el == null ? SaveConstantContent : SaveElementContent</c>.
+    /// So here the value source becomes:
+    ///   • «عنصر صفحه» (Elements) with the legacy selector on the equal* pair — the normal case;
+    ///   • «ثابت» (Constant) when there is no selector — or when the selector could not be
+    ///     converted to CSS (emitting an EMPTY value selector would silently save an empty cell,
+    ///     which is worse than keeping the constant the old app used as its own fallback);
+    /// and the destination binds SaveSourceId / dynamic column on saveDataSourceId / saveColumnName,
+    /// never on the value-source pair (that was the wrong mapping: both sides looked like «منبع»).
+    ///
+    /// Row: the old writer honoured exactly ONE pointer — LastRow (SetLastSourceVal, overwriting the
+    /// last row). none / CurruntLoop / ParrentLoop / TotalLoop all wrote at the current repeat row,
+    /// which is the node's own un-dedicated row here, so they stay unset.
+    /// </summary>
+    private static void MapSaveLikeAction(JsonObject node, Act action)
+    {
+        var notes = action.Notes;
+        var normalized = action.Selector?.Normalized;
+        // The AUTHOR's parameter decides the value source, not the attached rows: a node marked
+        // «ثابت» keeps its constant even when a stale selector sits next to it (the owner's rule).
+        var intentConstant = string.Equals(action.ContentSourceType, "Constant", StringComparison.OrdinalIgnoreCase)
+                             && !string.IsNullOrWhiteSpace(action.ConstantValue);
+        if (!intentConstant && normalized is { Ok: true })
+        {
+            node["contentSourceType"] = "Elements";
+            ApplyEqualSelector(node, action.Selector!);
+            if (!string.IsNullOrWhiteSpace(action.ConstantValue))
+                notes.Add($"در نسخهٔ قدیم اگر عنصر پیدا نمی‌شد مقدار ثابت «{action.ConstantValue}» ذخیره می‌شد؛ موتور جدید همیشه عنصر را می‌خواند — برای پوشش آن حالت، همین مقدار را در نودی جداگانه نگه دارید.");
+        }
+        else
+        {
+            node["contentSourceType"] = "Constant";
+            if (intentConstant)
+            {
+                notes.Add("نوع مبدأ روی خود نود «ثابت» بود؛ همان حفظ شد (سلکتور پیوست در اجرای قدیم برای این مقدار استفاده نمی‌شد).");
+            }
+            else if (action.Selector is not null)
+            {
+                // Keep the legacy text so the operator can fix the selector by hand.
+                if (!string.IsNullOrWhiteSpace(normalized?.LegacyValue))
+                    node["equalSelectorLegacyValue"] = normalized!.LegacyValue;
+                notes.Add("سلکتور عنصر مقدار خالی یا قابل تبدیل به CSS نبود؛ برای اینکه اجرا بی‌صدا مقدار خالی در سلول ذخیره نکند، منبع مقدار روی «ثابت» گذاشته شد — سلکتور را در ویرایشگر بازبینی و اصلاح کنید.");
+            }
+        }
+
+        if (action.SaveSourceId is int dest && dest > 0)
+        {
+            node["saveDataSourceId"] = dest;
+            node["saveColumnName"] = action.DynamicColumn;
+        }
+        else
+        {
+            notes.Add("منبع مقصد ذخیره در دادهٔ قدیم تعیین نشده بود؛ در ویرایشگر بخش «مقصد ذخیره» را مشخص کنید.");
+        }
+
+        var legacy = (action.LegacyActionType ?? "").Trim().ToLowerInvariant();
+        if (legacy == "savecontent")
+        {
+            if (MapRowPointer(action.RowIndexType) == "LastRow")
+            {
+                node["dedicatedRow"] = true;
+                node["rowIndexType"] = "LastRow";
+            }
+            else if (!string.IsNullOrWhiteSpace(action.RowIndexType)
+                     && !action.RowIndexType.Equals("none", StringComparison.OrdinalIgnoreCase))
+            {
+                notes.Add("در نسخهٔ قدیم گزینهٔ «ردیف» برای ذخیره جز «آخرین ردیف» تفاوتی نداشت و همیشه در ردیف جاری ذخیره می‌شد؛ همان رفتار حفظ شد.");
+            }
+        }
     }
 
     /// <summary>

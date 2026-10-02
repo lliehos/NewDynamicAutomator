@@ -61,6 +61,7 @@
               <th>@L["admin.migrate.colCreated"]</th>
               <th>@L["admin.migrate.colGroups"]</th>
               <th>@L["admin.migrate.colSteps"]</th>
+              <th>@L["admin.migrate.colSources"]</th>
               <th>@L["admin.migrate.colStatus"]</th>
               <th>@L["admin.migrate.colOps"]</th>
             </tr>
@@ -87,6 +88,7 @@
               <td class="num">@(p.CreatedAt?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
               <td class="num">@p.GroupCount</td>
               <td class="num">@p.StepsCount</td>
+              <td class="num">@p.SourceCount</td>
               <td>
                 @if (p.AlreadyTransferred)
                 {

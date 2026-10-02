@@ -5,6 +5,7 @@
   var user = ViewBag.LegacyUser as LegacyUserRow ?? new LegacyUserRow();
   var process = ViewBag.Process as LegacyProcessRow ?? new LegacyProcessRow();
   var groups = ViewBag.Groups as List<LegacyGroupRow> ?? new List<LegacyGroupRow>();
+  var sources = ViewBag.Sources as List<LegacySourceRow> ?? new List<LegacySourceRow>();
   var name = $"{user.FirstName} {user.LastName}".Trim();
   if (string.IsNullOrWhiteSpace(name)) name = user.UserName;
   var stepCount = groups.Sum(g => g.Steps.Count);
@@ -14,6 +15,46 @@
     ("title", process.Title), ("id", process.Id.ToString()), ("user", name),
     ("groups", groups.Count.ToString()), ("steps", stepCount.ToString()))
 }' />
+
+@* The sources the process legitimately references — the transfer brings them along. A process
+   bound to nothing shows the hint instead, so «no source moved» can never be a silent surprise. *@
+<div class="card-admin" style="margin-bottom:1rem">
+  <h3>
+    <i class="ti ti-database" aria-hidden="true"></i>@L["admin.migrate.sourcesTitle"]
+    <span class="admin-muted">· @sources.Count</span>
+  </h3>
+  @if (sources.Count == 0)
+  {
+    <p class="admin-field-hint">@L["admin.migrate.sourcesNone"]</p>
+  }
+  else
+  {
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>Id</th>
+          <th>@L["admin.migrate.colTitle"]</th>
+          <th>@L["admin.migrate.sourceColKind"]</th>
+          <th>@L["admin.migrate.sourceColSize"]</th>
+          <th>@L["admin.migrate.sourceColGlobal"]</th>
+        </tr>
+      </thead>
+      <tbody>
+      @foreach (var s in sources)
+      {
+        <tr>
+          <td>@s.Id</td>
+          <td>@(string.IsNullOrWhiteSpace(s.Title) ? "—" : s.Title)</td>
+          <td>@string.Join("، ", s.Kinds.Select(k => L["admin.migrate.sourceKind." + k]))</td>
+          <td class="num">@(s.Rows is int r && s.Cols is int c ? $"{r}×{c}" : "—")</td>
+          <td>@(s.IsGlobal ? L["admin.migrate.yes"] : "—")</td>
+        </tr>
+      }
+      </tbody>
+    </table>
+    <p class="admin-field-hint">@L["admin.migrate.sourcesHint"]</p>
+  }
+</div>
 
 @foreach (var g in groups)
 {

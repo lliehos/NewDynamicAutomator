@@ -44,6 +44,8 @@ public class LegacyProcessRow
     public DateTime? CreatedAt { get; set; }
     public int GroupCount { get; set; }
     public int StepsCount { get; set; }
+    /// <summary>Distinct legacy sources the process references (group / action / selector / task link).</summary>
+    public int SourceCount { get; set; }
     /// <summary>True when a Transferred copy of this legacy task already exists for the user.</summary>
     public bool AlreadyTransferred { get; set; }
 }
@@ -75,6 +77,18 @@ public class LegacyStepRow
     public int Priority { get; set; }
     public bool IsConditional { get; set; }
     public string? ActionType { get; set; }
+}
+
+/// <summary>One legacy source referenced by a process, as shown in the details view.</summary>
+public class LegacySourceRow
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = "";
+    public bool IsGlobal { get; set; }
+    public int? Rows { get; set; }
+    public int? Cols { get; set; }
+    /// <summary>Reference kinds — group / action / selector / task (locale keys under admin.migrate.sourceKind.*).</summary>
+    public List<string> Kinds { get; } = new();
 }
 
 /// <summary>Import processes from a legacy Windows / mid-schema SQL database into Processes.GraphJson.</summary>
@@ -222,6 +236,17 @@ FROM Tasks t WHERE t.CreatorUserId=@id ORDER BY t.Id";
                 }
             }
 
+            if (list.Count > 0)
+            {
+                try
+                {
+                    var refs = await LoadTaskSourceRefsAsync(conn, list.Select(x => x.Id).ToList(), ct);
+                    foreach (var p in list)
+                        p.SourceCount = refs.TryGetValue(p.Id, out var bySource) ? bySource.Count : 0;
+                }
+                catch (Exception ex) { _log.LogDebug(ex, "source-ref count failed"); }
+            }
+
             user.ProcessCount = list.Count;
             return (user, list, null);
         }
@@ -273,7 +298,7 @@ FROM Tasks t WHERE t.CreatorUserId=@id ORDER BY t.Id";
     /// Read-only details of ONE legacy process: its groups and steps. The owner (CreatorUserId)
     /// is resolved from the task itself — a process with no owner cannot be inspected.
     /// </summary>
-    public async Task<(LegacyUserRow? user, LegacyProcessRow? process, List<LegacyGroupRow>? groups, string? error)>
+    public async Task<(LegacyUserRow? user, LegacyProcessRow? process, List<LegacyGroupRow>? groups, List<LegacySourceRow>? sources, string? error)>
         ListProcessDetailsAsync(string connectionString, int taskId, CancellationToken ct = default)
     {
         try
@@ -281,9 +306,9 @@ FROM Tasks t WHERE t.CreatorUserId=@id ORDER BY t.Id";
             await using var conn = new SqlConnection(connectionString);
             await conn.OpenAsync(ct);
             if (!await CanvasBackfillService.LegacyTableExistsAsync(conn, "Users", ct))
-                return (null, null, null, "جدول Users در دیتابیس قدیمی پیدا نشد.");
+                return (null, null, null, null, "جدول Users در دیتابیس قدیمی پیدا نشد.");
             if (!await CanvasBackfillService.LegacyTableExistsAsync(conn, "Tasks", ct))
-                return (null, null, null, "جدول Tasks در دیتابیس قدیمی پیدا نشد.");
+                return (null, null, null, null, "جدول Tasks در دیتابیس قدیمی پیدا نشد.");
 
             var hasFirst = await ColumnExists(conn, "Users", "FirstName", ct);
             var hasLast = await ColumnExists(conn, "Users", "LastName", ct);
@@ -312,10 +337,10 @@ FROM Tasks t WHERE t.Id=@id", conn))
                     };
                 }
             }
-            if (process is null) return (null, null, null, $"فرآیند قدیمی #{taskId} پیدا نشد.");
-            if (creator is null) return (null, null, null, $"مالک فرآیند #{taskId} مشخص نیست.");
+            if (process is null) return (null, null, null, null, $"فرآیند قدیمی #{taskId} پیدا نشد.");
+            if (creator is null) return (null, null, null, null, $"مالک فرآیند #{taskId} مشخص نیست.");
             var user = await ReadLegacyUserAsync(conn, creator.Value, hasFirst, hasLast, ct);
-            if (user is null) return (null, null, null, $"کاربر قدیمی #{creator.Value} پیدا نشد.");
+            if (user is null) return (null, null, null, null, $"کاربر قدیمی #{creator.Value} پیدا نشد.");
 
             var groups = new List<LegacyGroupRow>();
             if (await CanvasBackfillService.LegacyTableExistsAsync(conn, "Groups", ct))
@@ -388,12 +413,15 @@ ORDER BY {(sPriority ? "s.Priority, " : "")}s.Id", conn);
 
             process.GroupCount = groups.Count;
             process.StepsCount = groups.Sum(g => g.Steps.Count);
-            return (user, process, groups, null);
+
+            var sources = await ReadReferencedSourcesAsync(conn, taskId, ct);
+            process.SourceCount = sources.Count;
+            return (user, process, groups, sources, null);
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Legacy process details failed");
-            return (null, null, null, ex.Message);
+            return (null, null, null, null, ex.Message);
         }
     }
 
@@ -778,6 +806,15 @@ FROM Users WHERE Id=@id", conn);
             }
         }
 
+        // Task-level links (old TaskDataSources): a source the run could pick even without a node
+        // binding it — the transfer must bring it along too.
+        if (graph["taskSourceIds"] is System.Text.Json.Nodes.JsonArray taskRefs)
+        {
+            foreach (var v in taskRefs)
+                if (v is System.Text.Json.Nodes.JsonValue tv && tv.TryGetValue<int>(out var tid) && tid > 0)
+                    referenced.Add(tid);
+        }
+
         if (referenced.Count == 0) return result;
 
         var metas = new List<(int LegacyId, SourceMeta Meta)>();
@@ -871,6 +908,19 @@ FROM Users WHERE Id=@id", conn);
                         if (c is System.Text.Json.Nodes.JsonObject co) Remap(co);
                 }
             }
+        }
+
+        // Task-level links either move to the new ids or disappear when the source could not load.
+        if (graph["taskSourceIds"] is System.Text.Json.Nodes.JsonArray taskRefs2)
+        {
+            var kept = new System.Text.Json.Nodes.JsonArray();
+            foreach (var v in taskRefs2.ToList())
+            {
+                if (v is System.Text.Json.Nodes.JsonValue tv2 && tv2.TryGetValue<int>(out var oldTaskId)
+                    && byLegacy.TryGetValue(oldTaskId, out var mappedTask))
+                    kept.Add(mappedTask.Id);
+            }
+            graph["taskSourceIds"] = kept;
         }
 
         // Embed the source summaries the editor renders on the canvas and in the process panel.
@@ -1064,6 +1114,150 @@ FROM Users WHERE Id=@id", conn);
             MergeNote = mergeNote,
             BlobWarning = blobWarning
         };
+    }
+
+    private static class SourceRefKind
+    {
+        public const string Group = "group";
+        public const string Action = "action";
+        public const string Selector = "selector";
+        public const string Task = "task";
+    }
+
+    /// <summary>
+    /// Which legacy sources each task references — exactly the four kinds the transfer brings along:
+    /// a group's DataSourceId, an action's SaveSourceId (SaveContent/InsertContent/read actions),
+    /// a selector's ElementSourceId (dynamic selectors read their value there) and the task-level
+    /// TaskDataSources links (the old run dialog could pick such a source).
+    /// </summary>
+    private async Task<Dictionary<int, Dictionary<int, HashSet<string>>>> LoadTaskSourceRefsAsync(
+        SqlConnection conn, IReadOnlyList<int> taskIds, CancellationToken ct)
+    {
+        var result = new Dictionary<int, Dictionary<int, HashSet<string>>>();
+        var packed = string.Join(",", taskIds.Where(x => x > 0).Distinct());
+        if (packed.Length == 0) return result;
+
+        void Add(int taskId, object sourceId, string kind)
+        {
+            var sid = sourceId is null || sourceId is DBNull ? 0 : Convert.ToInt32(sourceId);
+            if (sid <= 0) return;
+            if (!result.TryGetValue(taskId, out var bySource))
+                result[taskId] = bySource = new Dictionary<int, HashSet<string>>();
+            if (!bySource.TryGetValue(sid, out var kinds))
+                bySource[sid] = kinds = new HashSet<string>(StringComparer.Ordinal);
+            kinds.Add(kind);
+        }
+
+        async Task Probe(string sql, string kind)
+        {
+            try
+            {
+                await using var cmd = new SqlCommand(sql, conn);
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+                while (await r.ReadAsync(ct))
+                    Add(r.GetInt32(0), r.GetValue(1), kind);
+            }
+            catch (Exception ex) { _log.LogDebug(ex, "source-ref probe {Kind} failed", kind); }
+        }
+
+        if (await CanvasBackfillService.LegacyTableExistsAsync(conn, "Groups", ct)
+            && await ColumnExists(conn, "Groups", "DataSourceId", ct))
+            await Probe($"SELECT DISTINCT TaskId, DataSourceId FROM Groups WHERE TaskId IN ({packed}) AND DataSourceId IS NOT NULL", SourceRefKind.Group);
+
+        if (await CanvasBackfillService.LegacyTableExistsAsync(conn, "Actions", ct)
+            && await ColumnExists(conn, "Actions", "SaveSourceId", ct))
+            await Probe($"SELECT DISTINCT g.TaskId, a.SaveSourceId FROM Groups g JOIN Steps s ON s.GroupId = g.Id JOIN Actions a ON a.Id = s.ActionId WHERE g.TaskId IN ({packed}) AND a.SaveSourceId IS NOT NULL", SourceRefKind.Action);
+
+        if (await CanvasBackfillService.LegacyTableExistsAsync(conn, "Selectors", ct)
+            && await ColumnExists(conn, "Selectors", "ElementSourceId", ct))
+            await Probe($"SELECT DISTINCT g.TaskId, sel.ElementSourceId FROM Groups g JOIN Steps s ON s.GroupId = g.Id JOIN Actions a ON a.Id = s.ActionId JOIN Selectors sel ON sel.Id = a.SelectorId WHERE g.TaskId IN ({packed}) AND sel.ElementSourceId IS NOT NULL", SourceRefKind.Selector);
+
+        if (await CanvasBackfillService.LegacyTableExistsAsync(conn, "TaskDataSources", ct))
+        {
+            var taskCol = await ColumnExists(conn, "TaskDataSources", "TaskId", ct) ? "TaskId"
+                : await ColumnExists(conn, "TaskDataSources", "TasksId", ct) ? "TasksId" : null;
+            var dsCol = await ColumnExists(conn, "TaskDataSources", "DataSourceId", ct) ? "DataSourceId"
+                : await ColumnExists(conn, "TaskDataSources", "DataSourcesId", ct) ? "DataSourcesId" : null;
+            if (taskCol is not null && dsCol is not null)
+                await Probe($"SELECT DISTINCT {taskCol}, {dsCol} FROM TaskDataSources WHERE {taskCol} IN ({packed}) AND {dsCol} IS NOT NULL", SourceRefKind.Task);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The legacy sources a task references, with reference kinds and the best size numbers
+    /// available: the stored counters when set, otherwise parsed from the serialized table when it
+    /// is not too large.
+    /// </summary>
+    private async Task<List<LegacySourceRow>> ReadReferencedSourcesAsync(
+        SqlConnection conn, int taskId, CancellationToken ct)
+    {
+        var list = new List<LegacySourceRow>();
+        var refs = await LoadTaskSourceRefsAsync(conn, new[] { taskId }, ct);
+        if (!refs.TryGetValue(taskId, out var bySource) || bySource.Count == 0) return list;
+
+        var ids = bySource.Keys.OrderBy(x => x).ToList();
+        var packed = string.Join(",", ids);
+        var meta = new Dictionary<int, (string Title, bool IsGlobal, int? Rows, int? Cols)>();
+        try
+        {
+            if (await CanvasBackfillService.LegacyTableExistsAsync(conn, "GroupDataSources", ct))
+            {
+                var hasTitle = await ColumnExists(conn, "GroupDataSources", "Title", ct);
+                var hasGlobal = await ColumnExists(conn, "GroupDataSources", "IsGlobal", ct);
+                var hasRows = await ColumnExists(conn, "GroupDataSources", "RowsCount", ct);
+                var hasCols = await ColumnExists(conn, "GroupDataSources", "ColsCount", ct);
+                await using (var cmd = new SqlCommand(
+                    $"SELECT Id, {(hasTitle ? "Title" : "CAST(NULL AS nvarchar(200))")}, {(hasGlobal ? "IsGlobal" : "CAST(0 AS bit)")}, {(hasRows ? "RowsCount" : "CAST(NULL AS int)")}, {(hasCols ? "ColsCount" : "CAST(NULL AS int)")} FROM GroupDataSources WHERE Id IN ({packed})", conn))
+                {
+                    await using var r = await cmd.ExecuteReaderAsync(ct);
+                    while (await r.ReadAsync(ct))
+                        meta[r.GetInt32(0)] = (
+                            r.IsDBNull(1) ? "" : r.GetString(1),
+                            !r.IsDBNull(2) && r.GetBoolean(2),
+                            r.IsDBNull(3) ? null : Convert.ToInt32(r.GetValue(3)),
+                            r.IsDBNull(4) ? null : Convert.ToInt32(r.GetValue(4)));
+                }
+
+                // Size fallback for sources whose counters were never written: parse the serialized
+                // table (bounded — the big 16 MB blobs are skipped and stay «—»).
+                foreach (var id in ids)
+                {
+                    if (!meta.TryGetValue(id, out var m)) continue;
+                    if (m.Rows is > 0 && m.Cols is > 0) continue;
+                    try
+                    {
+                        await using var bcmd = new SqlCommand("SELECT Source FROM GroupDataSources WHERE Id=@id", conn);
+                        bcmd.Parameters.AddWithValue("@id", id);
+                        var v = await bcmd.ExecuteScalarAsync(ct);
+                        if (v is byte[] bytes && bytes.Length is > 0 and <= 8_000_000)
+                        {
+                            var table = LegacyDataTableBlob.TryRead(bytes, out _);
+                            if (table is not null)
+                                meta[id] = (m.Title, m.IsGlobal, table.Rows.Count, table.Columns.Count);
+                        }
+                    }
+                    catch (Exception ex) { _log.LogDebug(ex, "source size probe failed {Id}", id); }
+                }
+            }
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "source meta failed"); }
+
+        foreach (var id in ids)
+        {
+            var row = new LegacySourceRow { Id = id };
+            if (meta.TryGetValue(id, out var m))
+            {
+                row.Title = m.Title;
+                row.IsGlobal = m.IsGlobal;
+                row.Rows = m.Rows;
+                row.Cols = m.Cols;
+            }
+            row.Kinds.AddRange(bySource[id].OrderBy(k => k, StringComparer.Ordinal));
+            list.Add(row);
+        }
+        return list;
     }
 
     private static async Task<bool> TableExistsAsync(SqlConnection conn, string table, CancellationToken ct)
