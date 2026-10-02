@@ -30,23 +30,28 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     private readonly object _gate = new();
     private Timer? _debounce;
     private readonly Dictionary<string, PackageState> _packages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly DeploymentFingerprintService _fingerprints;
 
     public ExtensionSyncService(
         IWebHostEnvironment env,
         IConfiguration config,
         ILogger<ExtensionSyncService> log,
         IServiceScopeFactory scopes,
-        DatabaseSetupState dbSetup)
+        DatabaseSetupState dbSetup,
+        DeploymentFingerprintService fingerprints)
     {
         _env = env;
         _config = config;
         _log = log;
         _scopes = scopes;
         _dbSetup = dbSetup;
+        _fingerprints = fingerprints;
 
         var appKey = ExtensionInstallPathHelper.ResolveAppInstanceKey(_config);
         var baseInstall = ExtensionInstallPathHelper.InstanceRoot(_config);
         MigrateLegacyInstallRoot(baseInstall, appKey);
+        MigratePreviousBrandRoot(baseInstall, appKey);
+        MigrateDefaultKeyFolder(baseInstall, appKey);
 
         _packages[RoleGlobal] = new PackageState(
             RoleGlobal,
@@ -62,7 +67,8 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Migrates legacy flat folders into morobot.soras.ir/{AppInstanceKey}/.
+    /// Migrates legacy flat folders into the instance folder
+    /// (`webautomator\{AppInstanceKey}\…`, or `webautomator\…` when no key is set).
     /// </summary>
     private void MigrateLegacyInstallRoot(string instanceRoot, string appKey)
     {
@@ -79,6 +85,8 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
             {
                 var fromFlat = Path.Combine(brandRoot, name);
                 var to = Path.Combine(instanceRoot, name);
+                // With no explicit key the root IS the instance folder, so the move is a no-op.
+                if (string.Equals(fromFlat, to, StringComparison.OrdinalIgnoreCase)) continue;
                 if (Directory.Exists(fromFlat) && !Directory.Exists(to))
                 {
                     try
@@ -121,6 +129,117 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Legacy install-root migration skipped");
+        }
+    }
+
+    /// <summary>
+    /// Move packages from the PRE-RENAME product folder into the current brand root.
+    ///
+    /// Existing installs were loaded by Chrome from `…\morobot.soras.ir\…`; after the folder was
+    /// renamed to `webautomator` that path is no longer written by sync, so the user's loaded
+    /// extension would silently stop receiving updates. Handles every layout seen in the field:
+    /// keyed (`{old}\{key}\extension-global`), flat (`{old}\extension-global`) and the old shared
+    /// `default` key. Only moved when the target is free, so nothing is ever merged or overwritten.
+    /// </summary>
+    private void MigratePreviousBrandRoot(string instanceRoot, string appKey)
+    {
+        try
+        {
+            var prevRoot = ExtensionInstallPathHelper.PreviousBrandRoot;
+            if (!Directory.Exists(prevRoot)) return;
+            Directory.CreateDirectory(instanceRoot);
+            var names = new[]
+            {
+                GlobalInstallFolder, "extension-smart-recorder",
+                "extension-recorder", "extension-player", "extension-selector"
+            };
+            foreach (var name in names)
+            {
+                var sources = new List<string>
+                {
+                    Path.Combine(prevRoot, appKey, name),
+                    Path.Combine(prevRoot, name)
+                };
+                if (!string.Equals(appKey, "default", StringComparison.OrdinalIgnoreCase))
+                    sources.Add(Path.Combine(prevRoot, "default", name));
+
+                var dst = Path.Combine(instanceRoot, name);
+                if (Directory.Exists(dst)) continue;
+                var src = sources.FirstOrDefault(Directory.Exists);
+                if (src is null) continue;
+                try
+                {
+                    Directory.Move(src, dst);
+                    _log.LogInformation("Migrated pre-rename extension {Name} → {To}", name, dst);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Could not migrate pre-rename {From} → {To}", src, dst);
+                }
+            }
+
+            // The old root only existed to hold these packages; remove it once it is empty so the
+            // path the user was told to abandon does not linger and look loadable.
+            TryRemoveEmptyDir(Path.Combine(prevRoot, appKey));
+            TryRemoveEmptyDir(prevRoot);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Pre-rename extension migration skipped");
+        }
+    }
+
+    private static void TryRemoveEmptyDir(string dir)
+    {
+        try
+        {
+            if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
+                Directory.Delete(dir);
+        }
+        catch { /* ignore */ }
+    }
+
+    /// <summary>
+    /// Fold the old `default` key folder into wherever packages live now.
+    ///
+    /// Two shapes exist in the field: installs from when the key was always materialised
+    /// (`…\webautomator\default\extension-global`) — the normal case now has no key level at all,
+    /// so those move up into the root — and installs from before the identity key (`…\default\…`)
+    /// on a deployment that HAS since set a key, which move down into the key folder. One rule,
+    /// both directions; only moved when the target is free.
+    /// </summary>
+    private void MigrateDefaultKeyFolder(string instanceRoot, string appKey)
+    {
+        try
+        {
+            var from = Path.Combine(ExtensionInstallPathHelper.BrandRoot, "default");
+            if (!Directory.Exists(from)) return;
+            Directory.CreateDirectory(instanceRoot);
+            foreach (var name in new[]
+                     {
+                         GlobalInstallFolder, "extension-smart-recorder",
+                         "extension-recorder", "extension-player", "extension-selector"
+                     })
+            {
+                var src = Path.Combine(from, name);
+                var dst = Path.Combine(instanceRoot, name);
+                if (!Directory.Exists(src) || Directory.Exists(dst)) continue;
+                try
+                {
+                    Directory.Move(src, dst);
+                    _log.LogInformation("Migrated default-key extension {Name} → {To}", name, dst);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Could not migrate default-key {From} → {To}", src, dst);
+                }
+            }
+
+            TryRemoveEmptyDir(from);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Default-key extension migration skipped");
         }
     }
 
@@ -224,6 +343,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         SyncNow("install-path");
         var global = Snapshot(RoleGlobal);
         var smart = Snapshot(RoleSmart);
+        var fp = _fingerprints.TryGet();
         // Manifest names are "<Brand> Global"; strip the role suffix to recover the brand.
         var brandName = (global.Name ?? "").Trim();
         if (brandName.EndsWith(" Global", StringComparison.OrdinalIgnoreCase))
@@ -241,10 +361,12 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
             source = global.Source,
             stamp = global.Stamp,
             version = global.Version,
+            fingerprint = fp?.Fingerprint,
+            instanceId = fp?.InstanceId,
             error = global.Error ?? smart.Error,
             appInstanceKey = AppInstanceKey,
             instanceRoot = ExtensionInstallPathHelper.InstanceRoot(_config),
-            hint = $"دو افزونه: {brandName} Global (ضبط + اجرا + سلکتور) و Smart Recorder. هر استقرار {brandName} کلید AppInstanceKey جدا دارد — روی یک PC چند دامنه/نسخه بدون تداخل.",
+            hint = $"دو افزونه: {brandName} Global (ضبط + اجرا + سلکتور) و Smart Recorder. پیوند افزونه ↔ سرور با اثر انگشت همین استقرار انجام می‌شود؛ کلید AppInstanceKey فقط وقتی لازم است که چند استقرار روی یک PC باشند.",
             branding
         };
     }
@@ -329,6 +451,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         {
             pkg.LastStamp = $"{BootId}:{contentStamp}";
             TryApplyBrandingOverlay();
+            TryWriteBindingFile(pkg);
             return new SyncResult(true, pkg.InstallPath, pkg.SourcePath, pkg.LastStamp, null);
         }
 
@@ -339,6 +462,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         _log.LogInformation("{Role} extension synced ({Reason}) → {Install} stamp={Stamp}",
             pkg.Role, reason, pkg.InstallPath, pkg.LastStamp);
         TryApplyBrandingOverlay();
+        TryWriteBindingFile(pkg);
         return new SyncResult(true, pkg.InstallPath, pkg.SourcePath, pkg.LastStamp, null);
     }
 
@@ -364,6 +488,39 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Extension branding overlay skipped");
+        }
+    }
+
+    /// <summary>
+    /// Write <c>morobot-binding.json</c> into an install folder.
+    ///
+    /// This file is the extension's half of the server binding: it carries the deployment
+    /// fingerprint the extension compares against every portal origin it meets. Without it the
+    /// extension falls back to the old "any Morobot-looking portal" behaviour; with it, an extension
+    /// loaded from THIS folder only ever answers THIS server. Written per install root (global and
+    /// smart) and exempt from the copy-tree cleanup, exactly like the branding overlay file.
+    /// </summary>
+    private void TryWriteBindingFile(PackageState pkg)
+    {
+        try
+        {
+            var fp = _fingerprints.TryGet();
+            if (fp is null || !Directory.Exists(pkg.InstallPath)) return;
+            var payload = new
+            {
+                v = 1,
+                appInstanceKey = fp.AppInstanceKey,
+                instanceId = fp.InstanceId,
+                fingerprint = fp.Fingerprint,
+                generatedAtUtc = DateTime.UtcNow.ToString("O")
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(payload,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(Path.Combine(pkg.InstallPath, "morobot-binding.json"), json);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Extension binding file skipped for {Role}", pkg.Role);
         }
     }
 
@@ -447,6 +604,7 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
         {
             var rel = Path.GetRelativePath(dest, file);
             if (rel.Equals("morobot-branding.json", StringComparison.OrdinalIgnoreCase)) continue;
+            if (rel.Equals("morobot-binding.json", StringComparison.OrdinalIgnoreCase)) continue;
             var src = Path.Combine(source, rel);
             if (!File.Exists(src))
             {

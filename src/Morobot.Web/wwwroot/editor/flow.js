@@ -338,6 +338,24 @@
   const tmpId = (kind) => `tmp-${kind}-${Date.now()}-${Math.floor(Math.random() * 999)}`;
   const stepsOf = (gid) => graph.nodes.filter((n) => isActionNode(n) && n.groupNodeId === gid);
 
+  /**
+   * Smallest/greatest value of `pick(item)` over a list, without spreading.
+   *
+   * Math.min(...list.map(...)) is the idiomatic spelling, but it passes every element as a call
+   * argument: with a large list (a big group's children, a large multi-selection) the CALL blows
+   * the JS stack with "Maximum call stack size exceeded". A loop has no such limit.
+   */
+  function minOf(list, pick) {
+    let m = Infinity;
+    for (const it of list) { const v = pick(it); if (v < m) m = v; }
+    return m;
+  }
+  function maxOf(list, pick) {
+    let m = -Infinity;
+    for (const it of list) { const v = pick(it); if (v > m) m = v; }
+    return m;
+  }
+
   const LOCAL_USER_KEY = "da_local_user";
 
   function readCookie(name) {
@@ -5020,8 +5038,8 @@
     }
 
     const ids = new Set(list.map((a) => a.id));
-    const minX = Math.min(...list.map((a) => a.x));
-    const minY = Math.min(...list.map((a) => a.y));
+    const minX = minOf(list, (a) => a.x);
+    const minY = minOf(list, (a) => a.y);
     const title = list.length === 1
       ? (String(list[0].title || "گروه").trim() || "گروه")
       : `گروه (${list.length} اقدام)`;
@@ -5791,7 +5809,7 @@
         return;
       }
       if (!extOkHint()) {
-        setStatus("افزونهٔ اجرا متصل نیست — صفحه را در Chrome رفرش کنید یا Player را Reload کنید.", "warn");
+        setStatus("افزونهٔ اجرا متصل نیست یا به این سرور تعلق ندارد — از پنل ← نصب افزونه‌ها نصب/به‌روزرسانی کنید.", "warn");
         return;
       }
       send();
@@ -6167,16 +6185,16 @@
     if (!list.length) return false;
 
     const movingIds = new Set(list.map((n) => n.id));
-    const minX = Math.min(...list.map((n) => n.x));
-    const minY = Math.min(...list.map((n) => n.y));
+    const minX = minOf(list, (n) => n.x);
+    const minY = minOf(list, (n) => n.y);
     const existingKids = groupDirectChildren(groupId).filter((k) => !movingIds.has(k.id));
     let baseX = 140;
     let baseY = 120;
     if (existingKids.length) {
-      const bottom = Math.max(...existingKids.map((k) => {
+      const bottom = maxOf(existingKids, (k) => {
         const s = sizeOf(k);
         return k.y + s.h;
-      }));
+      });
       baseY = bottom + 48;
     }
 
@@ -9504,8 +9522,20 @@
   }
 
   function extOkHint() {
-    return document.documentElement.dataset.daPlayerExtension === "1"
-      || (typeof window.daHasPlayer === "function" && window.daHasPlayer());
+    if (typeof window.daHasPlayer === "function") {
+      return window.daHasPlayer();
+    }
+    // The editor page has no gate modal, so extension-gate.js no-ops here and the fingerprint rule
+    // is applied locally: a marked bundle must name THIS server's identity. A marked bundle without
+    // one is an older/foreign build — running on it would execute against the wrong server.
+    const d = document.documentElement.dataset;
+    const marked = d.daPlayerExtension === "1" || d.daExtension === "1" || d.daRecorderExtension === "1";
+    if (!marked) return false;
+    const meta = document.querySelector('meta[name="da-server-fingerprint"]');
+    const expected = meta ? String(meta.getAttribute("content") || "").trim() : "";
+    if (!expected) return true;   // server predates fingerprints: nothing to compare against
+    const actual = String(d.daExtensionFingerprint || "").trim();
+    return !!actual && actual === expected;
   }
 
   function onNodeDown(ev, n, isPort, edgeHint) {

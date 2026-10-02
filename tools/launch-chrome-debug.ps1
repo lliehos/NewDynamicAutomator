@@ -10,7 +10,7 @@ $chrome = @(
   'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-$base = Join-Path $env:LOCALAPPDATA 'morobot.soras.ir'
+$base = Join-Path $env:LOCALAPPDATA 'webautomator'
 $roles = @('extension-recorder','extension-player','extension-selector','extension-smart-recorder')
 $exts = foreach ($r in $roles) {
   $p = Join-Path $base $r

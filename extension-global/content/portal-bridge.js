@@ -166,7 +166,7 @@
     }
   }
 
-  function mark() {
+  function mark(fingerprint) {
     try {
       const version = chrome.runtime.getManifest().version;
       document.documentElement.dataset.daRecorderExtension = "1";
@@ -175,6 +175,12 @@
       document.documentElement.dataset.daPlayerVersion = version;
       document.documentElement.dataset.daSelectorExtension = "1";
       document.documentElement.dataset.daSelectorVersion = version;
+      // The identity this bundle was built for: the panel compares it with its own server
+      // fingerprint, so "connected" always means "THIS server's extension", never just "some
+      // Morobot extension is installed". Legacy bundles (no binding) leave it unset.
+      if (fingerprint) {
+        document.documentElement.dataset.daExtensionFingerprint = String(fingerprint);
+      }
       window.dispatchEvent(new CustomEvent("da-extension-ready", {
         detail: { version, role: "global" }
       }));
@@ -193,36 +199,39 @@
       ? "en"
       : "fa";
     /*
-     * This write is what made two servers interfere.
+     * Base adoption is decided by the WORKER, not here.
      *
-     * `portalBase` is one key in shared extension storage, so every portal page load repointed the
-     * whole extension at itself: opening the local portal while a recording ran against the remote
-     * one silently moved the running session's requests to localhost (and the reverse). A recording
-     * pinned to its own portal by `DaSessionScope.bindSession` was still overridden here on the next
-     * page load.
-     *
-     * A session in progress therefore must not be repointed. The base is only updated when nothing
-     * is recording or playing, and the session's own binding takes precedence in the background
-     * regardless — this just stops the shared value from being rewritten out from under it.
+     * `portalBase` is one shared key, so every portal page load used to repoint the whole extension
+     * at itself — opening the local portal while a recording ran against the remote one silently
+     * moved the running session's requests to localhost (and the reverse). `confirmPortalOrigin`
+     * now answers with the deployment verdict from the server fingerprint: a foreign portal is
+     * refused (and gets `daExtensionForeign` so the panel can say "this extension belongs to
+     * another server"), a matching one is adopted unless a session is in progress, and that
+     * in-session rule lives with the decision, in the worker.
      */
-    chrome.storage.local.get(["recording", "playing"]).then((st) => {
-      const inSession = !!(st && (st.recording || st.playing));
-      const patch = {
-        localUser: user,
-        extensionRole: "global",
-        uiCulture: culture
-      };
-      if (!inSession) {
-        patch.portalBase = origin;
-        patch.apiBase = origin;
+    chrome.storage.local.set({ localUser: user, extensionRole: "global", uiCulture: culture }).catch(() => {});
+
+    (async () => {
+      let verdict = null;
+      try {
+        verdict = await chrome.runtime.sendMessage({ type: "confirmPortalOrigin", origin: origin });
+      } catch { verdict = null; }
+      if (verdict && verdict.foreign) {
+        try { document.documentElement.dataset.daExtensionForeign = "1"; } catch { /* ignore */ }
+        return;
       }
-      chrome.storage.local.set(patch);
-      // The session sync runs after the write: it reads the same storage to work out which portal it
-      // is talking to, so firing it first would have it resolve against the previous value.
+      // Not verifiable: legacy servers (no endpoint) still mark; a bound server that did not answer
+      // is left unmarked rather than claimed — a claim that turns out wrong is worse than a warning.
+      if (verdict && verdict.match === null && verdict.legacy !== true) return;
+      mark(verdict?.bindingFingerprint || null);
+      pushTenantBranding();
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", pushTenantBranding);
+      }
+      pullFromExtension();
+      pushPageTasksToExtension();
       chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
-    }).catch(() => {
-      chrome.runtime.sendMessage({ type: "syncPortalSession" }).catch(() => {});
-    });
+    })().catch(() => { /* a handshake failure must never break the portal page */ });
   } catch {
     /* ignore */
   }
@@ -341,12 +350,7 @@
     } catch { /* ignore */ }
   }
 
-  mark();
-  pushTenantBranding();
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", pushTenantBranding);
-  }
-  pullFromExtension();
-  pushPageTasksToExtension();
+  // mark()/pull/push moved into the fingerprint handshake above: a foreign portal must not be
+  // marked as connected, and this extension must not import its tasks.
   }
 })();

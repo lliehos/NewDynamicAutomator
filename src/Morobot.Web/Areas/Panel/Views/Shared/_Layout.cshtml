@@ -1,3 +1,4 @@
+@inject Morobot.Web.Services.DeploymentFingerprintService Fingerprints
 @{
   var culture = L.Culture;
   var dir = L.Dir;
@@ -31,6 +32,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
+  @* This deployment's identity: the extension compares it with the fingerprint it was built for,
+     so "connected" means THIS server's bundle — not merely "some Morobot extension is installed". *@
+  <meta name="da-server-fingerprint" content="@(Fingerprints.TryGet()?.Fingerprint)" />
   <title>@brandHead.ComposeTitle(pageTitle, L["brand.tagline"])</title>
   <partial name="_BrandHead" model="brandHead" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -67,6 +71,7 @@
     <div class="da-ext-card">
       <h2 id="da-ext-title">@L["panel.extModalTitle"]</h2>
       <p id="da-ext-desc">@L["panel.extModalDesc"]</p>
+      <div class="da-ext-versions" id="da-ext-versions" hidden></div>
       @{
         /*
          * Same two modes as the install page, and for the same reason: the extension folder exists on

@@ -1,3 +1,4 @@
+@inject Morobot.Web.Services.DeploymentFingerprintService Fingerprints
 @{
   Layout = null;
   var culture = L.Culture;
@@ -15,6 +16,7 @@
   <meta name="theme-color" content="#0d9488" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="application-name" content="@brandHead.AppName" />
+  <meta name="da-server-fingerprint" content="@(Fingerprints.TryGet()?.Fingerprint)" />
   <title>@L["editor.title"] — @brandHead.AppName</title>
   <partial name="_BrandHead" model="brandHead" />
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />

@@ -32,6 +32,7 @@ builder.Services.AddScoped<ILocaleService, LocaleService>();
 builder.Services.AddScoped<BrandingCookieService>();
 builder.Services.AddScoped<TenantBrandingViewService>();
 builder.Services.AddScoped<ExtensionBrandingOverlay>();
+builder.Services.AddSingleton<Morobot.Web.Services.DeploymentFingerprintService>();
 builder.Services.AddSingleton<SetupGuideService>();
 builder.Services.AddControllersWithViews(o =>
     {

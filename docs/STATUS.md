@@ -13,7 +13,8 @@
 - **پروفایل اجباری:** نام/فامیل/ایمیل/موبایل قبل از استفاده پنل؛ ناو نمایش display name
 - **کاتالوگ زنده:** نوتیف به مالک/share؛ ادمین با `JoinAdminCatalog` همهٔ `taskChanged` / `sourceChanged` / `playState` را می‌بیند (نوع تغییر + چشمک اجرا)
 - **ادمین منابع:** مشاهده دیتا + دانلود اکسل از `/Admin/Sources`
-- **افزونه‌ها:** `extension-global` + `extension-smart-recorder`؛ مسیر: `%LocalAppData%\morobot.soras.ir\{AppInstanceKey}\`
+- **افزونه‌ها:** `extension-global` + `extension-smart-recorder`؛ مسیر: `%LocalAppData%\webautomator\extension-*`
+- **پیوند افزونه↔سرور (۲.۵.۰):** اثر انگشت سرور (`/extension/fingerprint`) + `morobot-binding.json`؛ هر افزونه فقط با پنل خودش کار می‌کند.
 - **افزونهٔ گلوبال (۲.۳.۹):** رکوردر دو دکمهٔ ذخیره دارد — فلاپی = «ذخیره و ادامه»، چرخ‌دنده = «ذخیره و پایان ضبط»
 - **تداخل چند-سروری (اصلاح‌شده):** سرور در خود جلسه قفل می‌شود (`smartPortalBase` / `recordPortalBase`).
   قبلاً `portalBase` یک کلید سراسری بود و لوکال و سرور مسیر هم را بازنویسی می‌کردند →

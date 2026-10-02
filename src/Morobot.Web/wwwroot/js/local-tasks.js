@@ -2071,8 +2071,10 @@ function dataSourceSafeFileName(ds) {
       }
       ev.preventDefault();
       ev.stopPropagation();
-      if (document.documentElement.dataset.daRecorderExtension !== "1"
-        && document.documentElement.dataset.daExtension !== "1") {
+      if (typeof window.daHasRecorder === "function"
+        ? !window.daHasRecorder()
+        : (document.documentElement.dataset.daRecorderExtension !== "1"
+          && document.documentElement.dataset.daExtension !== "1")) {
         return;
       }
       openRecordTargetMenu(recBtn);
@@ -2086,10 +2088,19 @@ function dataSourceSafeFileName(ds) {
     if (!document.getElementById("da-tasks-panel")) return;
     ev.preventDefault();
     ev.stopPropagation();
-    if (document.documentElement.dataset.daPlayerExtension !== "1"
-      && document.documentElement.dataset.daExtension !== "1"
-      && document.documentElement.dataset.daRecorderExtension !== "1") {
+    const playerOn = typeof window.daHasPlayer === "function"
+      ? window.daHasPlayer()
+      : (document.documentElement.dataset.daPlayerExtension === "1"
+        || document.documentElement.dataset.daExtension === "1"
+        || document.documentElement.dataset.daRecorderExtension === "1");
+    if (!playerOn) {
       return; // gate modal will open instead
+    }
+    // A connected but OUTDATED bundle is not usable: the gate modal (which names the required
+    // version) opens from the same click, so do not also open the play menu behind it.
+    if (typeof window.daExtensionVersionStale === "function"
+      && window.daExtensionVersionStale("player")) {
+      return;
     }
     openPlayTargetMenu(btn);
   }, true);

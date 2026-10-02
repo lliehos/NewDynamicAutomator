@@ -4,6 +4,16 @@ public sealed class MorobotOptions
 {
     public const string SectionName = "Morobot";
 
+    /// <summary>
+    /// The per-user folder this product keeps its data under (%LocalAppData%\{BrandFolderName}).
+    /// A neutral, product-agnostic name: the old domain-shaped folder conflated "where the brand's
+    /// website lives" with "where this deployment stores files", and read like a URL, not a path.
+    /// </summary>
+    public const string BrandFolderName = "webautomator";
+
+    /// <summary>Pre-rename folder name. MIGRATIONS ONLY — nothing may write to it any more.</summary>
+    public const string PreviousBrandFolderName = "morobot.soras.ir";
+
     /// <summary>Legacy/hosting label (Cloud | Enterprise). Does not disable licensing.</summary>
     public string DeploymentMode { get; set; } = nameof(Domain.Enums.DeploymentMode.Cloud);
 
@@ -11,16 +21,34 @@ public sealed class MorobotOptions
     public bool IsLicensingEnabled => true;
 
     /// <summary>
-    /// Unique id for this Morobot deployment (e.g. cloud-prod-a, acme-onprem).
-    /// Used to isolate extension sync folders on a machine running multiple instances.
+    /// Unique id for this deployment (e.g. cloud-prod-a, acme-onprem).
+    ///
+    /// Only needed when more than one deployment shares one machine — the product is deployed once
+    /// per server, and the deployment's identity for the extension pairing is the server host
+    /// fingerprint (the same value the licence shows). Leave it unset for the normal case: the
+    /// extension folder is then simply `webautomator\extension-global`, with no extra key level.
     /// </summary>
     public string AppInstanceKey { get; set; } = "default";
+
+    /// <summary>Informational copy of the deployment's public base URL, when configured.</summary>
+    public string? PublicBaseUrl { get; set; }
 
     public string? LicensePublicKeyPem { get; set; }
 
     public UpdateFeedOptions UpdateFeed { get; set; } = new();
 
-    public string EffectiveAppInstanceKey => SanitizeAppInstanceKey(AppInstanceKey);
+    public string EffectiveAppInstanceKey => DeriveAppInstanceKey(AppInstanceKey);
+
+    /// <summary>
+    /// The optional key this deployment uses to separate its extension folder from another
+    /// deployment's on the SAME machine. `default` means "no key": the folder is not nested.
+    /// </summary>
+    public static string DeriveAppInstanceKey(string? configured)
+        => SanitizeAppInstanceKey(configured);
+
+    /// <summary>True when no explicit key is set — the normal, one-deployment-per-server case.</summary>
+    public static bool IsDefaultAppInstanceKey(string? raw)
+        => SanitizeAppInstanceKey(raw).Equals("default", StringComparison.OrdinalIgnoreCase);
 
     public static string SanitizeAppInstanceKey(string? raw)
     {

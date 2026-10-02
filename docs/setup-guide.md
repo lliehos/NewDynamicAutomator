@@ -1,6 +1,6 @@
 # راهنمای جامع راه‌اندازی Morobot
 
-> **نسخه سند:** 1.7 · **آخرین‌به‌روزرسانی:** 2026-09-25  
+> **نسخه سند:** 1.8 · **آخرین‌به‌روزرسانی:** 2026-10-02  
 > این راهنما برای مدیران فناوری اطلاعات و مسئول استقرار سازمان تهیه شده است.
 
 ---
@@ -604,7 +604,9 @@ wwwroot/ …              ← سایر فایل‌ها
 
 مسیر پوشه افزونه روی ماشین (همگام‌سازی dev/local):
 
-`%LOCALAPPDATA%\morobot.soras.ir\{AppInstanceKey}\extension-global`
+`%LOCALAPPDATA%\webautomator\extension-global`
+
+(اگر برای چند استقرار روی یک PC مقدار `AppInstanceKey` ست شده باشد: `%LOCALAPPDATA%\webautomator\{AppInstanceKey}\extension-global`)
 
 هر Morobot با **دامنه + AppInstanceKey** یکتا باشد تا روی یک PC تداخل نداشته باشد.
 

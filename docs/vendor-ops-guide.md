@@ -1,6 +1,6 @@
 # راهنمای عملیات داخلی Morobot (Vendor / پشتیبانی / مالک)
 
-> **نسخه:** 1.1.0 · **تاریخ:** 2026-09-25  
+> **نسخه:** 1.1.1 · **تاریخ:** 2026-09-25  
 > مخاطب: کارمند جدید پشتیبانی، DevOps، یا مالک محصول — بدون نیاز به توضیح شفاهی.
 
 ---
@@ -310,8 +310,8 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 مسیر همگام‌سازی افزونه روی ماشینی که **Morobot.Web** اجرا می‌شود (یا dev محلی):
 
 ```
-%LOCALAPPDATA%\morobot.soras.ir\{AppInstanceKey}\extension-global
-%LOCALAPPDATA%\morobot.soras.ir\{AppInstanceKey}\extension-smart-recorder
+%LOCALAPPDATA%\webautomator\extension-global
+%LOCALAPPDATA%\webautomator\extension-smart-recorder
 ```
 
 **چرا لازم است؟** یک کارمند ممکن است همزمان:

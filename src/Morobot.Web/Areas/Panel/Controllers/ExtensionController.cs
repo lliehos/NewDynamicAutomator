@@ -1,6 +1,10 @@
 using System.IO.Compression;
+using System.Text;
+using Morobot.Infrastructure.Options;
+using Morobot.Infrastructure.Services;
 using Morobot.Web.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Morobot.Web.Areas.Panel.Controllers;
@@ -12,12 +16,20 @@ public class ExtensionController : Controller
     private readonly IWebHostEnvironment _env;
     private readonly ExtensionSyncService _sync;
     private readonly TenantBrandingViewService _branding;
+    private readonly DeploymentFingerprintService _fingerprints;
+    private readonly IDataProtector _tickets;
 
-    public ExtensionController(IWebHostEnvironment env, ExtensionSyncService sync, TenantBrandingViewService branding)
+    public ExtensionController(IWebHostEnvironment env, ExtensionSyncService sync, TenantBrandingViewService branding, DeploymentFingerprintService fingerprints, IDataProtectionProvider protection)
     {
         _env = env;
         _sync = sync;
         _branding = branding;
+        _fingerprints = fingerprints;
+        // Purpose-scoped protector for short-lived "install tickets" — the token a download script
+        // uses so it can fetch the package without a browser cookie. Data Protection is already
+        // registered (TempData/cookies use it); the purpose string keeps these tokens from being
+        // interchangeable with anything else it protects.
+        _tickets = protection.CreateProtector("Morobot.ExtensionInstallTicket.v1");
     }
 
     [AllowAnonymous]
@@ -73,6 +85,26 @@ public class ExtensionController : Controller
     }
 
     [AllowAnonymous]
+    [HttpGet("/extension/fingerprint")]
+    public IActionResult Fingerprint()
+    {
+        // The extension's identity probe: it fetches this from a candidate portal and only adopts
+        // that portal when the fingerprint matches the one written into its install folder. No
+        // caching anywhere — a stale answer is exactly the confusion this endpoint removes.
+        Response.Headers.CacheControl = "no-store, max-age=0";
+        var fp = _fingerprints.TryGet();
+        if (fp is null)
+            return Json(new { ok = false });
+        return Json(new
+        {
+            ok = true,
+            fingerprint = fp.Fingerprint,
+            instanceId = fp.InstanceId,
+            appInstanceKey = fp.AppInstanceKey
+        });
+    }
+
+    [AllowAnonymous]
     [HttpGet("/extension/branding")]
     public async Task<IActionResult> BrandingJson(CancellationToken ct)
     {
@@ -97,10 +129,22 @@ public class ExtensionController : Controller
         return Json(_sync.InstallPathsPayload());
     }
 
+    /// <summary>
+    /// Download the package as a zip.
+    ///
+    /// Two ways in, because there are two callers. A signed-in user clicking the button sends the
+    /// auth cookie; the install script running on the user's own machine has no cookie, so it
+    /// carries a short-lived install ticket minted by the (authenticated) install page instead.
+    /// Without one of the two this would be an open file server for every anonymous visitor.
+    /// </summary>
+    [AllowAnonymous]
     [HttpGet("/extension/download/{role?}")]
-    public IActionResult Download(string? role = null)
+    public IActionResult Download(string? role = null, string? ticket = null)
     {
         role ??= ExtensionSyncService.RoleRecorder;
+        if (User.Identity?.IsAuthenticated != true && !IsInstallTicketValid(role, ticket))
+            return Unauthorized("برای دانلود بسته وارد شوید یا از اسکریپت نصب استفاده کنید.");
+
         _sync.SyncRole(role, "download");
         var install = _sync.InstallPathFor(role);
         var source = Directory.Exists(install) ? install : _sync.SourcePathFor(role);
@@ -125,6 +169,116 @@ public class ExtensionController : Controller
         return File(ms, "application/zip", name);
     }
 
+    /// <summary>
+    /// The auto-installer script: downloads the package and extracts it into the conventional
+    /// folder on the USER's machine (`%LOCALAPPDATA%\webautomator\…`), then opens it.
+    ///
+    /// This exists because the server physically cannot do that step. In Production the browser is
+    /// on a different computer from the app, so the sync folder — perfect in the local case — is
+    /// meaningless to the reader; and no web page may write into the user's disk on its own. A
+    /// script the user runs locally (taken from this page, while signed in) is the closest a
+    /// browser-delivered install gets to "automatic": one paste, no zip handling, and the same
+    /// fixed path every time so a later update re-fills the folder Chrome already loaded.
+    ///
+    /// Ticket-gated: the request must carry a ticket minted for this role by the install page.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpGet("/extension/installer/{role}")]
+    public IActionResult Installer(string role, string? ticket = null)
+    {
+        if (!IsInstallTicketValid(role, ticket)) return Unauthorized("لینک نصب نامعتبر یا منقضی شده است — صفحهٔ نصب پرتال را دوباره باز کنید.");
+        var script = BuildInstallerScript(role, ticket!, $"{Request.Scheme}://{Request.Host}");
+        // UTF-8 WITH BOM: Windows PowerShell 5.1 reads .ps1 as ANSI unless the BOM says otherwise,
+        // and the Persian messages in the script would come out as mojibake in its console.
+        // NOTE: GetBytes() never emits the preamble — it must be prepended explicitly.
+        var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(script)).ToArray();
+        return File(bytes, "text/plain; charset=utf-8", $"install-{CanonicalRole(role)}.ps1");
+    }
+
+    private const int InstallTicketLifetimeHours = 2;
+
+    /// <summary>
+    /// Mint a ticket for one package role. The role is INSIDE the protected payload, so a ticket
+    /// handed out for Global cannot be replayed to fetch Smart (or anything else the endpoint is
+    /// ever extended to serve).
+    /// </summary>
+    private string CreateInstallTicket(string role)
+    {
+        var expiry = DateTimeOffset.UtcNow.AddHours(InstallTicketLifetimeHours).ToUnixTimeSeconds();
+        return _tickets.Protect($"{CanonicalRole(role)}|{expiry}");
+    }
+
+    private bool IsInstallTicketValid(string role, string? ticket)
+    {
+        if (string.IsNullOrWhiteSpace(ticket)) return false;
+        try
+        {
+            var parts = _tickets.Unprotect(ticket).Split('|');
+            if (parts.Length != 2) return false;
+            if (!string.Equals(parts[0], CanonicalRole(role), StringComparison.Ordinal)) return false;
+            return long.TryParse(parts[1], out var expiry) && expiry >= DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        }
+        catch
+        {
+            // Tampered or protected with a previous key ring: treat exactly like an expired one.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Roles collapse to the two packages that actually exist. recorder/player/selector are all
+    /// aliases of the single Global package (see <c>ExtensionSyncService.ResolveRole</c>), so one
+    /// ticket serves whichever alias name the caller used.
+    /// </summary>
+    private static string CanonicalRole(string? role)
+    {
+        var key = (role ?? "").Trim().ToLowerInvariant();
+        if (key is "smart" or "smart-recorder" or "smartrecorder" or "ai" or "learn") return "smart";
+        return "global";
+    }
+
+    /// <summary>
+    /// The script body. Kept as one raw string so the PowerShell is readable exactly as the user
+    /// receives it — interpolated values (base URL, ticket, paths) are inlined, everything else is
+    /// literal.
+    /// </summary>
+    private string BuildInstallerScript(string role, string ticket, string baseUrl)
+    {
+        var canonical = CanonicalRole(role);
+        var leaf = Path.GetFileName(_sync.InstallPathFor(canonical));
+        var keySegment = MorobotOptions.IsDefaultAppInstanceKey(_sync.AppInstanceKey) ? null : _sync.AppInstanceKey;
+        var target = keySegment is null
+            ? $"webautomator\\{leaf}"
+            : $"webautomator\\{keySegment}\\{leaf}";
+        var zip = canonical == "smart" ? "morobot-smart-recorder.zip" : "morobot-global.zip";
+        return $$"""
+            # ==============================================================================
+            #  نصب / به‌روزرسانی خودکار افزونه — روی همین کامپیوتر اجرا کنید
+            #  اجرا: راست‌کلیک روی فایل → Run with PowerShell  (یا در PowerShell:  .\این‌فایل.ps1 )
+            # ==============================================================================
+            $ErrorActionPreference = 'Stop'
+            $base   = '{{baseUrl}}'
+            $ticket = '{{ticket}}'
+            $target = Join-Path $env:LOCALAPPDATA '{{target}}'
+            $zip    = Join-Path $env:TEMP '{{zip}}'
+
+            Write-Host 'دریافت بستهٔ افزونه از سرور…'
+            New-Item -ItemType Directory -Force -Path $target | Out-Null
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri "$base/extension/download/{{canonical}}?ticket=$ticket" -OutFile $zip -UseBasicParsing
+
+            Write-Host 'استخراج در مسیر نصب…'
+            Expand-Archive -Path $zip -DestinationPath $target -Force
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+
+            Write-Host ''
+            Write-Host 'نصب شد:' -NoNewline; Write-Host " $target" -ForegroundColor Green
+            Write-Host 'گام بعدی: chrome://extensions → Developer mode → Load unpacked → همین پوشه را انتخاب کنید.'
+            Write-Host '(برای به‌روزرسانی در آینده، همین اسکریپت یا دستور را دوباره اجرا کنید.)'
+            Start-Process explorer.exe $target
+            """;
+    }
+
     [HttpGet]
     public IActionResult Install()
     {
@@ -140,6 +294,23 @@ public class ExtensionController : Controller
         ViewBag.SelectorVersion = ViewBag.GlobalVersion;
         ViewBag.SmartVersion = _sync.GetStamp(ExtensionSyncService.RoleSmart, syncFirst: false).Version;
         ViewBag.AppInstanceKey = _sync.AppInstanceKey;
+        // A key segment belongs in the path only when an explicit key is set; the normal
+        // one-deployment-per-server install has none, and "default" must not leak into instructions.
+        ViewBag.InstanceKeySegment = MorobotOptions.IsDefaultAppInstanceKey(_sync.AppInstanceKey)
+            ? null
+            : _sync.AppInstanceKey;
+        // The extension↔server pairing identity — the SAME host fingerprint the licence shows, so
+        // support can compare the number here with Admin → Licence (short form for readability;
+        // morobot-binding.json carries the full value).
+        ViewBag.BindingFingerprint = _fingerprints.TryGet() is { } fpInfo
+            ? ServerHostFingerprint.ShortHash(fpInfo.Fingerprint)
+            : null;
+        // For the remote case: the absolute base the reader reached us by, and a short-lived
+        // ticket per package so the copied command / downloaded script can fetch the zip without
+        // a browser cookie. Rendered only in the non-local branch of the view.
+        ViewBag.ServerBase = $"{Request.Scheme}://{Request.Host}";
+        ViewBag.InstallTicketGlobal = CreateInstallTicket("global");
+        ViewBag.InstallTicketSmart = CreateInstallTicket("smart");
         /*
          * Whether to hand out the folder path instead of a download package.
          *

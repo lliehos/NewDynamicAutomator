@@ -3,7 +3,7 @@ $listen = netstat -ano | Select-String '7201' | Select-String 'LISTENING'
 Write-Host "listen: $listen"
 
 $src = 'C:\Projects\DynamicAutomatorV3\extension-recorder'
-$dst = Join-Path $env:LOCALAPPDATA 'morobot.soras.ir\extension-recorder'
+$dst = Join-Path $env:LOCALAPPDATA 'webautomator\extension-recorder'
 New-Item -ItemType Directory -Force -Path $dst | Out-Null
 robocopy $src $dst /MIR /NFL /NDL /NJH /NJS /XD .git | Out-Null
 Write-Host 'recorder manifest:'
@@ -29,7 +29,7 @@ $chrome = @(
   'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-$base = Join-Path $env:LOCALAPPDATA 'morobot.soras.ir'
+$base = Join-Path $env:LOCALAPPDATA 'webautomator'
 $roles = @('extension-recorder','extension-player','extension-selector','extension-smart-recorder')
 $exts = @()
 foreach ($r in $roles) {

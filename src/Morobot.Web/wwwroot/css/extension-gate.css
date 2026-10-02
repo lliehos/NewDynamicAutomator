@@ -59,6 +59,20 @@
   display: inline-block;
 }
 #da-ext-modal .da-ext-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+#da-ext-modal .da-ext-versions {
+  font-size: 0.9rem;
+  color: #4b465c;
+  background: #f6f5fb;
+  border: 1px solid #e6e4f0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 0 0 12px;
+}
+#da-ext-modal .da-ext-versions.is-stale {
+  color: #8a4b12;
+  background: #fff4e5;
+  border-color: #ffd8a8;
+}
 #da-ext-modal .da-ext-hint { margin-top: 10px; font-size: 12px; color: #28c76f; min-height: 1.2em; }
 #da-ext-modal .btn-da {
   border: 0; border-radius: 8px; padding: 10px 14px; cursor: pointer; font-family: inherit;

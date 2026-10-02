@@ -471,12 +471,14 @@
     }
     if (action === "play-task") {
       ev.preventDefault();
+      if (!playerOk()) return;
       const taskId = t.getAttribute("data-task-id");
       if (!taskId) return;
       await playTask(taskId);
     }
     if (action === "play-group") {
       ev.preventDefault();
+      if (!playerOk()) return;
       const taskId = t.getAttribute("data-task-id") || document.getElementById("flow-app")?.dataset?.taskId;
       const groupNodeId = t.getAttribute("data-group-id");
       if (!taskId || !groupNodeId) return;
@@ -484,6 +486,7 @@
     }
     if (action === "play-step") {
       ev.preventDefault();
+      if (!playerOk()) return;
       const taskId = t.getAttribute("data-task-id") || document.getElementById("flow-app")?.dataset?.taskId;
       const stepNodeId = t.getAttribute("data-step-id");
       if (!taskId || !stepNodeId) return;
@@ -491,14 +494,17 @@
     }
     if (action === "stop-play") {
       ev.preventDefault();
+      if (!playerOk()) return;
       await stopPlay();
     }
     if (action === "pause-play") {
       ev.preventDefault();
+      if (!playerOk()) return;
       await pausePlayFromPortal();
     }
     if (action === "resume-play") {
       ev.preventDefault();
+      if (!playerOk()) return;
       await resumePlayFromPortal();
     }
     if (action === "copy-record-memory") {
@@ -544,6 +550,10 @@
   window.addEventListener("message", async (ev) => {    if (ev.source !== window) return;
     const d = ev.data;
     if (!d || d.source !== "da-editor") return;
+    // Only the extension that OWNS this page (fingerprint handshake succeeded) answers the editor.
+    // With a second Morobot extension installed, both content scripts see this message; without
+    // the guard both would start a run against their own server.
+    if (!playerOk()) return;
     if (d.type === "play") {
       if (!d.taskId) return;
       await playTask(d.taskId, {
@@ -592,6 +602,7 @@
   });
 
   window.addEventListener("da-start-record", async (ev) => {
+    if (!recorderOk()) return;
     const d = ev.detail || {};
     if (!d.taskId) return;
     await recordTask(d.taskId, {
@@ -604,6 +615,7 @@
   });
 
   window.addEventListener("da-play", async (ev) => {
+    if (!playerOk()) return;
     const d = ev.detail || {};
     if (!d.taskId) return;
     // Skip if this looks like a tab-targeted play without tabId (handled via postMessage).
@@ -621,6 +633,7 @@
   });
 
   window.addEventListener("da-list-open-tabs", async () => {
+    if (!playerOk()) return;
     const res = await listOpenTabsForEditor();
     try {
       window.dispatchEvent(new CustomEvent("da-open-tabs", { detail: res }));
@@ -629,14 +642,17 @@
   });
 
   window.addEventListener("da-stop-play", async () => {
+    if (!playerOk()) return;
     await stopPlay();
   });
 
   window.addEventListener("da-pause-play", async () => {
+    if (!playerOk()) return;
     await pausePlayFromPortal();
   });
 
   window.addEventListener("da-resume-play", async () => {
+    if (!playerOk()) return;
     await resumePlayFromPortal();
   });
 

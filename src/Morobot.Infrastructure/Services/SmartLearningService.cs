@@ -23,29 +23,39 @@ public sealed class SmartLearningService
     public SmartLearningService(IOptions<MorobotOptions> options)
     {
         var key = options.Value.EffectiveAppInstanceKey;
-        _root = Path.Combine(
+        var brandRoot = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "morobot.soras.ir",
-            key,
-            "smart-learning");
+            MorobotOptions.BrandFolderName);
+        _root = MorobotOptions.IsDefaultAppInstanceKey(key)
+            ? Path.Combine(brandRoot, "smart-learning")
+            : Path.Combine(brandRoot, key, "smart-learning");
         Directory.CreateDirectory(_root);
-        MigrateLegacySmartRoot(_root);
+        MigrateLegacySmartRoot(_root, key);
     }
 
-    private static void MigrateLegacySmartRoot(string newRoot)
+    private static void MigrateLegacySmartRoot(string newRoot, string appKey)
     {
         try
         {
-            var legacy = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "DynamicAutomator",
-                "smart-learning");
-            if (!Directory.Exists(legacy)) return;
-            foreach (var file in Directory.EnumerateFiles(legacy, "*.json"))
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var sources = new[]
             {
-                var dest = Path.Combine(newRoot, Path.GetFileName(file));
-                if (File.Exists(dest)) continue;
-                File.Copy(file, dest, overwrite: false);
+                Path.Combine(localAppData, "DynamicAutomator", "smart-learning"),
+                // Pre-rename product folder: copy sessions forward once, so a rename never looks
+                // like data loss (extension folders are migrated by ExtensionSyncService).
+                Path.Combine(localAppData, MorobotOptions.PreviousBrandFolderName, appKey, "smart-learning"),
+                // The new brand folder's old keyed level, before the key was dropped.
+                Path.Combine(localAppData, MorobotOptions.BrandFolderName, "default", "smart-learning")
+            };
+            foreach (var legacy in sources)
+            {
+                if (!Directory.Exists(legacy)) continue;
+                foreach (var file in Directory.EnumerateFiles(legacy, "*.json"))
+                {
+                    var dest = Path.Combine(newRoot, Path.GetFileName(file));
+                    if (File.Exists(dest)) continue;
+                    File.Copy(file, dest, overwrite: false);
+                }
             }
         }
         catch

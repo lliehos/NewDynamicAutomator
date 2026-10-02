@@ -1,6 +1,7 @@
 @{
     ViewData["Title"] = "نصب افزونه‌ها";
     var appKey = ViewBag.AppInstanceKey as string ?? "default";
+    var keySegment = ViewBag.InstanceKeySegment as string;
     var globalVer = ViewBag.GlobalVersion as string ?? ViewBag.RecorderVersion as string ?? ViewBag.Version as string ?? "";
     var smartVer = ViewBag.SmartVersion as string ?? "";
     var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
@@ -31,13 +32,40 @@
      * sequences. `$env:LOCALAPPDATA` is intentionally left for PowerShell to expand, so the user's own
      * profile path is used instead of a guessed one.
      */
-    var suggestedPathCommand = string.Join("; ", new[]
+    var commandParts = new System.Collections.Generic.List<string>
     {
-        "$p = Join-Path $env:LOCALAPPDATA 'morobot.soras.ir'",
-        "$p = Join-Path $p '" + appKey + "'",
-        "New-Item -ItemType Directory -Force -Path $p | Out-Null",
-        "explorer $p"
-    });
+        "$p = Join-Path $env:LOCALAPPDATA 'webautomator'"
+    };
+    if (!string.IsNullOrWhiteSpace(keySegment))
+    {
+        commandParts.Add("$p = Join-Path $p '" + keySegment + "'");
+    }
+    commandParts.Add("New-Item -ItemType Directory -Force -Path $p | Out-Null");
+    commandParts.Add("explorer $p");
+    var suggestedPathCommand = string.Join("; ", commandParts);
+
+    /*
+     * The remote case: the folder is on the USER's machine, so the only thing this server can do is
+     * hand over the package. Two ways to do that, and the faster one is a command that does the
+     * download AND the extraction locally: paste once, and the files land in the same fixed folder
+     * every time (`%LOCALAPPDATA%\webautomator\…`), ready for "Load unpacked" — no zip juggling, and
+     * a later update is the same command again. The zip stays as the manual fallback.
+     *
+     * The ticket in the links is minted by the controller (they expire; reload the page for new
+     * ones), because the script on the user's machine has no browser session. Building the command
+     * here rather than in the markup is deliberate: it contains backslashes, quotes and `$` tokens.
+     */
+    var serverBase = ViewBag.ServerBase as string ?? "";
+    var ticketGlobal = ViewBag.InstallTicketGlobal as string ?? "";
+    var ticketSmart = ViewBag.InstallTicketSmart as string ?? "";
+    var subGlobal = string.IsNullOrWhiteSpace(keySegment) ? "webautomator\\extension-global" : $"webautomator\\{keySegment}\\extension-global";
+    var subSmart = string.IsNullOrWhiteSpace(keySegment) ? "webautomator\\extension-smart-recorder" : $"webautomator\\{keySegment}\\extension-smart-recorder";
+    var autoGlobal = $"$ErrorActionPreference='Stop'; $d=Join-Path $env:LOCALAPPDATA '{subGlobal}'; New-Item -ItemType Directory -Force -Path $d|Out-Null; Invoke-WebRequest '{serverBase}/extension/download/global?ticket={ticketGlobal}' -OutFile \"$env:TEMP\\morobot-global.zip\" -UseBasicParsing; Expand-Archive \"$env:TEMP\\morobot-global.zip\" $d -Force; explorer $d";
+    var autoSmart = $"$ErrorActionPreference='Stop'; $d=Join-Path $env:LOCALAPPDATA '{subSmart}'; New-Item -ItemType Directory -Force -Path $d|Out-Null; Invoke-WebRequest '{serverBase}/extension/download/smart?ticket={ticketSmart}' -OutFile \"$env:TEMP\\morobot-smart-recorder.zip\" -UseBasicParsing; Expand-Archive \"$env:TEMP\\morobot-smart-recorder.zip\" $d -Force; explorer $d";
+    var showAutoInstall = !localPathReady && !string.IsNullOrWhiteSpace(serverBase) && !string.IsNullOrWhiteSpace(ticketGlobal);
+    var localFolderHint = string.IsNullOrWhiteSpace(keySegment)
+        ? "%LOCALAPPDATA%\\webautomator"
+        : $"%LOCALAPPDATA%\\webautomator\\{keySegment}";
 }
 <div class="card mb-4">
   <div class="card-body">
@@ -60,9 +88,38 @@
       <div class="alert alert-warning mb-3 small">
         <strong>این افزونه‌ها روی کامپیوتر خودتان نصب می‌شوند، نه روی سرور.</strong>
         پس مسیر سرور نمایش داده نمی‌شود — آن پوشه روی کامپیوتر شما وجود ندارد.
-        بستهٔ زیر را دانلود و در یک پوشهٔ <strong>ثابت</strong> باز کنید (پوشه را بعداً جابجا یا پاک نکنید،
-        وگرنه کروم افزونه را از دست می‌دهد).
+        سریع‌ترین راه، <strong>نصب خودکار</strong> پایین است (دانلود و استخراج خودکار در پوشهٔ درست)؛
+        اگر ترجیح می‌دهید دستی انجام دهید، بستهٔ zip را دانلود و در یک پوشهٔ <strong>ثابت</strong> باز کنید
+        (پوشه را بعداً جابجا یا پاک نکنید، وگرنه کروم افزونه را از دست می‌دهد).
       </div>
+
+      if (showAutoInstall)
+      {
+        <div class="border rounded p-3 mb-3" style="border-right: 3px solid #0d9488 !important;">
+          <div class="fw-semibold mb-1">⚡ نصب خودکار در پوشهٔ کاربر (بدون کار دستی با zip)</div>
+          <p class="small text-muted mb-2">
+            دستور زیر را در <strong>PowerShell</strong> روی همین کامپیوتر اجرا کنید: بسته از همین سرور دانلود و
+            مستقیم در مسیر استاندارد زیر استخراج می‌شود و پوشه باز می‌شود — بعد فقط Load unpacked کنید.
+            برای <strong>به‌روزرسانی</strong> در آینده هم کافی است همین دستور (یا اسکریپت) را دوباره اجرا کنید.
+          </p>
+          <div class="fw-semibold small mb-1">① @globalExtName</div>
+          <code id="da-ext-auto-global" class="user-select-all d-block small mb-2">@autoGlobal</code>
+          <div class="d-flex gap-2 flex-wrap mb-3">
+            <button type="button" class="btn btn-sm btn-primary" data-copy="#da-ext-auto-global">کپی دستور Global</button>
+            <a class="btn btn-sm btn-outline-primary" href="/extension/installer/global?ticket=@ticketGlobal">⬇ اسکریپت نصب Global (.ps1)</a>
+          </div>
+          <div class="fw-semibold small mb-1">② @smartExtName</div>
+          <code id="da-ext-auto-smart" class="user-select-all d-block small mb-2">@autoSmart</code>
+          <div class="d-flex gap-2 flex-wrap">
+            <button type="button" class="btn btn-sm btn-secondary" data-copy="#da-ext-auto-smart">کپی دستور Smart</button>
+            <a class="btn btn-sm btn-outline-secondary" href="/extension/installer/smart?ticket=@ticketSmart">⬇ اسکریپت نصب Smart (.ps1)</a>
+          </div>
+          <p class="small text-muted mt-2 mb-0">
+            اجرای فایل .ps1: راست‌کلیک روی فایل دانلودشده → <strong>Run with PowerShell</strong>.
+            لینک‌های بالا تا چند ساعت معتبرند؛ اگر منقضی شد همین صفحه را رفرش کنید.
+          </p>
+        </div>
+      }
     }
 
     <div class="row g-3">
@@ -72,7 +129,11 @@
           <p class="small text-muted">ضبط فرآیند، اجرا (Play) و کپی سلکتور — یک افزونه با آیکون برند.</p>
           @if (!string.IsNullOrEmpty(globalVer))
           {
-            <div class="small text-muted mb-2">نسخه: <code>@globalVer</code></div>
+            <div class="small text-muted mb-2">نسخهٔ موردنیاز: <code>@globalVer</code></div>
+          }
+          @if (!string.IsNullOrEmpty(ViewBag.BindingFingerprint as string))
+          {
+            <div class="small text-muted mb-2">اثر انگشت پیوند افزونه: <code>@ViewBag.BindingFingerprint</code></div>
           }
           @if (localPathReady)
           {
@@ -92,7 +153,7 @@
           <p class="small text-muted">هوشمندسازی فرآیند — جدا از Global.</p>
           @if (!string.IsNullOrEmpty(smartVer))
           {
-            <div class="small text-muted mb-2">نسخه: <code>@smartVer</code></div>
+            <div class="small text-muted mb-2">نسخهٔ موردنیاز: <code>@smartVer</code></div>
           }
           @if (localPathReady)
           {
@@ -121,8 +182,18 @@
       }
       else
       {
-        <li class="mb-2">بستهٔ بالا را دانلود و در یک پوشهٔ ثابت <strong>استخراج (Extract)</strong> کنید — مثلاً
-          <code>C:\@brandHead.AppName-ext\global</code>. پوشه را بعداً جابجا نکنید.</li>
+        if (showAutoInstall)
+        {
+          <li class="mb-2"><strong>روش سریع:</strong> دستور «نصب خودکار» بالا را در PowerShell اجرا کنید — دانلود و
+            استخراج خودکار در <code>@localFolderHint</code> انجام می‌شود و پوشه باز می‌شود.</li>
+          <li class="mb-2">یا <strong>روش دستی:</strong> بستهٔ zip پایین را دانلود و در یک پوشهٔ ثابت <strong>Extract</strong> کنید — مثلاً
+            <code>C:\@brandHead.AppName-ext\global</code>. پوشه را بعداً جابجا نکنید.</li>
+        }
+        else
+        {
+          <li class="mb-2">بستهٔ بالا را دانلود و در یک پوشهٔ ثابت <strong>استخراج (Extract)</strong> کنید — مثلاً
+            <code>C:\@brandHead.AppName-ext\global</code>. پوشه را بعداً جابجا نکنید.</li>
+        }
         <li class="mb-2"><code>chrome://extensions</code> یا <code>edge://extensions</code> را باز کنید.</li>
         <li class="mb-2"><strong>Developer mode</strong> را روشن کنید.</li>
         <li class="mb-2"><strong>Load unpacked</strong> → همان پوشه‌ای که استخراج کردید را انتخاب کنید.</li>

@@ -4,6 +4,132 @@ importScripts("lib/branding.js", "lib/session-scope.js", "lib/alert-dialog.js", 
 const DEFAULT_PORTAL = "https://localhost:7201";
 
 /**
+ * Server binding (\"اثر انگشت سرور\") — why this exists.
+ *
+ * One machine can carry several installations of this extension: one for the local server, one for
+ * a remote or a second tenant. Their content scripts are BOTH injected into EVERY http(s) page, so
+ * without an identity check the wrong extension answers a portal it does not belong to: it marks
+ * the page as connected and starts a run against ITS server, with the user looking at the other.
+ *
+ * The extension is bound to one deployment by `morobot-binding.json`, written into its install
+ * folder by the server that synced it, and the server proves the same identity on
+ * `/extension/fingerprint`. The fingerprint is the deployment instance id hashed with the
+ * AppInstanceKey — unique per deployment even when two of them share a machine.
+ *
+ * No binding file (an older or hand-built bundle) means the old behaviour: no fingerprint checks.
+ */
+const DEPLOYMENT_BINDING_FILE = "morobot-binding.json";
+let deploymentBinding = null;
+let deploymentBindingLoaded = false;
+let deploymentBindingPromise = null;
+
+/** Load (once) the binding written into this bundle's install folder. */
+async function ensureDeploymentBinding() {
+  if (deploymentBindingLoaded) return deploymentBinding;
+  if (deploymentBindingPromise) return deploymentBindingPromise;
+  deploymentBindingPromise = (async () => {
+    try {
+      const res = await fetch(chrome.runtime.getURL(DEPLOYMENT_BINDING_FILE), { cache: "no-store" });
+      if (res.ok) {
+        const doc = await res.json();
+        if (doc && doc.v === 1 && typeof doc.fingerprint === "string" && doc.fingerprint) {
+          deploymentBinding = {
+            appInstanceKey: String(doc.appInstanceKey || ""),
+            instanceId: String(doc.instanceId || ""),
+            fingerprint: doc.fingerprint
+          };
+          await chrome.storage.local.set({ extensionBinding: deploymentBinding }).catch(() => {});
+        }
+      }
+    } catch { /* no binding file: legacy behaviour */ }
+    deploymentBindingLoaded = true;
+    return deploymentBinding;
+  })();
+  return deploymentBindingPromise;
+}
+ensureDeploymentBinding();
+
+function normalizeOrigin(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (globalThis.DaSessionScope && DaSessionScope.normalizeBase) {
+    const viaScope = DaSessionScope.normalizeBase(raw);
+    if (viaScope) return viaScope;
+  }
+  try { return new URL(raw).origin; } catch { return ""; }
+}
+
+/**
+ * Ask one origin what deployment it is.
+ * Returns { fingerprint } on success, { missing: true } when the endpoint is absent (an older
+ * server), or { unknown: true } when the origin could not be asked at all.
+ */
+async function fetchOriginFingerprint(origin) {
+  const base = normalizeOrigin(origin);
+  if (!base) return { unknown: true };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const res = await fetch(`${base}/extension/fingerprint`, { cache: "no-store", signal: ctrl.signal });
+    if (res.status === 404) return { missing: true };
+    if (!res.ok) return { unknown: true };
+    const doc = await res.json();
+    return doc && doc.fingerprint ? { fingerprint: String(doc.fingerprint) } : { unknown: true };
+  } catch {
+    return { unknown: true };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Per-origin verification results, so the hot request path stays a map lookup. */
+const originBindingCache = new Map();
+
+/**
+ * Compare an origin against this bundle's binding.
+ *   match true  → same deployment
+ *   match false → a DIFFERENT deployment (must never be used)
+ *   match null  → not verifiable (unreachable, or the server predates the endpoint)
+ */
+async function verifyOriginAgainstBinding(origin) {
+  const base = normalizeOrigin(origin);
+  const binding = await ensureDeploymentBinding();
+  if (!binding) return { match: null, legacy: true };
+  if (!base) return { match: null };
+  const cached = originBindingCache.get(base);
+  if (cached && Date.now() - cached.checkedAt < 60000) {
+    return { match: cached.match, fingerprint: cached.fingerprint, serverLacksFingerprint: cached.serverLacksFingerprint };
+  }
+  const probed = await fetchOriginFingerprint(base);
+  const match = probed.fingerprint ? (probed.fingerprint === binding.fingerprint) : null;
+  const entry = {
+    match,
+    fingerprint: probed.fingerprint || null,
+    serverLacksFingerprint: probed.missing === true,
+    checkedAt: Date.now()
+  };
+  originBindingCache.set(base, entry);
+  return entry;
+}
+
+/**
+ * Guard one base URL with the binding: a base that belongs to ANOTHER deployment is never used;
+ * the last origin that proved itself wins instead. Unverifiable never blocks (that is a network
+ * problem, not a mismatch).
+ */
+async function guardBaseAgainstBinding(base, verifiedOrigin) {
+  const binding = await ensureDeploymentBinding();
+  if (!binding) return base;
+  const normalized = normalizeOrigin(base);
+  if (!normalized) return base;
+  const verified = normalizeOrigin(verifiedOrigin);
+  if (verified && verified === normalized) return base;
+  const result = await verifyOriginAgainstBinding(normalized);
+  if (result.match === false && verified) return verified;
+  return base;
+}
+
+/**
  * Engine-generated messages (e.g. node validation reports) follow the portal language.
  * portal-bridge.js writes chrome.storage.uiCulture whenever the portal language changes.
  */
@@ -53,7 +179,7 @@ syncEngineCulture();
  * in would silently keep the old, broken behaviour.
  */
 async function portalBase() {
-  const { portalBase } = await chrome.storage.local.get("portalBase");
+  const { portalBase, bindingVerifiedOrigin } = await chrome.storage.local.get(["portalBase", "bindingVerifiedOrigin"]);
   const globalBase = portalBase || DEFAULT_PORTAL;
   if (globalThis.DaSessionScope) {
     try {
@@ -63,7 +189,9 @@ async function portalBase() {
       if (bound) return bound;
     } catch { /* fall through to the global value */ }
   }
-  return globalBase;
+  // Fingerprint guard: when this bundle is bound to a deployment, a stored base that belongs to a
+  // DIFFERENT deployment is repointed to the origin that proved itself. See guardBaseAgainstBinding.
+  return guardBaseAgainstBinding(globalBase, bindingVerifiedOrigin);
 }
 
 /** All server calls go to the portal origin. */
@@ -269,6 +397,42 @@ async function handleMessage(message, sender) {
       return checkSession();
     case "syncPortalSession":
       return syncPortalSession();
+    case "getBinding":
+      return { ok: true, binding: await ensureDeploymentBinding() };
+    case "confirmPortalOrigin": {
+      // Called by portal-bridge on every portal page. This is where ownership is decided: a portal
+      // of a DIFFERENT deployment is refused outright (the content script then leaves the page
+      // unmarked and stamps `daExtensionForeign` so the panel can explain), while a matching portal
+      // — or a server too old to expose a fingerprint — may adopt this extension and becomes the
+      // stored base. In-session bases are left alone, exactly like the old content-script write.
+      const origin = normalizeOrigin(message.origin) || String(message.origin || "");
+      const result = await verifyOriginAgainstBinding(origin);
+      const bindingFingerprint = (await ensureDeploymentBinding())?.fingerprint || null;
+      if (result.match === false) {
+        return {
+          ok: true,
+          match: false,
+          foreign: true,
+          bindingFingerprint
+        };
+      }
+      if (result.match === null && result.legacy !== true && result.serverLacksFingerprint !== true) {
+        return { ok: true, match: null, bindingFingerprint };
+      }
+      const { recording, playing } = await chrome.storage.local.get(["recording", "playing"]);
+      const patch = { bindingVerifiedOrigin: origin };
+      if (!recording && !playing) {
+        patch.portalBase = origin;
+        patch.apiBase = origin;
+      }
+      await chrome.storage.local.set(patch).catch(() => {});
+      return {
+        ok: true,
+        match: result.match === true ? true : null,
+        legacy: result.legacy === true || result.serverLacksFingerprint === true,
+        bindingFingerprint
+      };
+    }
     case "recordedEvent":
       return onRecordedEvent(message.payload, sender);
     case "describeChildIframe":

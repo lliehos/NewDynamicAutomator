@@ -14,7 +14,7 @@ $root = if (Test-Path 'C:\Projects\MorobotV3\extension-recorder\manifest.json') 
 }
 
 # Prefer synced install paths; fall back to repo source
-$base = Join-Path $env:LOCALAPPDATA 'morobot.soras.ir'
+$base = Join-Path $env:LOCALAPPDATA 'webautomator'
 $roles = @('extension-recorder','extension-player','extension-selector','extension-smart-recorder')
 $exts = @()
 foreach ($r in $roles) {

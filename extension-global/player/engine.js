@@ -25,39 +25,38 @@ function selectorHasDynPlaceholder(val) {
  * `stepShowsTargetSelector`) plus a second, separately-maintained copy in the editor's flow.js, and
  * the two had already drifted. One file, one set of answers.
  *
- * THE CAPTURE BELOW IS LOAD-BEARING — do not "simplify" it back to reading globals at call time.
+ * THE CAPTURE BELOW IS LOAD-BEARING — do not "simplify" it, and do NOT read the flat globals.
  *
- * `action-specs.js` publishes its helpers on `globalThis`. In a service worker `globalThis` IS
- * `self`, i.e. the same object these wrappers are declared on. So a wrapper that looked up
- * `globalThis.actionSpec()` at call time resolved to ITSELF, and every call recursed until the
- * stack blew: "Maximum call stack size exceeded" on any run, the moment a step needed a spec.
+ * Two traps live here, and the first fix for the second one fell straight into the first:
  *
- * Reading the shared functions ONCE, here, into private names is what breaks that cycle: the
- * wrapper body then refers to the real implementation rather than to itself. `importScripts` runs
- * action-specs.js before this file (see the list in background.js), so the globals are already
- * present at this point and the capture is complete.
+ *   1. Reading `globalThis.actionSpec()` AT CALL TIME cannot work: in a service worker `globalThis`
+ *      IS `self`, the same object these wrappers are declared on, so the lookup resolves to the
+ *      wrapper itself and every call recurses until the stack blows.
+ *   2. Capturing the flat global ONCE does not save it either: a function declaration in THIS
+ *      script is installed on the shared global scope before any statement of the script runs —
+ *      classic-script semantics — so `globalThis.stepNeedsSelector` was already THESE wrappers,
+ *      replacing the flat helper action-specs.js had just published. The capture then read its own
+ *      function, and the run died in the pre-flight (`collectInvalidNodesForPlay`) with "Maximum
+ *      call stack size exceeded" before a single step executed.
  *
- * The fallbacks keep this file loadable on its own (tests, the editor's bundling) without the
- * shared script: without them the capture would throw at parse time and take the whole worker down.
+ * The namespace is the one reliable capture point: `action-specs.js` publishes `ActionSpecs`
+ * (an object assignment, not a function declaration) and this file never declares that name, so
+ * nothing here can shadow it. `importScripts` runs action-specs.js before this file (see the list
+ * in background.js), so it is present at this point and the capture is complete. The null
+ * fallbacks keep this file loadable on its own (tests, the editor's bundling) without the shared
+ * script: without them the file would throw at parse time and take the whole worker down.
  */
-const _sharedActionSpec = (typeof globalThis !== "undefined" && typeof globalThis.actionSpec === "function")
-  ? globalThis.actionSpec : null;
-const _sharedStepNeedsSelector = (typeof globalThis !== "undefined" && typeof globalThis.stepNeedsSelector === "function")
-  ? globalThis.stepNeedsSelector : null;
-const _sharedStepReceivesValue = (typeof globalThis !== "undefined" && typeof globalThis.stepReceivesValue === "function")
-  ? globalThis.stepReceivesValue : null;
-const _sharedStepAllowsElementValue = (typeof globalThis !== "undefined" && typeof globalThis.stepAllowsElementValue === "function")
-  ? globalThis.stepAllowsElementValue : null;
-const _sharedStepAllowsMemoryValue = (typeof globalThis !== "undefined" && typeof globalThis.stepAllowsMemoryValue === "function")
-  ? globalThis.stepAllowsMemoryValue : null;
-const _sharedStepAllowsSystemValue = (typeof globalThis !== "undefined" && typeof globalThis.stepAllowsSystemValue === "function")
-  ? globalThis.stepAllowsSystemValue : null;
-const _sharedStepWritesToSource = (typeof globalThis !== "undefined" && typeof globalThis.stepWritesToSource === "function")
-  ? globalThis.stepWritesToSource : null;
-const _sharedStepWritesToMemory = (typeof globalThis !== "undefined" && typeof globalThis.stepWritesToMemory === "function")
-  ? globalThis.stepWritesToMemory : null;
-const _sharedStepReadsCell = (typeof globalThis !== "undefined" && typeof globalThis.stepReadsCell === "function")
-  ? globalThis.stepReadsCell : null;
+const _specs = (typeof globalThis !== "undefined" && globalThis.ActionSpecs) ? globalThis.ActionSpecs : null;
+const _sharedActionSpec = _specs && typeof _specs.actionSpec === "function" ? _specs.actionSpec : null;
+const _sharedStepNeedsSelector = _specs && typeof _specs.stepNeedsSelector === "function" ? _specs.stepNeedsSelector : null;
+const _sharedStepReceivesValue = _specs && typeof _specs.stepReceivesValue === "function" ? _specs.stepReceivesValue : null;
+const _sharedStepAllowsElementValue = _specs && typeof _specs.stepAllowsElementValue === "function" ? _specs.stepAllowsElementValue : null;
+const _sharedStepAllowsMemoryValue = _specs && typeof _specs.stepAllowsMemoryValue === "function" ? _specs.stepAllowsMemoryValue : null;
+const _sharedStepAllowsSystemValue = _specs && typeof _specs.stepAllowsSystemValue === "function" ? _specs.stepAllowsSystemValue : null;
+const _sharedStepWritesToSource = _specs && typeof _specs.stepWritesToSource === "function" ? _specs.stepWritesToSource : null;
+const _sharedStepWritesToMemory = _specs && typeof _specs.stepWritesToMemory === "function" ? _specs.stepWritesToMemory : null;
+const _sharedStepReadsCell = _specs && typeof _specs.stepReadsCell === "function" ? _specs.stepReadsCell : null;
+const _sharedStepIsUrlAction = _specs && typeof _specs.stepIsUrlAction === "function" ? _specs.stepIsUrlAction : null;
 
 /** Spec for an action, or an empty spec so an unknown action never crashes a run or a render. */
 function actionSpec(actionType) {
@@ -97,7 +96,7 @@ function stepReadsCell(actionType) {
 }
 
 function stepIsUrlAction(actionType) {
-  return actionType === "GoToUrl";
+  return _sharedStepIsUrlAction ? _sharedStepIsUrlAction(actionType) : actionType === "GoToUrl";
 }
 
 function stepShowsTargetSelector(n) {
@@ -2121,6 +2120,10 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     cur: entryId,
     // Row context for this level. A group's repeat may rebind the row for the level below.
     row: rowIndex,
+    // The PROCESS row this walk was started for. It is deliberately separate from `row`: a group
+    // re-binds `row` for the level below, but the process row never changes — that is what lets a
+    // row pointer set to "ProcessLoop" name the outer row from any nesting depth.
+    outerRow: Number.isFinite(Number(opts && opts._processRow)) ? Number(opts._processRow) : rowIndex,
     insideGroupId: (opts && opts._insideGroupId) || null,
     // Remaining group iterations at this level: [] means this is a plain (non-group) level.
     pendingGroupRows: null,
@@ -2131,9 +2134,6 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     groupNodeId: null
   }];
 
-  /** Push a frame's successor work onto the parent, if the parent has anything left to do. */
-  const parentPendingNext = (frame) => frame && frame.pendingGroupRows ? "group" : null;
-
   while (stack.length && !playAbort && !playStatus.lastError && guard++ < 100000) {
     await waitIfPaused();
     if (playAbort) break;
@@ -2143,12 +2143,23 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     // --- a group level that still has iterations to run -------------------------------------
     if (frame.pendingGroupRows && frame.cur == null) {
       if (frame.pendingGroupIndex >= frame.pendingGroupRows.length) {
-        // Iterations exhausted: leave the group and continue after it.
+        // Iterations exhausted: the group is done and the walk continues on the edge AFTER it —
+        // at EVERY level, including the top one.
+        //
+        // The frame that drove the group is the same frame that was walking this level's chain
+        // when it met the group, so it now turns back into a plain walker and follows the group's
+        // outgoing edge itself. The earlier version popped the frame and handed the edge to the
+        // parent — which worked one level down but silently dropped the edge when the group sat at
+        // the top level (no parent to hand it to): every step after a root-level group was skipped.
         const afterId = flowEdge(edges, frame.groupNodeId, ["next"])?.to || null;
-        stack.pop();
-        const parent = stack[stack.length - 1];
-        if (parent) parent.cur = afterId;
-        if (!afterId) continue;
+        frame.pendingGroupRows = null;
+        frame.pendingGroupIndex = 0;
+        frame.pendingGroupTotal = 0;
+        frame.moveLoop = true;
+        frame.groupStart = null;
+        frame.groupNodeId = null;
+        frame.cur = afterId;
+        if (!afterId) continue;   // chain ends here; the next iteration pops this level
         await delayAfterNode(graph, afterId);
         await paceLoopBack(graph, afterId, visitCounts, loopBackLimit);
         continue;
@@ -2176,6 +2187,8 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       stack.push({
         cur: frame.entryId,
         row: effectiveRow,
+        // The process row travels down UNCHANGED through every nesting level.
+        outerRow: frame.outerRow,
         insideGroupId: frame.groupNodeId,
         pendingGroupRows: null,
         pendingGroupIndex: 0,
@@ -2236,9 +2249,9 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       if (stepOrdinal > playStatus.stepTotal) playStatus.stepTotal = stepOrdinal;
       playStatus.currentNodeId = node.id;
       // The row the process loop is on travels with the step so a row pointer inside a group can
-      // still mean the OUTER row rather than the group's. At the top level there is no marker and
-      // rowIndex already is the process row, so the marker is simply the same value.
-      const processRow = Number.isFinite(Number(frame.row)) ? Number(frame.row) : rowIndex;
+      // still mean the OUTER row rather than the group's. Taken from `outerRow`, not `row`: inside
+      // a group `row` has been re-bound to the group's own repeat row.
+      const processRow = Number.isFinite(Number(frame.outerRow)) ? Number(frame.outerRow) : rowIndex;
       playStatus.processRow = processRow;
       const outcome = await runOneAction(
         activeTabId, graph, { ...node, _processRow: processRow },
@@ -4762,10 +4775,15 @@ function resolveDedicatedRow(startNode, graph, ctx) {
       const rc = Number(ds?.rowCount);
       if (Number.isFinite(rc) && rc > 0) return rc - 1;
       // Fall back to the last row we can actually see in the graph when the count is unknown.
-      const idxs = (ds?.cells || [])
-        .map((c) => Number(c.index ?? c.Index ?? c.rowIndex))
-        .filter((x) => Number.isFinite(x));
-      return idxs.length ? Math.max(...idxs) : null;
+      // A loop, NOT Math.max(...idxs): a long run can leave tens of thousands of cells in this
+      // array, and spreading a large array into a call blows the JS stack with "Maximum call
+      // stack size exceeded" — precisely the failure this area exists to prevent.
+      let last = null;
+      for (const c of ds?.cells || []) {
+        const x = Number(c.index ?? c.Index ?? c.rowIndex);
+        if (Number.isFinite(x) && (last === null || x > last)) last = x;
+      }
+      return last;
     }
     case "SpecificRow": {
       const idx = Number(startNode.specificRowIndex);

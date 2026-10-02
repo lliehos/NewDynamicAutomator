@@ -78,5 +78,5 @@ $out = $json | ConvertTo-Json -Depth 100 -Compress
 Write-Host ""
 Write-Host "Done. Removed $($removed.Count) entry(ies)." -ForegroundColor Green
 Write-Host "Now start Chrome and load Smart Recorder from:" -ForegroundColor Cyan
-Write-Host "  $env:LOCALAPPDATA\morobot.soras.ir\default\extension-smart-recorder" -ForegroundColor Cyan
+Write-Host "  $env:LOCALAPPDATA\webautomator\default\extension-smart-recorder" -ForegroundColor Cyan
 Write-Host "If anything looks wrong, restore the backup and report it." -ForegroundColor DarkGray

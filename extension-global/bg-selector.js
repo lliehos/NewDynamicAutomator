@@ -432,6 +432,17 @@ if (chrome.contextMenus?.onClicked?.addListener) {
   chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (!tab?.id) return;
 
+    // A tab of ANOTHER deployment is not ours to act on: copying selectors from it or building
+    // nodes into its editor would mix two panels' data. Ordinary sites answer the fingerprint probe
+    // with 404, so only a real Morobot server (of a different deployment) can trigger this refusal.
+    if (typeof verifyOriginAgainstBinding === "function") {
+      const verdict = await verifyOriginAgainstBinding(tab.url || info.pageUrl || "").catch(() => null);
+      if (verdict && verdict.match === false) {
+        console.info("[Morobot Global Selector] refused: tab belongs to another deployment", tab.url);
+        return;
+      }
+    }
+
     // Our own panel is not a target surface: these entries mean nothing there.
     if (await isOnOurPortal(tab.url || info.pageUrl)) return;
 
