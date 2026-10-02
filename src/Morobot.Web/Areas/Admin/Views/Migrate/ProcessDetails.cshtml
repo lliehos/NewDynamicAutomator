@@ -1,0 +1,74 @@
+@using Morobot.Infrastructure.Services
+@using Morobot.Web.Areas.Admin.Models
+@{
+  ViewData["Title"] = L["admin.migrate.detailsTitle"];
+  var user = ViewBag.LegacyUser as LegacyUserRow ?? new LegacyUserRow();
+  var process = ViewBag.Process as LegacyProcessRow ?? new LegacyProcessRow();
+  var groups = ViewBag.Groups as List<LegacyGroupRow> ?? new List<LegacyGroupRow>();
+  var name = $"{user.FirstName} {user.LastName}".Trim();
+  if (string.IsNullOrWhiteSpace(name)) name = user.UserName;
+  var stepCount = groups.Sum(g => g.Steps.Count);
+}
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L.T("admin.migrate.detailsSummary",
+    ("title", process.Title), ("id", process.Id.ToString()), ("user", name),
+    ("groups", groups.Count.ToString()), ("steps", stepCount.ToString()))
+}' />
+
+@foreach (var g in groups)
+{
+  <div class="card-admin" style="margin-bottom:1rem">
+    <h3>
+      <i class="ti ti-folder" aria-hidden="true"></i>@L["admin.migrate.groupLabel"] #@g.Id — @g.Title
+      <span class="admin-muted">
+        · @L["admin.migrate.colPriority"] @g.Priority
+        @if (!string.IsNullOrWhiteSpace(g.SourceType)) { <text> · @g.SourceType</text> }
+        @if (g.DataSourceId != 0) { <text> · #@g.DataSourceId</text> }
+      </span>
+    </h3>
+    @if (g.Steps.Count == 0)
+    {
+      <p class="admin-field-hint">@L["admin.migrate.noSteps"]</p>
+    }
+    else
+    {
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Id</th>
+            <th>@L["admin.migrate.colTitle"]</th>
+            <th>@L["admin.migrate.colPriority"]</th>
+            <th>@L["admin.migrate.colActionType"]</th>
+            <th>@L["admin.migrate.colConditional"]</th>
+          </tr>
+        </thead>
+        <tbody>
+        @foreach (var s in g.Steps)
+        {
+          <tr>
+            <td>@s.Id</td>
+            <td>@s.Title</td>
+            <td class="num">@s.Priority</td>
+            <td>@(string.IsNullOrWhiteSpace(s.ActionType) ? "—" : s.ActionType)</td>
+            <td>@(s.IsConditional ? L["admin.migrate.yes"] : "—")</td>
+          </tr>
+        }
+        </tbody>
+      </table>
+    }
+  </div>
+}
+@if (groups.Count == 0)
+{
+  <div class="card-admin"><p class="admin-field-hint">@L["admin.migrate.noGroups"]</p></div>
+}
+
+<form method="post" asp-area="Admin" asp-controller="Migrate" asp-action="Processes" style="padding:0 1rem 1rem">
+  @Html.AntiForgeryToken()
+  <input type="hidden" name="connectionString" value="@ViewBag.ConnectionString" />
+  @foreach (var id in (ViewBag.UserIds as int[] ?? Array.Empty<int>()))
+  {
+    <input type="hidden" name="userIds" value="@id" />
+  }
+  <button type="submit" class="btn-admin secondary"><i class="ti ti-arrow-back-up" aria-hidden="true"></i>@L["admin.migrate.backToProcesses"]</button>
+</form>

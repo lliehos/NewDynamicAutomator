@@ -9,7 +9,7 @@
 }' />
 
 <div class="admin-table-wrap" data-no-page="1">
-<form method="post" asp-area="Admin" asp-controller="Migrate" asp-action="Run">
+<form method="post" asp-area="Admin" asp-controller="Migrate" asp-action="Processes">
   @Html.AntiForgeryToken()
   <input type="hidden" name="connectionString" value="@ViewBag.ConnectionString" />
   <table class="admin-table">
@@ -38,7 +38,7 @@
             Name = "userIds",
             Value = u.Id.ToString(),
             Label = "",
-            Checked = u.ProcessCount > 0,
+            Checked = false,
             Compact = true,
             HideLabel = true,
             InputClass = "js-migrate-user-cb",
@@ -64,7 +64,7 @@
     </tbody>
   </table>
   <div class="admin-form-actions" style="padding:1rem">
-    <button type="submit" class="btn-admin"><i class="ti ti-database-import" aria-hidden="true"></i>@L["admin.migrate.runSelected"]</button>
+    <button type="submit" class="btn-admin"><i class="ti ti-arrow-right" aria-hidden="true"></i>@L["admin.migrate.nextStep"]</button>
     <a class="btn-admin secondary" asp-area="Admin" asp-controller="Migrate" asp-action="Index">@L["admin.common.back"]</a>
   </div>
 </form>

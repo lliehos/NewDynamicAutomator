@@ -37,3 +37,28 @@
     </form>
   </div>
 </div>
+
+@* The wizard is a repeated operator task; cache the connection string in THIS browser so the admin
+   does not re-enter it on every visit. It never leaves the machine — no server-side storage. *@
+<script>
+  (function () {
+    var KEY = 'morobot.migrate.connectionString';
+    var el = document.getElementById('migrate-conn');
+    if (!el) return;
+    try {
+      if (!el.value) {
+        var saved = localStorage.getItem(KEY);
+        if (saved) el.value = saved;
+      }
+      var save = function () {
+        try {
+          var v = el.value.trim();
+          if (v) localStorage.setItem(KEY, v);
+          else localStorage.removeItem(KEY);
+        } catch (_) { /* storage disabled — ignore */ }
+      };
+      el.addEventListener('input', save);
+      el.closest('form').addEventListener('submit', save);
+    } catch (_) { /* storage disabled — ignore */ }
+  })();
+</script>

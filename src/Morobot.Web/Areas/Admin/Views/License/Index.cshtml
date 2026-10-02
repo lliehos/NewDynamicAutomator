@@ -122,6 +122,8 @@
         <dd>@(d.AllowBilingual ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
         <dt>@L["admin.license.fieldAllowFrontPackage"]</dt>
         <dd>@(d.AllowFrontPackage ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
+        <dt>@L["admin.license.fieldAllowLegacyMigration"]</dt>
+        <dd>@(d.AllowLegacyMigration ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
         <dt>@L["admin.license.fieldReferralUrl"]</dt>
         <dd>
           @if (string.IsNullOrWhiteSpace(d.ReferralWidgetUrl))

@@ -1,0 +1,123 @@
+@using Morobot.Infrastructure.Services
+@using Morobot.Web.Areas.Admin.Models
+@{
+  ViewData["Title"] = L["admin.migrate.processesTitle"];
+  var groups = ViewBag.Groups as List<LegacyUserProcesses> ?? new List<LegacyUserProcesses>();
+  var userIds = ViewBag.UserIds as int[] ?? Array.Empty<int>();
+  var total = groups.Sum(g => g.Processes.Count);
+}
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L.T("admin.migrate.processesSummaryMulti",
+    ("count", total.ToString()), ("users", groups.Count.ToString()))
+}' />
+
+<form method="post" asp-area="Admin" asp-controller="Migrate" asp-action="Preprocess">
+  @Html.AntiForgeryToken()
+  <input type="hidden" name="connectionString" value="@ViewBag.ConnectionString" />
+  @foreach (var id in userIds)
+  {
+    <input type="hidden" name="userIds" value="@id" />
+  }
+
+  @* Every switch starts OFF on purpose: the operator picks the processes consciously. *@
+  <div style="padding:0 1rem .75rem">
+    <label class="admin-switch is-compact" id="migrate-tasks-select-all" title="@L["admin.migrate.selectAll"]">
+      <input type="checkbox" data-da-switch="off" aria-label="@L["admin.migrate.selectAll"]" />
+      <span class="admin-switch-ui" aria-hidden="true"></span>
+      <span class="admin-switch-text">@L["admin.migrate.selectAll"]</span>
+    </label>
+  </div>
+
+  @foreach (var g in groups)
+  {
+    var u = g.User;
+    var name = $"{u.FirstName} {u.LastName}".Trim();
+    if (string.IsNullOrWhiteSpace(name)) name = u.UserName;
+    <div class="admin-table-wrap" data-no-page="1" style="margin-bottom:1.25rem">
+      <h3 style="padding:.75rem 1rem 0">
+        <i class="ti ti-user" aria-hidden="true"></i>
+        @name <span class="admin-muted">· @u.UserName · #@u.Id</span>
+        @if (u.MatchedHere)
+        {
+          <span class="admin-badge is-ok" title="@L["admin.migrate.matchHint"]">@L["admin.migrate.matched"] #@u.MatchedUserId</span>
+        }
+        else
+        {
+          <span class="admin-badge is-muted">@L["admin.migrate.newAccount"]</span>
+        }
+      </h3>
+      @if (g.Processes.Count == 0)
+      {
+        <p class="admin-field-hint" style="padding:.5rem 1rem">@L["admin.migrate.noProcesses"]</p>
+      }
+      else
+      {
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Id</th>
+              <th>@L["admin.migrate.colTitle"]</th>
+              <th>@L["admin.migrate.colCreated"]</th>
+              <th>@L["admin.migrate.colGroups"]</th>
+              <th>@L["admin.migrate.colSteps"]</th>
+              <th>@L["admin.migrate.colStatus"]</th>
+              <th>@L["admin.migrate.colOps"]</th>
+            </tr>
+          </thead>
+          <tbody>
+          @foreach (var p in g.Processes)
+          {
+            <tr>
+              <td>
+                <partial name="_AdminSwitch" model='new AdminSwitchModel {
+                  Name = "taskIds",
+                  Value = p.Id.ToString(),
+                  Label = "",
+                  Checked = false,
+                  Disabled = p.AlreadyTransferred,
+                  Compact = true,
+                  HideLabel = true,
+                  InputClass = p.AlreadyTransferred ? null : "js-migrate-task-cb",
+                  Id = $"migrate-task-{p.Id}"
+                }' />
+              </td>
+              <td>@p.Id</td>
+              <td>@p.Title</td>
+              <td class="num">@(p.CreatedAt?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+              <td class="num">@p.GroupCount</td>
+              <td class="num">@p.StepsCount</td>
+              <td>
+                @if (p.AlreadyTransferred)
+                {
+                  <span class="admin-badge is-warn">@L["admin.migrate.alreadyTransferred"]</span>
+                }
+                else
+                {
+                  <span class="admin-badge is-muted">@L["admin.migrate.notTransferred"]</span>
+                }
+              </td>
+              <td>
+                @* Details = groups + steps of THIS process (read-only) before deciding to transfer. *@
+                <button type="submit" class="btn-admin secondary"
+                        formaction="@Url.Action("ProcessDetails", "Migrate", new { area = "Admin" })"
+                        name="taskId" value="@p.Id">
+                  <i class="ti ti-list-details" aria-hidden="true"></i>@L["admin.migrate.viewDetails"]
+                </button>
+              </td>
+            </tr>
+          }
+          </tbody>
+        </table>
+      }
+    </div>
+  }
+
+  <div class="admin-form-actions" style="padding:0 1rem 1rem">
+    <button type="submit" class="btn-admin"><i class="ti ti-arrow-right" aria-hidden="true"></i>@L["admin.migrate.nextStep"]</button>
+    <button type="submit" class="btn-admin secondary"
+            formaction="@Url.Action("Connect", "Migrate", new { area = "Admin" })">
+      <i class="ti ti-arrow-back-up" aria-hidden="true"></i>@L["admin.migrate.backToUsers"]
+    </button>
+  </div>
+</form>

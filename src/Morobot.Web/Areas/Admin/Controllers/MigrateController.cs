@@ -64,23 +64,126 @@ public class MigrateController : Controller
         return View("SelectUsers");
     }
 
+    /// <summary>
+    /// Process-selection step: every selected user with the processes that user OWNS
+    /// (Tasks.CreatorUserId), grouped by user. Shared (User_Tasks) processes are never listed —
+    /// the transfer is creator-only, so the list shows exactly what a transfer would bring over.
+    /// </summary>
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Run(string connectionString, int[]? userIds, CancellationToken ct)
+    public async Task<IActionResult> Processes(string connectionString, int[]? userIds, CancellationToken ct)
     {
         if (!await IsMigrationAllowedAsync(ct)) return MigrationNotAllowed();
-        ViewData["Title"] = _locale["admin.migrate.resultTitle"];
+        ViewData["Title"] = _locale["admin.migrate.processesTitle"];
         connectionString = (connectionString ?? "").Trim();
         userIds ??= Array.Empty<int>();
         if (string.IsNullOrWhiteSpace(connectionString) || userIds.Length == 0)
         {
-            TempData["Ok"] = null;
             ViewBag.Error = _locale["admin.migrate.needConnectionAndUser"];
             return View("Index");
         }
 
-        var report = await _import.ImportUsersAsync(connectionString, userIds, ct);
+        var (groups, error) = await _import.ListProcessesForUsersAsync(connectionString, userIds, ct);
+        if (groups is null)
+        {
+            ViewBag.Error = error ?? _locale["admin.migrate.connectFailed"];
+            ViewBag.ConnectionString = connectionString;
+            return View("Index");
+        }
+
+        ViewBag.ConnectionString = connectionString;
+        ViewBag.Groups = groups;
+        ViewBag.UserIds = userIds;
+        return View("Processes");
+    }
+
+    /// <summary>
+    /// Pre-transfer review: the selected processes grouped by user, where anything the automatic
+    /// conversion cannot settle would be decided by the operator. Currently a review page; the
+    /// decision items are filled in as the converter's diagnostics are built out.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Preprocess(
+        string connectionString, int[]? userIds, int[]? taskIds, CancellationToken ct)
+    {
+        if (!await IsMigrationAllowedAsync(ct)) return MigrationNotAllowed();
+        ViewData["Title"] = _locale["admin.migrate.preprocessTitle"];
+        connectionString = (connectionString ?? "").Trim();
+        userIds ??= Array.Empty<int>();
+        taskIds ??= Array.Empty<int>();
+        if (string.IsNullOrWhiteSpace(connectionString) || userIds.Length == 0 || taskIds.Length == 0)
+        {
+            ViewBag.Error = _locale["admin.migrate.needProcessSelection"];
+            return View("Index");
+        }
+
+        var (groups, error) = await _import.ListProcessesForUsersAsync(connectionString, userIds, ct);
+        if (groups is null)
+        {
+            ViewBag.Error = error ?? _locale["admin.migrate.connectFailed"];
+            ViewBag.ConnectionString = connectionString;
+            return View("Index");
+        }
+
+        ViewBag.ConnectionString = connectionString;
+        ViewBag.Groups = groups;
+        ViewBag.UserIds = userIds;
+        ViewBag.SelectedTaskIds = new HashSet<int>(taskIds);
+        return View("Preprocess");
+    }
+
+    /// <summary>Transfer the selected processes (each to its own owner; duplicates refused server-side).</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RunProcesses(string connectionString, int[]? taskIds, CancellationToken ct)
+    {
+        if (!await IsMigrationAllowedAsync(ct)) return MigrationNotAllowed();
+        ViewData["Title"] = _locale["admin.migrate.resultTitle"];
+        connectionString = (connectionString ?? "").Trim();
+        taskIds ??= Array.Empty<int>();
+        if (string.IsNullOrWhiteSpace(connectionString) || taskIds.Length == 0)
+        {
+            ViewBag.Error = _locale["admin.migrate.needProcessSelection"];
+            return View("Index");
+        }
+
+        var report = await _import.ImportProcessesAsync(connectionString, taskIds, ct);
         ViewBag.Report = report;
         return View("Result");
+    }
+
+    /// <summary>
+    /// Read-only details of ONE legacy process (groups and steps), so the admin can inspect the
+    /// shape of what a transfer would convert. The owner is resolved from the task itself.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ProcessDetails(
+        string connectionString, int taskId, int[]? userIds, CancellationToken ct)
+    {
+        if (!await IsMigrationAllowedAsync(ct)) return MigrationNotAllowed();
+        ViewData["Title"] = _locale["admin.migrate.detailsTitle"];
+        connectionString = (connectionString ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            ViewBag.Error = _locale["admin.migrate.needConnection"];
+            return View("Index");
+        }
+
+        var (user, process, groups, error) = await _import.ListProcessDetailsAsync(connectionString, taskId, ct);
+        if (user is null || process is null || groups is null)
+        {
+            ViewBag.Error = error ?? _locale["admin.migrate.connectFailed"];
+            ViewBag.ConnectionString = connectionString;
+            return View("Index");
+        }
+
+        ViewBag.ConnectionString = connectionString;
+        ViewBag.LegacyUser = user;
+        ViewBag.Process = process;
+        ViewBag.Groups = groups;
+        ViewBag.UserIds = userIds ?? Array.Empty<int>();
+        return View("ProcessDetails");
     }
 }

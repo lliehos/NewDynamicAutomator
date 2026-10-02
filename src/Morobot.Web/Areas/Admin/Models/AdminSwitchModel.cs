@@ -11,5 +11,6 @@ public sealed class AdminSwitchModel
     public string? Value { get; init; }
     public bool AutoSubmit { get; init; }
     public bool HideLabel { get; init; }
+    public bool Disabled { get; init; }
     public string? InputClass { get; init; }
 }
