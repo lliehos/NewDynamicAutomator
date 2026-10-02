@@ -142,7 +142,7 @@ async function armAlertDialogsIfNeeded(graph, tabId) {
     isActionNode(n) && n.actionType === "AlertAccept" && n.isActive !== false);
   const type = String(first?.alertType || "Accept");
   try {
-    const res = await chrome.runtime.sendMessage({
+    const res = await callBackground({
       type: "armAlertDialog", tabId, alertType: type
     });
     if (res && res.ok === false) {
@@ -164,7 +164,7 @@ async function setAlertAnswerForStep(tabId, step) {
   const type = String(step?.alertType || "Accept");
   const promptText = step?.alertPromptText == null ? "" : String(step.alertPromptText);
   try {
-    return await chrome.runtime.sendMessage({
+    return await callBackground({
       type: "setAlertAnswer", tabId, alertType: type, alertPromptText: promptText
     }) || { ok: true };
   } catch (err) {
@@ -269,7 +269,7 @@ function validateDataSourcePick(n, opts = {}) {
   return { ok: true };
 }
 
-function validateActionNodeForPlay(n) {
+function validateActionNodeForPlay(n, graph) {
   const reasons = [];
   if (n.isActive === false) return { ok: true, reasons };
   const at = n.actionType || "";
@@ -344,6 +344,17 @@ function validateActionNodeForPlay(n) {
       const v = validateSelectorBlock(n, { labelKey: "label.targetSelector" });
       if (!v.ok) reasons.push(v.reason);
     }
+    // Its READ side — which cell it reads — is required, and the engine reads exactly these two
+    // fields (dataSourceId + dynamicSourceColumnName | saveColumnName). The source may come from
+    // the process default, but the COLUMN has no default: without it the run cannot read anything.
+    const pick = validateDataSourcePick(
+      {
+        dataSourceId: n.dataSourceId ?? graph?.dataSourceId,
+        dynamicSourceColumnName: n.dynamicSourceColumnName || n.saveColumnName
+      },
+      { dsReason: tv("ds.pickMissing"), colReason: tv("ds.colMissing") }
+    );
+    if (!pick.ok) reasons.push(pick.reason);
   }
   if (stepWritesToSource(at)) {
     const dsId = n.saveDataSourceId != null ? n.saveDataSourceId : n.dataSourceId;
@@ -357,6 +368,12 @@ function validateActionNodeForPlay(n) {
   if (stepWritesToMemory(at) && at !== "LoadContent") {
     if (!String(n.memoryVariableName || "").trim()) reasons.push(tv("act.memDestMissing"));
   }
+
+  // The node's own row pointer (the "ردیف اختصاصی" switch): a pointer that is on but dangling
+  // would silently fall back to the loop row and touch a row the author never chose.
+  validateRowPointerForPlay(n, graph, reasons);
+  // The dynamic selector carries its own switch and its own pointer.
+  validateRowPointerForPlay(n, graph, reasons, SELECTOR_ROW_KEYS, "selectorDedicatedRow");
 
   return { ok: reasons.length === 0, reasons };
 }
@@ -465,6 +482,11 @@ function validateConditionNodeForPlay(n, graph) {
     reasons.push(tv("cond.noAnyEdge"));
   }
 
+  // The node's own row pointer — same rule as the action validator, kept in one place — plus the
+  // dynamic selector's own pointer.
+  validateRowPointerForPlay(n, graph, reasons);
+  validateRowPointerForPlay(n, graph, reasons, SELECTOR_ROW_KEYS, "selectorDedicatedRow");
+
   return { ok: reasons.length === 0, reasons };
 }
 
@@ -487,9 +509,45 @@ function validateStartNodeForPlay(n, graph) {
     } else {
       const v = validateSelectorBlock(n, { labelKey: "label.repeatSelector" });
       if (!v.ok) reasons.push(v.reason);
+      // The repeat selector may build itself from a source cell and pin its own row — the same
+      // rule the action and condition selectors follow.
+      validateRowPointerForPlay(n, graph, reasons, SELECTOR_ROW_KEYS, "selectorDedicatedRow");
     }
   }
   return { ok: reasons.length === 0, reasons };
+}
+
+/**
+ * A node's own row pointer — and its dynamic selector's — must be resolvable before a run starts.
+ *
+ * Guarded by each switch (`dedicatedRow` / `selectorDedicatedRow`), so an author who never turned
+ * one on is never blocked by it — exactly the rule the editor applies, so both halves accept the
+ * same diagrams.
+ */
+function validateRowPointerForPlay(n, graph, reasons, keys, gateKey) {
+  if (!n || n[gateKey || "dedicatedRow"] !== true) return;
+  const k = keys || NODE_ROW_KEYS;
+  const pointer = String(n[k.type] || "None");
+  if (!pointer || pointer === "None") {
+    reasons.push(tv("row.pointerMissing"));
+    return;
+  }
+  if (pointer === "SpecificRow") {
+    const idx = Number(n[k.specific]);
+    if (!Number.isFinite(idx) || idx < 0) {
+      reasons.push(tv("row.specificIndexInvalid"));
+    } else {
+      const ds = findRowPointerSource(n, graph);
+      const rc = Number(ds?.rowCount);
+      if (Number.isFinite(rc) && rc > 0 && idx > rc - 1) {
+        reasons.push(tv("row.specificIndexOutOfRange", { idx, max: rc - 1 }));
+      }
+    }
+  }
+  if ((pointer === "FirstRow" || pointer === "LastRow" || pointer === "SpecificRow")
+    && !findRowPointerSource(n, graph)) {
+    reasons.push(tv("row.sourceMissing"));
+  }
 }
 
 /**
@@ -564,7 +622,7 @@ function validateNodeLeafForPlay(n, graph) {
   // walked at all should lead with that rather than with a missing-selector message.
   const struct = validateStructureForPlay(n, graph);
   if (!struct.ok) return struct;
-  if (isActionNode(n)) return validateActionNodeForPlay(n);
+  if (isActionNode(n)) return validateActionNodeForPlay(n, graph);
   if (n.kind === "condition") return validateConditionNodeForPlay(n, graph);
   if (n.kind === "start") return validateStartNodeForPlay(n, graph);
   return { ok: true, reasons: [] };
@@ -632,6 +690,11 @@ const ENGINE_MSG = {
     "start.loopBad": "تعداد تکرار حلقه نامعتبر است",
     "start.dsMissing": "منبع پیشفرض برای تکرار مشخص نشده",
     "start.elementsOnlyInGroup": "تکرار با المان صفحه فقط داخل گروه مجاز است",
+
+    "row.pointerMissing": "اشاره‌گر ردیف انتخاب نشده",
+    "row.specificIndexInvalid": "شماره ردیف مشخص نامعتبر است",
+    "row.specificIndexOutOfRange": "شماره ردیف مشخص {idx} خارج از بازهٔ منبع است (0 تا {max})",
+    "row.sourceMissing": "برای اشاره‌گر ردیف (اول/آخر/مشخص) منبع داده مشخص نشده",
 
     "struct.selfLoop": "یال خروجی این نود به خودش وصل است — همین باعث میشد اجرا در حلقهٔ بیپایان گیر کند. اتصال را باز و به نود درست وصل کنید",
     "struct.groupEntriesItself": "ورودی این گروه به خود گروه برمیگردد و اجرا نمیتواند وارد آن شود — اتصال ورودی گروه را اصلاح کنید",
@@ -709,6 +772,11 @@ const ENGINE_MSG = {
     "start.loopBad": "Loop repeat count is invalid",
     "start.dsMissing": "No default data source selected for the repeat",
     "start.elementsOnlyInGroup": "Repeating by page elements is only allowed inside a group",
+
+    "row.pointerMissing": "No row pointer is selected",
+    "row.specificIndexInvalid": "The fixed row number is invalid",
+    "row.specificIndexOutOfRange": "Fixed row {idx} is outside the source range (0 to {max})",
+    "row.sourceMissing": "No data source is set for the row pointer (first / last / fixed)",
 
     "struct.selfLoop": "This node's outgoing edge points at itself, which made the run loop forever. Re-wire the edge to the correct node",
     "struct.groupEntriesItself": "This group's entry leads back to the group itself, so the run cannot descend into it. Fix the group's entry edge",
@@ -1716,8 +1784,12 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   playAbort = false;
   playPaused = false;
   playResumeWaiters = [];
-  // Keep prior logs/results until the user clears them.
-  const hadHistory = playLogs.length > 0 || (playStatus.results || []).length > 0;
+  // Every run starts with a CLEAN log — including the context menu's single-step and «from this
+  // node on» runs, which are re-run repeatedly while debugging. Mixing their output with a
+  // previous run's (often another task's) made a fresh failure unreadable in the HUD and in the
+  // worker console. clearPlayLogs() also drops the previous results/lastError, so the HUD cannot
+  // display two runs at once.
+  clearPlayLogs();
   playTabId = tabId;
   // nextFromNodeId is excluded here too: it is a full walk from a different entry point, so it keeps
   // the process-level repeat (a spreadsheet source still drives one iteration per row).
@@ -1757,9 +1829,13 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   startPlayAbortWatch(String(graph.taskId || taskId));
   // HUD (pause/stop + results) on the execution tab — skip for condition-only check.
   if (scopeLabel !== "condition") {
+    // This tab OWNS the HUD until the user closes it by hand or closes the tab. A run commonly ends
+    // with a click that reloads the page (a submit/confirm button), and the fresh document must
+    // re-mount the HUD from this marker instead of reading as "no session". Overwritten by the next
+    // run's tab; cleared by the HUD's close button or the tab's own close.
+    await chrome.storage.local.set({ playSessionTabId: tabId });
     await injectPlayFab(tabId);
   }
-  if (hadHistory) appendPlayLog("info", "──────── اجرای جدید ────────");
   appendPlayLog("info", `شروع اجرا: ${graph.title || taskId}`);
   appendPlayLog("info", `تکرار فرآیند: ${iterations.label}`);
   {
@@ -1861,8 +1937,15 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
               ? Math.max(0, Number(step.selectorWaitMs) || 1000)
               : 0;
             const evalMs = Math.max(5000, waitBudget + 4000);
+            // A single-condition check honours the node's own row pointer too; there is no group
+            // stack here, so the loop row doubles as the parent/process row. Its selector may pin
+            // a row of its own as well.
+            const scopedCtx = { groupRow: rowIndex, parentRow: rowIndex, processRow: rowIndex, loopIndex: li };
+            const scopedCondRow = resolveRowPointer(step, graph, scopedCtx) ?? rowIndex;
+            const scopedSelRow = resolveRowPointer(step, graph, { ...scopedCtx, groupRow: scopedCondRow }, SELECTOR_ROW_KEYS);
+            const scopedCondNode = scopedSelRow != null ? { ...step, _selectorRow: scopedSelRow } : step;
             pass = await Promise.race([
-              evaluateCondition(activeTabId, step, graph, rowIndex),
+              evaluateCondition(activeTabId, scopedCondNode, graph, scopedCondRow),
               sleep(evalMs).then(() => {
                 appendPlayLog("warn", `مهلت بررسی شرط «${title}» تمام شد (${evalMs}ms)`);
                 return false;
@@ -1903,7 +1986,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
           });
         } else if (isActionNode(step)) {
           appendPlayLog("info", `اجرای تک‌اقدام «${step.title || step.actionType || step.id}» (بدون ادامهٔ دیاگرام)`);
-          const outcome = await runOneAction(activeTabId, graph, step, rowIndex, li + 1, iters.total, 1, 1);
+          const outcome = await runOneAction(activeTabId, graph, { ...step, _processRow: rowIndex }, rowIndex, li + 1, iters.total, 1, 1);
           if (outcome.tabId) activeTabId = outcome.tabId;
           if (!outcome.ok) {
             const decision = handleStepFailureForLoop(graph, outcome.error, {
@@ -2167,15 +2250,9 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       const gi = frame.pendingGroupIndex++;
       const gRow = frame.pendingGroupRows[gi];
       const parentRow = frame.row;
-      const pinnedRow = resolveDedicatedRow(frame.groupStart, graph, {
-        groupRow: gRow,
-        parentRow,
-        loopIndex,
-        loopTotal,
-        groupIndex: gi,
-        groupTotal: frame.pendingGroupTotal
-      });
-      const effectiveRow = pinnedRow != null ? pinnedRow : (frame.moveLoop ? gRow : parentRow);
+      // No row pinning happens at this level any more: a row pointer belongs to the NODE that
+      // reads or writes a source row (resolved when that node runs), not to the group around it.
+      const effectiveRow = frame.moveLoop ? gRow : parentRow;
       if (frame.pendingGroupTotal > 1) {
         appendPlayLog(
           "info",
@@ -2253,8 +2330,11 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       // a group `row` has been re-bound to the group's own repeat row.
       const processRow = Number.isFinite(Number(frame.outerRow)) ? Number(frame.outerRow) : rowIndex;
       playStatus.processRow = processRow;
+      // The row of the level ABOVE this one, so a node pointer set to "parent loop" still names
+      // the outer group's row from inside a nested group. Same marker trick as _processRow.
+      const parentRowForNode = stack.length >= 2 ? stack[stack.length - 2].row : frame.row;
       const outcome = await runOneAction(
-        activeTabId, graph, { ...node, _processRow: processRow },
+        activeTabId, graph, { ...node, _processRow: processRow, _parentRow: parentRowForNode },
         frame.row, loopIndex, loopTotal, stepOrdinal, playStatus.stepTotal
       );
       if (outcome.tabId) {
@@ -2285,8 +2365,22 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       broadcastPlayState();
       // Conditions never fail the run: any exception → false (fail branch).
       let pass = false;
+      const condParentRow = stack.length >= 2 ? stack[stack.length - 2].row : frame.row;
+      const condCtx = {
+        groupRow: frame.row,
+        parentRow: condParentRow,
+        processRow: Number.isFinite(Number(frame.outerRow)) ? Number(frame.outerRow) : rowIndex,
+        loopIndex
+      };
+      // A source-reading condition honours its own row pointer; without one the basis is the
+      // PROCESS loop's current row (same rule as actions — not the level's own row).
+      const condRow = resolveRowPointer(node, graph, condCtx)
+        ?? (Number.isFinite(Number(condCtx.processRow)) ? Number(condCtx.processRow) : frame.row);
+      // ...and its dynamic selector may pin a row of its own.
+      const condSelectorRow = resolveRowPointer(node, graph, { ...condCtx, groupRow: condRow }, SELECTOR_ROW_KEYS);
+      const condNode = condSelectorRow != null ? { ...node, _selectorRow: condSelectorRow } : node;
       try {
-        pass = await evaluateCondition(activeTabId, node, graph, frame.row);
+        pass = await evaluateCondition(activeTabId, condNode, graph, condRow);
       } catch (err) {
         lastConditionError = err?.message || String(err);
         appendPlayLog("warn", `شرط «${node.title || node.id}»: اکسپشن → fail — ${lastConditionError}`);
@@ -2304,7 +2398,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         t: Date.now(),
         loop: loopIndex,
         loopTotal,
-        rowIndex: frame.row,
+        rowIndex: condRow,
         step: stepOrdinal,
         stepTotal: playStatus.stepTotal,
         title: node.title || "شرط",
@@ -2368,7 +2462,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
           t: Date.now(),
           loop: loopIndex,
           loopTotal,
-          rowIndex: frame.row,
+          rowIndex: condRow,
           step: stepOrdinal,
           stepTotal: playStatus.stepTotal,
           title: node.title || "شرط",
@@ -2415,7 +2509,14 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       }
       const gStart = (graph.nodes || []).find((n) => n.kind === "start" && sameNodeId(n.groupNodeId, node.id))
         || findGraphNode(graph, innerEntry);
-      const groupIters = await expandGroupByRepeatSource(activeTabId, gStart || node, graph);
+      // The group start's selector may build itself from a source cell; carry the entering row
+      // context so its own row pointer can name CurrentLoop / ParentLoop / ProcessLoop.
+      const groupIters = await expandGroupByRepeatSource(activeTabId, gStart || node, graph, {
+        groupRow: frame.row,
+        parentRow: stack.length >= 2 ? stack[stack.length - 2].row : frame.row,
+        processRow: Number.isFinite(Number(frame.outerRow)) ? Number(frame.outerRow) : rowIndex,
+        loopIndex
+      });
       // Turn this frame into the group's driver: it now owns the remaining iterations and the
       // entry node for each. The frame's `cur` is cleared so the driver branch runs next.
       frame.cur = null;
@@ -2456,6 +2557,34 @@ function findGroupEntryFallback(graph, groupId) {
 async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, stepIndex, stepTotal) {
   await waitIfPaused();
   if (playAbort) return { ok: false, stepFailed: true, error: "اجرا متوقف شد", tabId };
+
+  // The node's own row pointer, if it has one: the value reads and cell writes THIS node makes
+  // happen on that row. Resolved here, at the single entry point, so the walker, a single-step
+  // run and any future caller all agree.
+  const stepProcessRow = processStatusRow(step, rowIndex);
+  const ownRow = resolveRowPointer(step, graph, {
+    groupRow: rowIndex,
+    parentRow: step?._parentRow,
+    processRow: stepProcessRow,
+    loopIndex
+  });
+  if (ownRow != null) rowIndex = ownRow;
+  // The switch off is a REAL choice, not "whatever level this node happens to sit on": the basis
+  // is the PROCESS loop's current row, at every nesting depth. A group rebinds the level's row to
+  // its own iteration, so without this an action inside a one-shot group nested in a process
+  // loop would read and write row 0 instead of the row actually being processed.
+  else if (Number.isFinite(Number(stepProcessRow))) rowIndex = Number(stepProcessRow);
+
+  // The dynamic selector's OWN pointer (the second switch) overrides the row only for this node's
+  // selector resolution; without it the selector keeps following the node's row, exactly as it did
+  // before the selector switch existed.
+  const selectorRow = resolveRowPointer(step, graph, {
+    groupRow: rowIndex,
+    parentRow: step?._parentRow,
+    processRow: processStatusRow(step, rowIndex),
+    loopIndex
+  }, SELECTOR_ROW_KEYS);
+  if (selectorRow != null) step = { ...step, _selectorRow: selectorRow };
 
   playStatus.currentNodeId = step.id;
   const label = step.title || step.actionType || `مرحله ${stepIndex}`;
@@ -3176,7 +3305,11 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   const actionType = step.actionType || "Click";
   const framePath = parseFramePath(step.framePathJson);
   const resolvedSelector = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0);
-  const resolvedUrl = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { preferUrl: true });
+  // The step's URL is resolved INSIDE the GoToUrl branch below, not here. This used to run for
+  // EVERY action, so a non-value action carrying leftover source fields (a Click recorded against
+  // an older rule set) read a cell it has no field for — and a missing column failed the whole
+  // run on a setting the editor never even shows. Value resolution stays scoped to the actions
+  // that take a value; see also `needsAsyncValue` further down.
 
   logDynamicSelectorResolution(step, resolvedSelector, rowIndex ?? 0);
 
@@ -3190,7 +3323,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   if (actionType === "GoForward") return runHistoryStep(tabId, "forward", step);
 
   if (actionType === "GoToUrl") {
-    let url = resolvedUrl;
+    let url = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { preferUrl: true });
     const cst0 = step.contentSourceType || "";
     if (cst0 === "Memory" || cst0 === "Elements" || cst0 === "System" || cst0 === "DataSource") {
       url = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
@@ -3256,20 +3389,11 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
         expectedSelector: null, actualUrl: null
       });
     }
-    // rowIndex is the row the current flow walk sits on: the group's row when the step lives inside
-    // a group, the process loop's row otherwise. processRow travels separately (see executeFlow's
-    // _processRow) so "process loop row" still means the outer loop when read from inside a group.
-    const groupRow = rowIndex;
-    const processRow = processStatusRow(step, rowIndex);
-    const pointer = resolveDedicatedRow({ ...step, dedicatedRow: true }, graph, {
-      groupRow,
-      parentRow: processRow,
-      processRow,
-      loopIndex,
-      groupIndex: loopIndex
-    });
-    const targetRow = pointer != null ? pointer : (Number(rowIndex) || 0);
-    const res = await chrome.runtime.sendMessage({
+    // rowIndex is the row THIS node works on: runOneAction resolved its own pointer (loop row /
+    // process row / first / last / fixed) before dispatching here, so there is nothing left to
+    // resolve and the old step-level lookup was a second, diverging answer to the same question.
+    const targetRow = Number(rowIndex) || 0;
+    const res = await callBackground({
       type: isInsert ? "insertDataSourceRow" : "deleteDataSourceRow",
       dataSourceId: dsId,
       rowIndex: targetRow
@@ -3309,9 +3433,17 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   }
 
   const cst = step.contentSourceType || "";
-  const needsAsyncValue = stepUsesDataSourceValue(step)
+  // A step resolves an input value at all ONLY when its action takes one (a Click takes none).
+  // Leftover source fields from an older rule set — contentSourceType/valueFromSource/dataSourceId
+  // left on an action that no longer offers a value field — must not make the run read a cell:
+  // the editor shows no field for them there, so the read could only fail the whole run on a
+  // setting the author cannot even see. Keep this gate in step with `if (stepReceivesValue(at))`
+  // in the editor's validateActionNode — the two sides must agree about which steps read a source.
+  const needsAsyncValue = stepReceivesValue(actionType) && (
+    stepUsesDataSourceValue(step)
     || cst === "Memory" || cst === "Elements" || cst === "System"
-    || (actionType === "InputContent" || actionType === "SelectOption" || actionType === "Hold");
+    || (actionType === "InputContent" || actionType === "SelectOption" || actionType === "Hold")
+  );
 
   let valueForAction;
   if (needsAsyncValue) {
@@ -3512,7 +3644,7 @@ async function runAlertAcceptStep(tabId, taskId, step, runMode) {
 
   let res;
   try {
-    res = await chrome.runtime.sendMessage({ type: "readAlertResult", tabId });
+    res = await callBackground({ type: "readAlertResult", tabId });
   } catch (err) {
     return onUnexpected(runMode, {
       taskId, stepId: step.entityId, reason: "alert_read_failed",
@@ -3573,6 +3705,18 @@ async function runInsertContentStep(tabId, taskId, step, runMode, graph, rowInde
 }
 
 /**
+ * The row a node's dynamic selector reads from.
+ *
+ * The selector's own pointer (the second switch) wins when it is set; otherwise the selector keeps
+ * following the row the node itself works on — which is what it did before the selector switch
+ * existed, so an existing graph does not change meaning.
+ */
+function selectorRowFor(step, rowIndex) {
+  const own = Number(step?._selectorRow);
+  return Number.isFinite(own) ? own : (rowIndex ?? 0);
+}
+
+/**
  * Log the selector a dynamic step actually resolved to.
  *
  * When a selector is built from data (a source cell or a captured value) the raw
@@ -3618,7 +3762,7 @@ function resolveDynamicSelector(step, graph, rowIndex, opts = {}) {
       ds = sources.find((d) => Number(d.id) === Number(step[dynDs])) || null;
     }
     if (!ds) ds = findDataSourceForStep(step, graph);
-    const row = rowIndex ?? 0;
+    const row = selectorRowFor(step, rowIndex);
     const col = step[dynCol];
 
     if (hasPh) {
@@ -3652,7 +3796,7 @@ async function resolveDynamicSelectorAsync(step, graph, rowIndex, opts = {}) {
       ds = sources.find((d) => Number(d.id) === Number(step[dynDs])) || null;
     }
     if (!ds) ds = findDataSourceForStep(step, graph);
-    const row = rowIndex ?? 0;
+    const row = selectorRowFor(step, rowIndex);
     const col = step[dynCol];
 
     if (hasPh) {
@@ -3812,7 +3956,13 @@ function resolveStepParam(step, graph, rowIndex, opts = {}) {
   if (cst === "System") {
     return resolveSystemValue(step.systemValueType || "CurrentDateTime");
   }
-  if (cst === "DataSource" || step?.valueFromSource || (step?.dataSourceId && step?.dynamicSourceColumnName && cst !== "Memory" && cst !== "Elements" && cst !== "System")) {
+  // `sourceId` is the CONDITION inspector's name for the same idea; a step saved by the editor may
+  // carry either, and both mean "read this cell". An EXPLICIT value type wins over those fields:
+  // the legacy fallback applies only to a node that carries no type at all, so a stale source pair
+  // left on a «ثابت» node cannot hijack the value the author sees in the editor.
+  if (cst === "DataSource"
+    || (!cst && (step?.valueFromSource === true
+      || !!((step?.dataSourceId || step?.sourceId) && step?.dynamicSourceColumnName)))) {
     const ds = findDataSourceForValue(step, graph);
     const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0, {
       emitRead: true, graph, stepTitle: step?.title
@@ -3980,6 +4130,32 @@ function sleep(ms) {
 }
 
 /**
+ * Talk to the background message handlers.
+ *
+ * The engine IS the extension's service worker in production (background.js importScripts this
+ * file), and a worker cannot message itself: `chrome.runtime.sendMessage` FROM the worker is not
+ * delivered to its own `onMessage` listener, so with no other extension context open the send
+ * failed with «Could not establish connection. Receiving end does not exist.» — and every server
+ * read/write a run needed failed with it mid-run («خواندن سلول … از سرور ناموفق بود»). When the
+ * dispatcher is in scope (the worker), call it directly; contexts without it (tests, other pages)
+ * keep the messaging path unchanged.
+ */
+async function callBackground(message) {
+  try {
+    if (typeof handleMessage === "function") {
+      return await handleMessage(message, null);
+    }
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
  * Read one cell from the server.
  *
  * Returns the RAW message result so the caller can tell the three cases apart:
@@ -3993,7 +4169,7 @@ function sleep(ms) {
  */
 async function readServerCell(dataSourceId, rowIndex, columnKey) {
   try {
-    return await chrome.runtime.sendMessage({
+    return await callBackground({
       type: "readDataSourceCell",
       dataSourceId,
       rowIndex,
@@ -4056,7 +4232,7 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
       }
       let res;
       try {
-        res = await chrome.runtime.sendMessage({
+        res = await callBackground({
           type: "patchDataSourceCell",
           dataSourceId: id,
           rowIndex: row,
@@ -4125,7 +4301,7 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
 
 async function readDataSourceMetaFromServer(dataSourceId) {
   try {
-    return await chrome.runtime.sendMessage({ type: "readDataSourceMeta", dataSourceId });
+    return await callBackground({ type: "readDataSourceMeta", dataSourceId });
   } catch {
     return null;
   }
@@ -4267,9 +4443,20 @@ function cellValue(ds, columnKey, rowIndex, opts = {}) {
 
 function stepUsesDataSourceValue(step) {
   const cst = step?.contentSourceType || "";
-  return cst === "DataSource" || step?.valueFromSource
-    || (step?.dataSourceId && step?.dynamicSourceColumnName
-      && cst !== "Memory" && cst !== "Elements" && cst !== "System");
+  // A SourceValue condition reads its SUBJECT cell, and for a condition `contentSourceType`
+  // describes the COMPARE operand — a separate choice. The subject read is unconditional (the
+  // editor agrees: a SourceValue condition always needs its source pointer, whatever the compare
+  // source is).
+  if (step?.kind === "condition" && String(step?.conditionType || "") === "SourceValue") return true;
+  // An explicitly chosen value type is the author's visible choice and WINS. Leftover `sourceId` /
+  // `valueFromSource` fields from an older rule set must not turn a node the editor shows as
+  // «ثابت» into a source read at run time — the author cannot see the setting that then fails the
+  // run (real report: an InputContent with contentSourceType:"Constant" + leftover
+  // dataSourceId:45 / dynamicSourceColumnName:"Date" failed with «مقدار از منبع داده خوانده نشد»).
+  if (cst) return cst === "DataSource";
+  // No explicit type at all: an OLD save. Honour the legacy signals.
+  return step?.valueFromSource === true
+    || !!((step?.dataSourceId || step?.sourceId) && step?.dynamicSourceColumnName);
 }
 
 /**
@@ -4473,7 +4660,7 @@ async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellV
     };
     // Fan-out to open portal/editor tabs (fast local path).
     try {
-      chrome.runtime.sendMessage({ type: "broadcastDsCellEvent", event: payload }).catch(() => {});
+      callBackground({ type: "broadcastDsCellEvent", event: payload }).catch(() => {});
     } catch { /* ignore */ }
     // SignalR path via portal HTTP.
     const portal = typeof portalBase === "function"
@@ -4494,7 +4681,7 @@ async function persistPlayDataSources(graph) {
   const taskId = String(graph?.taskId || playStatus.taskId || "").trim();
   if (!taskId || !Array.isArray(graph?.dataSources)) return;
   try {
-    await chrome.runtime.sendMessage({
+    await callBackground({
       type: "persistPlayDataSources",
       taskId,
       dataSources: graph.dataSources
@@ -4523,7 +4710,9 @@ function findDataSourceForStep(step, graph) {
 
 function resolveDynamicText(text, step, graph, rowIndex) {
   if (text == null || text === "") {
-    if (step?.dynamicSourceColumnName) {
+    // Only a LEGACY node (no explicit value type) falls back to its source column here; a node
+    // whose visible type is «ثابت» must not read a leftover column just because it is set.
+    if (step?.dynamicSourceColumnName && !step?.contentSourceType) {
       const ds = findDataSourceForValue(step, graph);
       const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0, {
         emitRead: true, graph, stepTitle: step?.title
@@ -4584,9 +4773,13 @@ function dataSourceUnavailable(step, ds, columnKey, rowIndex) {
 
 function findDataSourceForValue(step, graph) {
   const sources = graph?.dataSources || [];
-  if (step?.dataSourceId != null) {
-    const found = sources.find((d) => Number(d.id) === Number(step.dataSourceId));
-    if (found) return found;
+  // Actions pick their source with `dataSourceId`; a condition's subject uses `sourceId`. Both are
+  // the same choice — the node's own source — so both are honoured before the process default.
+  for (const id of [step?.dataSourceId, step?.sourceId]) {
+    if (id != null) {
+      const found = sources.find((d) => Number(d.id) === Number(id));
+      if (found) return found;
+    }
   }
   return findDataSourceForStep(step, graph);
 }
@@ -4737,16 +4930,29 @@ function collectReachableFromStart(graph) {
   return reachable;
 }
 
+/** Field sets a row pointer can live in: the node's own row, and its dynamic SELECTOR's row. */
+const NODE_ROW_KEYS = { type: "rowIndexType", specific: "specificRowIndex" };
+const SELECTOR_ROW_KEYS = { type: "selectorRowIndexType", specific: "selectorSpecificRowIndex" };
+
 /**
- * Resolve the row a group with "dedicated row" enabled must work on.
+ * Resolve the row a node's own "dedicated row" pointer names.
  *
- * Returns null when the switch is off or unusable, so the caller falls back to the normal loop-follow
- * behaviour. Every branch is deliberately tolerant: a pointer that cannot be resolved must not crash
- * a run, it just leaves the group following its loop.
+ * The pointer lives on the node that READS or WRITES a source row — an action or a condition —
+ * because that is where "which row?" is a real question: the same process may read row 0 for a
+ * lookup and write the loop's row for its result. A group carries no row opinion; it only owns
+ * its repeat, and every node inside it keeps its own answer.
+ *
+ * `keys` picks WHICH pointer to read: the node's own (default) or its dynamic selector's, so a
+ * node can pin its values to one row while its selector builds itself from another.
+ *
+ * Returns null when the node has no usable pointer ("None"/unset), so the caller falls back to the
+ * loop row it would use anyway. Every branch is deliberately tolerant: a pointer that cannot be
+ * resolved must not crash a run, it just leaves the node on its loop row.
  */
-function resolveDedicatedRow(startNode, graph, ctx) {
-  if (!startNode || startNode.dedicatedRow !== true) return null;
-  const pointer = String(startNode.rowIndexType || "None");
+function resolveRowPointer(node, graph, ctx, keys) {
+  if (!node) return null;
+  const k = keys || NODE_ROW_KEYS;
+  const pointer = String(node[k.type] || "None");
   const { groupRow, parentRow, processRow, loopIndex, groupIndex } = ctx || {};
   switch (pointer) {
     case "CurrentLoop":
@@ -4771,7 +4977,7 @@ function resolveDedicatedRow(startNode, graph, ctx) {
     case "FirstRow":
       return 0;
     case "LastRow": {
-      const ds = findDedicatedRowSource(startNode, graph);
+      const ds = findRowPointerSource(node, graph);
       const rc = Number(ds?.rowCount);
       if (Number.isFinite(rc) && rc > 0) return rc - 1;
       // Fall back to the last row we can actually see in the graph when the count is unknown.
@@ -4786,11 +4992,11 @@ function resolveDedicatedRow(startNode, graph, ctx) {
       return last;
     }
     case "SpecificRow": {
-      const idx = Number(startNode.specificRowIndex);
+      const idx = Number(node[k.specific]);
       if (!Number.isFinite(idx) || idx < 0) return null;
       // Clamp to the source so a stale index (source shrank after the graph was saved) reads the
       // nearest existing row instead of silently reading nothing.
-      const ds = findDedicatedRowSource(startNode, graph);
+      const ds = findRowPointerSource(node, graph);
       const rc = Number(ds?.rowCount);
       if (Number.isFinite(rc) && rc > 0 && idx > rc - 1) return rc - 1;
       return idx;
@@ -4817,15 +5023,21 @@ function processStatusRow(step, fallback) {
 }
 
 /** The source a row pointer resolves against: the node's own pick, else the process default. */
-function findDedicatedRowSource(startNode, graph) {
+function findRowPointerSource(node, graph) {
   const sources = graph?.dataSources || [];
-  const id = startNode?.dataSourceId ?? startNode?.saveDataSourceId ?? graph?.dataSourceId;
+  // Every id a node can pick its source with, in the order the node itself prefers: the action's
+  // value/target source first, then a condition's subject, then the dynamic-selector sources —
+  // including the COMPARE side (`equalSelector*`), because a node whose only source is its compare
+  // selector is source-dependent just the same.
+  const id = node?.dataSourceId ?? node?.saveDataSourceId ?? node?.sourceId
+    ?? node?.selectorDataSourceId ?? node?.equalSelectorDataSourceId
+    ?? node?.equalAttributeDataSourceId ?? graph?.dataSourceId;
   if (id == null || id === "") return null;
   return sources.find((d) => Number(d.id) === Number(id)) || null;
 }
 
 /** Expand group iterations from group-start repeat settings (Loops / DataSource / Elements). */
-async function expandGroupByRepeatSource(tabId, groupOrStart, graph) {
+async function expandGroupByRepeatSource(tabId, groupOrStart, graph, ctx = {}) {
   const node = groupOrStart || {};
   const type = String(node.repeatSourceType || "None");
   if (type === "None" || !type) {
@@ -4876,7 +5088,27 @@ async function expandGroupByRepeatSource(tabId, groupOrStart, graph) {
     };
   }
   if (type === "Elements") {
-    const css = String(node.elementValue || node.selectorValue || node.css || "").trim();
+    let css = String(node.elementValue || node.selectorValue || node.css || "").trim();
+    // The group start's selector can also be built from a source cell («سلکتور پویا»): resolve it
+    // for THIS entry, honouring the selector's own row pointer; without one it reads the row the
+    // group is entered on. A selector without the flag resolves to itself.
+    if (node.selectorIsDynamic === true || node.attributeValueIsDynamic === true) {
+      try {
+        const selRow = resolveRowPointer(node, graph, ctx, SELECTOR_ROW_KEYS);
+        const dynNode = selRow != null ? { ...node, _selectorRow: selRow } : node;
+        const resolved = await resolveDynamicSelectorAsync(
+          dynNode, graph,
+          selRow != null
+            ? selRow
+            : (Number.isFinite(Number(ctx && ctx.processRow))
+                ? Number(ctx.processRow)
+                : (Number(ctx && ctx.groupRow) || 0))
+        );
+        if (resolved) css = resolved;
+      } catch (err) {
+        appendPlayLog("warn", `ساخت سلکتور پویا برای تکرار گروه ناموفق: ${err?.message || err}`);
+      }
+    }
     if (!css) {
       appendPlayLog("warn", "سلکتور تکرار المان خالی است؛ یک‌بار اجرا می‌شود.");
       return { type: "Elements", indices: [0], total: 1, label: "المان (بدون سلکتور)" };

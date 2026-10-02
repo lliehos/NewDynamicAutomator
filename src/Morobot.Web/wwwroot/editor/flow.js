@@ -516,7 +516,7 @@
       // Fill in only what the survivor is missing; never clobber a value it already has.
       for (const key of ["repeatSourceType", "dataSourceId", "loopCount", "stepDelayMs",
         "loopBackLimit", "ignorePlayError", "highlightColor", "moveLoop",
-        "repeatFromIndex", "repeatToIndex", "dedicatedRow", "rowIndexType", "specificRowIndex"]) {
+        "repeatFromIndex", "repeatToIndex"]) {
         if (keep[key] == null && d[key] != null) keep[key] = d[key];
       }
     }
@@ -576,10 +576,7 @@
       stepDelayMs: graph.stepDelayMs ?? 0,
       loopBackLimit: graph.loopBackLimit ?? DEFAULT_LOOP_BACK_LIMIT,
       ignorePlayError: graph.ignorePlayError !== false,
-      highlightColor: graph.highlightColor || DEFAULT_HIGHLIGHT_COLOR,
-      dedicatedRow: false,
-      rowIndexType: "None",
-      specificRowIndex: null
+      highlightColor: graph.highlightColor || DEFAULT_HIGHLIGHT_COLOR
     };
     // Its own id must not already be taken by something else.
     if (graph.nodes.some((n) => n.id === startNode.id)) startNode.id = "start-root";
@@ -644,18 +641,6 @@
       if (start.loopCount == null && graph.loopCount != null) start.loopCount = graph.loopCount;
       if (start.repeatFromIndex == null) start.repeatFromIndex = graph.repeatFromIndex;
       if (start.repeatToIndex == null) start.repeatToIndex = graph.repeatToIndex;
-      // Dedicated row: normalise so a legacy graph (no field) reads as "off", and a graph that has
-      // the switch on but no pointer gets a working default instead of an invalid empty state.
-      start.dedicatedRow = start.dedicatedRow === true;
-      if (start.dedicatedRow) {
-        if (!start.rowIndexType || start.rowIndexType === "None") start.rowIndexType = "CurrentLoop";
-        if (start.rowIndexType === "SpecificRow" && !Number.isFinite(Number(start.specificRowIndex))) {
-          start.specificRowIndex = 0;
-        }
-      } else {
-        start.rowIndexType = "None";
-        start.specificRowIndex = null;
-      }
       if (start.stepDelayMs == null) start.stepDelayMs = graph.stepDelayMs ?? 0;
       else graph.stepDelayMs = start.stepDelayMs;
       if (start.loopBackLimit == null) start.loopBackLimit = graph.loopBackLimit ?? DEFAULT_LOOP_BACK_LIMIT;
@@ -1542,7 +1527,7 @@
     }
   }
 
-  const dsViewerState = { sourceId: null, connection: null, blinkTimers: new Map() };
+  const dsViewerState = { sourceId: null, connection: null, blinkTimers: new Map(), cellRevisions: null, editing: null };
 
   function setDsViewerLive(on, text) {
     const el = document.getElementById("ds-viewer-live");
@@ -1668,18 +1653,21 @@
     if (subEl) {
       subEl.textContent = `${colKeys.length} ${t("editor.ds.columns")} · ${rows.length} ${t("editor.ds.rows")}`
         + (ds.fileName ? ` · ${ds.fileName}` : "")
-        + " — " + t("editor.ds.liveHint");
+        + " — " + t("editor.ds.liveHint")
+        + (canModify ? " · " + t("editor.ds.editHint") : "");
     }
     const thead = table.querySelector("thead");
     const tbody = table.querySelector("tbody");
-    thead.innerHTML = `<tr><th class="ds-row-idx">#</th>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>`;
+    thead.innerHTML = `<tr><th class="ds-row-idx">#</th>${headers.map((h, ci) =>
+      `<th data-col="${esc(colKeys[ci])}" data-colindex="${ci}" title="${esc(h)}">${esc(h)}</th>`
+    ).join("")}</tr>`;
     if (!rows.length) {
       tbody.innerHTML = `<tr><td colspan="${headers.length + 1}" class="ds-viewer-empty">${t("editor.ds.noRows")}</td></tr>`;
       return;
     }
     tbody.innerHTML = rows.map((r, i) =>
       `<tr><th class="ds-row-idx">${i + 1}</th>${r.map((v, ci) =>
-        `<td data-row="${i}" data-col="${esc(colKeys[ci])}">${esc(v)}</td>`
+        `<td data-row="${i}" data-col="${esc(colKeys[ci])}" data-colindex="${ci}">${esc(v)}</td>`
       ).join("")}</tr>`
     ).join("");
   }
@@ -1697,7 +1685,9 @@
       ds.columnCount = meta.columnCount ?? ds.columnCount;
       ds.dataRevision = meta.dataRevision;
       if (Array.isArray(meta.columns)) ds.columns = meta.columns;
+      if (Array.isArray(meta.columnKeys)) ds.columnKeys = meta.columnKeys;
       ds.cells = [];
+      dsViewerState.cellRevisions = {};
       // One bulk page request instead of one request per row (was N+1 round trips).
       const total = Math.min(Number(meta.rowCount) || 0, 5000);
       const PAGE = 1000;
@@ -1708,6 +1698,11 @@
         );
         if (!pageRes.ok) continue;
         const page = await pageRes.json();
+        // Per-cell revisions ride along with the page — keep them so an inline edit can send the
+        // revision it saw and let the server refuse a stale write (same contract as the grids).
+        for (const [row, cols] of Object.entries(page.cellRevisions || {})) {
+          dsViewerState.cellRevisions[row] = Object.assign(dsViewerState.cellRevisions[row] || {}, cols);
+        }
         const rows = page.rows || page.Rows || [];
         for (const row of rows) {
           const idx = Number(row.rowIndex ?? row.RowIndex ?? 0);
@@ -1720,6 +1715,396 @@
       }
     } catch { /* use in-graph fallback */ }
     return ds;
+  }
+
+  // --- Editor source viewer: inline editing + row/column context menu -------------------------
+  // Same behaviour as the two portal grids, plus one editor-specific duty: a column rename is
+  // patched server-side into the SAVED graph, so the in-memory graph is re-pointed the same way
+  // here — otherwise the next save from this editor would write the old key back.
+
+  const EDITOR_COLUMN_BINDINGS = [
+    ["dataSourceId", "dynamicSourceColumnName"],
+    ["sourceId", "dynamicSourceColumnName"],
+    ["selectorDataSourceId", "selectorDynamicColumn"],
+    ["equalSelectorDataSourceId", "equalSelectorDynamicColumn"],
+    ["attributeDataSourceId", "attributeDynamicColumn"],
+    ["equalAttributeDataSourceId", "equalAttributeDynamicColumn"],
+    ["saveDataSourceId", "saveColumnName"]
+  ];
+
+  /** Reload the open source from the server and repaint the viewer table. */
+  async function reloadDsViewer() {
+    const ds = await loadDataSourceForViewer(dsViewerState.sourceId);
+    if (ds) renderDsViewerTable(ds);
+    return ds;
+  }
+
+  function dsViewerCellRevision(rowIndex, columnKey) {
+    const row = dsViewerState.cellRevisions?.[rowIndex];
+    return row ? row[columnKey] : undefined;
+  }
+
+  function setDsLocalCell(rowIndex, columnKey, value) {
+    const ds = findDataSourceById(dsViewerState.sourceId);
+    if (!ds) return;
+    ds.cells = Array.isArray(ds.cells) ? ds.cells : [];
+    const hit = ds.cells.find((c) =>
+      (c.key === columnKey || c.Key === columnKey)
+      && Number(c.index ?? c.Index ?? c.rowIndex) === rowIndex);
+    if (hit) {
+      if (hit.cellValue !== undefined) hit.cellValue = value;
+      else if (hit.CellValue !== undefined) hit.CellValue = value;
+      else hit.value = value;
+    } else {
+      ds.cells.push({ key: columnKey, index: rowIndex, cellValue: value });
+    }
+  }
+
+  /** Mirror the server's column rename on the in-memory graph so a later save cannot revert it. */
+  function patchLocalColumnBindings(sourceId, oldKey, newKey) {
+    let changed = 0;
+    (graph.nodes || []).forEach((n) => {
+      EDITOR_COLUMN_BINDINGS.forEach(([idProp, colProp]) => {
+        if (Number(n[idProp]) !== Number(sourceId)) return;
+        if (String(n[colProp] || "").trim().toLowerCase() !== String(oldKey).trim().toLowerCase()) return;
+        n[colProp] = newKey;
+        changed++;
+      });
+    });
+    return changed;
+  }
+
+  /** A shape change patches the SAVED graph server-side — re-read the canvas stamp so saving stays allowed. */
+  async function refreshEditorSourceStamp() {
+    if (isLocalMode || !/^\d+$/.test(String(taskId))) return;
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/canvas`, { credentials: "same-origin" });
+      if (!res.ok) return;
+      const c = await res.json();
+      if (c.updatedAtUtc) loadedUpdatedAtUtc = c.updatedAtUtc;
+    } catch { /* stamp refresh is best-effort */ }
+  }
+
+  /** Structural edits need the server store; local-only sources can only be edited as cells. */
+  function dsViewerServerGuard() {
+    const sourceId = dsViewerState.sourceId;
+    if (!isLocalMode && Number(sourceId) > 0) return true;
+    setStatus(t("editor.ds.serverOnly") || "این عملیات فقط برای منابع ذخیره‌شده روی سرور در دسترس است.", "error");
+    return false;
+  }
+
+  function beginDsViewerCellEdit(td) {
+    if (!canModify || !td || dsViewerState.editing) return;
+    const rowIndex = Number(td.dataset.row);
+    const columnKey = td.dataset.col;
+    if (!Number.isFinite(rowIndex) || !columnKey) return;
+
+    const before = td.textContent ?? "";
+    td.classList.add("ds-cell-editing");
+    td.innerHTML = "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "ds-cell-input";
+    input.value = before;
+    input.autocomplete = "off";
+    td.appendChild(input);
+    input.focus();
+    input.select();
+    dsViewerState.editing = { td, input, rowIndex, columnKey, before, done: false };
+
+    const finish = async (commit) => {
+      const state = dsViewerState.editing;
+      if (!state || state.done) return;
+      state.done = true;
+      const next = input.value;
+      td.classList.remove("ds-cell-editing");
+      td.textContent = commit ? next : before;
+      dsViewerState.editing = null;
+      if (!commit || next === before) return;
+      const ok = await saveDsViewerCell(rowIndex, columnKey, next);
+      if (!ok) td.textContent = before;
+    };
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      e.stopPropagation();
+    });
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("dblclick", (e) => e.stopPropagation());
+  }
+
+  async function saveDsViewerCell(rowIndex, columnKey, value) {
+    const sourceId = dsViewerState.sourceId;
+    if (sourceId == null) return false;
+    if (isLocalMode || !(Number(sourceId) > 0)) {
+      setDsLocalCell(rowIndex, columnKey, value);
+      await save();
+      return true;
+    }
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/cells`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rowIndex,
+          columnKey,
+          cellValue: value,
+          expectedCellRevision: dsViewerCellRevision(rowIndex, columnKey)
+        })
+      });
+      if (res.status === 409) {
+        // Another writer won — pull their value in rather than retrying blindly.
+        setStatus(t("editor.ds.cellConflict") || "این سلول جای دیگری تغییر کرده بود؛ جدول بازخوانی شد.", "error");
+        await reloadDsViewer();
+        return false;
+      }
+      if (!res.ok) throw new Error(`cell ${res.status}`);
+      const body = await res.json().catch(() => ({}));
+      if (body.cellRevision != null) {
+        if (!dsViewerState.cellRevisions) dsViewerState.cellRevisions = {};
+        dsViewerState.cellRevisions[rowIndex] = dsViewerState.cellRevisions[rowIndex] || {};
+        dsViewerState.cellRevisions[rowIndex][columnKey] = body.cellRevision;
+      }
+      setDsLocalCell(rowIndex, columnKey, value);
+      setStatus(t("editor.ds.cellSaved") || "سلول ذخیره شد.", "success");
+      return true;
+    } catch (e) {
+      setStatus(e.message || t("editor.ds.cellSaveFail") || "ذخیرهٔ سلول ناموفق بود.", "error");
+      return false;
+    }
+  }
+
+  async function beginDsColumnRename(oldKey) {
+    if (!canModify || !oldKey || !dsViewerServerGuard()) return;
+    const sourceId = dsViewerState.sourceId;
+    const next = window.DaNotify?.prompt
+      ? await DaNotify.prompt(t("sources.renameColumnPrompt") || "نام جدید ستون را وارد کنید", {
+          title: t("sources.renameColumn") || "تغییر نام ستون",
+          value: oldKey
+        })
+      : window.prompt(t("sources.renameColumnPrompt") || "نام جدید ستون را وارد کنید", oldKey);
+    if (next == null) return;
+    const newName = String(next).trim();
+    if (!newName || newName === oldKey) return;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/columns`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ oldKey, newName })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.renameColumnFail") || "تغییر نام ستون ناموفق بود.");
+      patchLocalColumnBindings(sourceId, oldKey, newName);
+      const affected = Number(body.affectedProcessCount ?? body.AffectedProcessCount ?? 0);
+      setStatus(
+        affected > 0
+          ? (t("sources.colRenamedAffected", { key: newName, count: affected }) || `ستون به «${newName}» تغییر نام یافت و در ${affected} فرآیند اعمال شد.`)
+          : (t("sources.colRenamed", { key: newName }) || `ستون به «${newName}» تغییر نام یافت.`),
+        "success"
+      );
+      await reloadDsViewer();
+      renderDataSources();
+      renderInspector();
+      render();
+      await refreshEditorSourceStamp();
+    } catch (e) {
+      setStatus(e.message || t("sources.renameColumnFail") || "تغییر نام ستون ناموفق بود.", "error");
+    }
+  }
+
+  /** Row/column context menu for the editor's source viewer (same shape as the portal grids). */
+  function showDsViewerGridMenu(x, y, td, th) {
+    if (!canModify || dsViewerState.sourceId == null) return;
+    const rowIndex = td ? Number(td.dataset.row) : null;
+    const columnKey = td ? td.dataset.col : (th ? th.dataset.col : null);
+    const columnIndex = th
+      ? Number(th.dataset.colindex ?? (th.cellIndex - 1))
+      : (td ? Number(td.dataset.colindex ?? (td.cellIndex - 1)) : null);
+
+    let items = [
+      { id: "row-after", label: t("sources.addRowAfter") || "افزودن ردیف بعد از این" },
+      { id: "row-before", label: t("sources.addRowBefore") || "افزودن ردیف قبل از این" },
+      { id: "row-delete", label: t("sources.deleteRow") || "حذف این ردیف" },
+      { sep: true },
+      { id: "col-rename", label: t("sources.renameColumn") || "تغییر نام ستون" },
+      { id: "col-after", label: t("sources.addColAfter") || "افزودن ستون بعد از این" },
+      { id: "col-before", label: t("sources.addColBefore") || "افزودن ستون قبل از این" },
+      { id: "col-delete", label: t("sources.deleteColumn") || "حذف این ستون" }
+    ];
+    if (th && columnKey) {
+      // Right-click on a column header: column actions for THAT column, no row actions.
+      items = [
+        { id: "col-rename", label: t("sources.renameColumn") || "تغییر نام ستون" },
+        { sep: true },
+        { id: "col-after", label: t("sources.addColAfter") || "افزودن ستون بعد از این" },
+        { id: "col-before", label: t("sources.addColBefore") || "افزودن ستون قبل از این" },
+        { id: "col-delete", label: t("sources.deleteColumn") || "حذف این ستون" },
+        { sep: true },
+        { id: "row-append", label: t("sources.addRowAppend") || "افزودن ردیف در پایان" }
+      ];
+    } else if (!td) {
+      items = [
+        { id: "row-append", label: t("sources.addRowAppend") || "افزودن ردیف در پایان" },
+        { sep: true },
+        { id: "col-append", label: t("sources.addColAppend") || "افزودن ستون در پایان" }
+      ];
+    }
+
+    const menu = document.createElement("div");
+    menu.className = "ds-grid-menu";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = items.map((it) => it.sep
+      ? `<div class="ds-grid-menu-sep"></div>`
+      : `<button type="button" class="ds-grid-menu-item" data-action="${it.id}">${esc(it.label)}</button>`
+    ).join("");
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+    menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+
+    const close = () => {
+      menu.remove();
+      document.removeEventListener("mousedown", onDocDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+    const onDocDown = (e) => { if (!menu.contains(e.target)) close(); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("mousedown", onDocDown, true);
+    document.addEventListener("keydown", onKey, true);
+
+    menu.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-action]");
+      if (!btn) return;
+      const action = btn.dataset.action;
+      close();
+      await runDsViewerGridAction(action, rowIndex, columnKey, columnIndex);
+    });
+  }
+
+  function nextDsViewerColumnKey(existingKeys) {
+    const used = new Set((existingKeys || []).map((k) => String(k).toLowerCase()));
+    let n = used.size + 1;
+    while (used.has(`c${n}`)) n++;
+    return `c${n}`;
+  }
+
+  async function runDsViewerGridAction(action, rowIndex, columnKey, columnIndex) {
+    const sourceId = dsViewerState.sourceId;
+    if (sourceId == null) return;
+    if (action === "col-rename") { await beginDsColumnRename(columnKey); return; }
+    if (action === "row-delete") { await deleteDsViewerRow(rowIndex); return; }
+    if (action === "col-delete") { await deleteDsViewerColumn(columnKey); return; }
+    if (!dsViewerServerGuard()) return;
+
+    const beforeIndexFor = (kind) => {
+      // A column's position comes from the header/cell index the menu was opened on — never from
+      // the row number, which is a different axis.
+      if (kind === "col" && columnIndex != null && Number.isFinite(columnIndex)) {
+        if (action === "col-before") return Math.max(0, columnIndex);
+        if (action === "col-after") return columnIndex + 1;
+      }
+      if (action === `${kind}-before`) return rowIndex ?? undefined;
+      if (action === `${kind}-after`) return rowIndex == null ? undefined : rowIndex + 1;
+      return undefined; // append
+    };
+
+    try {
+      if (action.startsWith("row-")) {
+        const res = await fetch(`/api/datasources/${sourceId}/rows/add`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ beforeIndex: beforeIndexFor("row"), count: 1 })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || t("sources.addRowFail") || "افزودن ردیف ناموفق بود.");
+        setStatus(t("sources.rowAdded") || "ردیف اضافه شد.", "success");
+      } else {
+        const ds = findDataSourceById(sourceId);
+        const existing = (ds?.columnKeys || ds?.columns || []).map((c) => String(c.key || c.Key || c));
+        const key = nextDsViewerColumnKey(existing);
+        const res = await fetch(`/api/datasources/${sourceId}/columns`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key, title: key, beforeIndex: beforeIndexFor("col") })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || t("sources.addColFail") || "افزودن ستون ناموفق بود.");
+        setStatus(t("sources.colAdded", { key: body.addedColumnKey || key }) || `ستون «${body.addedColumnKey || key}» اضافه شد.`, "success");
+      }
+      await reloadDsViewer();
+      renderDataSources();
+      await refreshEditorSourceStamp();
+    } catch (e) {
+      setStatus(e.message || "انجام نشد.", "error");
+    }
+  }
+
+  async function deleteDsViewerRow(rowIndex) {
+    if (!Number.isFinite(rowIndex) || !dsViewerServerGuard()) return;
+    const sourceId = dsViewerState.sourceId;
+    const msg = t("sources.deleteRowConfirm", { row: rowIndex + 1 }) || `ردیف ${rowIndex + 1} حذف شود؟`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("sources.deleteRow") || "حذف ردیف",
+          okText: t("common.delete") || "حذف",
+          cancelText: t("common.cancel") || "انصراف"
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/rows/${rowIndex}`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.deleteRowFail") || "حذف ردیف ناموفق بود.");
+      setStatus(t("sources.rowDeleted") || "ردیف حذف شد.", "success");
+      await reloadDsViewer();
+      renderDataSources();
+      await refreshEditorSourceStamp();
+    } catch (e) {
+      setStatus(e.message || "حذف ردیف ناموفق بود.", "error");
+    }
+  }
+
+  async function deleteDsViewerColumn(columnKey) {
+    if (!columnKey || !dsViewerServerGuard()) return;
+    const sourceId = dsViewerState.sourceId;
+    const msg = t("sources.deleteColumnConfirm", { key: columnKey }) || `ستون «${columnKey}» با همهٔ داده‌هایش حذف شود؟`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("sources.deleteColumn") || "حذف ستون",
+          okText: t("common.delete") || "حذف",
+          cancelText: t("common.cancel") || "انصراف"
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/columns/${encodeURIComponent(columnKey)}`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.deleteColumnFail") || "حذف ستون ناموفق بود.");
+      const key = body.deletedColumnKey || body.DeletedColumnKey || columnKey;
+      const affected = Number(body.affectedProcessCount ?? body.AffectedProcessCount ?? 0);
+      setStatus(
+        affected > 0
+          ? (t("sources.colDeletedAffected", { key, count: affected }) || `ستون «${key}» حذف شد — ${affected} فرآیند به این ستون وابسته بود؛ در ویرایشگر اصلاح کنید.`)
+          : (t("sources.colDeleted", { key }) || `ستون «${key}» حذف شد.`),
+        affected > 0 ? "error" : "success"
+      );
+      await reloadDsViewer();
+      renderDataSources();
+      await refreshEditorSourceStamp();
+    } catch (e) {
+      setStatus(e.message || "حذف ستون ناموفق بود.", "error");
+    }
   }
 
   async function openDsViewer(sourceId) {
@@ -1752,11 +2137,37 @@
       el.addEventListener("click", () => closeDsViewer());
     });
     document.getElementById("ds-viewer-refresh")?.addEventListener("click", () => {
-      const ds = findDataSourceById(dsViewerState.sourceId);
-      if (ds) renderDsViewerTable(ds);
+      reloadDsViewer();
     });
+    const table = document.getElementById("ds-viewer-table");
+    if (table) {
+      table.addEventListener("dblclick", (e) => {
+        // A column HEADER double-click renames the column; a cell edits its own value instead —
+        // the same gesture the two portal grids use.
+        const th = e.target.closest("th[data-col]");
+        if (th) {
+          e.preventDefault();
+          beginDsColumnRename(th.dataset.col);
+          return;
+        }
+        const td = e.target.closest("td[data-row][data-col]");
+        if (!td) return;
+        e.preventDefault();
+        beginDsViewerCellEdit(td);
+      });
+      table.addEventListener("contextmenu", (e) => {
+        const modal = document.getElementById("ds-viewer");
+        if (!modal || modal.hidden) return;
+        e.preventDefault();
+        showDsViewerGridMenu(
+          e.clientX, e.clientY,
+          e.target.closest("td[data-row][data-col]"),
+          e.target.closest("th[data-col]")
+        );
+      });
+    }
     document.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape") {
+      if (ev.key === "Escape" && !dsViewerState.editing) {
         const modal = document.getElementById("ds-viewer");
         if (modal && !modal.hidden) closeDsViewer();
       }
@@ -4345,6 +4756,11 @@
       tip.textContent = "نامعتبر: " + validity.reasons.join(" · ");
       g.insertBefore(tip, g.firstChild);
     }
+    // Source dependency is a property of the node, not of edit rights — the badge shows for every
+    // viewer (including read-only ones) whenever the node reads/writes a source or builds a
+    // selector from one. A group earns it when anything INSIDE it (any depth) depends on a source,
+    // so folding work into a group cannot hide where the source reads/writes actually live.
+    if (nodeDependsOnSource(n)) g.appendChild(makeSourceBadge(w, sourceBadgeTipText(n)));
     // Buttons first (lower paint layer); titles appended after so they sit above.
     // Child mode: the graph shape belongs to the mother, so no clone affordance.
     if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify && !structLocked) {
@@ -4579,6 +4995,28 @@
       fill: "none", stroke: color, "stroke-width": 1.45
     }));
     return btn;
+  }
+
+  /**
+   * Tiny source-dependency badge, drawn OUTSIDE the node's top-right corner.
+   *
+   * A small database cylinder on a soft plate: it marks every node that reads, writes or builds a
+   * selector from a data source, so the diagram itself answers "does this node depend on source
+   * data?" without opening the inspector. Hovering it names the meaning.
+   */
+  function makeSourceBadge(w, tipText) {
+    const badge = el("g", {
+      class: "node-src-badge",
+      transform: `translate(${w - 5},-10)`
+    });
+    const tip = document.createElementNS(ns, "title");
+    tip.textContent = tipText || "به منبع داده وابسته است";
+    badge.appendChild(tip);
+    badge.appendChild(el("circle", { cx: 6, cy: 6.5, r: 7.5 }));
+    badge.appendChild(el("ellipse", { cx: 6, cy: 4.2, rx: 3.4, ry: 1.3 }));
+    badge.appendChild(el("path", { d: "M2.6 4.2v4.6c0 .8 1.5 1.4 3.4 1.4s3.4-.6 3.4-1.4V4.2" }));
+    badge.appendChild(el("path", { d: "M2.6 6.5c0 .8 1.5 1.4 3.4 1.4s3.4-.6 3.4-1.4" }));
+    return badge;
   }
 
   function deepClonePlain(obj) {
@@ -6671,7 +7109,7 @@
         } else if (k === "dedicatedRow") {
           n.dedicatedRow = inp.checked === true;
           // Turning the switch on with no pointer yet means "a row, chosen how?" - default to the
-          // loop's own row so the group keeps working exactly as before until the user changes it.
+          // loop's own row so the node keeps working exactly as before until the user changes it.
           if (n.dedicatedRow && !n.rowIndexType) n.rowIndexType = "CurrentLoop";
           if (!n.dedicatedRow) {
             // Switching off clears the pointer so a stale hidden value cannot come back later.
@@ -6713,6 +7151,37 @@
           // Clamp to the source's real range: a row that does not exist would silently read empty.
           if (maxRow != null && num > maxRow) num = maxRow;
           n.specificRowIndex = num;
+          return;
+        } else if (k === "selectorDedicatedRow") {
+          n.selectorDedicatedRow = inp.checked === true;
+          // Same default as the node switch: a row, chosen how? -> the loop's own row until the
+          // author changes it, so switching on never invalidates the step on its own.
+          if (n.selectorDedicatedRow && !n.selectorRowIndexType) n.selectorRowIndexType = "CurrentLoop";
+          if (!n.selectorDedicatedRow) {
+            n.selectorRowIndexType = "None";
+            n.selectorSpecificRowIndex = null;
+          }
+          renderInspector();
+          return;
+        } else if (k === "selectorRowIndexType") {
+          n.selectorRowIndexType = inp.value;
+          if (inp.value === "SpecificRow") {
+            const rc = dataSourceRowCount(rowPointerSourceId(n));
+            const maxRow = rc > 0 ? rc - 1 : null;
+            if (n.selectorSpecificRowIndex == null) n.selectorSpecificRowIndex = 0;
+            if (maxRow != null && n.selectorSpecificRowIndex > maxRow) n.selectorSpecificRowIndex = maxRow;
+          } else {
+            n.selectorSpecificRowIndex = null;
+          }
+          renderInspector();
+          return;
+        } else if (k === "selectorSpecificRowIndex") {
+          const raw = String(inp.value || "").trim();
+          const rc = dataSourceRowCount(rowPointerSourceId(n));
+          const maxRow = rc > 0 ? rc - 1 : null;
+          let num = raw === "" ? 0 : Math.max(0, Math.floor(Number(raw) || 0));
+          if (maxRow != null && num > maxRow) num = maxRow;
+          n.selectorSpecificRowIndex = num;
           return;
         } else if (k === "repeatSourceType") {
           let next = inp.value;
@@ -7370,7 +7839,49 @@
     if (!n) return;
     const g = world.querySelector(`g.node[data-id="${CSS.escape(String(n.id))}"]`);
     if (g) applyNodeValidityClass(g, n);
+    syncNodeSourceBadge(n);
     syncAncestorGroupValidity(n);
+  }
+
+  /** Add/remove the source badge on one rendered node <g>, in place. */
+  function applySourceBadge(gEl, n) {
+    if (!gEl || !n) return;
+    const existing = gEl.querySelector(":scope > .node-src-badge");
+    const wanted = nodeDependsOnSource(n);
+    if (wanted && !existing) {
+      gEl.appendChild(makeSourceBadge(sizeOf(n).w, sourceBadgeTipText(n)));
+    } else if (!wanted && existing) {
+      existing.remove();
+    }
+  }
+
+  /** Tooltip for the source badge — a group explains that the dependency is inside it. */
+  function sourceBadgeTipText(n) {
+    return n && n.kind === "group"
+      ? "نودی داخل این گروه به منبع داده وابسته است"
+      : "به منبع داده وابسته است";
+  }
+
+  /**
+   * Add/remove one node's source badge in place, without repainting the whole diagram — including
+   * its ancestor groups, whose badge is derived from what they contain.
+   *
+   * The badge is normally drawn by drawNode; this keeps it in step when an inspector change
+   * (value source, dynamic selector, row fields…) touches a dependency-relevant field, because
+   * those handlers re-render the inspector but not the canvas.
+   */
+  function syncNodeSourceBadge(n) {
+    if (!n) return;
+    applySourceBadge(world.querySelector(`g.node[data-id="${CSS.escape(String(n.id))}"]`), n);
+    let gid = n.groupNodeId || null;
+    const seen = new Set();
+    while (gid && !seen.has(gid)) {
+      seen.add(gid);
+      const group = nodeById(gid);
+      if (!group) break;
+      applySourceBadge(world.querySelector(`g.node[data-id="${CSS.escape(String(group.id))}"]`), group);
+      gid = group.groupNodeId || null;
+    }
   }
   function validateSelectorBlock(n, opts = {}) {
     const valueKey = opts.valueKey || "selectorValue";
@@ -7480,6 +7991,16 @@
       if (normalizeLoadTarget(n) === "Memory") {
         if (!String(n.memoryVariableName || "").trim()) reasons.push("نام متغیر مقصد مشخص نیست");
       }
+      // The READ side is required too: which cell this step reads. The engine reads exactly these
+      // two fields — dataSourceId (or the process default) and the column, which has no default.
+      const pick = validateDataSourcePick(
+        {
+          dataSourceId: n.dataSourceId ?? graph.dataSourceId,
+          dynamicSourceColumnName: n.dynamicSourceColumnName || n.saveColumnName
+        },
+        { dsReason: "منبع خواندن مشخص نشده", colReason: "ستون خواندن مشخص نشده" }
+      );
+      if (!pick.ok) reasons.push(pick.reason);
     }
     // InsertContent writes a value INTO a source cell, so it needs a destination source + column.
     if (stepWritesToSource(at)) {
@@ -7522,6 +8043,10 @@
         reasons.push("نوع ردیف نامعتبر است: " + pointer);
       }
     }
+
+    // Both row pointers: the node's own and its dynamic selector's.
+    validateRowPointerNode(n, reasons);
+    validateRowPointerNode(n, reasons, "selector");
 
     return { ok: reasons.length === 0, reasons };
   }
@@ -7645,6 +8170,10 @@
       reasons.push("هیچ خروجی‌ای از این شرط وصل نشده (نه success، نه fail، نه بعدی)");
     }
 
+    // Same two pointers on a condition as on an action.
+    validateRowPointerNode(n, reasons);
+    validateRowPointerNode(n, reasons, "selector");
+
     return { ok: reasons.length === 0, reasons };
   }
 
@@ -7667,36 +8196,53 @@
       } else {
         const v = validateSelectorBlock(n, { label: "سلکتور تکرار" });
         if (!v.ok) reasons.push(v.reason);
-      }
-    }
-
-    // Dedicated-row rules. Only checked when the switch is on, so an author who never turned it on
-    // is never blocked by it.
-    if (n.dedicatedRow === true) {
-      const pointer = String(n.rowIndexType || "None");
-      if (pointer === "None") {
-        reasons.push("برای ردیف اختصاصی، نوع اشاره‌گر ردیف انتخاب نشده");
-      } else if (pointer === "SpecificRow") {
-        const idx = Number(n.specificRowIndex);
-        if (!Number.isFinite(idx) || idx < 0) {
-          reasons.push("شماره ردیف اختصاصی نامعتبر است");
-        } else {
-          // A pinned row must exist in the source it points at; otherwise the step would silently
-          // read an empty row and the process would look like it "did nothing".
-          const dsId = n.dataSourceId ?? n.saveDataSourceId ?? graph.dataSourceId;
-          const rc = dataSourceRowCount(dsId);
-          if (rc > 0 && idx > rc - 1) {
-            reasons.push(`شماره ردیف اختصاصی ${idx} خارج از بازهٔ منبع است (0 تا ${rc - 1})`);
-          }
-        }
-      }
-      // A dedicated row needs a source to resolve against, unless it just follows the loop.
-      if ((pointer === "FirstRow" || pointer === "LastRow" || pointer === "SpecificRow")
-        && (n.dataSourceId == null && n.saveDataSourceId == null && graph.dataSourceId == null)) {
-        reasons.push("برای اشاره‌گر ردیف منبع، منبع داده مشخص نشده");
+        // The repeat selector may build itself from a source cell and pin its own row — the same
+        // rule the action and condition selectors follow.
+        validateRowPointerNode(n, reasons, "selector");
       }
     }
     return { ok: reasons.length === 0, reasons };
+  }
+
+  /**
+   * The row pointer's own rules, applied to whichever node carries one.
+   *
+   * Guarded by each switch so an author who never turned one on is never blocked by it, and kept in
+   * step with <c>validateRowPointerForPlay</c> in the engine — the two must accept the same
+   * diagrams, or the editor would save a graph the player refuses to run. `kind` picks the node's
+   * own pointer or its dynamic selector's.
+   */
+  function validateRowPointerNode(n, reasons, kind) {
+    const isSelector = kind === "selector";
+    if ((isSelector ? n.selectorDedicatedRow : n.dedicatedRow) !== true) return;
+    const typeKey = isSelector ? "selectorRowIndexType" : "rowIndexType";
+    const specificKey = isSelector ? "selectorSpecificRowIndex" : "specificRowIndex";
+    const pointer = String(n[typeKey] || "None");
+    if (pointer === "None" || !pointer) {
+      reasons.push(isSelector
+        ? "برای ردیف اختصاصی سلکتور، نوع اشاره‌گر ردیف انتخاب نشده"
+        : "برای ردیف اختصاصی، نوع اشاره‌گر ردیف انتخاب نشده");
+      return;
+    }
+    if (pointer === "SpecificRow") {
+      const idx = Number(n[specificKey]);
+      if (!Number.isFinite(idx) || idx < 0) {
+        reasons.push(isSelector ? "شماره ردیف اختصاصی سلکتور نامعتبر است" : "شماره ردیف اختصاصی نامعتبر است");
+      } else {
+        // A pinned row must exist in the source it points at; otherwise the step would silently
+        // read an empty row and the process would look like it "did nothing".
+        const dsId = rowPointerSourceId(n) ?? graph.dataSourceId;
+        const rc = dataSourceRowCount(dsId);
+        if (rc > 0 && idx > rc - 1) {
+          reasons.push(`شماره ردیف اختصاصی ${idx} خارج از بازهٔ منبع است (0 تا ${rc - 1})`);
+        }
+      }
+    }
+    // A pointer of first/last/fixed needs a source to resolve against; the loop pointers do not.
+    if ((pointer === "FirstRow" || pointer === "LastRow" || pointer === "SpecificRow")
+      && rowPointerSourceId(n) == null && graph.dataSourceId == null) {
+      reasons.push("برای اشاره‌گر ردیف منبع، منبع داده مشخص نشده");
+    }
   }
 
   function knownMemoryVariableNames() {
@@ -7841,15 +8387,30 @@
     }
 
     if (stepNeedsValueSource(n)) body += stepValueSourceHtml(n);
-    // LoadContent puts its value into a chosen target, which may be a page element or a variable.
-    if (at === "LoadContent") body += stepLoadTargetHtml(n);
+    // LoadContent reads ONE cell and writes it somewhere: its read side (source + column) comes
+    // first — with the row switch right under that PAIR (rendered inside stepLoadSourceHtml) —
+    // then its destination.
+    if (at === "LoadContent") {
+      body += stepLoadSourceHtml(n);
+      body += stepLoadTargetHtml(n);
+    }
     // InsertContent writes its value into a chosen cell, so it needs the destination source+column.
-    if (stepWritesToSource(at)) body += stepWriteTargetHtml(n);
+    // Its row switch renders inside the builder, right under that pair as well.
+    if (stepWritesToSource(at)) {
+      body += stepWriteTargetHtml(n);
+    }
 
     // Target selector depends on action type (+ LoadContent only when its target is an element).
     if (stepShowsTargetSelector(n)) {
       body += `<div class="insp-section-title">هدف روی صفحه</div>`;
-      body += selectorFieldHtml(n, "سلکتور", { includeFramePath: true });
+      // The selector's own row switch renders INSIDE this block, directly under the source+column
+      // pair that raises it — the place that makes it meaningful. This instance carries the
+      // node's single selector switch whenever the target selector itself is data-driven; if only
+      // the value-side selector is dynamic, that block carries it instead.
+      body += selectorFieldHtml(n, "سلکتور", {
+        includeFramePath: true,
+        rowSwitch: n.selectorIsDynamic === true || n.attributeValueIsDynamic === true
+      });
     }
 
     return `
@@ -7874,6 +8435,37 @@
       <div class="insp-step-body${active ? "" : " is-disabled"}" ${active ? "" : "aria-disabled=\"true\""}>
         ${body}
       </div>`;
+  }
+
+  /**
+   * LoadContent's READ side: which cell it reads.
+   *
+   * Not folded into the value picker because LoadContent has no "value source" — the source cell
+   * IS its input. The engine reads exactly these two fields (`dataSourceId` and
+   * `dynamicSourceColumnName`), falling back to the process default only for the source.
+   */
+  function stepLoadSourceHtml(n) {
+    const dsId = n.dataSourceId || masterDataSourceId() || (graph.dataSources || [])[0]?.id || null;
+    if (dsId != null && n.dataSourceId == null) n.dataSourceId = dsId;
+    const dsOpts = processDataSourceOptions(dsId);
+    const cols = dataSourceColumnKeys(dsId);
+    const colOpts = cols.map((c) =>
+      `<option value="${esc(c)}" ${n.dynamicSourceColumnName === c ? "selected" : ""}>${esc(c)}</option>`
+    ).join("");
+    const emptyDs = !(graph.dataSources || []).length
+      ? `<p class="palette-hint">منبعی نیست — روی نود شروع اکسل اضافه کنید.</p>`
+      : "";
+    return `
+      <div class="insp-section-title">منبع خواندن</div>
+      <div class="insp-field"><label>منبع داده</label>
+        <select data-k="dataSourceId"><option value="">— انتخاب منبع —</option>${dsOpts}</select>
+      </div>
+      <div class="insp-field"><label>ستون</label>
+        <select data-k="dynamicSourceColumnName"><option value="">— انتخاب ستون —</option>${colOpts}</select>
+      </div>
+      ${nodeNeedsNodeRowPointer(n) ? rowPointerSectionHtml(n, "node") : ""}
+      ${emptyDs}
+      <p class="palette-hint">مقدار همین سلول (ردیف جاری) خوانده می‌شود و در مقصد زیر نوشته می‌شود.</p>`;
   }
 
   /**
@@ -7933,6 +8525,8 @@
       <div class="insp-field"><label>ستون مقصد</label>
         <select data-k="saveColumnName"><option value="">—</option>${colOpts}</select>
       </div>
+      ${nodeNeedsNodeRowPointer(n) && normalizeStepValueSource(n) !== "DataSource"
+        ? rowPointerSectionHtml(n, "node") : ""}
       <p class="palette-hint">مقدار بالا در سلول ردیف جاری همین ستون نوشته می‌شود.</p>`;
   }
 
@@ -8008,7 +8602,10 @@
         requireVisibleKey: "equalSelectorRequireVisible",
         requireEnabledKey: "equalSelectorRequireEnabled",
         requireClickableKey: "equalSelectorRequireClickable",
-        includeFramePath: true
+        includeFramePath: true,
+        // One selector switch per node: if the TARGET selector is also data-driven it carries the
+        // switch instead, right under ITS own source+column pair.
+        rowSwitch: n.selectorIsDynamic !== true && n.attributeValueIsDynamic !== true
       });
       if (isUrl) {
         html += `<p class="palette-hint">متن/مقدار این المان به‌عنوان آدرس استفاده می‌شود.</p>`;
@@ -8021,6 +8618,7 @@
         <div class="insp-field"><label>ستون</label>
           <select data-k="dynamicSourceColumnName"><option value="">— انتخاب ستون —</option>${colOpts}</select>
         </div>
+        ${nodeNeedsNodeRowPointer(n) ? rowPointerSectionHtml(n, "node") : ""}
         ${emptyDs}
         <p class="palette-hint">در اجرا مقدار سلول ردیف جاری خوانده می‌شود.</p>`;
     } else if (src === "Memory") {
@@ -8180,6 +8778,10 @@
     const reqEnabledKey = opts.requireEnabledKey || "selectorRequireEnabled";
     const reqClickableKey = opts.requireClickableKey || "selectorRequireClickable";
     const wrapId = opts.wrapId ? ` id="${opts.wrapId}"` : "";
+    // When true, this instance carries the SELECTOR row switch («این سلکتور روی ردیف خاصی از
+    // منبع کار می‌کند»): it renders directly under the source+column pair it belongs to — inside
+    // this block — instead of at the end of the panel.
+    const rowSwitch = opts.rowSwitch === true;
 
     // Default off unless explicitly true
     if (n[dynFlag] == null) n[dynFlag] = false;
@@ -8240,6 +8842,7 @@
             <div class="insp-field"><label>ستون پویا</label>
               <select data-k="${dynCol}"><option value="">— انتخاب ستون —</option>${colOpts}</select>
             </div>
+            ${rowSwitch ? rowPointerSectionHtml(n, "selector") : ""}
             ${empty}
           </div>
         ` : ""}
@@ -8312,6 +8915,7 @@
                 <div class="insp-field"><label>ستون مقدار</label>
                   <select data-k="${attrDynCol}"><option value="">— انتخاب ستون —</option>${attrColOpts}</select>
                 </div>
+                ${rowSwitch && !dynOn ? rowPointerSectionHtml(n, "selector") : ""}
                 ${empty}
               </div>
             ` : `
@@ -8839,8 +9443,13 @@
     }
 
     if (needsSubjectSelector) {
+      // The subject selector carries the node's single selector switch when it is data-driven
+      // (otherwise the compare block below carries it), right under its source+column pair.
       html += `<div class="insp-section-title">المان مورد بررسی</div>` +
-        selectorFieldHtml(n, "سلکتور المان", { includeFramePath: true });
+        selectorFieldHtml(n, "سلکتور المان", {
+          includeFramePath: true,
+          rowSwitch: n.selectorIsDynamic === true || n.attributeValueIsDynamic === true
+        });
     }
 
     if (needsSubjectDs) {
@@ -8850,7 +9459,9 @@
         </div>
         <div class="insp-field"><label>ستون</label>
           <select data-k="dynamicSourceColumnName"><option value="">— انتخاب ستون —</option>${subjectColOpts}</select>
-        </div>`;
+        </div>` +
+        // The row this read happens on is the condition's own choice: right under its source.
+        (nodeNeedsNodeRowPointer(n) ? rowPointerSectionHtml(n, "node") : "");
     }
 
     if (needsSubjectMemory) {
@@ -8928,7 +9539,9 @@
           waitMsKey: "equalSelectorWaitMs",
           requireVisibleKey: "equalSelectorRequireVisible",
           requireEnabledKey: "equalSelectorRequireEnabled",
-          requireClickableKey: "equalSelectorRequireClickable"
+          requireClickableKey: "equalSelectorRequireClickable",
+          // One selector switch per node: the subject selector carries it when IT is data-driven.
+          rowSwitch: n.selectorIsDynamic !== true && n.attributeValueIsDynamic !== true
         });
       } else if (src === "DataSource" && allowCompareDs) {
         html += `<div class="insp-field"><label>منبع داده</label>
@@ -8936,7 +9549,9 @@
           </div>
           <div class="insp-field"><label>ستون</label>
             <select data-k="dynamicSourceColumnName"><option value="">— انتخاب ستون —</option>${compareColOpts}</select>
-          </div>`;
+          </div>` +
+          // The row this compare reads on is the condition's own choice: right under its source.
+          (nodeNeedsNodeRowPointer(n) ? rowPointerSectionHtml(n, "node") : "");
       } else if (src === "Memory") {
         html += `<div class="insp-field"><label>متغیر حافظه</label>
           <input data-k="memoryVariableName" list="mem-var-list-cond" value="${esc(n.memoryVariableName || "")}" placeholder="نام متغیر" />
@@ -8959,6 +9574,8 @@
         html += `<p class="palette-hint" style="margin:0 0 8px">برای «دارای مقدار / بدون مقدار» به مقدار مقایسه نیاز نیست.</p>`;
       }
     }
+
+    // The row switches render at the blocks they qualify (above), not here.
 
     html += `<div class="insp-section-title">خروجی‌ها</div>` +
       `<div class="insp-field"><label><span style="color:#28c76f">●</span> موفقیت</label><div class="ds-meta">${labelOf(ok?.to)}</div></div>` +
@@ -9124,16 +9741,6 @@
     n.loopCount = n.loopCount || 1;
     const loopCount = n.loopCount || 1;
     const dsOpts = processDataSourceOptions(n.dataSourceId);
-    // "Dedicated row" is deliberately OFF by default: a group normally follows the row its loop is
-    // on, and pinning a row is the exception, so it stays hidden until the user asks for it.
-    const dedicatedRow = n.dedicatedRow === true;
-    const rowPointer = String(n.rowIndexType || "None");
-    const specificRow = n.specificRowIndex == null ? "" : String(n.specificRowIndex);
-    // Bound the specific-row field by the chosen source's real row count so the user cannot type a
-    // row that does not exist; an unknown/empty source leaves it unconstrained.
-    const rowCount = dataSourceRowCount(n.dataSourceId);
-    const maxRow = rowCount > 0 ? rowCount - 1 : null;
-    const hasRows = maxRow != null;
     return `
       <p class="palette-hint" style="margin:0 0 10px;line-height:1.7">
         تکرار این گروه: یک‌بار، تعداد ثابت، المان‌های صفحه، یا ردیف منبع داده.
@@ -9156,35 +9763,7 @@
         <select data-k="dataSourceId"><option value="">— انتخاب منبع —</option>${dsOpts}</select>
       </div>
       <div id="insp-el">
-        ${selectorFieldHtml(n, "سلکتور المان‌ها (تکرار گروه)")}
-      </div>
-      <div class="insp-section-title">${esc(t("editor.row.dedicatedTitle") || "ردیف اختصاصی")}</div>
-      <div class="insp-field">
-        <label class="insp-switch">
-          <input type="checkbox" data-k="dedicatedRow" ${dedicatedRow ? "checked" : ""} />
-          <span>${esc(t("editor.row.dedicatedEnable") || "این گروه روی یک ردیف مشخص کار کند")}</span>
-        </label>
-      </div>
-      <div id="insp-dedicated-row" style="${dedicatedRow ? "" : "display:none"}">
-        <div class="insp-field">
-          <label>${esc(t("editor.row.pointerType") || "اشاره‌گر ردیف")}</label>
-          <select data-k="rowIndexType">
-            <option value="CurrentLoop" ${rowPointer === "CurrentLoop" ? "selected" : ""}>${esc(t("editor.row.currentLoop") || "ردیف حلقهٔ فعلی")}</option>
-            <option value="ParentLoop" ${rowPointer === "ParentLoop" ? "selected" : ""}>${esc(t("editor.row.parentLoop") || "ردیف حلقهٔ والد")}</option>
-            <option value="TotalLoop" ${rowPointer === "TotalLoop" ? "selected" : ""}>${esc(t("editor.row.totalLoop") || "اندیس کل حلقه")}</option>
-            <option value="FirstRow" ${rowPointer === "FirstRow" ? "selected" : ""}>${esc(t("editor.row.firstRow") || "اولین ردیف منبع")}</option>
-            <option value="LastRow" ${rowPointer === "LastRow" ? "selected" : ""}>${esc(t("editor.row.lastRow") || "آخرین ردیف منبع")}</option>
-            <option value="SpecificRow" ${rowPointer === "SpecificRow" ? "selected" : ""}>${esc(t("editor.row.specificRow") || "یک ردیف مشخص")}</option>
-            <option value="None" ${rowPointer === "None" ? "selected" : ""}>${esc(t("editor.row.none") || "بدون اشاره‌گر (ردیف حلقه)")}</option>
-          </select>
-        </div>
-        <div class="insp-field" id="insp-specific-row" style="${rowPointer === "SpecificRow" ? "" : "display:none"}">
-          <label>${esc(t("editor.row.specificIndex") || "شماره ردیف")}</label>
-          <input type="number" min="0" ${maxRow != null ? `max="${maxRow}"` : ""} data-k="specificRowIndex" value="${esc(specificRow)}" />
-          ${rowCount > 0
-            ? `<p class="palette-hint">${esc(t("editor.row.rangeHint", { count: rowCount, max: maxRow }) || `منبع ${rowCount} ردیف دارد؛ بازهٔ مجاز: 0 تا ${maxRow}`)}</p>`
-            : `<p class="palette-hint">${esc(t("editor.row.pickSourceFirst") || "اول منبع داده را انتخاب کنید تا بازهٔ مجاز ردیف‌ها مشخص شود.")}</p>`}
-        </div>
+        ${selectorFieldHtml(n, "سلکتور المان‌ها (تکرار گروه)", { rowSwitch: true })}
       </div>
     `;
   }
@@ -9196,6 +9775,145 @@
     if (!ds) return 0;
     const n = Number(ds.rowCount);
     return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  /**
+   * Whether the node ITSELF reads or writes a source row, so its own row pointer applies.
+   *
+   * Deliberately blind to the dynamic-selector flags: a selector that builds itself from a source
+   * gets its own switch (`nodeNeedsSelectorRowPointer`), because "which row does my value come
+   * from" and "which row does my selector come from" are two separate choices.
+   */
+  function nodeNeedsNodeRowPointer(n) {
+    if (!n) return false;
+    if (isActionNode(n)) {
+      const at = n.actionType || "";
+      // These two carry their own row pointer field already (see the InsertRow/DeleteRow block).
+      if (at === "InsertRow" || at === "DeleteRow") return false;
+      // LoadContent always reads one cell; InsertContent always writes one.
+      if (at === "LoadContent" || at === "InsertContent") return true;
+      // Any action whose INPUT value is read from a source cell.
+      if (stepReceivesValue(at) && normalizeStepValueSource(n) === "DataSource") return true;
+      return false;
+    }
+    if (n.kind === "condition") {
+      if (String(n.conditionType || "") === "SourceValue") return true;
+      if (String(n.contentSourceType || "") === "DataSource") return true;
+      return false;
+    }
+    return false;
+  }
+
+  /**
+   * Whether this node's SELECTOR is built from a source cell, so the selector gets its own row
+   * switch — even before the source itself is picked, because the flag alone says "data-driven".
+   * Three flags exist: the target selector, the value-source element and its attribute.
+   */
+  function nodeNeedsSelectorRowPointer(n) {
+    if (!n) return false;
+    return n.selectorIsDynamic === true
+      || n.equalSelectorIsDynamic === true
+      || n.equalAttributeValueIsDynamic === true;
+  }
+
+  /**
+   * Whether a node depends on a data source in any way — it reads or writes a source row or cell,
+   * its value comes from a source, or its selector is built from one. (InsertRow / DeleteRow act
+   * on a source's rows directly, so they count even though they carry no value field.) A GROUP
+   * counts when anything inside it — at any nesting depth — does, so folding work into a group
+   * cannot hide where the source reads/writes live. This drives the small source badge drawn
+   * outside the node's top-right corner: the same dependency the «ردیف اختصاصی» switches are
+   * about, visible without opening the inspector.
+   */
+  function nodeDependsOnSource(n, seen) {
+    if (!n) return false;
+    if (nodeNeedsSelectorRowPointer(n)) return true;
+    if (isActionNode(n)) {
+      const at = n.actionType || "";
+      if (at === "InsertRow" || at === "DeleteRow") return true;
+      return nodeNeedsNodeRowPointer(n);
+    }
+    if (n.kind === "condition") return nodeNeedsNodeRowPointer(n);
+    if (n.kind === "group") {
+      // The `seen` set keeps the walk finite even if a damaged graph made two groups each other's
+      // ancestors; a group already being examined contributes nothing new.
+      const visited = seen || new Set();
+      if (visited.has(n.id)) return false;
+      visited.add(n.id);
+      return (graph.nodes || []).some((kid) =>
+        kid.groupNodeId === n.id && nodeDependsOnSource(kid, visited)
+      );
+    }
+    return false;
+  }
+
+  /** The source a row pointer resolves against (same order as the engine's lookup). */
+  function rowPointerSourceId(n) {
+    return n.dataSourceId ?? n.saveDataSourceId ?? n.sourceId
+      ?? n.selectorDataSourceId ?? n.equalSelectorDataSourceId ?? n.equalAttributeDataSourceId ?? null;
+  }
+
+  /**
+   * The row-pointer switch + picker.
+   *
+   * `kind` picks WHICH pointer this is: the node's own ("node") or its dynamic selector's
+   * ("selector"). Both draw the same control but read and write different fields, so a node can
+   * be pinned to one row while its selector is built from another.
+   */
+  function rowPointerSectionHtml(n, kind) {
+    const isSelector = kind === "selector";
+    const switchKey = isSelector ? "selectorDedicatedRow" : "dedicatedRow";
+    const typeKey = isSelector ? "selectorRowIndexType" : "rowIndexType";
+    const specificKey = isSelector ? "selectorSpecificRowIndex" : "specificRowIndex";
+    const enabled = n[switchKey] === true;
+    const rowPointer = String(n[typeKey] || "None");
+    const specificRow = n[specificKey] == null ? "" : String(n[specificKey]);
+    const title = isSelector
+      ? (t("editor.row.selectorDedicatedTitle") || "ردیف اختصاصی سلکتور")
+      : (t("editor.row.dedicatedTitle") || "ردیف اختصاصی");
+    const label = isSelector
+      ? (t("editor.row.selectorDedicatedEnable") || "این سلکتور روی ردیف خاصی از منبع کار می‌کند")
+      : (t("editor.row.dedicatedEnable") || "این نود روی یک ردیف مشخص از منبع کار کند");
+    const hint = isSelector
+      ? (t("editor.row.selectorDedicatedHint") || "بدون این سوئیچ، سلکتور روی ردیف خود نود (پیش‌فرض: ردیف حلقهٔ فرآیند) کار می‌کند.")
+      : (t("editor.row.dedicatedNodeHint") || "بدون این سوئیچ، نود روی ردیف حلقهٔ فرآیند (اندیس جاری فرآیند) کار می‌کند.");
+    // Bound the specific-row field by the chosen source's real row count so the user cannot type a
+    // row that does not exist; an unknown/empty source leaves it unconstrained.
+    const rowCount = dataSourceRowCount(rowPointerSourceId(n));
+    const maxRow = rowCount > 0 ? rowCount - 1 : null;
+    const specificFieldId = isSelector ? "insp-selector-specific-row" : "insp-specific-row";
+    return `
+      <div class="insp-section-title">${esc(title)}</div>
+      <div class="insp-field">
+        <label class="insp-switch">
+          <input type="checkbox" data-k="${switchKey}" ${enabled ? "checked" : ""} />
+          <span>${esc(label)}</span>
+        </label>
+      </div>
+      ${enabled ? `
+      <div>
+        <div class="insp-field">
+          <label>${esc(t("editor.row.pointerType") || "اشاره‌گر ردیف")}</label>
+          <select data-k="${typeKey}">
+            <option value="CurrentLoop" ${rowPointer === "CurrentLoop" ? "selected" : ""}>${esc(t("editor.row.currentLoop") || "ردیف حلقهٔ فعلی")}</option>
+            <option value="ParentLoop" ${rowPointer === "ParentLoop" ? "selected" : ""}>${esc(t("editor.row.parentLoop") || "ردیف حلقهٔ والد")}</option>
+            <option value="TotalLoop" ${rowPointer === "TotalLoop" ? "selected" : ""}>${esc(t("editor.row.totalLoop") || "اندیس کل حلقه")}</option>
+            <option value="FirstRow" ${rowPointer === "FirstRow" ? "selected" : ""}>${esc(t("editor.row.firstRow") || "اولین ردیف منبع")}</option>
+            <option value="LastRow" ${rowPointer === "LastRow" ? "selected" : ""}>${esc(t("editor.row.lastRow") || "آخرین ردیف منبع")}</option>
+            <option value="SpecificRow" ${rowPointer === "SpecificRow" ? "selected" : ""}>${esc(t("editor.row.specificRow") || "یک ردیف مشخص")}</option>
+          </select>
+        </div>
+        ${rowPointer === "SpecificRow" ? `
+        <div class="insp-field" id="${specificFieldId}">
+          <label>${esc(t("editor.row.specificIndex") || "شماره ردیف")}</label>
+          <input type="number" min="0" ${maxRow != null ? `max="${maxRow}"` : ""} data-k="${specificKey}" value="${esc(specificRow)}" />
+          ${rowCount > 0
+            ? `<p class="palette-hint">${esc(t("editor.row.rangeHint", { count: rowCount, max: maxRow }) || `منبع ${rowCount} ردیف دارد؛ بازهٔ مجاز: 0 تا ${maxRow}`)}</p>`
+            : `<p class="palette-hint">${esc(t("editor.row.pickSourceFirst") || "اول منبع داده را انتخاب کنید تا بازهٔ مجاز ردیف‌ها مشخص شود.")}</p>`}
+        </div>` : ""}
+        <p class="palette-hint" style="margin:0 0 4px;line-height:1.6">${esc(hint)}</p>
+      </div>` : ""}
+    `;
   }
 
   function groupInspectorHtml(n) {
@@ -9305,6 +10023,7 @@
     "loopCount", "loopBackLimit", "stepDelayMs", "delayBeforeMs", "delayAfterMs",
     "repeatFromIndex", "repeatToIndex",
     "specificRowIndex",
+    "selectorSpecificRowIndex",
     "systemClockFormat"
   ]);
   /** Keys that hold a free-text label the user reads, so they follow the UI direction. */

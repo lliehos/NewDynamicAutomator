@@ -175,9 +175,6 @@ public static class GraphJsonHelper
         "stepDelayMs",
         "loopBackLimit",
         "ignorePlayError",
-        "dedicatedRow",
-        "rowIndexType",
-        "specificRowIndex",
         "repeatFromIndex",
         "repeatToIndex"
     };
@@ -335,7 +332,6 @@ public static class GraphJsonHelper
             childStart["dataSourceId"] = null;
             childStart["repeatFromIndex"] = null;
             childStart["repeatToIndex"] = null;
-            childStart["specificRowIndex"] = null;
 
             nodes[startIndex] = childStart;
             if (!isLower && root["Nodes"] is not null) root["Nodes"] = nodes;

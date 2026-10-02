@@ -1014,7 +1014,12 @@ function dataSourceSafeFileName(ds) {
   }
 
   // --- Grid editing on the processes page (same behaviour as the sources page) ----------------
-  const processViewerState = { source: null, cellRevisions: null, cellMeta: null, editing: null };
+  const processViewerState = {
+    source: null, cellRevisions: null, cellMeta: null, editing: null,
+    // Live overlay state: which process's play group we joined, the hub connection, and the
+    // per-cell flash timers so a re-triggered cell restarts its blink instead of stacking.
+    taskId: null, connection: null, blinkTimers: new Map()
+  };
 
   /**
    * Read a source's current content straight from the server, paging until it is exhausted.
@@ -1076,6 +1081,130 @@ function dataSourceSafeFileName(ds) {
       cellRevisions,
       cellMeta
     };
+  }
+
+  // --- Live read/write overlays (same behaviour as the sources-page viewer) --------------------
+  // The modal is a window on the same data a run touches, so while the process plays every cell
+  // the engine reads or writes must light up right here — reading = blue flash, writing = green
+  // flash — and the live dot says whether that conduit is actually open.
+  function setProcessLiveStatus(on, text) {
+    const el = document.getElementById("da-portal-ds-live");
+    if (!el) return;
+    el.classList.toggle("is-on", !!on);
+    el.textContent = text || (on ? "● زنده" : "● آفلاین");
+  }
+
+  function flashProcessCell(td, op) {
+    if (!td) return;
+    const cls = op === "write" ? "ds-flash-write" : "ds-flash-read";
+    td.classList.remove("ds-flash-read", "ds-flash-write");
+    void td.offsetWidth;
+    td.classList.add(cls);
+    const key = `${td.dataset.row}:${td.dataset.col}`;
+    const prev = processViewerState.blinkTimers.get(key);
+    if (prev) clearTimeout(prev);
+    processViewerState.blinkTimers.set(key, setTimeout(() => {
+      td.classList.remove(cls);
+      processViewerState.blinkTimers.delete(key);
+    }, 2800));
+  }
+
+  function showProcessActor(ev) {
+    const who = ev.userName || ev.UserName;
+    if (!who) return;
+    const el = document.getElementById("da-portal-ds-actor");
+    if (el) {
+      el.hidden = false;
+      el.textContent = (window.DaI18n ? DaI18n.t("live.byUser", { user: who }) : `توسط ${who}`) || `توسط ${who}`;
+    }
+  }
+
+  function handleProcessCellEvent(ev) {
+    if (!ev) return;
+    const taskId = String(ev.taskId ?? ev.TaskId ?? "");
+    if (taskId && processViewerState.taskId != null && String(processViewerState.taskId) !== taskId) return;
+    const sid = Number(ev.dataSourceId ?? ev.DataSourceId ?? ev.sourceId ?? ev.SourceId);
+    const op = String(ev.op || ev.Op || "read").toLowerCase();
+    const col = String(ev.columnKey ?? ev.ColumnKey ?? "").trim();
+    const idx = Number(ev.rowIndex ?? ev.RowIndex ?? 0) || 0;
+    // A write also moves the grid's own copy — even before (or without) the modal showing this
+    // source — so the next paint of this source is never stale.
+    if (op.includes("write") && col && processViewerState.source
+      && Number(processViewerState.source.id) === sid) {
+      const val = ev.cellValue == null && ev.CellValue == null ? "" : String(ev.cellValue ?? ev.CellValue ?? "");
+      setProcessLocalCell(processViewerState.source, idx, col, val);
+    }
+    const modal = document.getElementById("da-portal-ds-viewer");
+    const viewing = modal && !modal.hidden && Number(processViewerState.source?.id) === sid;
+    if (!viewing || !col) return;
+    const table = document.getElementById("da-portal-ds-table");
+    const findTd = () => table?.querySelector(`td[data-row="${idx}"][data-col="${CSS.escape(col)}"]`);
+    if (op.includes("write")) {
+      let td = findTd();
+      if (!td && processViewerState.source) {
+        // The write may have grown the grid (a new row) — repaint, then light the cell up.
+        renderProcessViewerTable(processViewerState.source);
+        td = findTd();
+      } else if (td && (ev.cellValue != null || ev.CellValue != null)) {
+        td.textContent = String(ev.cellValue ?? ev.CellValue ?? "");
+      }
+      flashProcessCell(td, "write");
+    } else {
+      flashProcessCell(findTd(), "read");
+    }
+    showProcessActor(ev);
+  }
+
+  async function ensureProcessViewerHub(taskId) {
+    if (typeof signalR === "undefined") {
+      setProcessLiveStatus(false, "● بدون SignalR");
+      return;
+    }
+    if (processViewerState.connection) {
+      try { await processViewerState.connection.stop(); } catch { /* ignore */ }
+      processViewerState.connection = null;
+    }
+    const joinId = String(taskId ?? "").trim();
+    if (!joinId) {
+      setProcessLiveStatus(false, "● آفلاین");
+      return;
+    }
+    try {
+      const conn = new signalR.HubConnectionBuilder()
+        .withUrl("/hubs/play-data")
+        .withAutomaticReconnect([0, 1000, 3000, 8000])
+        .configureLogging(signalR.LogLevel.None)
+        .build();
+      conn.on("cellEvent", handleProcessCellEvent);
+      conn.onreconnecting(() => setProcessLiveStatus(false, "● در حال اتصال…"));
+      conn.onreconnected(async () => {
+        await conn.invoke("JoinTask", joinId).catch(() => {});
+        setProcessLiveStatus(true, "● زنده");
+      });
+      conn.onclose(() => setProcessLiveStatus(false));
+      await conn.start();
+      await conn.invoke("JoinTask", joinId);
+      processViewerState.connection = conn;
+      setProcessLiveStatus(true, "● زنده");
+    } catch {
+      setProcessLiveStatus(false, "● قطع");
+    }
+  }
+
+  async function closeProcessViewer() {
+    const modal = document.getElementById("da-portal-ds-viewer");
+    if (modal) modal.hidden = true;
+    for (const t of processViewerState.blinkTimers.values()) clearTimeout(t);
+    processViewerState.blinkTimers.clear();
+    processViewerState.source = null;
+    processViewerState.cellRevisions = null;
+    processViewerState.cellMeta = null;
+    processViewerState.taskId = null;
+    setProcessLiveStatus(false);
+    if (processViewerState.connection) {
+      try { await processViewerState.connection.stop(); } catch { /* ignore */ }
+      processViewerState.connection = null;
+    }
   }
 
   /** Re-read the open source from the server: the list payload is a summary without cell values. */
@@ -1212,20 +1341,37 @@ function dataSourceSafeFileName(ds) {
     input.addEventListener("dblclick", (e) => e.stopPropagation());
   }
 
-  function showProcessGridMenu(x, y, td) {
+  function showProcessGridMenu(x, y, td, th) {
     const source = processViewerState.source;
     if (!source) return;
     const rowIndex = td ? Number(td.dataset.row) : null;
-    const columnKey = td ? td.dataset.col : null;
+    const columnKey = td ? td.dataset.col : (th ? th.dataset.col : null);
+    // A column's position comes from the header/cell index it was invoked on — never from the
+    // row number, which is a different axis.
+    const columnIndex = (th || td) ? (th ? th.cellIndex : td.cellIndex) - 1 : null;
 
     let items = [
       { id: "row-after", label: t("sources.addRowAfter") || "افزودن ردیف بعد از این" },
       { id: "row-before", label: t("sources.addRowBefore") || "افزودن ردیف قبل از این" },
+      { id: "row-delete", label: t("sources.deleteRow") || "حذف این ردیف" },
       { sep: true },
+      { id: "col-rename", label: t("sources.renameColumn") || "تغییر نام ستون" },
       { id: "col-after", label: t("sources.addColAfter") || "افزودن ستون بعد از این" },
-      { id: "col-before", label: t("sources.addColBefore") || "افزودن ستون قبل از این" }
+      { id: "col-before", label: t("sources.addColBefore") || "افزودن ستون قبل از این" },
+      { id: "col-delete", label: t("sources.deleteColumn") || "حذف این ستون" }
     ];
-    if (!td) {
+    if (th && columnKey) {
+      // Right-click on a column header: column actions for THAT column, no row actions.
+      items = [
+        { id: "col-rename", label: t("sources.renameColumn") || "تغییر نام ستون" },
+        { sep: true },
+        { id: "col-after", label: t("sources.addColAfter") || "افزودن ستون بعد از این" },
+        { id: "col-before", label: t("sources.addColBefore") || "افزودن ستون قبل از این" },
+        { id: "col-delete", label: t("sources.deleteColumn") || "حذف این ستون" },
+        { sep: true },
+        { id: "row-append", label: t("sources.addRowAppend") || "افزودن ردیف در پایان" }
+      ];
+    } else if (!td) {
       items = [
         { id: "row-append", label: t("sources.addRowAppend") || "افزودن ردیف در پایان" },
         { sep: true },
@@ -1260,7 +1406,7 @@ function dataSourceSafeFileName(ds) {
       if (!btn) return;
       const action = btn.dataset.action;
       close();
-      await runProcessGridAction(action, rowIndex, columnKey);
+      await runProcessGridAction(action, rowIndex, columnKey, columnIndex);
     });
   }
 
@@ -1271,11 +1417,29 @@ function dataSourceSafeFileName(ds) {
     return `c${n}`;
   }
 
-  async function runProcessGridAction(action, rowIndex, columnKey) {
+  async function runProcessGridAction(action, rowIndex, columnKey, columnIndex) {
     const source = processViewerState.source;
     const sourceId = source?.id;
     if (!sourceId) return;
+    if (action === "col-rename") {
+      await renameProcessColumn(sourceId, columnKey);
+      return;
+    }
+    if (action === "row-delete") {
+      await deleteProcessRow(sourceId, rowIndex);
+      return;
+    }
+    if (action === "col-delete") {
+      await deleteProcessColumn(sourceId, columnKey);
+      return;
+    }
     const beforeIndexFor = (kind) => {
+      // A column's position comes from the header/cell index the menu was opened on — never from
+      // the row number (that ax-mixup is why "before this column" used to land at a row place).
+      if (kind === "col" && columnIndex != null) {
+        if (action === "col-before") return Math.max(0, columnIndex);
+        if (action === "col-after") return columnIndex + 1;
+      }
       if (action === `${kind}-before`) return rowIndex ?? undefined;
       if (action === `${kind}-after`) return rowIndex == null ? undefined : rowIndex + 1;
       return undefined;
@@ -1310,6 +1474,115 @@ function dataSourceSafeFileName(ds) {
     }
   }
 
+  /**
+   * Rename one column of the source shown in the modal.
+   *
+   * The server applies the rename to the column, its cells AND every linked process whose nodes
+   * bind to that column — so an edit here cannot leave a process reading a column that no longer
+   * exists. The grid refreshes from the server afterwards so the header shows the new name.
+   */
+  async function renameProcessColumn(sourceId, oldKey) {
+    if (!sourceId || !oldKey) return;
+    const next = window.DaNotify?.prompt
+      ? await DaNotify.prompt(t("sources.renameColumnPrompt") || "نام جدید ستون را وارد کنید", {
+          title: t("sources.renameColumn") || "تغییر نام ستون",
+          value: oldKey
+        })
+      : window.prompt(t("sources.renameColumnPrompt") || "نام جدید ستون را وارد کنید", oldKey);
+    if (next == null) return;
+    const newName = String(next).trim();
+    if (!newName || newName === oldKey) return;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/columns`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ oldKey, newName })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.renameColumnFail") || "تغییر نام ستون ناموفق بود.");
+      const affected = Number(body.affectedProcessCount ?? body.AffectedProcessCount ?? 0);
+      notifyHome(
+        affected > 0
+          ? (t("sources.colRenamedAffected", { key: newName, count: affected }) || `ستون به «${newName}» تغییر نام یافت و در ${affected} فرآیند اعمال شد.`)
+          : (t("sources.colRenamed", { key: newName }) || `ستون به «${newName}» تغییر نام یافت.`),
+        "success"
+      );
+      await refreshProcessViewer();
+    } catch (e) {
+      notifyHome(e.message || t("sources.renameColumnFail") || "تغییر نام ستون ناموفق بود.", "error");
+    }
+  }
+
+  /**
+   * Context menu — delete one row from the modal's source, after a confirmation.
+   *
+   * A row is not addressable afterwards (the one below it takes its place), so this is asked
+   * explicitly rather than being a one-click action.
+   */
+  async function deleteProcessRow(sourceId, rowIndex) {
+    if (!sourceId || !Number.isFinite(rowIndex)) return;
+    const msg = t("sources.deleteRowConfirm", { row: rowIndex + 1 }) || `ردیف ${rowIndex + 1} حذف شود؟`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("sources.deleteRow") || "حذف ردیف",
+          okText: t("common.delete") || "حذف",
+          cancelText: t("common.cancel") || "انصراف"
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/rows/${rowIndex}`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.deleteRowFail") || "حذف ردیف ناموفق بود.");
+      notifyHome(t("sources.rowDeleted") || "ردیف حذف شد.", "success");
+      await refreshProcessViewer();
+    } catch (e) {
+      notifyHome(e.message || "حذف ردیف ناموفق بود.", "error");
+    }
+  }
+
+  /**
+   * Context menu — delete one column (with its cells), after a confirmation.
+   *
+   * The server keeps node bindings intact on purpose and reports how many linked processes used
+   * the column; the toast carries that count so the author knows where to re-pick a column.
+   */
+  async function deleteProcessColumn(sourceId, columnKey) {
+    if (!sourceId || !columnKey) return;
+    const msg = t("sources.deleteColumnConfirm", { key: columnKey }) || `ستون «${columnKey}» با همهٔ داده‌هایش حذف شود؟`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("sources.deleteColumn") || "حذف ستون",
+          okText: t("common.delete") || "حذف",
+          cancelText: t("common.cancel") || "انصراف"
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/columns/${encodeURIComponent(columnKey)}`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.deleteColumnFail") || "حذف ستون ناموفق بود.");
+      const key = body.deletedColumnKey || body.DeletedColumnKey || columnKey;
+      const affected = Number(body.affectedProcessCount ?? body.AffectedProcessCount ?? 0);
+      notifyHome(
+        affected > 0
+          ? (t("sources.colDeletedAffected", { key, count: affected }) || `ستون «${key}» حذف شد — ${affected} فرآیند به این ستون وابسته بود؛ در ویرایشگر اصلاح کنید.`)
+          : (t("sources.colDeleted", { key }) || `ستون «${key}» حذف شد.`),
+        affected > 0 ? "warn" : "success"
+      );
+      await refreshProcessViewer();
+    } catch (e) {
+      notifyHome(e.message || "حذف ستون ناموفق بود.", "error");
+    }
+  }
+
   async function viewProcessData(taskId, btn) {
     if (btn) { btn.disabled = true; btn.classList.add("is-busy"); }
     try {
@@ -1318,6 +1591,7 @@ function dataSourceSafeFileName(ds) {
         notifyHome(t("tasks.noDataSource"), "warn");
         return;
       }
+      processViewerState.taskId = taskId;
       renderProcessViewerTable(hit.ds);
       const modal = document.getElementById("da-portal-ds-viewer");
       if (modal) modal.hidden = false;
@@ -1325,6 +1599,10 @@ function dataSourceSafeFileName(ds) {
       // The list/canvas snapshot is a summary without cell VALUES, so pull the real rows (and the
       // per-cell revisions the inline editor needs) before anyone tries to edit.
       await refreshProcessViewer();
+      // Live overlay: join this process's play group so the cell reads/writes the engine makes
+      // while it runs flash right here, exactly like the sources-page viewer does.
+      setProcessLiveStatus(false, "● اتصال…");
+      await ensureProcessViewerHub(taskId);
     } catch (e) {
       notifyHome(String(e.message || e), "error");
     } finally {
@@ -2561,18 +2839,20 @@ function dataSourceSafeFileName(ds) {
     if (!table) return;
 
     document.querySelectorAll("[data-portal-ds-close]").forEach((el) => {
-      el.addEventListener("click", () => {
-        const modal = document.getElementById("da-portal-ds-viewer");
-        if (modal) modal.hidden = true;
-        processViewerState.source = null;
-        processViewerState.cellRevisions = null;
-      });
+      el.addEventListener("click", () => { closeProcessViewer(); });
     });
     document.getElementById("da-portal-ds-refresh")?.addEventListener("click", () => {
       if (processViewerState.source) refreshProcessViewer();
     });
 
     table.addEventListener("dblclick", (e) => {
+      // A column HEADER double-click renames the column; cells edit their own value instead.
+      const th = e.target.closest("th[data-col]");
+      if (th) {
+        e.preventDefault();
+        renameProcessColumn(processViewerState.source?.id, th.dataset.col);
+        return;
+      }
       const td = e.target.closest("td[data-row][data-col]");
       if (!td) return;
       e.preventDefault();
@@ -2582,14 +2862,18 @@ function dataSourceSafeFileName(ds) {
       const modal = document.getElementById("da-portal-ds-viewer");
       if (!modal || modal.hidden) return;
       e.preventDefault();
-      showProcessGridMenu(e.clientX, e.clientY, e.target.closest("td[data-row][data-col]"));
+      showProcessGridMenu(
+        e.clientX, e.clientY,
+        e.target.closest("td[data-row][data-col]"),
+        e.target.closest("th[data-col]")
+      );
     });
 
     document.addEventListener("keydown", (e) => {
       const modal = document.getElementById("da-portal-ds-viewer");
       if (!modal || modal.hidden) return;
       // Escape belongs to the cell editor while a cell is open.
-      if (e.key === "Escape" && !processViewerState.editing) modal.hidden = true;
+      if (e.key === "Escape" && !processViewerState.editing) closeProcessViewer();
     });
   })();
 

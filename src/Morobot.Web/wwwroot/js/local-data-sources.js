@@ -695,6 +695,13 @@
       setLiveStatus(false, "● بدون SignalR");
       return;
     }
+    // A library row has no process to observe, so there is nothing to join — say offline instead
+    // of connecting to a group named "undefined".
+    const joinId = String(taskId ?? "").trim();
+    if (!joinId) {
+      setLiveStatus(false, "● آفلاین");
+      return;
+    }
     try {
       if (viewerState.connection) {
         await viewerState.connection.stop().catch(() => {});
@@ -708,12 +715,12 @@
       conn.on("cellEvent", handleCellEvent);
       conn.onreconnecting(() => setLiveStatus(false, "● در حال اتصال…"));
       conn.onreconnected(async () => {
-        await conn.invoke("JoinTask", String(taskId)).catch(() => {});
+        await conn.invoke("JoinTask", joinId).catch(() => {});
         setLiveStatus(true, "● زنده");
       });
       conn.onclose(() => setLiveStatus(false));
       await conn.start();
-      await conn.invoke("JoinTask", String(taskId));
+      await conn.invoke("JoinTask", joinId);
       viewerState.connection = conn;
       setLiveStatus(true, "● زنده");
     } catch {
@@ -814,10 +821,13 @@
 
   /** Column keys + row count of the source currently open in the viewer (from the local cache). */
   function viewerSource() {
-    if (viewerState.taskId == null || viewerState.sourceId == null) return null;
+    if (viewerState.sourceId == null) return null;
+    // The server-loaded copy is the freshest shape and the only one a library-only row has
+    // (no process id → `findEntry` cannot help), so it wins when present.
+    if (viewerState.lastSource) return viewerState.lastSource;
+    if (viewerState.taskId == null) return null;
     const entry = findEntry(viewerState.taskId, viewerState.sourceId);
-    if (entry) return entry.ds;
-    return viewerState.lastSource || null;
+    return entry ? entry.ds : null;
   }
 
   function cellRevisionFor(rowIndex, columnKey) {
@@ -961,21 +971,39 @@
   }
 
   /** Row/column context menu for the source grid. */
-  function showGridMenu(x, y, td) {
+  function showGridMenu(x, y, td, th) {
     const source = viewerSource();
     if (!source || viewerState.sourceId == null) return;
     const rowIndex = td ? Number(td.dataset.row) : null;
-    const columnKey = td ? td.dataset.col : null;
+    const columnKey = td ? td.dataset.col : (th ? th.dataset.col : null);
+    // A column's position comes from the header/cell index the menu was opened on — never from
+    // the row number, which is a different axis.
+    const columnIndex = th
+      ? Number(th.dataset.colIndex ?? (th.cellIndex - 1))
+      : (td ? td.cellIndex - 1 : null);
 
     const items = [
       { id: "row-after", label: t("sources.addRowAfter") || "افزودن ردیف بعد از این" },
       { id: "row-before", label: t("sources.addRowBefore") || "افزودن ردیف قبل از این" },
+      { id: "row-delete", label: t("sources.deleteRow") || "حذف این ردیف" },
       { sep: true },
+      { id: "col-rename", label: t("sources.renameColumn") || "تغییر نام ستون" },
       { id: "col-after", label: t("sources.addColAfter") || "افزودن ستون بعد از این" },
-      { id: "col-before", label: t("sources.addColBefore") || "افزودن ستون قبل از این" }
+      { id: "col-before", label: t("sources.addColBefore") || "افزودن ستون قبل از این" },
+      { id: "col-delete", label: t("sources.deleteColumn") || "حذف این ستون" }
     ];
-    if (!td) {
-      // Clicked a header or empty area — offer append-only actions.
+    if (th && columnKey) {
+      // Right-click on a column header: column actions for THAT column, no row actions.
+      items.splice(0, items.length,
+        { id: "col-rename", label: t("sources.renameColumn") || "تغییر نام ستون" },
+        { sep: true },
+        { id: "col-after", label: t("sources.addColAfter") || "افزودن ستون بعد از این" },
+        { id: "col-before", label: t("sources.addColBefore") || "افزودن ستون قبل از این" },
+        { id: "col-delete", label: t("sources.deleteColumn") || "حذف این ستون" },
+        { sep: true },
+        { id: "row-append", label: t("sources.addRowAppend") || "افزودن ردیف در پایان" });
+    } else if (!td) {
+      // Clicked empty area — offer append-only actions.
       items.splice(0, items.length,
         { id: "row-append", label: t("sources.addRowAppend") || "افزودن ردیف در پایان" },
         { sep: true },
@@ -1012,18 +1040,36 @@
       if (!btn) return;
       const action = btn.dataset.action;
       close();
-      await runGridAction(action, rowIndex, columnKey);
+      await runGridAction(action, rowIndex, columnKey, columnIndex);
     });
   }
 
-  async function runGridAction(action, rowIndex, columnKey) {
+  async function runGridAction(action, rowIndex, columnKey, columnIndex) {
     const sourceId = viewerState.sourceId;
     if (sourceId == null) return;
+    if (action === "col-rename") {
+      await renameLibraryColumn(sourceId, columnKey);
+      return;
+    }
+    if (action === "row-delete") {
+      await deleteLibraryRow(sourceId, rowIndex);
+      return;
+    }
+    if (action === "col-delete") {
+      await deleteLibraryColumn(sourceId, columnKey);
+      return;
+    }
     const source = viewerSource();
     const columns = (source?.columnKeys || source?.columns || []).map((c) => String(c.key || c.Key || c));
     const rowCount = Number(source?.rowCount) || 0;
 
     const beforeIndexFor = (kind) => {
+      // A column's position comes from the header/cell index the menu was opened on — never from
+      // the row number, which is a different axis.
+      if (kind === "col" && columnIndex != null) {
+        if (action === "col-before") return Math.max(0, columnIndex);
+        if (action === "col-after") return columnIndex + 1;
+      }
       if (action === `${kind}-before`) return rowIndex ?? undefined;
       if (action === `${kind}-after`) return rowIndex == null ? undefined : rowIndex + 1;
       return undefined; // append
@@ -1068,6 +1114,120 @@
     }
   }
 
+  /**
+   * Rename one column of the open source.
+   *
+   * The server applies the rename to the column, its cells AND every linked process whose nodes
+   * bind to that column — an edit here cannot leave a process reading a column that no longer
+   * exists. The grid is re-read afterwards so the header shows the new name.
+   */
+  async function renameLibraryColumn(sourceId, oldKey) {
+    if (sourceId == null || !oldKey) return;
+    const next = window.DaNotify?.prompt
+      ? await DaNotify.prompt(t("sources.renameColumnPrompt") || "نام جدید ستون را وارد کنید", {
+          title: t("sources.renameColumn") || "تغییر نام ستون",
+          value: oldKey
+        })
+      : window.prompt(t("sources.renameColumnPrompt") || "نام جدید ستون را وارد کنید", oldKey);
+    if (next == null) return;
+    const newName = String(next).trim();
+    if (!newName || newName === oldKey) return;
+    try {
+      setGridBusy(true, "sources.renamingColumn");
+      const res = await fetch(`/api/datasources/${sourceId}/columns`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ oldKey, newName })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.renameColumnFail") || "تغییر نام ستون ناموفق بود.");
+      const affected = Number(body.affectedProcessCount ?? body.AffectedProcessCount ?? 0);
+      notify(
+        affected > 0
+          ? (t("sources.colRenamedAffected", { key: newName, count: affected }) || `ستون به «${newName}» تغییر نام یافت و در ${affected} فرآیند اعمال شد.`)
+          : (t("sources.colRenamed", { key: newName }) || `ستون به «${newName}» تغییر نام یافت.`),
+        "success"
+      );
+      await refreshViewer({ busy: false });
+    } catch (e) {
+      notify(e.message || t("sources.renameColumnFail") || "تغییر نام ستون ناموفق بود.", "error");
+    } finally {
+      setGridBusy(false);
+    }
+  }
+
+  /** Context menu — delete one row from the open source, after a confirmation. */
+  async function deleteLibraryRow(sourceId, rowIndex) {
+    if (sourceId == null || !Number.isFinite(rowIndex)) return;
+    const msg = t("sources.deleteRowConfirm", { row: rowIndex + 1 }) || `ردیف ${rowIndex + 1} حذف شود؟`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("sources.deleteRow") || "حذف ردیف",
+          okText: t("common.delete") || "حذف",
+          cancelText: t("common.cancel") || "انصراف"
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+    try {
+      setGridBusy(true, "sources.deletingRow");
+      const res = await fetch(`/api/datasources/${sourceId}/rows/${rowIndex}`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.deleteRowFail") || "حذف ردیف ناموفق بود.");
+      notify(t("sources.rowDeleted") || "ردیف حذف شد.", "success");
+      // refreshViewer shows its own overlay, so tell it not to double-count ours.
+      await refreshViewer({ busy: false });
+    } catch (e) {
+      notify(e.message || "حذف ردیف ناموفق بود.", "error");
+    } finally {
+      setGridBusy(false);
+    }
+  }
+
+  /**
+   * Context menu — delete one column (with its cells), after a confirmation.
+   *
+   * The server keeps node bindings intact on purpose and reports how many linked processes used
+   * the column; the toast carries that count so the author knows where to re-pick a column.
+   */
+  async function deleteLibraryColumn(sourceId, columnKey) {
+    if (sourceId == null || !columnKey) return;
+    const msg = t("sources.deleteColumnConfirm", { key: columnKey }) || `ستون «${columnKey}» با همهٔ داده‌هایش حذف شود؟`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("sources.deleteColumn") || "حذف ستون",
+          okText: t("common.delete") || "حذف",
+          cancelText: t("common.cancel") || "انصراف"
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+    try {
+      setGridBusy(true, "sources.deletingColumn");
+      const res = await fetch(`/api/datasources/${sourceId}/columns/${encodeURIComponent(columnKey)}`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.deleteColumnFail") || "حذف ستون ناموفق بود.");
+      const key = body.deletedColumnKey || body.DeletedColumnKey || columnKey;
+      const affected = Number(body.affectedProcessCount ?? body.AffectedProcessCount ?? 0);
+      notify(
+        affected > 0
+          ? (t("sources.colDeletedAffected", { key, count: affected }) || `ستون «${key}» حذف شد — ${affected} فرآیند به این ستون وابسته بود؛ در ویرایشگر اصلاح کنید.`)
+          : (t("sources.colDeleted", { key }) || `ستون «${key}» حذف شد.`),
+        affected > 0 ? "warn" : "success"
+      );
+      await refreshViewer({ busy: false });
+    } catch (e) {
+      notify(e.message || "حذف ستون ناموفق بود.", "error");
+    } finally {
+      setGridBusy(false);
+    }
+  }
+
   /** First free c<n> not already used by the source. */
   function nextColumnKey(existingKeys) {
     const used = new Set((existingKeys || []).map((k) => String(k).toLowerCase()));
@@ -1096,7 +1256,10 @@
   }
 
   async function openViewer(taskId, sourceId) {
-    viewerState.taskId = taskId;
+    // `undefined`/empty (a library row's button) must become a real null, or the hub would be
+    // joined with the string "undefined" and the live indicator would lie.
+    const tid = (taskId == null || taskId === "" || taskId === "undefined" || taskId === "null") ? null : taskId;
+    viewerState.taskId = tid;
     viewerState.sourceId = Number(sourceId);
     // A freshly opened source starts at its first page; keeping an old page index would show a
     // different source's rows or an out-of-range page.
@@ -1110,7 +1273,7 @@
       setGridBusy(false);
     }
     if (!viewerState.lastSource) {
-      const entry = findEntry(taskId, sourceId);
+      const entry = tid != null ? findEntry(tid, sourceId) : null;
       if (!entry) {
         notify("منبع پیدا نشد.", "error");
         return;
@@ -1120,7 +1283,7 @@
     const modal = document.getElementById("da-portal-ds-viewer");
     if (modal) modal.hidden = false;
     setLiveStatus(false, "● اتصال…");
-    await ensureHub(taskId);
+    await ensureHub(tid);
   }
 
   async function closeViewer() {
@@ -1155,7 +1318,7 @@
     return `
       ${Number(sid) > 0 ? iconBtn("js-rename", t("sources.rename"), ICO_RENAME, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
       ${Number(sid) > 0 ? iconBtn("js-reload", t("sources.reloadFile"), ICO_RELOAD, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
-      ${row.taskId != null ? iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `data-task="${tid}" data-id="${sid}"`) : ""}
+      ${Number(sid) > 0 ? iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}"`) : ""}
       ${row.taskId != null ? iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`) : ""}
       ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-id="${sid}"`)}
       ${master}
@@ -1173,7 +1336,8 @@
       btn.addEventListener("click", () => reloadLibrarySource(btn.dataset.id, btn.dataset.title || ""));
     });
     root.querySelectorAll(".js-view").forEach((btn) => {
-      btn.addEventListener("click", () => openViewer(btn.dataset.task, btn.dataset.id));
+      // A library row has no process: pass null so the viewer skips the live-session join.
+      btn.addEventListener("click", () => openViewer(btn.dataset.task ?? null, btn.dataset.id));
     });
     root.querySelectorAll(".js-dl").forEach((btn) => {
       btn.addEventListener("click", () => downloadSource(btn.dataset.task, btn.dataset.id, btn));
@@ -1347,6 +1511,13 @@
   const viewerTable = document.getElementById("da-portal-ds-table");
   if (viewerTable) {
     viewerTable.addEventListener("dblclick", (e) => {
+      // A column HEADER double-click renames the column; cells edit their own value instead.
+      const th = e.target.closest("th[data-col]");
+      if (th) {
+        e.preventDefault();
+        renameLibraryColumn(viewerState.sourceId, th.dataset.col);
+        return;
+      }
       const td = e.target.closest("td[data-row][data-col]");
       if (!td) return;
       e.preventDefault();
@@ -1356,8 +1527,11 @@
       const modal = document.getElementById("da-portal-ds-viewer");
       if (!modal || modal.hidden) return;
       e.preventDefault();
-      const td = e.target.closest("td[data-row][data-col]");
-      showGridMenu(e.clientX, e.clientY, td);
+      showGridMenu(
+        e.clientX, e.clientY,
+        e.target.closest("td[data-row][data-col]"),
+        e.target.closest("th[data-col]")
+      );
     });
   }
 

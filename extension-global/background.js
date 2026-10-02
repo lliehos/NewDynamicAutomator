@@ -457,6 +457,21 @@ async function handleMessage(message, sender) {
       return getPlayStatus();
     case "clearPlayLogs":
       return clearPlayLogs();
+    // The Player HUD re-mounts itself on every page load of its tab — a run often ends with a
+    // click that reloads the page, and the fresh document would otherwise look like "no session"
+    // and the HUD would vanish. It asks which tab owns the open play session; the marker is
+    // cleared only by closing the HUD by hand or by closing the tab — the owner's rule.
+    case "playSessionHere": {
+      const { playSessionTabId } = await chrome.storage.local.get("playSessionTabId");
+      return { ok: true, here: playSessionTabId != null && sender?.tab?.id === Number(playSessionTabId) };
+    }
+    case "closePlayHud": {
+      const { playSessionTabId } = await chrome.storage.local.get("playSessionTabId");
+      if (playSessionTabId != null && sender?.tab?.id === Number(playSessionTabId)) {
+        await chrome.storage.local.remove("playSessionTabId");
+      }
+      return { ok: true };
+    }
     // AlertAccept's three calls. The Player cannot answer a browser dialog from inside the page
     // (a dialog blocks the page's own script), so it asks the extension to do it — see
     // lib/alert-dialog.js for why the answer is pre-set rather than decided on the fly.
@@ -1157,7 +1172,11 @@ async function handleRecordTabClosed(tabId) {
  * set for the same reason.
  */
 async function handlePlayTabClosed(tabId) {
-  const st = await chrome.storage.local.get(["playing", "playTabId"]);
+  const st = await chrome.storage.local.get(["playing", "playTabId", "playSessionTabId"]);
+  // Closing the tab ends its HUD session — one of the only two ways the marker may go.
+  if (st.playSessionTabId != null && Number(st.playSessionTabId) === Number(tabId)) {
+    await chrome.storage.local.remove("playSessionTabId");
+  }
   const knownTab = Number(st.playTabId);
   const sessionTab = typeof playTabId !== "undefined" ? Number(playTabId) : NaN;
   if (Number(tabId) !== knownTab && Number(tabId) !== sessionTab) return;
@@ -1759,12 +1778,10 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
       ignorePlayError: base.ignorePlayError !== false,
       highlightColor: base.highlightColor,
       dataSourceId: base.dataSourceId ?? null,
-      // Range over the repeat source, and the dedicated-row pointer.
+      // Range over the repeat source. (Row pointers are per NODE now — see the row's action or
+      // condition — so a rebuilt start carries none.)
       repeatFromIndex: base.repeatFromIndex ?? null,
-      repeatToIndex: base.repeatToIndex ?? null,
-      dedicatedRow: base.dedicatedRow === true,
-      rowIndexType: base.rowIndexType || "None",
-      specificRowIndex: base.specificRowIndex ?? null
+      repeatToIndex: base.repeatToIndex ?? null
     });
   }
 

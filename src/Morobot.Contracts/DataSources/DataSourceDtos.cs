@@ -173,6 +173,21 @@ public class AddDataSourceColumnRequest
     public int? BeforeIndex { get; set; }
 }
 
+/// <summary>
+/// Rename one column of a library source (grid header edit).
+///
+/// A column's KEY is what process nodes bind to, so renaming is not cosmetic: the same operation
+/// re-points every linked process node that reads or writes the column, keeping the two sides in
+/// step. The cells keep their values; only their column key moves.
+/// </summary>
+public class RenameDataSourceColumnRequest
+{
+    /// <summary>Current key of the column to rename.</summary>
+    public string? OldKey { get; set; }
+    /// <summary>New name — becomes both the key and the display title of the column.</summary>
+    public string? NewName { get; set; }
+}
+
 /// <summary>Insert or append a blank row in a library source.</summary>
 public class AddDataSourceRowRequest
 {
@@ -195,6 +210,14 @@ public class DataSourceStructureResponse
     public long DataRevision { get; set; }
     /// <summary>Key of the column that was added, when a column was added.</summary>
     public string? AddedColumnKey { get; set; }
+    /// <summary>Key of a column that was renamed (its previous name), when a rename happened.</summary>
+    public string? RenamedFromKey { get; set; }
+    /// <summary>New key of the renamed column, when a rename happened.</summary>
+    public string? RenamedColumnKey { get; set; }
+    /// <summary>Key of the column that was deleted, when a column was deleted.</summary>
+    public string? DeletedColumnKey { get; set; }
+    /// <summary>How many linked processes had node bindings re-pointed by the last operation.</summary>
+    public int AffectedProcessCount { get; set; }
 }
 
 public class UploadDataSourceResponse

@@ -15,7 +15,14 @@
     } catch { /* ignore */ }
     try {
       const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => null);
-      return !!(state?.playing || state?.play?.playing);
+      if (state?.playing || state?.play?.playing) return true;
+    } catch { /* ignore */ }
+    // The run may have FINISHED while this page was navigating (the last click reloads the page),
+    // and the HUD still belongs to this tab until it is closed by hand or the tab closes — so ask
+    // the background whether this tab owns the open play session and re-mount from that.
+    try {
+      const here = await chrome.runtime.sendMessage({ type: "playSessionHere" }).catch(() => null);
+      return here?.here === true;
     } catch {
       return false;
     }
@@ -140,6 +147,9 @@
   function dismissPlayerHud() {
     userDismissed = true;
     window.__daFabInit = false;
+    // Closing by hand ends the session marker, so a later navigation of this tab does not bring
+    // the HUD back — that is the "until closed by hand" half of the rule.
+    try { chrome.runtime.sendMessage({ type: "closePlayHud" }).catch(() => {}); } catch { /* ignore */ }
     try { root.remove(); } catch { /* ignore */ }
   }
 
@@ -733,8 +743,10 @@
     if (playing) document.documentElement.dataset.daMorobotMode = "play";
     else if (pageMode === "play") delete document.documentElement.dataset.daMorobotMode;
 
-    // Keep HUD after finish so user can re-run (Play). Hide only when no session context.
-    const hasIdleSession = !playing && (canRestart || hasHistory(play));
+    // Keep HUD after finish so user can re-run (Play). Hide only when no session context is left —
+    // a session SEEN on this page (lastPlaySnapshot) counts too, so a flaky or restarted worker
+    // can never make the HUD vanish right when a run ends.
+    const hasIdleSession = !playing && (canRestart || hasHistory(play) || !!lastPlaySnapshot);
     const showHud = (playing || hasIdleSession)
       && (document.documentElement.dataset.daMorobotMode !== "record");
 

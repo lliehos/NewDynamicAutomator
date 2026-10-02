@@ -278,6 +278,25 @@ rect.flow-marquee{pointer-events:none}
 #flow-svg g.node .node-clone-btn[data-tone="action"]:hover .clone-ico{stroke:#ff9f43}
 #flow-svg g.node .node-promote-btn:hover .promote-bg{fill:#ff9f43}
 #flow-svg g.node .node-promote-btn:hover .promote-ico{stroke:#fff}
+/*
+ * The source-dependency badge: a small database cylinder on a soft plate, drawn OUTSIDE the
+ * node's top-right corner. It answers "does this node depend on source data?" at a glance — the
+ * same dependency the «ردیف اختصاصی» switches act on. Shown for every viewer, editors and
+ * read-only alike, because it describes the diagram rather than offering an action.
+ */
+#flow-svg g.node .node-src-badge circle{
+  fill:#ffffff;
+  fill-opacity:.95;
+  stroke:#7367f0;
+  stroke-width:1.2;
+}
+#flow-svg g.node .node-src-badge ellipse,
+#flow-svg g.node .node-src-badge path{
+  fill:none;
+  stroke:#7367f0;
+  stroke-width:1.2;
+  stroke-linecap:round;
+}
 .btn-canvas-save{
   position:absolute;right:16px;bottom:16px;z-index:20;
   display:inline-flex;align-items:center;justify-content:center;gap:8px;

@@ -1137,6 +1137,276 @@ public class DataSourceService
     }
 
     /// <summary>
+    /// Rename one column of a library source — the grid's header edit.
+    /// </summary>
+    /// <remarks>
+    /// A column's KEY is the identifier process nodes bind to (`dynamicSourceColumnName` and its
+    /// siblings), so a rename that stopped at the column would leave every bound node reading a
+    /// name that no longer exists. One operation therefore applies it everywhere it matters: the
+    /// column itself (key + title), its cells (values keep their rows — only the key they hang off
+    /// moves), and every linked process whose nodes bind the old key. Refuses to overwrite a name
+    /// that is already taken.
+    /// </remarks>
+    public async Task<DataSourceStructureResponse> RenameColumnAsync(
+        int userId, int id, RenameDataSourceColumnRequest req, CancellationToken ct = default)
+    {
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+        var oldKey = (req.OldKey ?? "").Trim();
+        var newName = (req.NewName ?? "").Trim();
+
+        var target = columns.FirstOrDefault(c => string.Equals(c.Key, oldKey, StringComparison.OrdinalIgnoreCase));
+        if (target is null)
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "column-not-found",
+                Message = $"ستونی با نام «{oldKey}» پیدا نشد.",
+                DataSourceId = id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+        if (string.IsNullOrWhiteSpace(newName))
+            return new DataSourceStructureResponse
+            {
+                Ok = false, Code = "empty-name", Message = "نام جدید ستون خالی است.",
+                DataSourceId = id, Columns = columns, ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+        if (columns.Any(c => !ReferenceEquals(c, target) && string.Equals(c.Key, newName, StringComparison.OrdinalIgnoreCase)))
+            return new DataSourceStructureResponse
+            {
+                Ok = false, Code = "duplicate-key", Message = $"ستونی با نام «{newName}» از قبل وجود دارد.",
+                DataSourceId = id, Columns = columns, ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+
+        var storedOldKey = target.Key;
+        var affected = 0;
+        if (!string.Equals(storedOldKey, newName, StringComparison.Ordinal))
+        {
+            target.Key = newName;
+            target.Title = newName;
+            entity.ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts);
+            entity.DataRevision += 1;
+            entity.UpdatedAtUtc = DateTime.UtcNow;
+            StampDataEditor(entity, userId);
+
+            var cells = await _db.DataSourceCells
+                .Where(c => c.DataSourceId == id && c.ColumnKey == storedOldKey)
+                .ToListAsync(ct);
+            foreach (var cell in cells) cell.ColumnKey = newName;
+
+            await _db.SaveChangesAsync(ct);
+
+            var processIds = await _db.ProcessDataSources.AsNoTracking()
+                .Where(l => l.DataSourceId == id)
+                .Select(l => l.ProcessId)
+                .Distinct()
+                .ToListAsync(ct);
+            foreach (var pid in processIds)
+            {
+                try
+                {
+                    if (await PatchColumnInProcessGraphAsync(pid, id, storedOldKey, newName, ct)) affected++;
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Patch column {Old}->{New} of source {Ds} on process {P}",
+                        storedOldKey, newName, id, pid);
+                }
+            }
+        }
+
+        // Re-stamp the embedded source snapshots — their column lists carry the same keys.
+        await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+
+        var (_, rc) = await GetDerivedCountersAsync(id, ct);
+        return new DataSourceStructureResponse
+        {
+            Ok = true,
+            DataSourceId = entity.Id,
+            Columns = columns,
+            ColumnKeys = columns.Select(c => c.Key).ToList(),
+            ColumnCount = columns.Count,
+            RowCount = Math.Max(entity.RowCount, rc),
+            DataRevision = entity.DataRevision,
+            RenamedFromKey = storedOldKey,
+            RenamedColumnKey = newName,
+            AffectedProcessCount = affected
+        };
+    }
+
+    /// <summary>
+    /// Re-point one process's node bindings from an old column key to its new name.
+    /// </summary>
+    /// <remarks>
+    /// Only nodes bound to THIS source are touched — a name that happens to match on a node bound
+    /// elsewhere is a different column. The binding pairs are declared once in
+    /// <see cref="ColumnBindings"/> and reused, so this cannot drift from the dependency scan.
+    /// Returns true when at least one binding changed (the caller counts affected processes).
+    /// </remarks>
+    private async Task<bool> PatchColumnInProcessGraphAsync(
+        int processId, int dataSourceId, string oldKey, string newKey, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return false;
+
+        // Stored graphs come in two shapes (plain, or an envelope whose body is a string) — unwrap
+        // first so the node list is actually found.
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+        JsonObject? body;
+        try { body = JsonNode.Parse(bodyJson) as JsonObject; }
+        catch { return false; }
+        if (body is null || body["nodes"] is not JsonArray nodes) return false;
+
+        var changed = false;
+        foreach (var n in nodes)
+        {
+            if (n is not JsonObject no) continue;
+            foreach (var (idProp, columnProp, _) in ColumnBindings)
+            {
+                if (no[idProp]?.GetValue<int?>() != dataSourceId) continue;
+                var bound = ReadString(no, columnProp);
+                if (string.IsNullOrWhiteSpace(bound)
+                    || !bound.Trim().Equals(oldKey, StringComparison.OrdinalIgnoreCase)) continue;
+                no[columnProp] = newKey;
+                changed = true;
+            }
+        }
+        if (!changed) return false;
+
+        process.GraphJson = envelope is null
+            ? body.ToJsonString(JsonOpts)
+            : EnvelopeWithBody(envelope, body).ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Delete one column of a library source — the grid's context menu.
+    /// </summary>
+    /// <remarks>
+    /// The column's cells go with it (a value cannot outlive its column) and the embedded source
+    /// snapshots of linked processes are re-stamped. Node bindings are deliberately NOT rewritten:
+    /// a node that still names the deleted column is a real configuration problem the author has
+    /// to see and fix, and it is reported by the editor's validation instead of silently reading
+    /// nothing. The count of linked processes the column was used in is returned so the caller can
+    /// warn. The last remaining column cannot be deleted — a source without columns breaks every
+    /// consumer (grid, export, node bindings) for no benefit.
+    /// </remarks>
+    public async Task<DataSourceStructureResponse> DeleteColumnAsync(
+        int userId, int id, string columnKey, CancellationToken ct = default)
+    {
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+        var key = (columnKey ?? "").Trim();
+        var target = columns.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
+        if (target is null)
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "column-not-found",
+                Message = $"ستونی با نام «{key}» پیدا نشد.",
+                DataSourceId = id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+        if (columns.Count <= 1)
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "last-column",
+                Message = "آخرین ستون منبع قابل حذف نیست؛ ابتدا ستون دیگری اضافه کنید.",
+                DataSourceId = id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+
+        var storedKey = target.Key;
+        columns.Remove(target);
+        entity.ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts);
+        entity.ColumnCount = columns.Count;
+        entity.DataRevision += 1;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        StampDataEditor(entity, userId);
+
+        var cells = await _db.DataSourceCells
+            .Where(c => c.DataSourceId == id && c.ColumnKey == storedKey)
+            .ToListAsync(ct);
+        if (cells.Count > 0) _db.DataSourceCells.RemoveRange(cells);
+        await _db.SaveChangesAsync(ct);
+
+        // Count — not migrate — the linked processes that still bind this column, so the caller can
+        // tell the author how many processes point at a column that no longer exists.
+        var affected = 0;
+        var processIds = await _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.DataSourceId == id)
+            .Select(l => l.ProcessId)
+            .Distinct()
+            .ToListAsync(ct);
+        foreach (var pid in processIds)
+        {
+            try { if (await ProcessGraphBindsColumnAsync(pid, id, storedKey, ct)) affected++; }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Scan deleted column {Key} of source {Ds} on process {P}", storedKey, id, pid);
+            }
+        }
+
+        // Re-stamp the embedded source snapshots — their column lists still carry the deleted key.
+        await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+
+        var (_, rc) = await GetDerivedCountersAsync(id, ct);
+        return new DataSourceStructureResponse
+        {
+            Ok = true,
+            DataSourceId = entity.Id,
+            Columns = columns,
+            ColumnKeys = columns.Select(c => c.Key).ToList(),
+            ColumnCount = columns.Count,
+            RowCount = Math.Max(entity.RowCount, rc),
+            DataRevision = entity.DataRevision,
+            DeletedColumnKey = storedKey,
+            AffectedProcessCount = affected
+        };
+    }
+
+    /// <summary>Whether any node of a process still binds one column of a source (read-only scan).</summary>
+    private async Task<bool> ProcessGraphBindsColumnAsync(
+        int processId, int dataSourceId, string columnKey, CancellationToken ct)
+    {
+        var process = await _db.Processes.AsNoTracking().FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return false;
+
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+        JsonObject? body;
+        try { body = JsonNode.Parse(bodyJson) as JsonObject; }
+        catch { return false; }
+        if (body is null || body["nodes"] is not JsonArray nodes) return false;
+
+        foreach (var n in nodes)
+        {
+            if (n is not JsonObject no) continue;
+            foreach (var (idProp, columnProp, _) in ColumnBindings)
+            {
+                if (no[idProp]?.GetValue<int?>() != dataSourceId) continue;
+                var bound = ReadString(no, columnProp);
+                if (!string.IsNullOrWhiteSpace(bound)
+                    && bound.Trim().Equals(columnKey, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Insert blank rows into a library source. Blank rows are materialised as empty cells so the
     /// normal row-page query returns them (it drives row count from the cell table, not the parent).
     /// </summary>

@@ -625,6 +625,46 @@ public class DataSourcesApiController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// Grid header edit — rename a column. Every linked process whose nodes bind the column is
+    /// re-pointed at the new name in the same operation, so nothing keeps reading the old key.
+    /// </summary>
+    [HttpPatch("{id:int}/columns")]
+    public async Task<IActionResult> RenameColumn(
+        int id, [FromBody] Morobot.Contracts.DataSources.RenameDataSourceColumnRequest req, CancellationToken ct)
+    {
+        var result = await _sources.RenameColumnAsync(UserId, id, req ?? new(), ct);
+        if (!result.Ok)
+            return result.Code switch
+            {
+                "forbidden" => Forbid(),
+                "column-not-found" => NotFound(result),
+                _ => BadRequest(result)
+            };
+        await BroadcastSourceShapeAsync(id, result, "column_renamed", ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Grid context menu — delete a column (and every cell in it). Bindings that still name the
+    /// column are left in place on purpose: the affected-process count comes back so the caller can
+    /// warn, and the editor validation points at each node that must pick another column.
+    /// </summary>
+    [HttpDelete("{id:int}/columns/{key}")]
+    public async Task<IActionResult> DeleteColumn(int id, string key, CancellationToken ct)
+    {
+        var result = await _sources.DeleteColumnAsync(UserId, id, key, ct);
+        if (!result.Ok)
+            return result.Code switch
+            {
+                "forbidden" => Forbid(),
+                "column-not-found" => NotFound(result),
+                _ => BadRequest(result)
+            };
+        await BroadcastSourceShapeAsync(id, result, "column_deleted", ct);
+        return Ok(result);
+    }
+
     /// <summary>Grid context menu — append/insert blank row(s).</summary>
     [HttpPost("{id:int}/rows/add")]
     public async Task<IActionResult> AddRows(
@@ -669,7 +709,10 @@ public class DataSourcesApiController : ControllerBase
             columnCount = result.ColumnCount,
             rowCount = result.RowCount,
             dataRevision = result.DataRevision,
-            addedColumnKey = result.AddedColumnKey
+            addedColumnKey = result.AddedColumnKey,
+            renamedFromKey = result.RenamedFromKey,
+            renamedColumnKey = result.RenamedColumnKey,
+            deletedColumnKey = result.DeletedColumnKey
         }, reason, User.Identity?.Name, UserId, ct);
 
         var linked = await _sources.GetLinkedProcessIdsAsync(dataSourceId, ct);
@@ -679,7 +722,10 @@ public class DataSourcesApiController : ControllerBase
             {
                 id = result.DataSourceId,
                 dataRevision = result.DataRevision,
-                addedColumnKey = result.AddedColumnKey
+                addedColumnKey = result.AddedColumnKey,
+                renamedFromKey = result.RenamedFromKey,
+                renamedColumnKey = result.RenamedColumnKey,
+                deletedColumnKey = result.DeletedColumnKey
             }, reason, User.Identity?.Name, ct);
             await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
             {
