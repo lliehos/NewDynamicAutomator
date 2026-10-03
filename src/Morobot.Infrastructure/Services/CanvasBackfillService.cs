@@ -337,8 +337,9 @@ public static class CanvasBackfillService
 
             // ---- legacy execution semantics (Windows engine: StepExtensions / GroupExtentions) ----
             //  * steps run in Priority order; INACTIVE steps never ran — they are not converted;
-            //  * a CONDITIONAL step's condition groups are a GUARD: the action runs only when every
-            //    active group passes, otherwise the walk skips to the next step;
+            //  * a CONDITIONAL step (IsConditional=1) transfers with NO conditions at all — they
+            //    are REMOVED, and the node's «چشم‌پوشی از خطا» switch (ON) carries the behavior;
+            //    every other step gets the same switch explicitly OFF (owner, 2026-10-03);
             //  * a NO-ACTION step with condition groups is a pure ROUTER (the old app had no
             //    standalone condition node): passed → SuccessGroupId, failed → FaildGroupId;
             //  * any other step with condition groups runs its action first, then routes.
@@ -346,7 +347,6 @@ public static class CanvasBackfillService
             var chainEntry = (string?)null;    // first node of the group's chain
             var chainTail = (string?)null;     // node whose `next` continues the chain
             var chainBroken = false;           // a router/route step already took over the flow
-            var pendingGuardFails = new List<string>();                        // guards awaiting the skip target
             var pendingBranches = new List<(string CondId, string Branch)>();  // branches with no explicit target
             var skippedInactive = new List<string>();
             var skippedUnreachable = new List<string>();
@@ -491,12 +491,6 @@ public static class CanvasBackfillService
                 // Branches without a target group are no-ops in the old engine: the walk simply
                 // continues with the next step (or the next condition of the same step).
                 var wired = 0;
-                foreach (var guardId in pendingGuardFails)
-                {
-                    edgesOut.Add(Edge($"e-skp-{guardId}", guardId, target, "fail"));
-                    wired++;
-                }
-                pendingGuardFails.Clear();
                 foreach (var (pendingCond, branch) in pendingBranches)
                 {
                     edgesOut.Add(Edge($"e-{branch}-{pendingCond}", pendingCond, target, branch));
@@ -583,6 +577,9 @@ public static class CanvasBackfillService
                     ["groupNodeId"] = gid,
                     ["actionType"] = action?.Kind ?? "NoAction",
                     ["isConditional"] = s.IsConditional,
+                    // Owner rule (2026-10-03): the legacy conditional tick transfers as the «ignore
+                    // error» switch — ON for conditional steps and explicitly OFF for every other.
+                    ["ignoreError"] = s.IsConditional,
                     ["isActive"] = s.IsActive,
                     ["constantValue"] = action?.ConstantValue,
                     ["navigateUrl"] = action?.NavigateUrl,
@@ -730,46 +727,23 @@ public static class CanvasBackfillService
                 {
                     if (cgSuppressed)
                         AppendNodeNote(node,
-                            "شرط‌های این مرحله در نسخهٔ قدیم بررسی نمی‌شدند (مرحله بدون اقدام بود)؛ شرط‌ها منتقل نشدند.");
+                            "شرط‌های این مرحله در نسخهٔ قدیم اثری نداشتند (مرحله بدون اقدام بود)؛ شرط‌ها حذف شدند و «چشم‌پوشی از خطا» برای این مرحله روشن شد.");
                     nodesOut.Add(node);
 
                     if (s.IsConditional && hadCg)
                     {
-                        // Conditional step = GUARD: the action runs only when EVERY active group
-                        // passes; any failure skips the action and continues with the next step.
-                        var guardIds = new List<string>();
-                        var emptyGuards = 0;
-                        foreach (var cg in cgs)
-                        {
-                            // An always-true group (no active conditions) could never skip the step:
-                            // drop it instead of drawing a pointless condition (owner, 2026-10-03).
-                            if (cg.Conditions.Count == 0) { emptyGuards++; continue; }
-                            var guardNode = CreateConditionNode(cg, sid);
-                            guardIds.Add(guardNode["id"]!.GetValue<string>());
-                            // A CONDITIONAL step's groups could never route in the old engine — they
-                            // only decided whether THIS step ran (owner, 2026-10-03). A target here
-                            // is stale data and is deliberately ignored.
-                            if (cg.SuccessGroupId is > 0 || cg.FailedGroupId is > 0)
-                                AppendNodeNote(guardNode,
-                                    "در نسخهٔ قدیم شرط‌های یک مرحلهٔ شرطی فقط اجرا/عدم اجرای همان مرحله را کنترل می‌کردند و گروه موفق/ناموفق نداشتند؛ مقصد گروه در این داده نادیده گرفته شد.");
-                        }
-                        if (emptyGuards > 0)
-                            AppendNodeNote(node,
-                                "گروه شرطی بدون زیرشرط این مرحله همیشه برقرار بود و هرگز مرحله را رد نمی‌کرد؛ بدون شرط منتقل شد.");
-                        if (guardIds.Count == 0)
-                        {
-                            AttachEntry(sid);
-                            chainTail = sid;
-                        }
-                        else
-                        {
-                            for (var i = 0; i + 1 < guardIds.Count; i++)
-                                edgesOut.Add(Edge($"e-gs-{guardIds[i]}", guardIds[i], guardIds[i + 1], "success"));
-                            edgesOut.Add(Edge($"e-gs-{s.Id}", guardIds[^1], sid, "success"));
-                            AttachEntry(guardIds[0]);
-                            pendingGuardFails.AddRange(guardIds);
-                            chainTail = sid;
-                        }
+                        // Owner rule (2026-10-03): a CONDITIONAL step transfers WITHOUT any
+                        // conditions — no guard node and no condition is drawn for it at all.
+                        // «چشم‌پوشی از خطا» — set ON on the node literal above (non-conditional
+                        // steps carry it OFF) — is what represents the step's tolerance instead.
+                        // Legacy targets on a guard never routed (they only decided whether THIS
+                        // step ran) — dropped along with the conditions, with an explanatory note.
+                        var hadTargets = cgs.Any(x => x.SuccessGroupId is > 0 || x.FailedGroupId is > 0);
+                        AppendNodeNote(node, hadTargets
+                            ? "مرحلهٔ شرطی: شرط‌های این مرحله حذف شدند و به‌جای آن «چشم‌پوشی از خطا» روشن شد. مقصدهای گروهیِ ثبت‌شده روی این شرط‌ها در نسخهٔ قدیم فقط اجرا/عدم اجرای همین مرحله را کنترل می‌کردند و اثری نداشتند."
+                            : "مرحلهٔ شرطی: شرط‌های این مرحله حذف شدند و به‌جای آن «چشم‌پوشی از خطا» روشن شد.");
+                        AttachEntry(sid);
+                        chainTail = sid;
                     }
                     else if (!isNoAction && hadCg)
                     {
@@ -799,7 +773,7 @@ public static class CanvasBackfillService
                             }
                             else
                             {
-                                var hadCarry = pendingBranches.Count > 0 || pendingGuardFails.Count > 0;
+                                var hadCarry = pendingBranches.Count > 0;
                                 AttachEntry(condId);
                                 AppendNodeNote(cond, hadCarry
                                     ? "در نسخهٔ قدیم همهٔ شرط‌های این مرحله هم‌زمان بررسی می‌شدند؛ در گراف جدید این شرط از ادامهٔ شاخه‌های بدون مقصد شرط قبلی اجرا می‌شود."
@@ -827,12 +801,6 @@ public static class CanvasBackfillService
             // Chain end: a step whose no-target branch ran out of steps hands over to the group's
             // next groups (the old engine ran the group's children after its chain finished).
             var groupExit = GroupExitTarget(g.Id);
-            foreach (var guardId in pendingGuardFails)
-            {
-                edgesOut.Add(Edge($"e-skp-{guardId}", guardId, groupExit, "fail"));
-                residualExitEdges.Add((g.Id, $"e-skp-{guardId}"));
-            }
-            pendingGuardFails.Clear();
             foreach (var (pendingCond, branch) in pendingBranches)
             {
                 edgesOut.Add(Edge($"e-{branch}-{pendingCond}", pendingCond, groupExit, branch));
