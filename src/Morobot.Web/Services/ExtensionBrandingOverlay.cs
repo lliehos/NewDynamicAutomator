@@ -34,7 +34,7 @@ public sealed class ExtensionBrandingOverlay
             try
             {
                 var brandingPath = Path.Combine(root, "morobot-branding.json");
-                await File.WriteAllTextAsync(brandingPath, json, ct);
+                await FileSyncHelper.WriteAllTextIfDifferentAsync(brandingPath, json, ct);
                 PatchManifest(root, head, identityLabel);
                 CopyBrandIcons(root, head);
             }
@@ -80,7 +80,7 @@ public sealed class ExtensionBrandingOverlay
         if (obj["action"] is JsonObject action)
             action["default_title"] = $"{head.AppName} — {head.BrandTitle}{suffix}";
 
-        File.WriteAllText(manifestPath, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        FileSyncHelper.WriteAllTextIfDifferent(manifestPath, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>
@@ -101,7 +101,9 @@ public sealed class ExtensionBrandingOverlay
             Directory.CreateDirectory(iconsDir);
             foreach (var size in new[] { 16, 32, 48, 128 })
             {
-                File.Copy(source, Path.Combine(iconsDir, $"icon{size}.png"), overwrite: true);
+                // Only when the brand icon actually changed: rewriting the same PNG on every start
+                // is what anti-ransomware heuristics flag as file content tampering.
+                FileSyncHelper.CopyIfDifferent(source, Path.Combine(iconsDir, $"icon{size}.png"));
             }
         }
         catch (Exception ex)
@@ -136,7 +138,7 @@ public sealed class ExtensionBrandingOverlay
         var suffix = IdentitySuffix(identityLabel);
         var smartName = $"{head.AppName} Smart Recorder{suffix}";
         var json = JsonSerializer.Serialize(head.ToExtensionJson(origin), new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(Path.Combine(installRoot, "morobot-branding.json"), json, ct);
+        await FileSyncHelper.WriteAllTextIfDifferentAsync(Path.Combine(installRoot, "morobot-branding.json"), json, ct);
         CopyBrandIcons(installRoot, head);
 
         var manifestPath = Path.Combine(installRoot, "manifest.json");
@@ -149,7 +151,7 @@ public sealed class ExtensionBrandingOverlay
             root["description"] = $"{head.BrandTitle} — Smart Recorder";
             if (root["action"] is JsonObject action)
                 action["default_title"] = $"{head.AppName} — Smart Recorder{suffix}";
-            File.WriteAllText(manifestPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            FileSyncHelper.WriteAllTextIfDifferent(manifestPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex)
         {

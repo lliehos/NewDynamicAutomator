@@ -596,8 +596,11 @@ public sealed class ExtensionSyncService : IHostedService, IDisposable
             if (name.StartsWith(".", StringComparison.Ordinal)) continue;
             var rel = Path.GetRelativePath(source, file);
             var target = Path.Combine(dest, rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: true);
+            // CopyIfDifferent, not File.Copy: on every start the in-memory stamp is empty, so this
+            // tree walk used to rewrite every file (icons included) with identical bytes. Beyond the
+            // wasted I/O, endpoint protection reads that as "an app repeatedly overwriting images"
+            // and raises a file-content-tampering alert.
+            FileSyncHelper.CopyIfDifferent(file, target);
         }
 
         foreach (var file in Directory.EnumerateFiles(dest, "*", SearchOption.AllDirectories))
