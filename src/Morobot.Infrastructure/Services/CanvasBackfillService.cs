@@ -967,6 +967,64 @@ public static class CanvasBackfillService
             if (detachedExit is not null) edgesOut.Remove(detachedExit);
         }
 
+        // A group left holding ONE action, with no condition of its own and no repeat, is not a
+        // container at all: the old engine ran it as a single step, once. Carrying it over as a
+        // group would add a box (and an inner start node) saying nothing the action does not
+        // already say, so the action takes the group's place in the graph — its incoming lines
+        // now point at the action, and the group's exit line becomes the action's exit
+        // (owner, 2026-10-03).
+        var promotedGroups = new Dictionary<int, string>();
+        foreach (var g in groups)
+        {
+            if (removedGroups.Contains(g.Id)) continue;
+            if (!groupHadContent.TryGetValue(g.Id, out var hasBody) || !hasBody) continue;
+            if (routerEntryByGroup.ContainsKey(g.Id)) continue;
+            if (childGroups.TryGetValue(g.Id, out var promoKids) && promoKids.Count > 0) continue;
+
+            var containerId = $"group-{g.Id}";
+            if (!groupNodes.TryGetValue(g.Id, out var containerNode)) continue;
+
+            var inside = nodesOut
+                .Where(x => x is JsonObject).Cast<JsonObject>()
+                .Where(x => string.Equals(x["groupNodeId"]?.GetValue<string>(), containerId, StringComparison.Ordinal))
+                .ToList();
+            // Exactly one node, and it has to be an action: a condition is a decision that needs
+            // the group it belongs to, and a chain of several steps is a real container.
+            if (inside.Count != 1) continue;
+            if (!string.Equals(inside[0]["kind"]?.GetValue<string>(), "step", StringComparison.Ordinal)) continue;
+            var onlyInsideId = inside[0]["id"]?.GetValue<string>();
+            if (onlyInsideId is null) continue;
+
+            // Only a group that runs once. Page-element and data-source repetition belong to the
+            // container and would be lost with it — and `moveLoop` is deliberately NOT consulted
+            // here: it does not say whether a group repeats, only whether a repetition takes its
+            // index from the parent, which is meaningless once the container is gone.
+            var repeat = containerNode["repeatSourceType"]?.GetValue<string>() ?? "None";
+            if (!string.Equals(repeat, "None", StringComparison.Ordinal)) continue;
+
+            promotedGroups[g.Id] = onlyInsideId;
+            // The container's migration notes describe where the action came from; they belong to
+            // the action once the container is gone.
+            if (containerNode["conversionNotes"] is JsonArray containerNotes)
+                foreach (var note in containerNotes.ToList())
+                    if (note?.GetValue<string>() is { Length: > 0 } text) AppendNodeNote(inside[0], text);
+
+            nodesOut.Remove(containerNode);
+            foreach (var e in edgesOut.Where(x => x is JsonObject).Cast<JsonObject>().ToList())
+            {
+                var kind = e["kind"]?.GetValue<string>();
+                var from = e["from"]?.GetValue<string>();
+                var to = e["to"]?.GetValue<string>();
+                if (string.Equals(kind, "contains", StringComparison.Ordinal))
+                {
+                    if (string.Equals(from, containerId, StringComparison.Ordinal)) edgesOut.Remove(e);
+                    continue;
+                }
+                if (string.Equals(from, containerId, StringComparison.Ordinal)) e["from"] = onlyInsideId;
+                if (string.Equals(to, containerId, StringComparison.Ordinal)) e["to"] = onlyInsideId;
+            }
+        }
+
         // Flatten the call-return: every residual exit of a group with exactly ONE call site is
         // re-pointed to that call site's continuation — the next node of the calling chain (or,
         // when the caller was the chain's last node, the caller group's own resolved exit).
@@ -1041,8 +1099,13 @@ public static class CanvasBackfillService
                 var target = ResolveExit(ownerGroup);
                 if (string.Equals(target, "end", StringComparison.Ordinal)) continue;
                 edge["to"] = target;
-                if (groupNodes.TryGetValue(ownerGroup, out var ownerNode))
-                    AppendNodeNote(ownerNode, string.Equals(target, entryTarget, StringComparison.Ordinal)
+                var noteTargetId = promotedGroups.TryGetValue(ownerGroup, out var promotedId)
+                    ? promotedId
+                    : $"group-{ownerGroup}";
+                var noteTarget = nodesOut.Where(x => x is JsonObject).Cast<JsonObject>()
+                    .FirstOrDefault(x => string.Equals(x["id"]?.GetValue<string>(), noteTargetId, StringComparison.Ordinal));
+                if (noteTarget is not null)
+                    AppendNodeNote(noteTarget, string.Equals(target, entryTarget, StringComparison.Ordinal)
                         ? "انتهای این گروه در نسخهٔ قدیم به فراخوان برمی‌گشت؛ چون مسیر برگشت یکتا نیست، مسیر برگشت به ابتدای چرخهٔ فرآیند («گروه شروع») وصل شد تا چرخهٔ وضعیت ادامه یابد."
                         : "انتهای این گروه در نسخهٔ قدیم به فراخوان برمی‌گشت و مسیر همان شاخه ادامه می‌یافت؛ مسیر برگشت به ادامهٔ همان شاخه وصل شد.");
             }
@@ -1079,6 +1142,7 @@ public static class CanvasBackfillService
         {
             if (entryGroupId is int egCheck && g.Id == egCheck) continue;
             if (removedGroups.Contains(g.Id)) continue;
+            if (promotedGroups.ContainsKey(g.Id)) continue;
             if (g.ParentId is int parent2 && groupById.ContainsKey(parent2)) continue;
             if (flowTargets.Contains($"group-{g.Id}")) continue;
             AppendNodeNote(groupNodes[g.Id],

@@ -3502,11 +3502,51 @@
         queue.push(n.id);
       }
     });
+
+    // --- Cycle breaking: a retry edge (a condition pointing back at a group it already came from)
+    // makes the longest-path relaxation below climb forever — every round each node of the loop gets
+    // pushed one layer further until the guard trips. The loop then owns the highest layer numbers
+    // and everything after it is laid out past the loop, with its edges running backwards.
+    // The DFS order marks those cycle-closing edges as back edges: they are still drawn, they just
+    // do not define a layer.
+    const backEdges = new Set();
+    {
+      const state = new Map(); // 1 = on the current DFS stack, 2 = finished
+      const startIds = [];
+      if (start) startIds.push(start.id);
+      nodes.forEach((n) => {
+        if (n.id !== (start ? start.id : null) && !(ins.get(n.id) || []).length) startIds.push(n.id);
+      });
+      nodes.forEach((n) => startIds.push(n.id)); // leftovers: unreachable / closed components
+      startIds.forEach((rootId) => {
+        if (state.has(rootId)) return;
+        state.set(rootId, 1);
+        const stack = [{ id: rootId, i: 0 }];
+        while (stack.length) {
+          const top = stack[stack.length - 1];
+          const list = outs.get(top.id) || [];
+          if (top.i >= list.length) {
+            state.set(top.id, 2);
+            stack.pop();
+            continue;
+          }
+          const to = list[top.i++];
+          const seen = state.get(to);
+          if (seen === 1) backEdges.add(top.id + ">" + to);
+          else if (!seen) {
+            state.set(to, 1);
+            stack.push({ id: to, i: 0 });
+          }
+        }
+      });
+    }
+
     let guard = 0;
     while (queue.length && guard++ < nodes.length * nodes.length + 16) {
       const id = queue.shift();
       const L = layerOf.get(id) || 0;
       for (const to of outs.get(id) || []) {
+        if (backEdges.has(id + ">" + to)) continue;
         const next = L + 1;
         if (!layerOf.has(to) || layerOf.get(to) < next) {
           layerOf.set(to, next);
@@ -3523,12 +3563,46 @@
       }
     });
 
+    // An edge that hops over a layer is invisible to a layer-by-layer optimizer: crossings are
+    // counted between ADJACENT layers, and such an edge contributes to none of them — so the
+    // ordering passes happily let long lines lie across everything. Splitting every long edge
+    // into a chain of virtual nodes turns each hop into a one-layer edge the optimizer can see.
+    // The virtual nodes are ordering anchors only: never drawn, sized or positioned, and dropped
+    // again before any coordinate is written.
+    const virtualIds = new Set();
+    const augLayerOf = new Map(layerOf);
+    const augEdges = [];
+    let virtualSeq = 0;
+    edges.forEach((e) => {
+      const lf = layerOf.get(e.from);
+      const lt = layerOf.get(e.to);
+      if (lf == null || lt == null || lt <= lf) return;   // same-layer / back edges order nothing
+      if (backEdges.has(e.from + ">" + e.to)) return;
+      let prev = e.from;
+      for (let L = lf + 1; L < lt; L++) {
+        const vid = `__lane${virtualSeq++}`;
+        virtualIds.add(vid);
+        augLayerOf.set(vid, L);
+        augEdges.push({ from: prev, to: vid });
+        prev = vid;
+      }
+      augEdges.push({ from: prev, to: e.to });
+    });
+
     const layers = new Map();
-    layerOf.forEach((L, id) => {
+    augLayerOf.forEach((L, id) => {
       if (!layers.has(L)) layers.set(L, []);
       layers.get(L).push(id);
     });
     const layerKeys = [...layers.keys()].sort((a, b) => a - b);
+
+    const augOuts = new Map();
+    const augIns = new Map();
+    layers.forEach((ids) => ids.forEach((id) => { augOuts.set(id, []); augIns.set(id, []); }));
+    augEdges.forEach((e) => {
+      (augOuts.get(e.from) || []).push(e.to);
+      (augIns.get(e.to) || []).push(e.from);
+    });
 
     function posMap(layerList) {
       const m = new Map();
@@ -3536,11 +3610,14 @@
       return m;
     }
 
-    function countLayerCrossings(orderA, orderB) {
+    function countLayerCrossings(orderA, orderB, useVirtual) {
       const pa = posMap(orderA);
       const pb = posMap(orderB);
+      // The ordering passes count with the virtual anchors (so a line hopping a layer is seen);
+      // the number shown to the operator counts real edges only, so it stays comparable.
+      const list = useVirtual === false ? edges : augEdges;
       const pairs = [];
-      edges.forEach((e) => {
+      list.forEach((e) => {
         if (!pa.has(e.from) || !pb.has(e.to)) return;
         pairs.push([pa.get(e.from), pb.get(e.to)]);
       });
@@ -3555,19 +3632,19 @@
       return cross;
     }
 
-    function totalCrossings(layerMap) {
+    function totalCrossings(layerMap, useVirtual) {
       let c = 0;
       for (let i = 0; i < layerKeys.length - 1; i++) {
         const a = layerMap.get(layerKeys[i]) || [];
         const b = layerMap.get(layerKeys[i + 1]) || [];
-        c += countLayerCrossings(a, b);
+        c += countLayerCrossings(a, b, useVirtual);
       }
       return c;
     }
 
     function barycenter(ids, refPos, useParents) {
       return ids.map((id) => {
-        const refs = useParents ? (ins.get(id) || []) : (outs.get(id) || []);
+        const refs = useParents ? (augIns.get(id) || []) : (augOuts.get(id) || []);
         const hit = refs.filter((r) => refPos.has(r));
         if (!hit.length) return { id, key: refPos.get(id) ?? 0 };
         const avg = hit.reduce((s, r) => s + refPos.get(r), 0) / hit.length;
@@ -3627,7 +3704,7 @@
       layerKeys.forEach(improveBySwaps);
     }
 
-    const crossCount = totalCrossings(orders);
+    const crossCount = totalCrossings(orders, false);
 
     // --- Place in world coords: try both orientations, pick best viewport fill ---
     const H_GAP = 56;
@@ -3641,8 +3718,12 @@
       const laneSizes = [];
       const layerSizes = [];
 
-      layerKeys.forEach((L, li) => {
-        const ids = orders.get(L) || [];
+      // Layers holding only virtual anchors are ordering scaffolding: they must not take a slot in
+      // the grid, or every layer an edge hops over turns into an empty band of canvas.
+      const realLayers = layerKeys.filter((L) => (orders.get(L) || []).some((id) => !virtualIds.has(id)));
+
+      realLayers.forEach((L, li) => {
+        const ids = (orders.get(L) || []).filter((id) => !virtualIds.has(id));
         let laneMax = 0;
         let stack = 0;
         ids.forEach((id, idx) => {
@@ -3662,8 +3743,8 @@
 
       const maxStack = Math.max(0, ...laneSizes);
       let cursor = ORIGIN;
-      layerKeys.forEach((L, li) => {
-        const ids = orders.get(L) || [];
+      realLayers.forEach((L, li) => {
+        const ids = (orders.get(L) || []).filter((id) => !virtualIds.has(id));
         const stack = laneSizes[li] || 0;
         let cross = ORIGIN + Math.max(0, (maxStack - stack) / 2);
         ids.forEach((id) => {
@@ -4004,10 +4085,11 @@
   }
 
   /** Sides (rect) or tip names (diamond) already used by incoming edge tips. */
-  function occupiedIncomingKeys(n) {
+  function occupiedIncomingKeys(n, excludeEdgeId) {
     const keys = new Set();
     for (const e of diagramEdges()) {
       if (e.to !== n.id || e.kind === "contains" || e.kind === "parent") continue;
+      if (excludeEdgeId && e.id === excludeEdgeId) continue;
       const src = nodeById(e.from);
       if (!src) continue;
       // Geometric exit only — avoid recursion with outgoingAnchor / conditionExitPoint.
@@ -4028,18 +4110,32 @@
   }
 
   /**
+   * All four sides of a rect ordered by how well they face a world point — the same score
+   * `nearestSideMid` uses. The best face comes first, so an exit that cannot use the side it
+   * would have preferred still takes the NEXT best face rather than jumping to a fixed order
+   * (which is how a line to a node straight below used to leave from the right-hand side).
+   */
+  function sidesByFacing(n, px, py) {
+    return ALL_SIDES.slice().sort((a, b) => {
+      const faceScore = (side) => {
+        const an = anchorOn(n, side);
+        const dist = Math.hypot(an.x - px, an.y - py);
+        const face = (px - an.x) * an.dx + (py - an.y) * an.dy;
+        return dist + (face < 0 ? 50 : 0);
+      };
+      return faceScore(a) - faceScore(b);
+    });
+  }
+
+  /**
    * Prefer an outgoing side that is NOT where an incoming arrow already lands.
    * Still bias toward the target when that side is free.
    */
   function pickOutgoingSide(n, towardX, towardY) {
     const occupied = occupiedIncomingKeys(n);
-    const ordered = [];
-    if (towardX != null && towardY != null) {
-      ordered.push(sideTowardPoint(n, towardX, towardY));
-    }
-    for (const s of ["right", "bottom", "top", "left"]) {
-      if (!ordered.includes(s)) ordered.push(s);
-    }
+    const ordered = (towardX != null && towardY != null)
+      ? sidesByFacing(n, towardX, towardY)
+      : ["right", "bottom", "top", "left"];
     return ordered.find((s) => !occupied.has(s)) || ordered[0] || "right";
   }
 
@@ -4058,14 +4154,28 @@
     if (occupiedExtra) {
       for (const k of occupiedExtra) occupied.add(k);
     }
-    const prefer = [];
-    if (towardX != null && towardY != null) {
-      prefer.push(conditionTipName(n, nearestConditionCorner(n, towardX, towardY)));
-    }
-    for (const name of ["right", "bottom", "top", "left"]) {
-      if (!prefer.includes(name)) prefer.push(name);
-    }
+    const prefer = (towardX != null && towardY != null)
+      ? conditionTipsByFacing(n, towardX, towardY)
+      : ["right", "bottom", "top", "left"];
     return pickFreeConditionTip(n, occupied, prefer);
+  }
+
+  /**
+   * The four tips of a diamond ordered by how well they face a world point — the same score
+   * `nearestConditionCorner` uses (distance, with a penalty for a tip that points away).
+   */
+  function conditionTipsByFacing(n, px, py) {
+    const names = ["top", "right", "bottom", "left"];
+    const tips = conditionCorners(n);
+    return names
+      .map((name, i) => {
+        const t = tips[i];
+        const dist = Math.hypot(t.x - px, t.y - py);
+        const face = (px - t.x) * t.dx + (py - t.y) * t.dy;
+        return { name, score: dist + (face < 0 ? 25 : 0) };
+      })
+      .sort((a, b) => a.score - b.score)
+      .map((x) => x.name);
   }
 
   function pickFreeConditionTip(n, occupied, preferNames) {
@@ -4101,6 +4211,28 @@
       fail = offsetAlongTipTangent(fail, 12);
     }
     return { success, fail };
+  }
+
+  /**
+   * Arrival tip on a condition.
+   *
+   * A diamond has only four tips and two of them are already spoken for by the node's own
+   * success/fail branches, so an incoming arrow that lands on one of those tips reads as if it
+   * fed the branch sharing the tip — the line in and the branch out become one drawn corner.
+   * The arrival therefore prefers a tip that neither another arriving arrow nor either branch
+   * exit uses, and falls back to a taken tip only when every other tip is taken as well.
+   * The bias toward where the line comes from is kept, so nothing moves while that tip is free.
+   */
+  function conditionArrivalPoint(n, px, py, edgeId) {
+    const occupied = occupiedIncomingKeys(n, edgeId);
+    const pair = conditionBranchExits(n);
+    occupied.add(conditionTipName(n, pair.success));
+    occupied.add(conditionTipName(n, pair.fail));
+    const prefer = [conditionTipName(n, nearestConditionCorner(n, px, py))];
+    for (const name of ["top", "right", "bottom", "left"]) {
+      if (!prefer.includes(name)) prefer.push(name);
+    }
+    return pickFreeConditionTip(n, occupied, prefer);
   }
 
   /**
@@ -4330,9 +4462,13 @@
     const a = from.kind === "condition"
       ? conditionExitPoint(from, edgeKind, tc.x, tc.y)
       : outgoingAnchor(from, tc.x, tc.y);
-    let b = attachPoint(to, a.x, a.y);
+    let b = to.kind === "condition"
+      ? conditionArrivalPoint(to, a.x, a.y, edgeId)
+      : attachPoint(to, a.x, a.y);
     if (Math.hypot(b.x - a.x, b.y - a.y) < 1) {
-      b = attachPoint(to, fc.x, fc.y);
+      b = to.kind === "condition"
+        ? conditionArrivalPoint(to, fc.x, fc.y, edgeId)
+        : attachPoint(to, fc.x, fc.y);
     }
     b = fanTargetAnchor(to, b, edgeId);
     return { a, b };
