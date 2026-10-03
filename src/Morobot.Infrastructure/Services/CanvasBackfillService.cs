@@ -874,7 +874,7 @@ public static class CanvasBackfillService
             edgesOut.Add(Edge("e-start", "start", $"group-{entryId}", "next"));
             if (firstGroupId is null)
                 AppendNodeNote(startNode,
-                    "گروه شروع بر اساس کمترین اولویت گروه‌ها انتخاب شد — همان ترتیب فهرست گروه‌های نسخهٔ قدیم.");
+                    "گروه شروع همان گروهی است که در نسخهٔ قدیم اجرا از آن آغاز می‌شد: گروهی بدون والد که ادامهٔ زنجیره را تحویل می‌دهد (اگر چنین گروهی نبود، ترتیب فهرست قدیمی یعنی کمترین اولویت).");
 
             // The legacy process carried NO repeat of its own: the repeat configuration of the
             // FIRST executed group drove the whole run (owner, 2026-10-02). Move that config onto
@@ -1006,6 +1006,17 @@ public static class CanvasBackfillService
             if (!string.Equals(repeat, "None", StringComparison.Ordinal)) continue;
 
             promotedGroups[g.Id] = onlyInsideId;
+            // The action is a top-level node from here on: it must stop pointing at the container
+            // that is being removed, or the editor treats it as a child of a group that no longer
+            // exists and hides it — the line into it then appears to jump over to whatever sits
+            // next (owner report, 2026-10-03). It also takes the container's spot on the canvas, so
+            // the box the operator knows is simply replaced by the action it held.
+            inside[0]["groupNodeId"] = null;
+            if (containerNode["x"] is JsonValue cx && containerNode["y"] is JsonValue cy)
+            {
+                inside[0]["x"] = cx.GetValue<double>();
+                inside[0]["y"] = cy.GetValue<double>();
+            }
             // The container's migration notes describe where the action came from; they belong to
             // the action once the container is gone.
             if (containerNode["conversionNotes"] is JsonArray containerNotes)
