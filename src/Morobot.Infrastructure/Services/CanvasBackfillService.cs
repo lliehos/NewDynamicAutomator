@@ -952,6 +952,17 @@ public static class CanvasBackfillService
         // branch anywhere pointing at it — was only ever started by hand from the group list. It
         // stays in the graph as a standalone unit and gets no exit line: there is no walk of its
         // own to end, and drawing one would claim it is part of the flow (owner, 2026-10-03).
+        // What counts is whether the graph already reaches the group: a hand-over from another
+        // group's chain or a branch of a router makes it reachable, and `callSites` alone misses
+        // exactly the retry helpers whose only caller is their own «تصمیم بررسی مجدد» step — that
+        // group's own router condition IS its exit, so dropping that line left half the group's
+        // logic hanging in the air (owner report, 2026-10-03).
+        var reachedGroups = edgesOut
+            .Where(x => x is JsonObject).Cast<JsonObject>()
+            .Where(x => !string.Equals(x["kind"]?.GetValue<string>(), "contains", StringComparison.Ordinal))
+            .Select(x => x["to"]?.GetValue<string>())
+            .Where(x => x is not null && x.StartsWith("group-", StringComparison.Ordinal))
+            .ToHashSet(StringComparer.Ordinal);
         foreach (var g in groups)
         {
             if (removedGroups.Contains(g.Id)) continue;
@@ -959,6 +970,7 @@ public static class CanvasBackfillService
             if (g.ParentId is int linkedParent && groupById.ContainsKey(linkedParent)) continue;
             if (childGroups.TryGetValue(g.Id, out var linkedKids) && linkedKids.Count > 0) continue;
             if (callSites.ContainsKey(g.Id)) continue;
+            if (reachedGroups.Contains($"group-{g.Id}")) continue;
 
             var detachedExitId = $"e-gn-{g.Id}";
             var detachedExit = edgesOut
