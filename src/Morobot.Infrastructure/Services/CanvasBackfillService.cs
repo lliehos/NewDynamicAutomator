@@ -990,8 +990,11 @@ public static class CanvasBackfillService
                 .ToList();
             // Exactly one node, and it has to be an action: a condition is a decision that needs
             // the group it belongs to, and a chain of several steps is a real container.
+            // Both spellings of the kind are accepted here, the same way GraphJsonHelper reads them.
             if (inside.Count != 1) continue;
-            if (!string.Equals(inside[0]["kind"]?.GetValue<string>(), "step", StringComparison.Ordinal)) continue;
+            var insideKind = inside[0]["kind"]?.GetValue<string>();
+            if (!string.Equals(insideKind, "step", StringComparison.Ordinal)
+                && !string.Equals(insideKind, "action", StringComparison.Ordinal)) continue;
             var onlyInsideId = inside[0]["id"]?.GetValue<string>();
             if (onlyInsideId is null) continue;
 
