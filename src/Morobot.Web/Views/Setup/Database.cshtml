@@ -14,9 +14,7 @@
   <title>راه‌اندازی دیتابیس — @brandHead.AppName</title>
   <partial name="_BrandHead" model="brandHead" />
   @* Same font as the rest of the application; Tahoma remains the fallback for an offline server. *@
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700&family=Vazirmatn:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="~/css/da-fonts.css" />
   <style>
     :root { --ink: #1f2937; --muted: #6b7280; --line: #e5e7eb; --bg: #f9fafb; --accent: #7367f0; }
     * { box-sizing: border-box; }
@@ -27,7 +25,7 @@
     }
     .wrap { max-width: 860px; margin: 0 auto; }
     .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
-    h1 { font-family: Syne, Vazirmatn, sans-serif; font-size: 1.25rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+    h1 { font-family: "Segoe UI", Vazirmatn, sans-serif; font-size: 1.25rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
     h2 { font-size: 1rem; margin: 0 0 .75rem; font-weight: 600; }
     .lead { color: var(--muted); margin: 0; }
     .badge {
@@ -36,16 +34,16 @@
     }
     dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1rem; margin: 0; }
     dt { color: var(--muted); }
-    dd { margin: 0; font-family: "JetBrains Mono", Consolas, "Courier New", monospace; direction: ltr; text-align: left; word-break: break-all; font-size: .92em; }
+    dd { margin: 0; font-family: Consolas, "Courier New", monospace; direction: ltr; text-align: left; word-break: break-all; font-size: .92em; }
     pre {
       background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 8px; overflow-x: auto;
       direction: ltr; text-align: left; font-size: .85rem; line-height: 1.6; margin: 0;
-      font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+      font-family: Consolas, "Courier New", monospace;
     }
     .note { color: var(--muted); font-size: .9rem; margin: .75rem 0 0; }
     .server-msg { font-size: .85rem; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca;
                   border-radius: 8px; padding: .75rem; direction: ltr; text-align: left;
-                  font-family: "JetBrains Mono", Consolas, monospace; word-break: break-word; }
+                  font-family: Consolas, monospace; word-break: break-word; }
     .actions { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
     button {
       font: inherit; cursor: pointer; border: 0; border-radius: 8px; padding: .6rem 1.4rem;

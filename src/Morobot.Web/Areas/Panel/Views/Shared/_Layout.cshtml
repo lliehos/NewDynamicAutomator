@@ -37,9 +37,6 @@
   <meta name="da-server-fingerprint" content="@(Fingerprints.TryGet()?.Fingerprint)" />
   <title>@brandHead.ComposeTitle(pageTitle, L["brand.tagline"])</title>
   <partial name="_BrandHead" model="brandHead" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
   <link rel="stylesheet" href="~/assets/vendor/css/@(cssPrefix)core.css" />
   <link rel="stylesheet" href="~/assets/vendor/css/@(cssPrefix)theme-default.css" />
@@ -94,12 +91,15 @@
         else
         {
           @* Remotely the server's folder does not exist for the reader, so a package is the only
-             thing that can work. The links rely on the download endpoint the app already exposes. *@
+             thing that can work. The links rely on the download endpoint the app already exposes.
+             A ticket is attached for the same reason the install page does it: a top-level link
+             navigation is not guaranteed to carry the auth cookie, and without one the endpoint
+             answers 401 (previously it was a licence-gate redirect to the login page). *@
           <div class="da-ext-downloads" id="da-ext-downloads">
             <a class="btn-da btn-da-primary" id="da-ext-download-global"
-               href="/extension/download/global" download>⬇ @L["panel.extDownloadGlobal"]</a>
+               href="/extension/download/global?ticket=@(ViewBag.InstallTicketGlobal)" download>⬇ @L["panel.extDownloadGlobal"]</a>
             <a class="btn-da btn-da-ghost" id="da-ext-download-smart"
-               href="/extension/download/smart" download>⬇ @L["panel.extDownloadSmart"]</a>
+               href="/extension/download/smart?ticket=@(ViewBag.InstallTicketSmart)" download>⬇ @L["panel.extDownloadSmart"]</a>
           </div>
         }
       </div>
@@ -266,7 +266,7 @@
   <script src="~/assets/vendor/libs/perfect-scrollbar/perfect-scrollbar.js"></script>
   <script src="~/assets/vendor/js/menu.js"></script>
   <script src="~/assets/js/main.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="~/lib/signalr/signalr.min.js"></script>
   <script src="~/js/da-notify.js?v=@V.AssetVersion"></script>
   <script src="~/js/da-catalog.js?v=@V.AssetVersion"></script>
   <script src="~/js/da-device.js?v=@V.AssetVersion"></script>
@@ -279,7 +279,10 @@
   @if (brandHead.ShowReferralQr)
   {
     <partial name="_ReferralQrWidget" model="brandHead" />
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js" crossorigin="anonymous"></script>
+    @* Self-hosted QR: the encoder plus a shim exposing the QRCode.toCanvas API referral-qr.js
+       calls. Nothing here leaves the server -- see wwwroot/lib/qrcode. *@
+    <script src="~/lib/qrcode/qrcode-generator.min.js"></script>
+    <script src="~/lib/qrcode/qrcode-shim.js"></script>
     <script src="~/js/referral-qr.js?v=@V.AssetVersion"></script>
   }
   @await Component.InvokeAsync("SiteChrome")

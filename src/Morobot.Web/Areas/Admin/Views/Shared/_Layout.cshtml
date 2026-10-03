@@ -36,7 +36,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>@brandHead.ComposeTitle(pageTitle, L["brand.tagline"])</title>
   <partial name="_BrandHead" model="brandHead" />
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
   <link rel="stylesheet" href="~/css/admin-app.css?v=@V.AssetVersion" />
   <link rel="stylesheet" href="~/css/da-switch.css?v=@V.AssetVersion" />
@@ -127,7 +126,7 @@
       @RenderBody()
     </main>
   </div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="~/lib/signalr/signalr.min.js"></script>
   <script src="~/assets/vendor/libs/apex-charts/apexcharts.js"></script>
   <script src="~/js/da-catalog.js?v=@V.AssetVersion"></script>
   <script src="~/js/admin-ui.js?v=@V.AssetVersion"></script>

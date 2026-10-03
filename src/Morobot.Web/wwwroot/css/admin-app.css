@@ -494,7 +494,7 @@ label { font-size: .9rem; }
   font-size: .95rem;
   font-weight: 700;
   color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
-  font-family: Syne, Vazirmatn, sans-serif;
+  font-family: "Segoe UI", Vazirmatn, sans-serif;
 }
 .admin-form-card hr {
   border: 0;

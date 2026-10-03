@@ -308,7 +308,10 @@
     const data = await ensureInstallPaths();
     if (pathEl) {
       const path = pathForRole(data, activeRole);
-      pathEl.textContent = path || t("editor.ds.noPathReady");
+      // "noPathReady" ("path not ready — refresh the portal") is only honest when the server
+      // actually answered and simply had no folder to report. When the request itself failed there
+      // is nothing to refresh that would help, so say so instead of blaming the user's reload.
+      pathEl.textContent = path || (data ? t("editor.ds.noPathReady") : t("panel.extPathUnavailable"));
     }
     // Version line — and when the loaded bundle differs from the required one, that outranks the
     // generic "not found" hint: the fix is an update, not a fresh install.

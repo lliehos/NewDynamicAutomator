@@ -22,15 +22,19 @@
       });
       return;
     }
-    const img = new Image();
-    img.alt = "QR";
-    img.width = 200;
-    img.height = 200;
-    img.src = "https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=" + encodeURIComponent(url);
+    // No local encoder loaded: show the link itself so the dialog is still usable offline.
+    // (Previously this fell back to api.qrserver.com, which is an external request and is not
+    // allowed on this deployment.)
     const wrap = canvas.parentElement;
     if (wrap) {
       canvas.hidden = true;
-      wrap.appendChild(img);
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = url;
+      link.className = "morobot-referral-url-fallback";
+      wrap.appendChild(link);
       qrReady = true;
     }
   }

@@ -89,6 +89,27 @@ public sealed class LicenseGateFilter : IAsyncActionFilter
         if (path.StartsWith("/checkupdate", StringComparison.OrdinalIgnoreCase))
             return true;
 
+        /*
+         * Extension delivery.
+         *
+         * These endpoints carry [AllowAnonymous] because they must be reachable in two very
+         * different situations: a signed-in user clicking "download", and the installer script
+         * running on the user's own machine, which has no browser cookie at all. That attribute is
+         * an AUTHORIZATION concern and does nothing about the licence gate, which is a separate
+         * global filter -- so without this exemption every one of them was answered with a redirect
+         * to the login page. The visible symptoms were the install modal never resolving a path
+         * (it fetches /extension/install-path and treats a non-2xx as "no data") and the download
+         * buttons looking broken on a published server.
+         *
+         * Exempting them here is safe because the controller does not rely on the licence: it
+         * enforces its own access rules per endpoint. /extension/download requires either an
+         * authenticated user or a signed ticket; /extension/installer requires a ticket. The
+         * read-only metadata endpoints expose the same values the install page shows a signed-in
+         * user, and reveal no user data.
+         */
+        if (path.StartsWith("/extension/", StringComparison.OrdinalIgnoreCase))
+            return true;
+
         if (string.IsNullOrEmpty(area)
             && string.Equals(controller, "Home", StringComparison.OrdinalIgnoreCase)
             && (string.Equals(action, "Index", StringComparison.OrdinalIgnoreCase)
@@ -126,6 +147,12 @@ public sealed class LicenseGateFilter : IAsyncActionFilter
 
         if (path.StartsWith("/api/tasks", StringComparison.OrdinalIgnoreCase)
             && string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Extension delivery stays available in restricted mode too: installing the extension is
+        // how a restricted user gets any use out of the deployment at all, and the endpoints
+        // enforce their own access rules (authenticated user or signed ticket).
+        if (path.StartsWith("/extension/", StringComparison.OrdinalIgnoreCase))
             return true;
 
         return false;

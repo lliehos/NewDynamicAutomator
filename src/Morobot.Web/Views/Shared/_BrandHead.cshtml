@@ -5,6 +5,13 @@
 }
 <meta name="theme-color" content="@Model.ColorPrimary" />
 <partial name="_BrandTheme" model="Model" />
+@*
+  Self-hosted fonts. Loaded here rather than in each layout because this partial is included by
+  every one of them (Panel, Admin, auth, public site) -- one declaration covers them all, and a
+  page can never accidentally end up on a different font than the rest of the app.
+  Nothing in this file reaches the network; see wwwroot/css/da-fonts.css.
+*@
+<link rel="stylesheet" href="~/css/da-fonts.css" />
 <link rel="icon" href="@Url.Content(Model.FaviconPath.StartsWith("http") ? Model.FaviconPath : "~" + (Model.FaviconPath.StartsWith('/') ? Model.FaviconPath : "/" + Model.FaviconPath))" type="@favType" />
 @if (!Model.FaviconPath.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) && Model.IconPngPath != Model.FaviconPath)
 {

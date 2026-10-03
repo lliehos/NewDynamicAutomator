@@ -19,7 +19,7 @@
   <meta name="da-server-fingerprint" content="@(Fingerprints.TryGet()?.Fingerprint)" />
   <title>@L["editor.title"] — @brandHead.AppName</title>
   <partial name="_BrandHead" model="brandHead" />
-  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="~/css/da-fonts.css" />
   <link rel="stylesheet" href="~/css/da-notify.css?v=@V.AssetVersion" />
   <link rel="stylesheet" href="~/css/da-switch.css?v=@V.AssetVersion" />
   <link rel="stylesheet" href="~/css/da-cropper.css?v=@V.AssetVersion" />
@@ -29,7 +29,7 @@
   <style>
     html, body { margin: 0; direction: @dir; }
     html.flow-rtl, html.flow-rtl body { font-family: Vazirmatn, Tahoma, sans-serif; }
-    html.flow-ltr, html.flow-ltr body { font-family: Syne, "Segoe UI", sans-serif; }
+    html.flow-ltr, html.flow-ltr body { font-family: "Segoe UI", sans-serif; }
   </style>
 </head>
 <body>
@@ -218,7 +218,7 @@
       </div>
     </div>
   </div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="~/lib/signalr/signalr.min.js"></script>
   <script>
     window.__DA_ENTITLEMENTS__ = @Html.Raw(ViewBag.EntitlementsJson ?? "{}");
     window.__DA_DIAGRAM_DEFAULTS__ = @Html.Raw(ViewBag.DiagramDefaultsJson ?? "{}");

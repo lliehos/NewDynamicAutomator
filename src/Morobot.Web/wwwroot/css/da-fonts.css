@@ -1,0 +1,66 @@
+/*
+ * Self-hosted Vazir — the Persian UI font.
+ *
+ * These files were carried over from the reference portal template
+ * (Portal.Main\wwwroot\fonts) and live in wwwroot/fonts. Nothing here reaches the network:
+ * the app must render correctly on a server with no outbound access, and a webfont that only
+ * exists on someone else's CDN is a font that disappears the moment the network does.
+ *
+ * Two families, because the source template shipped two files rather than one family with
+ * several weights:
+ *   Vazir     — regular text
+ *   VazirBold — the bold face
+ * Both declare font-weight: 400 for the same reason the template did: each file is a complete
+ * face, and the weight is selected by choosing the family (Vazir vs VazirBold), not by the
+ * browser synthesising a bold from the regular file.
+ *
+ * `Vazirmatn` is aliased to the same files below. The panel/admin CSS was written against Google
+ * Fonts' name for this typeface, so the alias means those ~40 `font-family: Vazirmatn` rules keep
+ * working without being rewritten — and a variable/absent weight (300/500/600) degrades to the
+ * nearest real face instead of to a fallback system font.
+ */
+
+/* --- Vazir (regular) --- */
+@font-face {
+  font-family: Vazir;
+  src: url("../fonts/Vazir-FD-WOL.woff") format("woff"),
+       url("../fonts/Vazir-FD-WOL.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* --- VazirBold --- */
+@font-face {
+  font-family: VazirBold;
+  src: url("../fonts/Vazir-Bold-FD-WOL.woff") format("woff"),
+       url("../fonts/Vazir-Bold-FD-WOL.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * Vazirmatn aliases.
+ *
+ * Weight 400 maps to the regular file, 700 to the bold one. The intermediate weights the markup
+ * asks for (500, 600) resolve to the nearest declared face via the browser's normal
+ * nearest-weight matching, which is the same visual result the template had.
+ */
+@font-face {
+  font-family: Vazirmatn;
+  src: url("../fonts/Vazir-FD-WOL.woff") format("woff"),
+       url("../fonts/Vazir-FD-WOL.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Vazirmatn;
+  src: url("../fonts/Vazir-Bold-FD-WOL.woff") format("woff"),
+       url("../fonts/Vazir-Bold-FD-WOL.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
