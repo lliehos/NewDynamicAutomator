@@ -31,6 +31,27 @@
   </ItemGroup>
 
   <!--
+    The two Chrome extension packages. ExtensionSyncService resolves them from the content root
+    (it probes <ContentRoot>\extension-global and <ContentRoot>\extension-smart-recorder) and
+    /extension/download/{role} serves whatever it finds there, so a publish without them leaves
+    the install page empty and the download endpoint answering "پوشه افزونه پیدا نشد".
+    They live in the repository root, outside this project, so reaching the publish output needs
+    an explicit include; %(RecursiveDir) keeps the content/ styles/ lib/ layout intact.
+  -->
+  <ItemGroup>
+    <None Include="..\..\extension-global\**\*"
+          Link="extension-global\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Include="..\..\extension-smart-recorder\**\*"
+          Link="extension-smart-recorder\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
     The four-file appsettings layout. appsettings.json and appsettings.Development.json are picked
     up by the SDK automatically, but the two environment files are only copied when named explicitly
     — without this, a publish would ship a Production server with no Production file at all, and the
