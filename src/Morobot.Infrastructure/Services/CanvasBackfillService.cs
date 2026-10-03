@@ -269,12 +269,6 @@ public static class CanvasBackfillService
             childGroups[key] = childGroups[key].OrderBy(x => x.Priority).ThenBy(x => x.Id).ToList();
         }
 
-        // What runs when a group's step chain ends: the old engine executed the group's child
-        // groups (Task.Groups where ParrentGroupId = this group) — and a branch without a target
-        // group was a no-op that simply let the chain continue.
-        string GroupExitTarget(int groupId)
-            => childGroups.TryGetValue(groupId, out var kids) && kids.Count > 0 ? $"group-{kids[0].Id}" : "end";
-
         // The legacy walk is a CALL tree that unwinds: a router branch enters another group and,
         // when that group's chain finishes (no children / no route), control RETURNS to the
         // calling chain and continues with what follows the router. The flat graph has no call
@@ -342,7 +336,9 @@ public static class CanvasBackfillService
             //    every other step gets the same switch explicitly OFF (owner, 2026-10-03);
             //  * a NO-ACTION step with condition groups is a pure ROUTER (the old app had no
             //    standalone condition node): passed → SuccessGroupId, failed → FaildGroupId;
-            //  * any other step with condition groups runs its action first, then routes.
+            //  * any other step with condition groups runs its action first, then routes;
+            //  * a route edge whose target group was UNSPECIFIED (نامشخص) stays terminal at the
+            //    chain end: it is drawn to «پایان» (owner, 2026-10-03).
             var sy = 0.0;
             var chainEntry = (string?)null;    // first node of the group's chain
             var chainTail = (string?)null;     // node whose `next` continues the chain
@@ -467,9 +463,11 @@ public static class CanvasBackfillService
                     }
                     if (condNodeById.TryGetValue(condId, out var missingOn))
                         AppendNodeNote(missingOn,
-                            $"گروه مقصد این مسیر (#{eid}) جزء این فرآیند نیست (کپی ناقص)؛ مسیر به ادامهٔ زنجیره وصل شد.");
+                            $"گروه مقصد این مسیر (#{eid}) جزء این فرآیند نیست (کپی ناقص)؛ مسیر به ادامهٔ زنجیره وصل می‌شود و اگر ادامه‌ای نباشد به نود «پایان».");
                 }
-                // No target group: the walk continues where the step would have continued.
+                // No target group (نامشخص): mid-chain the walk continues where the step would
+                // have continued; at the end of the chain the branch is drawn to «پایان»
+                // (owner, 2026-10-03).
                 pendingBranches.Add((condId, success ? "success" : "fail"));
             }
 
@@ -798,14 +796,19 @@ public static class CanvasBackfillService
                 sy += 110;
             }
 
-            // Chain end: a step whose no-target branch ran out of steps hands over to the group's
-            // next groups (the old engine ran the group's children after its chain finished).
-            var groupExit = GroupExitTarget(g.Id);
-            foreach (var (pendingCond, branch) in pendingBranches)
+            // Chain end: a branch whose legacy target group was UNSPECIFIED (نامشخص) has no
+            // destination to carry over. The old engine's fallback was the task's LAST GROUP
+            // (Task.Group1) — and group linking runs the other way in the new model (next vs.
+            // previous) — so such branches terminate at the «پایان» node instead of being
+            // pushed through the group-exit / call-return logic (owner, 2026-10-03).
+            foreach (var danglingCond in pendingBranches.Select(x => x.CondId).Distinct(StringComparer.Ordinal))
             {
-                edgesOut.Add(Edge($"e-{branch}-{pendingCond}", pendingCond, groupExit, branch));
-                residualExitEdges.Add((g.Id, $"e-{branch}-{pendingCond}"));
+                if (condNodeById.TryGetValue(danglingCond, out var danglingOn))
+                    AppendNodeNote(danglingOn,
+                        "این شاخه در نسخهٔ قدیم گروه مقصدی نداشت (نامشخص)؛ طبق قاعده به نود «پایان» وصل شد.");
             }
+            foreach (var (pendingCond, branch) in pendingBranches)
+                edgesOut.Add(Edge($"e-{branch}-{pendingCond}", pendingCond, "end", branch));
             pendingBranches.Clear();
 
             if (chainEntry is not null)
