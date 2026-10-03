@@ -283,6 +283,8 @@ public static class CanvasBackfillService
         var groupRouterTerminated = new Dictionary<int, bool>();       // a permanent («در هر صورت») transfer already happened
 
         var groupNodes = new Dictionary<int, JsonObject>();
+        // Whether the group ended up with anything INSIDE it (see the empty-container cleanup below).
+        var groupHadContent = new Dictionary<int, bool>();
 
         var gx = 280.0;
         foreach (var g in groups)
@@ -820,6 +822,8 @@ public static class CanvasBackfillService
                 groupNotes.Add("مرحله‌هایی که بعد از انتقال «در هر صورت» هرگز اجرا نمی‌شدند و منتقل نشدند: " + string.Join("، ", skippedUnreachable));
             if (groupNotes.Count > 0)
                 groupNodes[g.Id]["conversionNotes"] = new JsonArray(groupNotes.Select(x => (JsonNode?)JsonValue.Create(x)).ToArray());
+
+            groupHadContent[g.Id] = chainEntry is not null;
         }
 
         // Group → next group(s): the legacy chain lives on Groups.ParrentGroupId (children are the
@@ -856,7 +860,14 @@ public static class CanvasBackfillService
         // helper group «بستن تب وخطا» and the real entry is the priority-0 data-row decision).
         var entryGroupId = firstGroupId is int fg2 && groupById.ContainsKey(fg2)
             ? fg2
-            : groups.Where(x => x.ParentId is null).OrderBy(x => x.Priority).ThenBy(x => x.Id).Select(x => (int?)x.Id).FirstOrDefault()
+            // A helper group (a login/setup group saved once and run by hand) sits in the same
+            // legacy list and can out-rank the real entry, so the group order alone is not enough
+            // to find where a run started: the entry is the parent-less group that HANDS OVER to
+            // the rest of the chain. A list without such a group keeps the old Priority order.
+            : groups.Where(x => x.ParentId is null
+                        && childGroups.TryGetValue(x.Id, out var entryKids) && entryKids.Count > 0)
+                    .OrderBy(x => x.Priority).ThenBy(x => x.Id).Select(x => (int?)x.Id).FirstOrDefault()
+              ?? groups.Where(x => x.ParentId is null).OrderBy(x => x.Priority).ThenBy(x => x.Id).Select(x => (int?)x.Id).FirstOrDefault()
               ?? groups.OrderBy(x => x.Priority).ThenBy(x => x.Id).Select(x => (int?)x.Id).FirstOrDefault();
         if (entryGroupId is int entryId)
         {
@@ -900,6 +911,62 @@ public static class CanvasBackfillService
             }
         }
 
+        // A group whose ONLY legacy step was a no-action router keeps nothing of its own: the
+        // router moved OUT of the container as an inter-group condition, and the container is left
+        // as an empty box sitting between the condition that reached it and its own branches. An
+        // empty container carries no behaviour and no longer exists as a group at all — it BECOMES
+        // the condition — so it is dropped and everything that pointed at it is re-pointed at the
+        // element it handed over to. That includes the process's own entry group: «شروع» then
+        // points straight at the condition (owner, 2026-10-03).
+        var removedGroups = new HashSet<int>();
+        foreach (var g in groups)
+        {
+            if (groupHadContent.TryGetValue(g.Id, out var hadContent) && hadContent) continue;
+            if (!routerEntryByGroup.TryGetValue(g.Id, out var handover)) continue;
+            if (childGroups.TryGetValue(g.Id, out var ownKids) && ownKids.Count > 0) continue;
+
+            var containerId = $"group-{g.Id}";
+            // A branch of the container's own router that points back at the container is a legacy
+            // retry loop, not a pass-through: re-pointing it would collapse the loop onto the
+            // condition itself, so such a container is kept as it is.
+            if (edgesOut.Where(x => x is JsonObject).Cast<JsonObject>().Any(x =>
+                    string.Equals(x["from"]?.GetValue<string>(), handover, StringComparison.Ordinal)
+                    && string.Equals(x["to"]?.GetValue<string>(), containerId, StringComparison.Ordinal)))
+                continue;
+
+            removedGroups.Add(g.Id);
+            nodesOut.Remove(groupNodes[g.Id]);
+            foreach (var e in edgesOut.Where(x => x is JsonObject).Cast<JsonObject>().ToList())
+            {
+                if (string.Equals(e["from"]?.GetValue<string>(), containerId, StringComparison.Ordinal))
+                {
+                    edgesOut.Remove(e);
+                    continue;
+                }
+                if (string.Equals(e["to"]?.GetValue<string>(), containerId, StringComparison.Ordinal))
+                    e["to"] = handover;
+            }
+        }
+
+        // A group the legacy never linked to anything — no parent group, no children, and no router
+        // branch anywhere pointing at it — was only ever started by hand from the group list. It
+        // stays in the graph as a standalone unit and gets no exit line: there is no walk of its
+        // own to end, and drawing one would claim it is part of the flow (owner, 2026-10-03).
+        foreach (var g in groups)
+        {
+            if (removedGroups.Contains(g.Id)) continue;
+            if (entryGroupId == g.Id) continue;
+            if (g.ParentId is int linkedParent && groupById.ContainsKey(linkedParent)) continue;
+            if (childGroups.TryGetValue(g.Id, out var linkedKids) && linkedKids.Count > 0) continue;
+            if (callSites.ContainsKey(g.Id)) continue;
+
+            var detachedExitId = $"e-gn-{g.Id}";
+            var detachedExit = edgesOut
+                .Where(x => x is JsonObject).Cast<JsonObject>()
+                .FirstOrDefault(x => string.Equals(x["id"]?.GetValue<string>(), detachedExitId, StringComparison.Ordinal));
+            if (detachedExit is not null) edgesOut.Remove(detachedExit);
+        }
+
         // Flatten the call-return: every residual exit of a group with exactly ONE call site is
         // re-pointed to that call site's continuation — the next node of the calling chain (or,
         // when the caller was the chain's last node, the caller group's own resolved exit).
@@ -908,7 +975,13 @@ public static class CanvasBackfillService
         // task looped over its rows and re-entered that same state machine, and the author's own
         // tail conditions loop back to it as well. Only the entry group's own exit is the end
         // of one pass.
-        var entryTarget = entryGroupId is int eid3 ? $"group-{eid3}" : "end";
+        // When the entry group was itself an empty router container it no longer exists as a group,
+        // so the cycle's entry is the condition that took its place.
+        var entryTarget = entryGroupId is int eid3
+            ? (removedGroups.Contains(eid3) && routerEntryByGroup.TryGetValue(eid3, out var entryHandover)
+                ? entryHandover
+                : $"group-{eid3}")
+            : "end";
         var exitMemo = new Dictionary<int, string>();
         var exitVisiting = new HashSet<int>();
         string ResolveExit(int groupId)
@@ -916,7 +989,12 @@ public static class CanvasBackfillService
             if (exitMemo.TryGetValue(groupId, out var memo)) return memo;
             if (entryGroupId == groupId) return exitMemo[groupId] = "end";
             if (!exitVisiting.Add(groupId)) return entryTarget;
-            var res = entryTarget;
+            // A group the legacy never "called" — a chain root, or a leaf reached only by a
+            // group→group hand-over — has no continuation to return to, so its walk simply ends:
+            // the old engine drew no line between it and the cycle. Only a genuinely AMBIGUOUS
+            // return (several call sites: the hub / state-machine centres) is re-pointed at the
+            // cycle's entry group.
+            var res = "end";
             if (callSites.TryGetValue(groupId, out var sites))
             {
                 var distinct = sites.Distinct(StringComparer.Ordinal).ToList();
@@ -935,6 +1013,13 @@ public static class CanvasBackfillService
                             res = ResolveExit(host);
                         }
                     }
+                }
+                else
+                {
+                    // Several call sites: the return cannot be pinned to one continuation. The
+                    // legacy task re-entered the same state machine on its next row, so the line
+                    // goes back to the cycle's entry group (owner, 2026-10-03).
+                    res = entryTarget;
                 }
             }
             exitVisiting.Remove(groupId);
@@ -993,6 +1078,7 @@ public static class CanvasBackfillService
         foreach (var g in groups)
         {
             if (entryGroupId is int egCheck && g.Id == egCheck) continue;
+            if (removedGroups.Contains(g.Id)) continue;
             if (g.ParentId is int parent2 && groupById.ContainsKey(parent2)) continue;
             if (flowTargets.Contains($"group-{g.Id}")) continue;
             AppendNodeNote(groupNodes[g.Id],
