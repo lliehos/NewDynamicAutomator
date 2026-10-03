@@ -538,3 +538,4 @@ _tmp-*.png
 
 # Local MCP client settings
 .deputydev/
+/.vscode
