@@ -1,0 +1,134 @@
+/*
+ * da-cropper.css — styles for the dependency-free image cropper (da-cropper.js).
+ * Scoped under .da-crop-* so it cannot collide with the designer theme.
+ */
+
+.da-crop-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, .55);
+  backdrop-filter: blur(3px);
+}
+
+.da-crop-box {
+  width: min(620px, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  background: #fff;
+  border-radius: 1rem;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, .28);
+  padding: 1.1rem 1.25rem 1rem;
+  direction: inherit;
+}
+
+.da-crop-title {
+  margin: 0 0 .85rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #283937;
+}
+
+.da-crop-stage {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: .75rem;
+  padding: .75rem;
+  overflow: hidden;
+}
+
+.da-crop-canvas {
+  display: block;
+  border-radius: .4rem;
+  cursor: grab;
+  touch-action: none;
+  max-width: 100%;
+}
+.da-crop-canvas.is-dragging { cursor: grabbing; }
+
+/* Rule-of-thirds guides drawn over the frame, non-interactive. */
+.da-crop-grid {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, .75);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, .12);
+}
+.da-crop-grid::before,
+.da-crop-grid::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to right, transparent calc(33.33% - .5px), rgba(255,255,255,.6) calc(33.33% - .5px), rgba(255,255,255,.6) calc(33.33% + .5px), transparent calc(33.33% + .5px)),
+    linear-gradient(to right, transparent calc(66.66% - .5px), rgba(255,255,255,.6) calc(66.66% - .5px), rgba(255,255,255,.6) calc(66.66% + .5px), transparent calc(66.66% + .5px));
+}
+.da-crop-grid::after {
+  background:
+    linear-gradient(to bottom, transparent calc(33.33% - .5px), rgba(255,255,255,.6) calc(33.33% - .5px), rgba(255,255,255,.6) calc(33.33% + .5px), transparent calc(33.33% + .5px)),
+    linear-gradient(to bottom, transparent calc(66.66% - .5px), rgba(255,255,255,.6) calc(66.66% - .5px), rgba(255,255,255,.6) calc(66.66% + .5px), transparent calc(66.66% + .5px));
+}
+
+.da-crop-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .75rem 1rem;
+  margin-top: .9rem;
+}
+
+.da-crop-ctl {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex: 1 1 200px;
+  font-size: .82rem;
+  font-weight: 600;
+  color: #64748b;
+}
+.da-crop-ctl > span { flex: 0 0 auto; min-width: 4.2rem; }
+.da-crop-ctl input[type="range"] { flex: 1 1 auto; accent-color: var(--brand-primary, #1b8777); }
+
+.da-crop-actions {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-top: 1rem;
+  padding-top: .85rem;
+  border-top: 1px solid #e2e8f0;
+}
+.da-crop-aspect {
+  flex: 1 1 auto;
+  font-size: .78rem;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.da-crop-btn {
+  padding: .45rem 1rem;
+  border-radius: .55rem;
+  border: 1px solid transparent;
+  font-size: .85rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: #f1f5f9;
+  color: #334155;
+}
+.da-crop-btn.ghost { background: #f1f5f9; }
+.da-crop-btn.ghost:hover { background: #e2e8f0; }
+.da-crop-btn.primary {
+  background: var(--brand-primary, #1b8777);
+  color: #fff;
+}
+.da-crop-btn.primary:hover { filter: brightness(.95); }
+.da-crop-btn:disabled { opacity: .6; cursor: not-allowed; }
+
+@media (max-width: 560px) {
+  .da-crop-controls { flex-direction: column; align-items: stretch; }
+}

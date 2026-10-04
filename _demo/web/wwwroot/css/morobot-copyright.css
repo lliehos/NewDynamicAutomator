@@ -1,0 +1,24 @@
+.morobot-copyright-bar {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 9999;
+  pointer-events: none;
+  text-align: center;
+  padding: .35rem .75rem;
+  background: linear-gradient(0deg, rgba(15, 23, 42, .88), rgba(15, 23, 42, .55), transparent);
+  color: #f8fafc;
+  font-size: .72rem;
+  letter-spacing: .02em;
+}
+.morobot-copyright-watermark::before {
+  content: "© ";
+}
+body::after {
+  content: "";
+  display: block;
+  height: 2rem;
+}
+body.morobot-licensed-brand::after {
+  height: 0;
+}

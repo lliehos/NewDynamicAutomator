@@ -1,0 +1,1865 @@
+/* Admin shell — isolated from Panel Vuexy theme (no core.css) */
+body {
+  font-family: Vazirmatn, Tahoma, sans-serif;
+  background: linear-gradient(160deg, var(--morobot-soft, var(--morobot-soft-default)) 0%, #f8fafc 42%, #eef2ff 100%);
+  margin: 0;
+  color: #334155;
+}
+/*
+ * Form controls do not inherit font-family - the browser gives them its own default
+ * (Arial here), so every input, select, textarea and button in the admin shell rendered
+ * in Arial while the surrounding text used Vazirmatn. Persian text looked wrong and the
+ * weights did not match. Set the family explicitly on the controls themselves.
+ */
+input,
+select,
+textarea,
+button {
+  font-family: Vazirmatn, Tahoma, sans-serif;
+}
+/* Keep the monospace fields (connection strings, selectors, ids) monospaced. */
+code,
+kbd,
+pre,
+samp,
+.admin-mono,
+input[type="text"].admin-mono,
+textarea.admin-mono {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+.admin-shell .num,
+.admin-dash-stat b,
+.admin-kv dd,
+.admin-table td,
+.admin-event-meta span:first-child,
+.admin-plan-bar-row strong {
+  font-family: Vazirmatn, Tahoma, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+[dir="rtl"] .admin-dash-stat b,
+[dir="rtl"] .admin-kv dd,
+[dir="rtl"] .admin-table td:has(> .num) {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.admin-shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 100vh;
+}
+.admin-nav {
+  background: linear-gradient(180deg, var(--morobot-primary-dark, var(--morobot-primary-dark-default)) 0%, var(--morobot-ink, var(--morobot-ink-default)) 55%, var(--morobot-ink, var(--morobot-ink-default)) 100%);
+  color: #fff;
+  padding: 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  box-shadow: 4px 0 24px rgba(15, 118, 110, .18);
+}
+.admin-brand {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin-bottom: .75rem;
+  letter-spacing: .01em;
+}
+.admin-brand img { border-radius: 8px; background: #fff; }
+.admin-nav-links { flex: 1; }
+.admin-nav a {
+  color: #ecfeff;
+  display: block;
+  padding: .55rem .8rem;
+  border-radius: .6rem;
+  text-decoration: none;
+  margin-bottom: .2rem;
+  font-size: .92rem;
+  transition: background .15s ease;
+}
+.admin-nav a:hover,
+.admin-nav a.active { background: rgba(255, 255, 255, .14); }
+.admin-main {
+  padding: 1.5rem 1.75rem 2.5rem;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding-bottom: calc(2.5rem + env(safe-area-inset-bottom, 0px));
+}
+.admin-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.1rem;
+}
+.admin-top h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  font-family: Vazirmatn, Tahoma, sans-serif;
+}
+/* Account controls (panel, logout, language) share the top bar with the page title. */
+.admin-top-actions {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.admin-top-link {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+}
+.admin-top-link .ti { font-size: 1rem; }
+@media (max-width: 560px) {
+  /* On a narrow screen the labels wrap awkwardly, so keep only the icons. */
+  .admin-top-link span { display: none; }
+}
+.admin-lang { margin: 0; }
+table.admin-table {
+  width: 100%;
+  background: #fff;
+  border-collapse: collapse;
+  border-radius: .9rem;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .06);
+}
+table.admin-table th,
+table.admin-table td {
+  padding: .7rem .9rem;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: start;
+  font-size: .9rem;
+  vertical-align: middle;
+}
+table.admin-table th {
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  font-weight: 700;
+  font-size: .82rem;
+  text-transform: none;
+}
+.btn-admin {
+  display: inline-block;
+  padding: .4rem .85rem;
+  border-radius: .55rem;
+  background: var(--morobot-primary, var(--morobot-primary-default));
+  color: #fff;
+  text-decoration: none;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: .84rem;
+  font-weight: 600;
+}
+.btn-admin.secondary { background: #64748b; }
+.btn-admin.danger { background: #dc2626; }
+.btn-admin.is-busy,
+.btn-admin:disabled { opacity: .55; pointer-events: none; }
+.card-admin {
+  background: #fff;
+  border-radius: .85rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+}
+.card-admin.is-ok { border-inline-start: 4px solid var(--morobot-primary, var(--morobot-primary-default)); }
+.form-control,
+.form-select {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: .45rem .65rem;
+  border: 1px solid #cbd5e1;
+  border-radius: .5rem;
+  margin-top: .25rem;
+}
+textarea.form-control,
+.admin-textarea {
+  min-height: 7rem;
+  resize: vertical;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: .84rem;
+  line-height: 1.5;
+}
+.admin-field-block {
+  width: 100%;
+  margin-bottom: .75rem;
+}
+.admin-field-block .admin-label { margin-bottom: .35rem; }
+.admin-alert {
+  padding: .65rem .85rem;
+  border-radius: .55rem;
+  margin-bottom: .85rem;
+  font-size: .88rem;
+}
+.admin-alert.is-error {
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+.admin-alert.is-warn {
+  background: #fef9c3;
+  color: #a16207;
+  border: 1px solid #fde68a;
+}
+.admin-alert.is-ok {
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  border: 1px solid var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+}
+/* Licence inside its last month: a distinct orange, so it reads as "act soon" and is not
+   mistaken for either the calm green of a healthy licence or the red of an expired one. */
+.admin-alert.is-expiring {
+  background: #ffedd5;
+  color: #c2410c;
+  border: 1px solid #fdba74;
+}
+.admin-alert.is-expiring .admin-license-strip-expiring { font-weight: 700; }
+.admin-alert.is-error .ti,
+.admin-alert.is-warn .ti,
+.admin-alert.is-expiring .ti,
+.admin-alert.is-ok .ti { margin-inline-end: .35rem; vertical-align: -2px; }
+.admin-license-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem .65rem;
+  font-size: .88rem;
+}
+.admin-license-strip strong { font-weight: 700; margin-inline-end: .25rem; }
+.admin-license-strip-sep { opacity: .45; }
+.admin-license-strip a { color: inherit; font-weight: 700; text-decoration: underline; }
+.card-admin.is-danger { border-inline-start: 4px solid #dc2626; background: #fef2f2; }
+label { font-size: .9rem; }
+
+/* Live bar */
+.admin-live-bar {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  flex-wrap: wrap;
+  margin-bottom: .9rem;
+  padding: .55rem .85rem;
+  background: rgba(255, 255, 255, .72);
+  border: 1px solid var(--morobot-soft-2, var(--morobot-soft-2-default));
+  border-radius: .75rem;
+  font-size: .86rem;
+  color: #475569;
+}
+.admin-live-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #94a3b8;
+  flex-shrink: 0;
+}
+.admin-live-dot.is-on {
+  background: #22c55e;
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, .2);
+  animation: admin-pulse 1.6s ease infinite;
+}
+.admin-live-feed {
+  margin-inline-start: auto;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  font-weight: 600;
+  opacity: .85;
+}
+.admin-live-feed.is-flash { animation: admin-feed-flash .9s ease; }
+
+.admin-change-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: .15rem .55rem;
+  border-radius: 999px;
+  font-size: .75rem;
+  font-weight: 700;
+  background: #f1f5f9;
+  color: #64748b;
+}
+.admin-change-badge.is-created { background: #dcfce7; color: #15803d; }
+.admin-change-badge.is-updated,
+.admin-change-badge.is-renamed { background: var(--morobot-soft-2, var(--morobot-soft-2-default)); color: var(--morobot-primary-dark, var(--morobot-primary-dark-default)); }
+.admin-change-badge.is-deleted,
+.admin-change-badge.is-detached { background: #fee2e2; color: #b91c1c; }
+.admin-change-badge.is-attached,
+.admin-change-badge.is-shared { background: #e0e7ff; color: #4338ca; }
+.admin-change-actor {
+  display: block;
+  font-size: .72rem;
+  color: #94a3b8;
+  margin-top: .15rem;
+}
+.admin-play-ico {
+  display: inline-flex;
+  color: var(--morobot-primary, var(--morobot-primary-default));
+}
+/* Running: green and blinking. The colour is set on the playing state rather than the base rule
+   so the two states cannot both be right if a class is left behind. */
+.admin-play-ico.is-playing {
+  color: #16a34a;
+}
+.admin-play-ico.is-blink {
+  animation: admin-play-blink 1s ease-in-out infinite;
+}
+/* Stopped: red and still, so "not running" is visible rather than an empty cell. */
+.admin-play-ico.is-stopped {
+  color: #dc2626;
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-play-ico.is-blink { animation: none; }
+}
+.admin-cell-flash { animation: admin-cell-flash 1s ease; }
+.admin-row-gone { opacity: .45; transition: opacity .4s ease; }
+
+@keyframes admin-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(34, 197, 94, .18); }
+  50% { box-shadow: 0 0 0 6px rgba(34, 197, 94, .08); }
+}
+@keyframes admin-play-blink {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .35; transform: scale(1.12); }
+}
+@keyframes admin-cell-flash {
+  from { background: rgba(13, 148, 136, .22); }
+  to { background: transparent; }
+}
+@keyframes admin-feed-flash {
+  from { opacity: 1; transform: translateY(-2px); }
+  to { opacity: .85; transform: none; }
+}
+
+/* ── Admin switch (replaces raw checkboxes) ── */
+.admin-switch {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+  font-size: .88rem;
+  color: #475569;
+  font-weight: 500;
+  position: relative;
+  min-height: 28px;
+}
+.admin-switch input[type="checkbox"] {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 26px;
+  margin: 0;
+  opacity: 0;
+  z-index: 2;
+  cursor: pointer;
+}
+.admin-switch-ui {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: #cbd5e1;
+  transition: background .25s ease, box-shadow .25s ease;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, .08);
+  pointer-events: none;
+}
+.admin-switch-ui::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  inset-inline-start: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, .18);
+  transition: inset-inline-start .25s ease;
+}
+.admin-switch input:checked + .admin-switch-ui {
+  background: var(--morobot-primary, var(--morobot-primary-default));
+  box-shadow: inset 0 0 0 1px rgba(13, 148, 136, .35);
+}
+.admin-switch input:checked + .admin-switch-ui::after {
+  inset-inline-start: 21px;
+}
+.admin-switch input:focus-visible + .admin-switch-ui {
+  outline: 2px solid rgba(13, 148, 136, .45);
+  outline-offset: 2px;
+}
+.admin-switch-text {
+  flex: 1 1 auto;
+  line-height: 1.35;
+  pointer-events: none;
+}
+.admin-switch input:checked ~ .admin-switch-text {
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  font-weight: 600;
+}
+.admin-switch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: .65rem .85rem;
+  margin-top: .5rem;
+}
+
+/* Three numeric defaults on one row: they are all small numbers and reading them side by side is
+   how an admin sanity-checks a delay against a loop limit. Wraps on a narrow card. */
+.admin-diagram-defaults-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: .65rem .85rem;
+  margin-bottom: .5rem;
+}
+
+/* ── Plan pricing ──   Amount and its discount sit side by side: the discount only means anything next to the price it
+   applies to, so stacking them would invite reading one row's percentage against the other's
+   amount. Wraps rather than shrinking, so a long number never squashes the discount box. */
+.admin-price-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: .65rem .85rem;
+  align-items: start;
+}
+
+/* Prices in the plans table: one compact chip per cycle, so the column stays readable next to
+   Limits and Capabilities instead of repeating the whole pricing card. */
+.admin-price-chip {
+  display: flex;
+  align-items: baseline;
+  gap: .4rem;
+  white-space: nowrap;
+  font-size: .82rem;
+  line-height: 1.5;
+}
+.admin-price-cycle {
+  min-width: 3.6rem;
+  color: #94a3b8;
+  font-size: .74rem;
+}
+.admin-price-amount {
+  font-weight: 600;
+  color: var(--morobot-ink, var(--morobot-ink-default));
+  font-variant-numeric: tabular-nums;
+}
+.admin-price-amount small {
+  font-weight: 400;
+  color: #94a3b8;
+  font-size: .7rem;
+}
+.admin-price-off {
+  color: #0f766e;
+  background: rgba(15, 118, 110, .09);
+  border-radius: .35rem;
+  padding: 0 .3rem;
+  font-size: .7rem;
+}
+.admin-price-none {
+  color: #cbd5e1;
+}
+
+/* ── Responsive form layout ── */
+.admin-form-shell {
+  display: grid;
+  gap: 1rem;
+}
+@media (min-width: 960px) {
+  .admin-form-shell.is-2col {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+  .admin-form-shell.is-3col {
+    grid-template-columns: repeat(3, 1fr);
+    align-items: start;
+  }
+}
+.admin-form-card {
+  background: #fff;
+  border-radius: .85rem;
+  padding: 1rem 1.25rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+  border: 1px solid rgba(226, 232, 240, .9);
+}
+.admin-form-card h3,
+.admin-form-card h4 {
+  margin: 0 0 .85rem;
+  font-size: .95rem;
+  font-weight: 700;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  font-family: Syne, Vazirmatn, sans-serif;
+}
+.admin-form-card hr {
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+  margin: .85rem 0;
+}
+.admin-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .65rem;
+  margin-top: .25rem;
+}
+.admin-form-actions .btn-admin { margin: 0; }
+
+/* ── Settings page ── */
+.admin-settings-grid {
+  display: grid;
+  gap: 1rem;
+  /* Cards keep their natural height instead of stretching to match the tallest one in
+     the row. Stretching left the short cards (auth, deployment) full of dead space and
+     forced every card to be as tall as the longest. */
+  align-items: start;
+}
+@media (min-width: 720px) {
+  .admin-settings-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1200px) {
+  /* On a normal desktop the groups are narrow, so three fit across comfortably and the
+     page stops reading as two very wide columns. */
+  .admin-settings-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ── Branding form ──
+   The branding form reuses .admin-settings-grid for its cards, but its cards hold two-column
+   language pairs and the diagram colour grid. At the settings page's 3-across layout each card was
+   only ~420px, which collapsed every language pair to a single column and made the page read as one
+   long list of inputs.
+   These rules sit AFTER the .admin-settings-grid media queries on purpose: equal specificity means
+   the later rule wins, so putting them earlier let the 3-across rule override them. */
+@media (min-width: 900px) {
+  .admin-settings-grid.admin-branding-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* The colour cards hold a wide picker+hex+reset row and a grid of them, so they take the full
+     width rather than being squeezed into half of it. */
+  .admin-settings-grid.admin-branding-form > .admin-settings-card:has(.admin-color-grid) {
+    grid-column: 1 / -1;
+  }
+}
+.admin-settings-card {
+  background: #fff;
+  border-radius: .85rem;
+  padding: 1rem 1.25rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+  border: 1px solid rgba(226, 232, 240, .9);
+}
+.admin-settings-card h3 {
+  margin: 0 0 .75rem;
+  font-size: .95rem;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  font-weight: 700;
+}
+.admin-field-hint {
+  font-size: .82rem;
+  color: #64748b;
+  margin-top: .25rem;
+}
+
+/* Who last changed a setting, and when. Deliberately quieter than the hint above it: it is
+   reference information for an occasional question, not something to read on every visit. */
+.admin-settings-changed {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  margin-top: .35rem;
+  font-size: .76rem;
+  color: #94a3b8;
+}
+.admin-settings-changed i {
+  font-size: .9rem;
+  opacity: .8;
+}
+.admin-settings-changed strong {
+  color: #64748b;
+  font-weight: 600;
+}
+.admin-settings-changed.is-muted {
+  font-style: italic;
+  opacity: .75;
+}
+
+/* Colour setting: swatch, text box, and the optional apply-on/off switch on one line.
+   Flex-wrap so a narrow card stacks rather than squashing the hex value out of legibility. */
+.admin-settings-colour-row {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+.admin-settings-colour-picker {
+  width: 42px;
+  height: 38px;
+  padding: 2px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.admin-settings-colour-picker::-webkit-color-swatch-wrapper { padding: 0; }
+.admin-settings-colour-picker::-webkit-color-swatch { border: none; border-radius: 5px; }
+.admin-settings-colour-text {
+  flex: 1 1 8rem;
+  min-width: 8rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Hex is read left-to-right even in the RTL layout. */
+  direction: ltr;
+  text-align: left;
+}
+.admin-settings-colour-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .78rem;
+  color: #64748b;
+  white-space: nowrap;
+  cursor: pointer;
+  margin: 0;
+}
+.admin-settings-colour-switch input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* ── Dashboard ── */
+.admin-dash-intro {
+  margin: 0 0 1rem;
+  color: #64748b;
+  font-size: .92rem;
+  max-width: 52rem;
+}
+.admin-dash-stats {
+  display: grid;
+  /* auto-fill left a ragged last row and the tiles did not line up with the cards below, since
+     the card edge and the tile edge drifted apart. A fixed count of equal columns keeps every
+     tile the same width and flush with the grid underneath. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .85rem;
+  margin-bottom: 1.25rem;
+}
+@media (max-width: 1100px) {
+  .admin-dash-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .admin-dash-stats { grid-template-columns: minmax(0, 1fr); }
+}
+/*
+ * Stat card = icon column + text column, laid out with flex so the label can never
+ * slide under the icon. The previous absolute-icon + fixed inline padding left only
+ * 2.6rem for a 2rem icon starting at .85rem, so "text went under the icon" whenever
+ * the label wrapped to a second line.
+ */
+.admin-dash-stat {
+  background: #fff;
+  border-radius: .85rem;
+  padding: .85rem 1rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+  border: 1px solid rgba(226, 232, 240, .85);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: .7rem;
+  position: relative;
+  min-height: 4.25rem;
+}
+.admin-dash-stat-body {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+  min-width: 0;
+}
+.admin-dash-stat b {
+  font-size: 1.55rem;
+  font-weight: 700;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  line-height: 1.15;
+}
+.admin-dash-stat span {
+  font-size: .82rem;
+  color: #64748b;
+  /* Keep long Persian labels on their own line instead of colliding with the icon. */
+  overflow-wrap: anywhere;
+}
+.admin-dash-stat.is-live b { color: #16a34a; }
+.admin-dash-grid {
+  display: grid;
+  gap: 1rem;
+}
+@media (min-width: 960px) {
+  .admin-dash-grid {
+    grid-template-columns: 1.2fr .8fr;
+    align-items: start;
+  }
+}
+.admin-dash-section {
+  background: #fff;
+  border-radius: .85rem;
+  padding: 1rem 1.25rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+  border: 1px solid rgba(226, 232, 240, .85);
+  margin-bottom: 1rem;
+}
+.admin-dash-section h2 {
+  margin: 0 0 .75rem;
+  font-size: 1rem;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  font-weight: 700;
+}
+.admin-dash-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .75rem;
+  margin-bottom: .75rem;
+}
+.admin-dash-section-head h2 { margin: 0; }
+.admin-dash-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: .65rem;
+}
+/* Full-width launcher under the grid. Spans both columns so the tiles are one even row rather
+   than a narrow column, and it sits below the data panels because it is navigation, not data. */
+.admin-dash-shortcuts-section {
+  margin-top: 1rem;
+}
+@media (min-width: 960px) {
+  .admin-dash-shortcuts-section .admin-dash-shortcuts {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+}
+.admin-dash-link {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+  padding: .75rem .85rem;
+  border-radius: .65rem;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  text-decoration: none;
+  font-size: .86rem;
+  font-weight: 600;
+  border: 1px solid var(--morobot-soft-2, var(--morobot-soft-2-default));
+  transition: background .15s ease, transform .15s ease;
+}
+.admin-dash-link:hover {
+  background: var(--morobot-soft-2, var(--morobot-soft-2-default));
+  transform: translateY(-1px);
+}
+.admin-dash-link small {
+  font-weight: 400;
+  color: #64748b;
+  font-size: .75rem;
+}
+.admin-plan-bars { display: flex; flex-direction: column; gap: .55rem; }
+.admin-plan-bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .5rem;
+  align-items: center;
+  font-size: .84rem;
+}
+.admin-plan-bar-track {
+  grid-column: 1 / -1;
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.admin-plan-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--morobot-primary, var(--morobot-primary-default)), var(--morobot-primary, var(--morobot-primary-default)));
+  border-radius: 999px;
+  min-width: 2px;
+}
+.admin-event-list { list-style: none; margin: 0; padding: 0; }
+.admin-event-list li {
+  padding: .55rem 0;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: .84rem;
+}
+.admin-event-list li:last-child { border-bottom: 0; }
+.admin-event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem .65rem;
+  font-size: .75rem;
+  color: #94a3b8;
+  margin-bottom: .15rem;
+}
+.admin-event-msg { color: #334155; }
+.admin-badge {
+  display: inline-flex;
+  padding: .12rem .45rem;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 700;
+  background: #f1f5f9;
+  color: #64748b;
+}
+.admin-badge.is-ok { background: #dcfce7; color: #15803d; }
+.admin-badge.is-warn { background: #fef9c3; color: #a16207; }
+.admin-badge.is-err { background: #fee2e2; color: #b91c1c; }
+
+/* ── Icons, hints, page chrome ── */
+.admin-nav a {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+}
+.admin-nav a .ti { font-size: 1.05rem; opacity: .92; flex-shrink: 0; }
+.btn-admin {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  justify-content: center;
+}
+.btn-admin .ti { font-size: 1rem; }
+.btn-admin.icon-only {
+  padding: .4rem .55rem;
+}
+.admin-page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem 1rem;
+  margin-bottom: 1rem;
+}
+.admin-page-summary {
+  margin: 0;
+  color: #64748b;
+  font-size: .9rem;
+  max-width: 42rem;
+  line-height: 1.5;
+}
+.admin-label {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .88rem;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: .2rem;
+}
+.admin-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  color: #94a3b8;
+  cursor: help;
+  position: relative;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.admin-hint .ti { font-size: .95rem; }
+.admin-hint::after {
+  content: attr(data-tip);
+  position: absolute;
+  inset-inline-start: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  min-width: 10rem;
+  max-width: 16rem;
+  padding: .45rem .6rem;
+  border-radius: .5rem;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: .75rem;
+  font-weight: 500;
+  line-height: 1.35;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .22);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity .15s ease, visibility .15s ease;
+  z-index: 30;
+  white-space: normal;
+  text-align: start;
+}
+[dir="rtl"] .admin-hint::after { transform: translateX(50%); }
+.admin-hint:hover::after,
+.admin-hint:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+.admin-form-card h4,
+.admin-settings-card h3 {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+}
+.admin-form-card h4 .ti,
+.admin-settings-card h3 .ti,
+.admin-dash-section h2 .ti {
+  font-size: 1rem;
+  opacity: .85;
+}
+.admin-switch.is-compact {
+  min-height: 24px;
+  font-size: .82rem;
+}
+.admin-switch.is-compact input[type="checkbox"] {
+  width: 38px;
+  height: 22px;
+}
+.admin-switch.is-compact .admin-switch-ui {
+  width: 38px;
+  height: 22px;
+}
+.admin-switch.is-compact .admin-switch-ui::after {
+  width: 16px;
+  height: 16px;
+}
+.admin-switch.is-compact input:checked + .admin-switch-ui::after {
+  inset-inline-start: 19px;
+}
+.admin-switch.is-icon-only .admin-switch-text { display: none; }
+.admin-switch-text .admin-hint { margin-inline-start: .15rem; }
+.admin-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+}
+.admin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  padding: .18rem .45rem;
+  border-radius: 999px;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  font-size: .72rem;
+  font-weight: 600;
+  border: 1px solid var(--morobot-soft-2, var(--morobot-soft-2-default));
+}
+.admin-chip .ti { font-size: .85rem; }
+
+/* Event log: the level filter row, the level badges, and the details disclosure. */
+.admin-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem;
+  margin-bottom: .85rem;
+}
+.admin-filter-label {
+  color: #94a3b8;
+  font-size: .78rem;
+  font-weight: 600;
+  margin-inline-end: .15rem;
+}
+a.admin-chip {
+  text-decoration: none;
+  background: #fff;
+  color: #64748b;
+  border-color: rgba(226, 232, 240, .95);
+}
+a.admin-chip:hover { border-color: var(--morobot-primary, var(--morobot-primary-default)); color: var(--morobot-primary-dark, var(--morobot-primary-dark-default)); }
+a.admin-chip.is-active {
+  background: var(--morobot-primary, var(--morobot-primary-default));
+  color: #fff;
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+}
+.admin-chip-info { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+.admin-chip-warning { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+.admin-chip-error { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+.admin-chip-audit { background: #f5f3ff; color: #6d28d9; border-color: #ddd6fe; }
+.admin-nowrap { white-space: nowrap; }
+.admin-log-message { max-width: 34rem; }
+.admin-log-detail { color: #94a3b8; font-size: .78rem; margin-top: .2rem; }
+.admin-log-detail pre {
+  margin: .3rem 0 0;
+  padding: .45rem .6rem;
+  background: #f8fafc;
+  border: 1px solid rgba(226, 232, 240, .95);
+  border-radius: .45rem;
+  font-size: .74rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  direction: ltr;
+  text-align: left;
+}
+.admin-log-detail summary { cursor: pointer; }
+.admin-empty {
+  background: #fff;
+  border: 1px solid rgba(226, 232, 240, .85);
+  border-radius: .9rem;
+  padding: 3rem 1rem;
+  text-align: center;
+  color: #94a3b8;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .06);
+}
+.admin-empty .ti { font-size: 2rem; opacity: .5; }
+.admin-empty p { margin: .6rem 0 0; font-size: .9rem; }
+.admin-status {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .82rem;
+  font-weight: 600;
+}
+.admin-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+.admin-status.is-on { color: #15803d; }
+.admin-status.is-on .admin-status-dot { background: #22c55e; }
+.admin-status.is-off { color: #94a3b8; }
+.admin-muted { color: #94a3b8; font-size: .84rem; }
+.admin-table-wrap {
+  background: #fff;
+  border-radius: .9rem;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .06);
+  border: 1px solid rgba(226, 232, 240, .85);
+}
+.admin-table-wrap .admin-table {
+  box-shadow: none;
+  border-radius: 0;
+}
+.admin-dash-stat-ico {
+  flex: 0 0 auto;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: .55rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+}
+.admin-dash-stat-ico .ti { font-size: 1.15rem; }
+.admin-dash-link {
+  position: relative;
+  padding-inline-start: 2.35rem;
+}
+.admin-dash-link .ti {
+  position: absolute;
+  inset-inline-start: .75rem;
+  top: .85rem;
+  font-size: 1.1rem;
+  opacity: .85;
+}
+.admin-toggle-form { display: inline-block; margin: 0; }
+
+/* ── User presence ── */
+.admin-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.admin-presence-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #94a3b8;
+  flex-shrink: 0;
+}
+.admin-presence.is-online .admin-presence-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, .18);
+}
+.admin-presence.is-online.is-playing .admin-presence-dot {
+  animation: admin-pulse 1.6s ease infinite;
+}
+.admin-presence.is-online { color: #15803d; }
+.admin-presence.is-offline { color: #94a3b8; }
+
+.admin-license-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+/* Licence page: the status read-out is a long list of key/value rows and needs the wider
+   column; the action cards stack in the narrower one. Stacked rather than side by side because
+   they are a short list the admin works down, and three narrow columns wrapped badly. */
+@media (min-width: 960px) {
+  .admin-license-grid {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  }
+}
+.admin-license-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+/* The cards are inside a flex column now, so the grid's own gap no longer spaces them. */
+.admin-license-actions > .card-admin,
+.admin-license-actions > .admin-settings-card {
+  margin-bottom: 0;
+}
+.admin-kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: .35rem 1rem;
+  margin: 0;
+}
+.admin-kv dt { color: #64748b; font-weight: 600; }
+.admin-kv dd { margin: 0; }
+.admin-form-stack { display: flex; flex-direction: column; gap: .75rem; }
+.card-admin.is-muted { opacity: .92; }
+
+/* ── Offline update: upload ──
+   The upload box is the whole point of the page, so it is a drop target rather than a bare
+   file input. The real input is hidden inside the label and the zone forwards the click. */
+.admin-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .3rem;
+  padding: 1.6rem 1rem;
+  border: 2px dashed var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+  border-radius: .85rem;
+  background: #fbfcfe;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.admin-dropzone:hover { border-color: var(--morobot-primary, var(--morobot-primary-default)); }
+.admin-dropzone:focus-within {
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  box-shadow: 0 0 0 3px var(--morobot-soft, var(--morobot-soft-default));
+}
+.admin-dropzone.is-drop {
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  border-style: solid;
+}
+.admin-dropzone.has-file {
+  border-style: solid;
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  background: var(--morobot-soft, var(--morobot-soft-default));
+}
+.admin-dropzone.is-invalid { border-color: #dc2626; background: #fef2f2; }
+.admin-dropzone-icon { font-size: 1.9rem; color: var(--morobot-primary, var(--morobot-primary-default)); }
+.admin-dropzone-title { font-size: .95rem; font-weight: 700; color: #334155; }
+.admin-dropzone-sub { font-size: .8rem; color: #7c8598; }
+.admin-dropzone-pick {
+  margin-top: .35rem;
+  padding: .3rem .7rem;
+  border-radius: .5rem;
+  border: 1px solid var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+  background: #fff;
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+}
+
+/* ── Licence import ──
+   The licence page reuses the offline-update drop zone above, and adds the parts it needs: a
+   file/paste switch, the accepted-format line, and a chip naming the chosen file. */
+.admin-import {
+  display: flex;
+  flex-direction: column;
+  gap: .7rem;
+}
+.admin-import-tabs {
+  display: flex;
+  gap: .25rem;
+  padding: .2rem;
+  border-radius: .6rem;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+}
+.admin-import-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .35rem;
+  padding: .42rem .6rem;
+  border: 0;
+  border-radius: .45rem;
+  background: transparent;
+  font-size: .82rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.admin-import-tab:hover { color: var(--morobot-ink, var(--morobot-ink-default)); }
+.admin-import-tab.is-active {
+  background: #fff;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .09);
+}
+.admin-import-tab .ti { font-size: 1rem; }
+
+/* Only the selected channel is rendered, so the admin never sees two inputs competing. */
+.admin-import-pane { display: none; }
+.admin-import-pane.is-active { display: block; }
+.admin-import-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .78rem;
+  line-height: 1.5;
+  /* A licence document is one very long JSON line. Without these it scrolls sideways and the admin
+     cannot see — or select — the whole thing, which reads as the text being cut off. Wrapping and
+     a hard break inside the box keep every character reachable. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  resize: vertical;
+  max-height: 22rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 9rem;
+}
+.admin-dropzone-formats {
+  margin-top: .45rem;
+  font-size: .72rem;
+  color: #94a3b8;
+}
+.admin-dropzone.is-dragging {
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  border-style: solid;
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  box-shadow: 0 0 0 3px var(--morobot-soft, var(--morobot-soft-default));
+}
+
+/* The chosen file, named so the admin can confirm it before sending. */
+.admin-file-chip {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-top: .55rem;
+  padding: .5rem .65rem;
+  border-radius: .6rem;
+  border: 1px solid var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+  background: #fff;
+  font-size: .82rem;
+}
+/* `display: flex` above beats the browser's own rule for [hidden], which is only `display: none` at
+   the same specificity — so without this the chip showed (as an empty row) before any file was
+   picked. Restated here so the JS `hidden` toggle actually hides it. */
+.admin-file-chip[hidden] { display: none; }
+.admin-file-chip > .ti {
+  font-size: 1.1rem;
+  color: var(--morobot-primary, var(--morobot-primary-default));
+}
+.admin-file-chip-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: ltr;
+  text-align: start;
+}
+.admin-file-chip-size {
+  color: #94a3b8;
+  font-size: .74rem;
+  font-variant-numeric: tabular-nums;
+}
+.admin-file-chip-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 0;
+  border-radius: .4rem;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+}
+.admin-file-chip-clear:hover { background: #fef2f2; color: #dc2626; }
+
+.admin-import-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .4rem;
+}
+/* Disabled until there is something to send: an empty submit only bounces back with a warning. */
+.admin-import-submit:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+/* Visually hidden, but still focusable and still the control that posts the file. */
+.admin-dropzone-input {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0);
+  white-space: nowrap; border: 0;
+}
+.admin-btn-row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.admin-inline-progress { display: flex; align-items: center; gap: .6rem; }
+.admin-inline-progress-bar {
+  position: relative;
+  flex: 1;
+  height: .4rem;
+  border-radius: 999px;
+  background: var(--morobot-soft-2, var(--morobot-soft-2-default));
+  overflow: hidden;
+}
+/* The bar is indeterminate: the server answers once, after staging, so there is no honest
+   percentage to show while the request is in flight. */
+.admin-inline-progress-bar > span {
+  position: absolute;
+  inset-block: 0;
+  width: 40%;
+  border-radius: 999px;
+  background: var(--morobot-primary, var(--morobot-primary-default));
+  animation: admin-progress-slide 1.1s ease-in-out infinite;
+}
+.admin-inline-progress-text { font-size: .8rem; color: #64748b; white-space: nowrap; }
+@keyframes admin-progress-slide {
+  0% { inset-inline-start: -40%; }
+  100% { inset-inline-start: 100%; }
+}
+/* The page is Persian-first, so the bar sweeps in the writing direction; with RTL that is
+   right to left, which the logical inset-inline-start already handles. */
+@media (prefers-reduced-motion: reduce) {
+  .admin-inline-progress-bar > span { animation: none; width: 100%; inset-inline-start: 0; opacity: .5; }
+}
+.admin-alert.is-muted {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+.is-hidden { display: none !important; }
+
+@media (max-width: 900px) {
+  .admin-shell { grid-template-columns: 1fr; }
+  .admin-nav { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .admin-nav-links { display: flex; flex-wrap: wrap; gap: .2rem; width: 100%; }
+  .admin-top { flex-direction: column; align-items: flex-start; }
+  .admin-top-actions { width: 100%; justify-content: flex-start; }
+}
+
+/* ── Branding file pickers ── */
+.admin-branding-form .admin-branding-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+.admin-file-picker {
+  display: grid;
+  gap: .75rem;
+  padding: .85rem;
+  border: 1px dashed rgba(15, 118, 110, .35);
+  border-radius: .75rem;
+  background: linear-gradient(180deg, rgba(240, 253, 250, .6), #fff);
+}
+.admin-file-picker-preview {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: .55rem;
+  background: #f8fafc;
+  border: 1px solid rgba(226, 232, 240, .95);
+  padding: .65rem;
+}
+.admin-file-picker-preview--favicon { min-height: 56px; }
+.admin-file-picker-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .25rem;
+  color: #94a3b8;
+  font-size: .82rem;
+}
+.admin-file-picker-placeholder .ti { font-size: 1.5rem; }
+.admin-file-picker-img--logo { max-height: 56px; max-width: 100%; object-fit: contain; }
+.admin-file-picker-img--favicon { width: 32px; height: 32px; object-fit: contain; }
+.admin-file-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .65rem;
+}
+.admin-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.admin-file-name {
+  font-size: .82rem;
+  color: #64748b;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.btn-admin-outline {
+  background: #fff;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  border: 1px solid rgba(15, 118, 110, .45);
+  box-shadow: none;
+}
+.btn-admin-outline:hover {
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  color: var(--morobot-ink, var(--morobot-ink-default));
+}
+
+.admin-color-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+/* ── Bilingual value pairs ── */
+.admin-lang-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+.admin-lang-pair > div { min-width: 0; }
+
+/* ── Colour presets ── */
+.admin-preset-block {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+}
+.admin-preset-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.admin-preset-current {
+  font-size: .82rem;
+  font-weight: 700;
+  color: var(--morobot-primary, var(--morobot-primary-default));
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  border: 1px solid var(--morobot-border-subtle, var(--morobot-border-subtle-default));
+  border-radius: 999px;
+  padding: .12rem .6rem;
+  white-space: nowrap;
+}
+.admin-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: .6rem;
+}
+.admin-preset {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .5rem .65rem;
+  border: 2px solid #e2e8f0;
+  border-radius: .65rem;
+  background: #fff;
+  cursor: pointer;
+  text-align: start;
+  font: inherit;
+  font-size: .85rem;
+  color: #334155;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.admin-preset:hover { border-color: var(--morobot-primary-light, var(--morobot-primary-light-default)); }
+.admin-preset.is-active {
+  border-color: var(--morobot-primary, var(--morobot-primary-default));
+  box-shadow: 0 0 0 3px var(--morobot-soft-2, var(--morobot-soft-2-default));
+  font-weight: 700;
+}
+.admin-preset-swatch {
+  display: inline-flex;
+  width: 2.1rem;
+  height: 1.5rem;
+  border-radius: .35rem;
+  overflow: hidden;
+  flex: 0 0 auto;
+  border: 1px solid rgba(15, 23, 42, .08);
+}
+.admin-preset-swatch i { flex: 1; display: block; }
+.admin-preset-swatch-custom {
+  align-items: center;
+  justify-content: center;
+  background: #f1f5f9;
+  color: #64748b;
+  border-style: dashed;
+}
+.admin-preset-name { min-width: 0; }
+
+.admin-color-row {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+}
+.admin-color-row .form-control-color {
+  width: 3rem;
+  height: 2.35rem;
+  padding: .15rem;
+}
+.admin-color-hex {
+  max-width: 7rem;
+  font-family: ui-monospace, monospace;
+  font-size: .85rem;
+}
+
+/* Reset-to-default button beside each colour. Replaces the old per-colour "apply" switch: one
+   click restores the shipped value instead of a second setting deciding whether the first counts. */
+.admin-color-reset {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  padding: 0;
+  border: 1px solid var(--morobot-border-subtle, #e6e4f0);
+  border-radius: .4rem;
+  background: transparent;
+  color: var(--morobot-ink, #4b465c);
+  cursor: pointer;
+  transition: background-color .15s, color .15s, border-color .15s;
+}
+.admin-color-reset:hover:not(:disabled) {
+  background: var(--morobot-soft, #f4f2fb);
+  border-color: var(--morobot-primary, #7367f0);
+  color: var(--morobot-primary, #7367f0);
+}
+.admin-color-reset:disabled { opacity: .5; cursor: default; }
+.admin-color-reset i { font-size: 1.05rem; line-height: 1; }
+
+/* Brief confirmation that a colour was restored, so the click is not silent when the colour
+   happens to already equal the default and nothing visibly moves. */
+.admin-color-field.is-reset .admin-color-row { animation: admin-color-reset-flash .9s ease-out; }
+@keyframes admin-color-reset-flash {
+  0%   { box-shadow: 0 0 0 2px var(--morobot-primary, #7367f0); border-radius: .4rem; }
+  100% { box-shadow: 0 0 0 2px transparent; border-radius: .4rem; }
+}
+
+/* Sub-headings inside a branded card, used to group the diagram colours. */
+.admin-branding-subhead {
+  margin: 1.1rem 0 .5rem;
+  font-size: .82rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--morobot-muted-label, #9a96a8);
+}
+.admin-branding-subhead:first-of-type { margin-top: 0; }
+.admin-switch-line {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  cursor: pointer;
+  font-weight: 500;
+  margin-top: .5rem;
+}
+.admin-switch-line input[type="checkbox"] {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--morobot-primary, var(--morobot-primary, var(--morobot-primary-default)));
+}
+
+/* ---- Dashboard charts & analytics widgets ---- */
+.admin-chart {
+  width: 100%;
+  min-height: 200px;
+}
+.admin-chart-sm { min-height: 180px; }
+.admin-top-owners {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+}
+.admin-top-owner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem;
+  padding: .45rem .6rem;
+  border-radius: .5rem;
+  background: #f8fafc;
+  border: 1px solid rgba(226, 232, 240, .9);
+}
+.admin-top-owner-name {
+  font-size: .84rem;
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.admin-top-owner-nums {
+  display: flex;
+  gap: .55rem;
+  flex: 0 0 auto;
+  font-size: .78rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+.admin-top-owner-nums .ti { font-size: .9rem; vertical-align: -1px; }
+.admin-kpi-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: .55rem;
+}
+.admin-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: .1rem;
+  padding: .6rem .7rem;
+  border-radius: .6rem;
+  background: #fff;
+  border: 1px solid rgba(226, 232, 240, .9);
+}
+.admin-kpi b {
+  font-size: 1.25rem;
+  color: var(--morobot-primary-dark, var(--morobot-primary-dark-default));
+  font-variant-numeric: tabular-nums;
+}
+.admin-kpi span { font-size: .74rem; color: #64748b; }
+.admin-kpi.is-warn b { color: #dc2626; }
+
+/* ---- Table pagination ---- */
+.admin-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .35rem;
+  padding: .6rem .2rem 0;
+  font-size: .8rem;
+  color: #64748b;
+}
+.admin-pager[hidden] { display: none; }
+.admin-pager-btn {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 .5rem;
+  border-radius: .45rem;
+  border: 1px solid rgba(226, 232, 240, .95);
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  font-size: .95rem;
+  line-height: 1;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.admin-pager-btn:hover:not(:disabled) {
+  background: var(--morobot-soft, var(--morobot-soft-default));
+  border-color: var(--morobot-primary, var(--morobot-primary-dark, var(--morobot-primary-dark-default)));
+  color: var(--morobot-primary, var(--morobot-primary-dark, var(--morobot-primary-dark-default)));
+}
+.admin-pager-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+.admin-pager-info {
+  padding: 0 .45rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ?? Users page: per-user ownership counts ?? */
+.admin-count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:30px;padding:2px 8px;border-radius:999px;background:var(--brand-bg-soft,#eef4f2);color:var(--brand-ink,#283937);font-size:.8rem;font-weight:600;font-variant-numeric:tabular-nums;}
+.admin-count-badge.is-zero{background:transparent;color:#a5a3ae;font-weight:500;}
+
+
+/* â”€â”€ Settings page: category rail, group cards, system-managed fields â”€â”€ */
+.admin-settings-form { display: block; }
+
+.admin-settings-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-bottom: 1rem;
+  padding: .6rem .75rem;
+  background: var(--brand-bg-soft, #f7f9f8);
+  border: 1px solid var(--brand-border, rgba(191, 211, 188, .7));
+  border-radius: .85rem;
+}
+.admin-settings-toc-item {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .35rem .7rem;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--brand-ink, #283937);
+  font-size: .82rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.admin-settings-toc-item:hover {
+  border-color: var(--brand-primary, #1b8777);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, .07);
+}
+.admin-settings-toc-count {
+  font-size: .72rem;
+  font-weight: 700;
+  color: #64748b;
+  background: rgba(100, 116, 139, .12);
+  border-radius: 999px;
+  padding: 0 .4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-settings-card { scroll-margin-top: 1rem; }
+.admin-settings-card h3 {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+.admin-settings-card h3 > span:first-of-type { flex: 1 1 auto; }
+.admin-settings-card-count {
+  font-size: .72rem;
+  font-weight: 700;
+  color: #64748b;
+  background: rgba(100, 116, 139, .12);
+  border-radius: 999px;
+  padding: 0 .45rem;
+  font-variant-numeric: tabular-nums;
+}
+.admin-settings-card-desc {
+  margin: -.35rem 0 .9rem;
+  font-size: .82rem;
+  line-height: 1.7;
+  color: #64748b;
+}
+
+.admin-settings-field { margin-bottom: 1rem; }
+.admin-settings-field:last-child { margin-bottom: .25rem; }
+
+/* ── Sign-in switches (Admin → Settings → Auth) ──
+   These two are booleans, so they read as switches rather than text boxes: "off" as a word in a
+   text field is easy to mistype and easy to misread, while a switch shows its state at a glance.
+   The checkbox stays in the markup and carries the name, so the form posts it unchanged; the
+   track and knob are drawn by the sibling span. */
+.admin-settings-switch {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  margin: 0;
+}
+.admin-settings-switch input[type="checkbox"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.admin-settings-switch-track {
+  position: relative;
+  display: inline-block;
+  width: 3rem;
+  height: 1.6rem;
+  border-radius: 999px;
+  background: #cbd5e1;
+  transition: background .18s ease;
+  flex: 0 0 auto;
+}
+.admin-settings-switch-track::after {
+  content: "";
+  position: absolute;
+  top: .2rem;
+  inset-inline-start: .2rem;
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .3);
+  transition: inset-inline-start .18s ease;
+}
+.admin-settings-switch input:checked + .admin-settings-switch-track {
+  background: var(--brand-primary, #1b8777);
+}
+.admin-settings-switch input:checked + .admin-settings-switch-track::after {
+  inset-inline-start: 1.6rem;
+}
+/* A disabled switch cannot be changed, so it must not look changeable — the last remaining
+   sign-in method is disabled to make "at least one must stay on" visible rather than enforced
+   silently on save. */
+.admin-settings-switch input:disabled + .admin-settings-switch-track {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.admin-settings-switch input:focus-visible + .admin-settings-switch-track {
+  box-shadow: 0 0 0 3px var(--brand-bg-soft, #eef4f2);
+}
+/* While the LDAP sign-in switch is off its connection fields are hidden, but they stay in the
+   form so their values survive a save rather than being blanked by tidying the page. */
+.admin-settings-ldap-field[aria-hidden="true"] { display: none; }
+
+/* System-managed values read as information, not as an input. */
+.admin-settings-ro {
+  background: #f1f5f9;
+  color: #64748b;
+  cursor: default;
+  border-style: dashed;
+}
+.admin-settings-ro:focus { box-shadow: none; border-color: rgba(226, 232, 240, .9); }
+/* A system-owned value shown as text rather than a box, so an unset value does not look like an
+   empty field inviting input. */
+.admin-settings-ro-value {
+  padding: .45rem .65rem;
+  border-radius: .5rem;
+  background: #f8fafc;
+  border: 1px dashed #e2e8f0;
+  font-size: .86rem;
+  color: #475569;
+  min-height: 2.35rem;
+  display: flex;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+.admin-settings-ro-value code {
+  font-size: .82rem;
+  color: #334155;
+}
+
+.admin-settings-ro-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  margin-inline-start: .5rem;
+  padding: .1rem .45rem;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, .12);
+  color: #64748b;
+  font-size: .7rem;
+  font-weight: 700;
+}
+
+.admin-settings-actions {
+  position: sticky;
+  bottom: 0;
+  margin-top: 1rem;
+  padding: .75rem 1rem;
+  background: rgba(255, 255, 255, .92);
+  backdrop-filter: blur(6px);
+  border-top: 1px solid rgba(226, 232, 240, .9);
+  border-radius: .85rem;
+  display: flex;
+  justify-content: flex-end;
+}
