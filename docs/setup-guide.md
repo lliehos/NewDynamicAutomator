@@ -1,6 +1,6 @@
 # راهنمای جامع راه‌اندازی Morobot
 
-> **نسخه سند:** 1.11 · **آخرین‌به‌روزرسانی:** 2026-10-04  
+> **نسخه سند:** 1.12 · **آخرین‌به‌روزرسانی:** 2026-10-04  
 > این راهنما برای مدیران فناوری اطلاعات و مسئول استقرار سازمان تهیه شده است.
 
 ---
@@ -407,9 +407,42 @@ certutil -addstore -f Root "C:\certs\morobot\automator.krtax.ir-root.cer"
 
 > نکتهٔ کاربرِ بدون ادمین: `-Scope User` گواهی را در مخزن **همان پروفایل ویندوز** می‌گذارد؛ کروم و Edge آن را می‌خوانند، ولی Firefox مخزن جدا دارد و برای آن scope ماشین (و سوییچ `-SetFirefoxEnterpriseRoots`) لازم است.
 
+**۲.۲ بستهٔ MSI (برای توزیع بی‌سروصدا با SCCM/Intune/GPO/PDQ/RMM)**
+
+اگر سازمان ابزار توزیع نرم‌افزار دارد، به‌جای اسکریپت از بستهٔ MSI استفاده کنید. MSI همان کار اسکریپت را می‌کند
+(نصب ریشه در مخزن ماشین + فعال‌کردن `ImportEnterpriseRoots` برای Firefox) و چیزهایی دارد که اسکریپت ندارد:
+**حذف استاندارد**، **Rollback** در صورت خرابی نصب، و لاگ verbose استاندارد.
+
+ساخت بسته (یک‌بار، روی ماشین خودتان — نیاز به .NET SDK؛ اسکریپت اگر WiX نباشد دستور نصبش را چاپ می‌کند):
+
+```powershell
+tools\installer\Build-RootCaMsi.ps1 -CerPath C:\certs\morobot\automator.krtax.ir-root.cer -OutDir C:\certs\morobot
+# خروجی: MorobotRootCA-1.0.0.msi + MorobotRootCA-1.0.0.msi.sha256
+```
+
+اسکریپت ساخت، بسته را قبل از تحویل **خودش تأیید می‌کند**: اعتبار ریشه، وجود سه Custom Action
+(نصب/rollback/حذف)، ترتیب زمان‌بندی آن‌ها، پالیسی رجیستری Firefox، و درستی payload گواهی؛ در پایان هم
+با یک extraction تستی ثابت می‌کند گواهی واقعاً داخل بسته است.
+
+| نیاز | دستور |
+|---|---|
+| نصب بی‌سروصدا (SYSTEM یا ادمین) | `msiexec /i MorobotRootCA-1.0.0.msi /qn /norestart` |
+| نصب با لاگ برای عیب‌یابی | `msiexec /i MorobotRootCA-1.0.0.msi /l*v %TEMP%\MorobotRootCA.log` |
+| از مسیر شبکه | `msiexec /i \\fs01\share\MorobotRootCA-1.0.0.msi /qn /norestart` |
+| حذف بسته و برداشتن ریشه | `msiexec /x MorobotRootCA-1.0.0.msi /qn /norestart` |
+
+نکته‌ها:
+
+- بسته **per-machine** و **x64** است (بستهٔ 32 بیتی مقدار رجیستری Firefox را در `WOW6432Node` می‌نویسد و ۶۴ بیتی‌ها آن را نمی‌بینند) و برای اجرای بی‌سروصدا به دسترسی ادمین/SYSTEM نیاز دارد — که با SCCM/Intune/GPO/RMM فراهم است.
+- گواهی زیر `%ProgramFiles%\Morobot Root CA\` کپی می‌شود و با **thumbprint** همان ریشه دوباره حذف می‌شود؛ پس اگر روزی ریشه را عوض کردید، بستهٔ جدید نسخهٔ دیگری است و باید توزیع شود.
+- تست: روی **یک کلاینت** با ادمین نصب کنید و در لاگ دنبال `Return value 3` و `CustomAction AddRootCert returned actual error code` بگردید (نباید باشد)، سپس گام ۴ همین بخش را برای تأیید اجرا کنید.
+- اگر بعداً ریشه را در `-CerPath` به گواهی دیگری تغییر دهید، باید `-Version` را هم بالا ببرید، وگرنه MSI آن را upgrade نمی‌شناسد.
+
 **۳. توزیع گروهی (توصیه‌شده در دامنه):** GPO →
 Computer Configuration → Policies → Windows Settings → Security Settings → Public Key Policies →
 Trusted Root Certification Authorities → Import.
+
+همین کار را می‌توان با بستهٔ MSI بخش ۲.۲ هم انجام داد و به‌جای Import دستی، **Computer Configuration → Policies → Software Settings → Software Installation** بسته را Publish/Assign کنید؛ مزیتش این است که حذف بسته هم از همان GPO مدیریت می‌شود.
 
 **۴. تأیید:**
 
