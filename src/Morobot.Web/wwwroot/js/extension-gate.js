@@ -249,9 +249,32 @@
     return document.documentElement.dataset.daExtensionForeign === "1" && !hasExtension();
   }
 
+  /**
+   * True when the extension is installed but could not reach THIS server's fingerprint probe.
+   *
+   * An extension fetch cannot ride the browser's "Proceed" interstitial, so a server certificate
+   * this machine does not trust — or any network gap — fails the probe outright, and the bridge
+   * then leaves the page unmarked on purpose (portal-bridge.js). That is correct, but unexplained it
+   * reads as "the extension is not installed", which sends the user to reinstall something that is
+   * already there and already bound to this server. Same precedence as above: real marks win.
+   */
+  function probeUnreachable() {
+    return document.documentElement.dataset.daExtensionUnreachable === "1" && !hasExtension();
+  }
+
+  /**
+   * Role-independent reason nothing was marked, or "" when there is nothing to explain.
+   * Used both for the first gate and for the retry hint, so both tell the same story.
+   */
+  function blockedReason(role) {
+    if (isForeignInstalled() || markedNotOwn(role)) return t("panel.extForeign");
+    if (probeUnreachable()) return t("panel.extUnreachable");
+    return "";
+  }
+
   /** Why the role is not connected: a foreign/older bundle deserves its own explanation. */
   function missingReason(role) {
-    return (isForeignInstalled() || markedNotOwn(role)) ? t("panel.extForeign") : copyFor(role).missing;
+    return blockedReason(role) || copyFor(role).missing;
   }
 
   async function ensureInstallPaths() {
@@ -442,9 +465,7 @@
       return true;
     }
     if (modal.classList.contains("open") && hintEl) {
-      hintEl.textContent = (isForeignInstalled() || markedNotOwn(role))
-        ? t("panel.extForeign")
-        : copyFor(role).stillMissing;
+      hintEl.textContent = blockedReason(role) || copyFor(role).stillMissing;
     }
     return false;
   }

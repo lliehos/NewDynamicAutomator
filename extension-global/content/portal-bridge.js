@@ -222,7 +222,16 @@
       }
       // Not verifiable: legacy servers (no endpoint) still mark; a bound server that did not answer
       // is left unmarked rather than claimed — a claim that turns out wrong is worse than a warning.
-      if (verdict && verdict.match === null && verdict.legacy !== true) return;
+      // Unmarked and unexplained, though, is the worst of the three: the panel then blames a missing
+      // extension and sends the user to install what is already installed. So stamp WHY the probe
+      // failed (offline server, or a certificate this machine does not trust) and let the panel say
+      // it in those words.
+      if (verdict && verdict.match === null && verdict.legacy !== true) {
+        if (verdict.probeFailed) {
+          try { document.documentElement.dataset.daExtensionUnreachable = "1"; } catch { /* ignore */ }
+        }
+        return;
+      }
       mark(verdict?.bindingFingerprint || null);
       pushTenantBranding();
       if (document.readyState === "loading") {

@@ -293,6 +293,7 @@
     "extVersionInstalled": "Installed version: {v}",
     "extVersionStale": "Your extension is version {have}, but this portal requires {need} — load the new package from Panel → Install extensions, then press Reload on chrome://extensions.",
     "extForeign": "The extension installed in your browser belongs to a DIFFERENT server (server fingerprints do not match) — load this server's package from Panel → Install extensions.",
+    "extUnreachable": "The extension is installed but cannot reach this server — the server's root certificate is not trusted on this computer (or the network is blocked). The extension needs that connection, and clicking \"Proceed\" on the browser warning does not grant it; after installing the root certificate, fully close and reopen the browser.",
     "extServerKey": "This panel's install key: {v}",
     "extSelectorTitle": "Selector extension required",
     "extSelectorDesc": "To copy element selectors with right-click, install {brand} Selector once with Load unpacked.",

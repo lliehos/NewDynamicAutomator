@@ -417,7 +417,13 @@ async function handleMessage(message, sender) {
         };
       }
       if (result.match === null && result.legacy !== true && result.serverLacksFingerprint !== true) {
-        return { ok: true, match: null, bindingFingerprint };
+        // The server HAS an identity and did not answer its own probe. Two very different causes
+        // hide behind that silence — it is unreachable, or its TLS certificate is not trusted on
+        // this machine, which blocks an extension fetch outright: the browser's "Proceed"
+        // interstitial covers navigations only, never a background fetch. The page has to be able
+        // to say so, instead of sending the user to install an extension that is already installed
+        // and already bound to this very server.
+        return { ok: true, match: null, probeFailed: true, bindingFingerprint };
       }
       const { recording, playing } = await chrome.storage.local.get(["recording", "playing"]);
       const patch = { bindingVerifiedOrigin: origin };
