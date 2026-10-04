@@ -71,12 +71,17 @@
 .PARAMETER Force
     Skip the "does this really look like a CA root" sanity checks. Use with care.
 
+.PARAMETER LogPath
+    Also write a transcript here. Handy when a management agent (SCCM/Intune/RMM) runs this
+    unattended and the console output would otherwise disappear.
+
 .EXAMPLE
     .\Install-ClientRootCA.ps1
     .\Install-ClientRootCA.ps1 -Scope User
     .\Install-ClientRootCA.ps1 -CerPath \\fs01\share\automator.krtax.ir-root.cer
     .\Install-ClientRootCA.ps1 -Url https://automator.krtax.ir/certs/root.cer -Thumbprint 1F2E3D...
     .\Install-ClientRootCA.ps1 -Uninstall
+    .\Install-ClientRootCA.ps1 -DryRun -LogPath C:\Windows\Temp\morobot-rootca.log
 
 .OUTPUTS
     Exit codes: 0 = trusted and verified; 2 = admin rights missing; 1 = anything else.
@@ -100,11 +105,24 @@ param(
     [switch]$SetFirefoxEnterpriseRoots,
     [switch]$Uninstall,
     [switch]$DryRun,
-    [switch]$Force
+    [switch]$Force,
+    [string]$LogPath
 )
 
 $ErrorActionPreference = "Stop"
 $script:DownloadedTemp = $null
+
+$transcriptStarted = $false
+if ($LogPath) {
+    try {
+        $logDir = Split-Path -Parent $LogPath
+        if ($logDir -and -not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
+        Start-Transcript -Path $LogPath -Force | Out-Null
+        $transcriptStarted = $true
+    } catch {
+        Write-Host ("   Could not start the transcript at " + $LogPath + ": " + $_.Exception.Message) -ForegroundColor Yellow
+    }
+}
 
 function Write-Step([string]$Text) {
     Write-Host ""
@@ -402,6 +420,11 @@ try {
     $trust = Get-ServerTrust -HostName $Server -TlsPort $Port -Base $base
 
     if (-not $trust.Handshake) {
+        if ($DryRun) {
+            Write-WarnLine ("Could not reach " + $Server + " for verification: " + $trust.Problem)
+            Write-Info "Dry run: nothing was changed - the certificate file itself validated fine."
+            exit 0
+        }
         Write-Err ("Could not open a TLS connection to " + $Server + ": " + $trust.Problem)
         Write-Info "The root may still be installed correctly - check the network or the hostname and re-run."
         exit 1

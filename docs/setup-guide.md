@@ -414,11 +414,18 @@ Trusted Root Certification Authorities → Import.
 **۴. تأیید:**
 
 ```powershell
-curl.exe -sS https://<host>/extension/fingerprint     # باید JSON بدهد — بدون -k
+# ساده‌ترین و همان درخواستی که افزونه می‌زند (بدون دورزدن اعتبارسنجی):
+(Invoke-WebRequest https://<host>/extension/fingerprint -UseBasicParsing).Content
+
+# معادل با curl — نکته: --ssl-no-revoke لازم است
+curl.exe -sS --ssl-no-revoke https://<host>/extension/fingerprint
 ```
 
-اگر همین دستور **بدون** `-k` خطای `SEC_E_UNTRUSTED_ROOT` داد، ریشهٔ همان گواهی هنوز روی آن کلاینت
-نصب نشده است. پس از اصلاح، در کنسول پنل مقدار `document.documentElement.dataset.daExtensionFingerprint`
+> **دو خطای متفاوت را با هم اشتباه نگیرید:**
+> - `SEC_E_UNTRUSTED_ROOT` (curl کد ۶۰) ⇒ **ریشه روی کلاینت نیست** — همین را باید نصب کنید.
+> - `CRYPT_E_NO_REVOCATION_CHECK` (curl کد ۳۵) ⇒ فقط **بررسی ابطال (CRL/OCSP) ممکن نشده**، چون ریشهٔ self-signed شما CRL ندارد. **نشانهٔ خرابی نیست**؛ کروم soft-fail می‌کند و گواهی را می‌پذیرد. به همین دلیل `curl` بدون `--ssl-no-revoke` اینجا نتیجهٔ گمراه‌کننده می‌دهد.
+
+پس از اصلاح، در کنسول پنل مقدار `document.documentElement.dataset.daExtensionFingerprint`
 باید با مقدار متای `da-server-fingerprint` صفحه یکی باشد.
 
 > **جابجایی سرور:** اثر انگشت سرور از `MachineGuid` + نام ماشین + تعداد هسته + پلتفرم ساخته می‌شود.
