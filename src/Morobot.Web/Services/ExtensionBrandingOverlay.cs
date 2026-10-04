@@ -9,6 +9,9 @@ namespace Morobot.Web.Services;
 /// </summary>
 public sealed class ExtensionBrandingOverlay
 {
+    /// <summary>The PNG file signature — "\x89PNG\r\n\x1a\n".</summary>
+    private static readonly byte[] PngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+
     private readonly TenantBrandingViewService _branding;
     private readonly IWebHostEnvironment _env;
     private readonly ILogger<ExtensionBrandingOverlay> _log;
@@ -88,8 +91,8 @@ public sealed class ExtensionBrandingOverlay
     ///
     /// The manifest points at icons/icon16|32|48|128.png; this overwrites those four files with the
     /// tenant's brand icon so the toolbar button and the extensions page show the same mark as the
-    /// web panel. The web icon is always a PNG — BrandHeadModel falls back to the stock PNG whenever
-    /// the tenant's favicon is not one, and Chrome accepts no other format for manifest icons.
+    /// web panel. Chrome accepts no other format for manifest icons, so the source has to be a real
+    /// PNG — see <see cref="ResolveBrandIconFile"/>, which refuses anything else.
     /// </summary>
     private void CopyBrandIcons(string installRoot, BrandHeadModel head)
     {
@@ -123,11 +126,45 @@ public sealed class ExtensionBrandingOverlay
             var rootFull = Path.GetFullPath(_env.WebRootPath);
             // Only files inside wwwroot may be copied — the path originates in settings, not code.
             if (!full.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) return null;
-            return File.Exists(full) ? full : null;
+            if (!File.Exists(full)) return null;
+
+            /*
+             * The extension is not the only format check on this file. An administrator can upload a
+             * JPEG/WebP that happens to be named ".png" — the brand icon itself shipped that way once
+             * — and those bytes then land in icons/icon16.png. Besides being invalid for Chrome, an
+             * unpacked-extension folder under %LocalAppData% is watched by endpoint protection, and a
+             * file named .png that suddenly holds JPEG data reads as deliberate image tampering: the
+             * write is blocked and the file is left padded with zeros. Keep the extension's own icons
+             * rather than hand out a corrupt one.
+             */
+            if (!IsPngFile(full))
+            {
+                _log.LogWarning(
+                    "Brand icon {Path} is named .png but is not PNG data; keeping the extension's own icons.",
+                    webPath);
+                return null;
+            }
+
+            return full;
         }
         catch
         {
             return null;
+        }
+    }
+
+    private static bool IsPngFile(string path)
+    {
+        try
+        {
+            Span<byte> signature = stackalloc byte[8];
+            using var stream = File.OpenRead(path);
+            stream.ReadExactly(signature);
+            return signature.SequenceEqual(PngSignature);
+        }
+        catch
+        {
+            return false;
         }
     }
 
