@@ -508,3 +508,4 @@ updates/
 # Local DB / canvas backups (do not commit)
 _backup_*.bak
 _morobot*.bak
+/.vscode
