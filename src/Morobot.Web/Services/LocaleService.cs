@@ -31,7 +31,19 @@ public sealed class LocaleService : ILocaleService
     /// </remarks>
     public const string BilingualItemKey = "da.bilingual";
 
-    private static readonly ConcurrentDictionary<string, Dictionary<string, string>> FlatCache = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// Parsed locale files, keyed by culture, each remembering the file's write time.
+    /// </summary>
+    /// <remarks>
+    /// Keying on the write time is what lets a drop-in replacement of <c>wwwroot/locales/*.json</c>
+    /// take effect without restarting the process. A plain cache (and a bare "is this file
+    /// present" check) made a locale hotfix invisible on a running install: the file on disk was
+    /// new but every server-rendered label kept resolving from the dictionary parsed at startup,
+    /// including the ones that had never existed before.
+    /// </remarks>
+    private static readonly ConcurrentDictionary<string, FlatLocale> FlatCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed record FlatLocale(DateTime WrittenUtc, Dictionary<string, string> Flat);
 
     private readonly IHttpContextAccessor _http;
     private readonly IWebHostEnvironment _env;
@@ -177,24 +189,31 @@ public sealed class LocaleService : ILocaleService
     private Dictionary<string, string> GetFlat(string culture)
     {
         culture = Normalize(culture);
-        if (_env.IsDevelopment())
+        var path = Path.Combine(_env.WebRootPath, "locales", $"{culture}.json");
+
+        DateTime written;
+        try
         {
-            var path = Path.Combine(_env.WebRootPath, "locales", $"{culture}.json");
-            var flat = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (!File.Exists(path)) return flat;
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            Flatten(doc.RootElement, "", flat);
-            return flat;
+            written = File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
         }
-        return FlatCache.GetOrAdd(culture, c =>
+        catch (IOException)
         {
-            var path = Path.Combine(_env.WebRootPath, "locales", $"{c}.json");
-            var flat = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (!File.Exists(path)) return flat;
+            // A path the file system will not answer for is treated as "no file": the page then
+            // falls back to the keys, which is visible and diagnosable, rather than throwing.
+            written = DateTime.MinValue;
+        }
+
+        if (FlatCache.TryGetValue(culture, out var cached) && cached.WrittenUtc == written)
+            return cached.Flat;
+
+        var flat = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (written != DateTime.MinValue)
+        {
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             Flatten(doc.RootElement, "", flat);
-            return flat;
-        });
+        }
+        FlatCache[culture] = new FlatLocale(written, flat);
+        return flat;
     }
 
     private static void Flatten(JsonElement el, string prefix, Dictionary<string, string> flat)

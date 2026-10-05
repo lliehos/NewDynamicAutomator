@@ -23,6 +23,30 @@
     <InformationalVersion>3.0.0</InformationalVersion>
   </PropertyGroup>
 
+  <!--
+    Do not let the SDK compress the static assets.
+
+    From net9.0 the Web SDK has compression on by default (EnableDefaultCompressedItems), so every
+    build and publish writes a .br AND a .gz sibling next to each css/js/html/json/svg file in
+    wwwroot. A compressed sibling is only ever served by two things: MapStaticAssets(), or a host
+    that was configured to prefer them (IIS's staticCompression is per-MIME, not per-file, and
+    nginx only does it with gzip_static/brotli_static turned on). This application uses
+    UseStaticFiles(), and both documented deployments are a plain reverse proxy in front of it
+    (docs/setup-guide.md), so the siblings are never read: requesting /css/admin-app.css with
+    "Accept-Encoding: gzip" and with "br" both return 200 with no Content-Encoding header.
+
+    They are not free, either. They are written at build/publish time, so a deployment ships an
+    unused duplicate of every asset — two extra files per asset, tens of megabytes in the package,
+    and a deployment folder where "a zip appears next to every CSS file", which is confusing to
+    anyone looking at it and looks like the server is generating them.
+
+    If the host is ever switched to gzip_static/brotli_static (or the app to MapStaticAssets, which
+    does use them), delete this line to get the pre-compressed copies back.
+  -->
+  <PropertyGroup>
+    <DisableBuildCompression>true</DisableBuildCompression>
+  </PropertyGroup>
+
   <ItemGroup>
     <None Include="..\..\docs\setup-guide.md" Link="docs\setup-guide.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -48,12 +72,15 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
   </ItemGroup>
-  <ItemGroup>
-    <Compile Remove="wwwroot\assets\**" />
-    <Content Remove="wwwroot\assets\**" />
-    <EmbeddedResource Remove="wwwroot\assets\**" />
-    <None Remove="wwwroot\assets\**" />
-  </ItemGroup>
+
+  <!--
+    NOTE: do NOT add the four "Remove" lines Visual Studio writes when a wwwroot subfolder is
+    excluded in Solution Explorer (<Compile/Content/EmbeddedResource/None Remove="wwwroot\assets\**" />).
+    They do not break Development — static files are read straight off disk there — but they DO
+    remove those files from the MSBuild item list, so every publish silently ships without them.
+    wwwroot/assets holds the icon font, the chart library and the vendor CSS/JS the layouts link to,
+    so a package built with them excluded renders with no icons and no charts.
+  -->
 
   <!--
     The four-file appsettings layout. appsettings.json and appsettings.Development.json are picked

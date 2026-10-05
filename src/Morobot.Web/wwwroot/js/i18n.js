@@ -6,6 +6,24 @@
   const LS_KEY = "da_culture";
   const DEFAULT = "fa";
 
+  /**
+   * The build stamp this script was loaded with, taken from its own <script src="...i18n.js?v=…">.
+   *
+   * The locale JSON is fetched under the SAME stamp so a new build always asks for a new URL. A
+   * hard-coded version pins it: the request URL never changes between releases, and the static file
+   * handler marks any `?v=` URL immutable for a year, so a browser that had visited once kept
+   * serving its cached dictionary — including after the locale file was replaced on the server.
+   */
+  const ASSET_VERSION = (function () {
+    try {
+      const el = document.currentScript
+        || document.querySelector('script[src*="i18n.js"]');
+      const v = el && new URL(el.src, location.href).searchParams.get("v");
+      if (v) return v;
+    } catch { /* fall back to an unversioned request below */ }
+    return "";
+  })();
+
   let dict = {};
   let culture = DEFAULT;
 
@@ -160,7 +178,8 @@
 
   async function load(nextCulture) {
     culture = normalize(nextCulture || detect());
-    const res = await fetch(`/locales/${culture}.json?v=4`, { cache: "no-cache" });
+    const versionQuery = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : "";
+    const res = await fetch(`/locales/${culture}.json${versionQuery}`, { cache: "no-cache" });
     if (!res.ok) throw new Error("locale load failed");
     const json = await res.json();
     dict = {};
