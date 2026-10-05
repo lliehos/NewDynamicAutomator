@@ -73,7 +73,12 @@
     tbody.querySelector(".admin-empty-row")?.remove();
     let row = findRow(id);
     const title = src.title ?? src.Title ?? "";
-    const linked = src.linkedProcessTitles ?? src.LinkedProcessTitles ?? src.taskTitle ?? src.TaskTitle ?? "—";
+    // A source nobody links to is a library leftover; the server renders it with the same word so
+    // a live-inserted row does not read differently from a reloaded page.
+    const linkedCount = src.linkedProcessCount ?? src.LinkedProcessCount ?? null;
+    const linked = linkedCount === 0
+      ? (i18n.library || "—")
+      : (src.linkedProcessTitles ?? src.LinkedProcessTitles ?? src.taskTitle ?? src.TaskTitle ?? "—");
     const owner = src.ownerUserName ?? src.OwnerUserName ?? src.owner ?? src.Owner ?? "—";
     const editor = src.lastEditorUserName ?? src.LastEditorUserName ?? src.lastEditor ?? src.LastEditor ?? owner;
     const created = fmtDate(src.createdAtUtc ?? src.CreatedAtUtc);
@@ -85,6 +90,7 @@
       row = document.createElement("tr");
       row.dataset.sourceId = String(id);
       row.innerHTML = `
+        <td class="admin-bulk-col"><input type="checkbox" class="admin-bulk-check" value="${escapeHtml(id)}" /></td>
         <td>${escapeHtml(id)}</td>
         <td data-flash="title">${escapeHtml(title)}</td>
         <td data-flash="linked">${escapeHtml(linked)}</td>
@@ -96,11 +102,13 @@
         <td data-flash="rows">${escapeHtml(rows)}</td>
         <td class="admin-change-cell" data-flash="change"><span class="admin-change-badge is-idle">—</span></td>
         <td class="text-nowrap">
-          <button type="button" class="btn-admin secondary js-admin-ds-view" data-id="${escapeHtml(id)}">View</button>
-          <button type="button" class="btn-admin js-admin-ds-dl" data-id="${escapeHtml(id)}">Excel</button>
+          <button type="button" class="btn-admin secondary js-admin-ds-view" data-id="${escapeHtml(id)}">${escapeHtml(i18n.viewData || "View")}</button>
+          <button type="button" class="btn-admin js-admin-ds-dl" data-id="${escapeHtml(id)}">${escapeHtml(i18n.downloadExcel || "Excel")}</button>
+          <button type="button" class="btn-admin danger js-admin-ds-del" data-id="${escapeHtml(id)}" data-title="${escapeHtml(title)}">${escapeHtml(i18n.delete || "Delete")}</button>
         </td>`;
       tbody.prepend(row);
       bindRowActions(row);
+      if (window.AdminBulk) window.AdminBulk.refresh();
     } else {
       const titleEl = row.querySelector("[data-flash='title']");
       if (titleEl && title) titleEl.textContent = title;
@@ -255,12 +263,44 @@
     }
   }
 
+  /**
+   * Delete a library source from a live-inserted row. Server-rendered rows post a plain form, but a
+   * row pushed by SignalR has no antiforgery token baked in, so it posts here with the token taken
+   * from any existing form on the page (the admin layout always has one).
+   */
+  async function deleteSource(id, title, btn) {
+    const msg = (i18n.deleteConfirm || "Delete \"{title}\"?").replace("{title}", title || `#${id}`);
+    if (!confirm(msg)) return;
+    const token = document.querySelector("input[name='__RequestVerificationToken']")?.value;
+    if (!token) { alert(i18n.viewFail || "error"); return; }
+    if (btn) { btn.disabled = true; }
+    try {
+      const body = new URLSearchParams({ id: String(id), __RequestVerificationToken: token });
+      const res = await fetch("/Admin/Sources/Delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        credentials: "same-origin"
+      });
+      // The action redirects back to the list, so fetch follows it and resolves with 200. A real
+      // failure (403/404/500) is the only thing worth surfacing here.
+      if (!res.ok) throw new Error("delete failed");
+      removeRow(id, "");
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      alert(e.message || "error");
+    }
+  }
+
   function bindRowActions(root) {
     root.querySelectorAll(".js-admin-ds-view").forEach((btn) => {
       btn.addEventListener("click", () => viewSource(btn.dataset.id, btn));
     });
     root.querySelectorAll(".js-admin-ds-dl").forEach((btn) => {
       btn.addEventListener("click", () => downloadSource(btn.dataset.id, btn));
+    });
+    root.querySelectorAll(".js-admin-ds-del").forEach((btn) => {
+      btn.addEventListener("click", () => deleteSource(btn.dataset.id, btn.dataset.title, btn));
     });
   }
 

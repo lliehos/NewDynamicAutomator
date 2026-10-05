@@ -3,6 +3,9 @@
   Layout = "_Layout";
   ViewData["Title"] = L["admin.dashboard.title"];
   var maxPlanUsers = Model.PlanStats.Count > 0 ? Math.Max(1, Model.PlanStats.Max(p => p.UserCount)) : 1;
+  // Plan figures only say something when the licence lets the deployment define levels; without it
+  // every user is on the top one, so the card, the distribution and the shortcut are all noise.
+  var allowsPlanManagement = TenantBrandingViewDataFilter.AllowsPlanManagement(ViewData);
 }
 <p class="admin-dash-intro">@L["admin.dashboard.intro"]</p>
 
@@ -32,11 +35,14 @@
     <div class="admin-dash-stat-body"><b>@Model.SourceCount</b>
     <span>@L["admin.dashboard.statSources"]</span></div>
   </article>
-  <article class="admin-dash-stat">
-    <div class="admin-dash-stat-ico"><i class="ti ti-layers-intersect" aria-hidden="true"></i></div>
-    <div class="admin-dash-stat-body"><b>@Model.PlanCount</b>
-    <span>@L["admin.dashboard.statPlans"]</span></div>
-  </article>
+  @if (allowsPlanManagement)
+  {
+    <article class="admin-dash-stat">
+      <div class="admin-dash-stat-ico"><i class="ti ti-layers-intersect" aria-hidden="true"></i></div>
+      <div class="admin-dash-stat-body"><b>@Model.PlanCount</b>
+      <span>@L["admin.dashboard.statPlans"]</span></div>
+    </article>
+  }
   <article class="admin-dash-stat @(Model.PlayingCount > 0 ? "is-live" : null)">
     <div class="admin-dash-stat-ico"><i class="ti ti-player-play" aria-hidden="true"></i></div>
     <div class="admin-dash-stat-body"><b>@Model.PlayingCount</b>
@@ -89,33 +95,36 @@
       </script>
     </section>
 
-    <section class="admin-dash-section">
-      <div class="admin-dash-section-head">
-        <h2><i class="ti ti-chart-bar" aria-hidden="true"></i>@L["admin.dashboard.planDistribution"]</h2>
-        <a class="btn-admin secondary" asp-controller="Settings" asp-action="Index" title="@L["admin.hints.defaultRegisterPlan"]">
-          <i class="ti ti-settings" aria-hidden="true"></i>
-          @L["admin.dashboard.defaultPlan"]: @Model.DefaultPlanName
-        </a>
-      </div>
-      @if (Model.PlanStats.Count == 0)
-      {
-        <p class="admin-field-hint">@L["admin.dashboard.noPlans"]</p>
-      }
-      else
-      {
-        <div class="admin-plan-bars">
-          @foreach (var p in Model.PlanStats)
-          {
-            var pct = p.UserCount * 100.0 / maxPlanUsers;
-            <div class="admin-plan-bar-row">
-              <span>@p.Name (@p.Code)</span>
-              <span><strong>@p.UserCount</strong> @if (!p.IsActive) { <span class="admin-badge">@L["admin.plans.inactive"]</span> }</span>
-              <div class="admin-plan-bar-track"><div class="admin-plan-bar-fill" style="width:@pct.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></div></div>
-            </div>
-          }
+    @if (allowsPlanManagement)
+    {
+      <section class="admin-dash-section">
+        <div class="admin-dash-section-head">
+          <h2><i class="ti ti-chart-bar" aria-hidden="true"></i>@L["admin.dashboard.planDistribution"]</h2>
+          <a class="btn-admin secondary" asp-controller="Settings" asp-action="Index" title="@L["admin.hints.defaultRegisterPlan"]">
+            <i class="ti ti-settings" aria-hidden="true"></i>
+            @L["admin.dashboard.defaultPlan"]: @Model.DefaultPlanName
+          </a>
         </div>
-      }
-    </section>
+        @if (Model.PlanStats.Count == 0)
+        {
+          <p class="admin-field-hint">@L["admin.dashboard.noPlans"]</p>
+        }
+        else
+        {
+          <div class="admin-plan-bars">
+            @foreach (var p in Model.PlanStats)
+            {
+              var pct = p.UserCount * 100.0 / maxPlanUsers;
+              <div class="admin-plan-bar-row">
+                <span>@p.Name (@p.Code)</span>
+                <span><strong>@p.UserCount</strong> @if (!p.IsActive) { <span class="admin-badge">@L["admin.plans.inactive"]</span> }</span>
+                <div class="admin-plan-bar-track"><div class="admin-plan-bar-fill" style="width:@pct.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></div></div>
+              </div>
+            }
+          </div>
+        }
+      </section>
+    }
   </div>
 
   <div>
@@ -209,7 +218,10 @@
     <a class="admin-dash-link" asp-controller="Users" asp-action="Index"><i class="ti ti-users" aria-hidden="true"></i>@L["admin.nav.users"]<small>@L["admin.dashboard.shortUsers"]</small></a>
     <a class="admin-dash-link" asp-controller="Processes" asp-action="Index"><i class="ti ti-git-branch" aria-hidden="true"></i>@L["admin.nav.processes"]<small>@L["admin.dashboard.shortProcesses"]</small></a>
     <a class="admin-dash-link" asp-controller="Sources" asp-action="Index"><i class="ti ti-database" aria-hidden="true"></i>@L["admin.nav.sources"]<small>@L["admin.dashboard.shortSources"]</small></a>
-    <a class="admin-dash-link" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]<small>@L["admin.dashboard.shortPlans"]</small></a>
+    @if (allowsPlanManagement)
+    {
+      <a class="admin-dash-link" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]<small>@L["admin.dashboard.shortPlans"]</small></a>
+    }
     <a class="admin-dash-link" asp-controller="Logs" asp-action="Index"><i class="ti ti-history" aria-hidden="true"></i>@L["admin.nav.events"]<small>@L["admin.dashboard.shortEvents"]</small></a>
     <a class="admin-dash-link" asp-controller="Settings" asp-action="Index"><i class="ti ti-settings" aria-hidden="true"></i>@L["admin.nav.settings"]<small>@L["admin.dashboard.shortSettings"]</small></a>
   </div>

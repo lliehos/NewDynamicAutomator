@@ -83,11 +83,26 @@ public class AuthService
         if (!UserNamePattern.IsMatch(userName))
             return (null, "register.errorUserNameFormat");
 
-        var registerPlan = await _settings.GetDefaultRegisterPlanAsync(ct);
-        // The plan's own rules win; the deployment-wide policy is the floor for an install whose
-        // licence has no plan levels (and for any plan that states no rules of its own).
+        // Without plan management there is no "default register plan" to honour: nobody can define
+        // what a level means on that install, so the account starts on the deployment's top plan and
+        // the deployment-wide password policy is what governs — the plan's own rule is unreachable
+        // from any page and would otherwise override a setting the admin *can* edit.
+        var allowsPlans = await _entitlements.AllowsPlanManagementAsync(ct);
+        Plan registerPlan;
+        if (allowsPlans)
+        {
+            registerPlan = await _settings.GetDefaultRegisterPlanAsync(ct);
+        }
+        else
+        {
+            registerPlan = await _entitlements.FindTopPlanAsync(ct)
+                           ?? await _settings.GetDefaultRegisterPlanAsync(ct);
+        }
+
+        // When plans are managed, the plan's own rules win; otherwise the global policy is the rule.
         var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
-        var (pwdOk, pwdErr) = PasswordPolicy.Validate(password, registerPlan, globalMinLen, globalComplexity);
+        var (pwdOk, pwdErr) = PasswordPolicy.Validate(
+            password, allowsPlans ? registerPlan : null, globalMinLen, globalComplexity);
         if (!pwdOk)
             return (null, pwdErr);
 
@@ -156,6 +171,11 @@ public class AuthService
         string? ip = null,
         CancellationToken ct = default)
     {
+        // Self-upgrade is a plan operation, so it means nothing on an install that cannot manage
+        // plans. Refused here as well as in the page, because the POST is reachable on its own.
+        if (!await _entitlements.AllowsPlanManagementAsync(ct))
+            return (null, "plan.upgrade.errorUnavailable");
+
         var targetCode = (request.TargetPlan ?? "").Trim();
         var plan = await _db.Plans.FirstOrDefaultAsync(
             p => p.Code == targetCode && p.IsActive && p.AllowSelfUpgrade, ct);
@@ -214,11 +234,18 @@ public class AuthService
         }, null);
     }
 
-    public Task<List<Plan>> ListSelfUpgradePlansAsync(CancellationToken ct = default) =>
-        _db.Plans.AsNoTracking()
+    public async Task<List<Plan>> ListSelfUpgradePlansAsync(CancellationToken ct = default)
+    {
+        // Empty when the licence has no plan management: the page then shows its built-in
+        // "no plans available" note instead of offering levels nobody can define.
+        if (!await _entitlements.AllowsPlanManagementAsync(ct))
+            return new List<Plan>();
+
+        return await _db.Plans.AsNoTracking()
             .Where(p => p.IsActive && p.AllowSelfUpgrade)
             .OrderBy(p => p.SortOrder)
             .ToListAsync(ct);
+    }
 
     /// <summary>
     /// Create the local row for a directory user signing in for the first time.
@@ -229,8 +256,10 @@ public class AuthService
     /// <item>no usable password — a random hash, never revealed, because the directory owns the
     ///       credential. Only the Admin break-glass path ever consults a local hash, and this is not
     ///       an Admin, so the random value can never be matched.</item>
-    /// <item>the Local plan, the same starting point a self-registered account gets, so an
-    ///       unconfigured new user cannot accidentally receive paid entitlements.</item>
+    /// <item>the Local plan — the safe no-entitlement default — when the licence manages plans, so an
+    ///       unconfigured new user cannot accidentally receive paid entitlements. Without plan
+    ///       management there is no such default to hold anyone below, so the account starts on the
+    ///       deployment's top plan, exactly as a self-registered one does.</item>
     /// <item>an empty profile, which is what sends them to the completion page on the next
     ///       request.</item>
     /// </list>
@@ -251,7 +280,9 @@ public class AuthService
         var existing = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.UserName == name, ct);
         if (existing is not null) return existing;
 
-        var localPlan = await _db.Plans.FirstOrDefaultAsync(p => p.Code == nameof(PlanCode.Local), ct);
+        var startingPlan = await _entitlements.AllowsPlanManagementAsync(ct)
+            ? await _db.Plans.FirstOrDefaultAsync(p => p.Code == nameof(PlanCode.Local), ct)
+            : await _entitlements.FindTopPlanAsync(ct);
         var user = new AppUser
         {
             UserName = name,
@@ -259,8 +290,8 @@ public class AuthService
             LastName = null,
             IsActive = true,
             Role = UserRole.User,
-            PlanId = localPlan?.Id,
-            Plan = localPlan,
+            PlanId = startingPlan?.Id,
+            Plan = startingPlan,
             CreatedAtUtc = DateTime.UtcNow,
             PreferredLanguage = "fa"
         };

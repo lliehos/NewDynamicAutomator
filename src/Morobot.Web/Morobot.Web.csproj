@@ -39,16 +39,20 @@
     an explicit include; %(RecursiveDir) keeps the content/ styles/ lib/ layout intact.
   -->
   <ItemGroup>
-    <None Include="..\..\extension-global\**\*"
-          Link="extension-global\%(RecursiveDir)%(Filename)%(Extension)">
+    <None Include="..\..\extension-global\**\*" Link="extension-global\%(RecursiveDir)%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
-    <None Include="..\..\extension-smart-recorder\**\*"
-          Link="extension-smart-recorder\%(RecursiveDir)%(Filename)%(Extension)">
+    <None Include="..\..\extension-smart-recorder\**\*" Link="extension-smart-recorder\%(RecursiveDir)%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="wwwroot\assets\**" />
+    <Content Remove="wwwroot\assets\**" />
+    <EmbeddedResource Remove="wwwroot\assets\**" />
+    <None Remove="wwwroot\assets\**" />
   </ItemGroup>
 
   <!--

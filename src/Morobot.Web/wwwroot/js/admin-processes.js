@@ -107,9 +107,10 @@
       row = document.createElement("tr");
       row.dataset.taskId = String(task.id);
       row.innerHTML = `
+        <td class="admin-bulk-col"><input type="checkbox" class="admin-bulk-check" value="${escapeHtml(task.id)}" /></td>
         <td>${escapeHtml(task.id)}</td>
         <td data-flash="title">${escapeHtml(task.title || "")}</td>
-        <td>${escapeHtml(task.ownerUserName || "—")}</td>
+        <td>${escapeHtml(task.ownerFullName || task.ownerUserName || "—")}</td>
         <td>${escapeHtml(task.designOrigin || "")}</td>
         <td data-flash="counts">${Number(task.groupCount || 0)} / ${Number(task.stepCount || 0)} / ${Number(task.dataSourceCount || 0)}</td>
         <td>${escapeHtml(task.createdAtUtc || "")}</td>
@@ -117,6 +118,7 @@
         <td class="admin-play-cell" data-flash="play"><span class="admin-play-ico is-stopped"><svg class="ico-play" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" style="display:none"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg><svg class="ico-pause" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></span></td>
         <td></td>`;
       tbody.prepend(row);
+      if (window.AdminBulk) window.AdminBulk.refresh();
     } else {
       const titleEl = row.querySelector("[data-flash='title']");
       if (titleEl && task.title != null) titleEl.textContent = task.title;
@@ -166,6 +168,7 @@
         id,
         title: task.title ?? task.Title,
         ownerUserName: task.ownerUserName ?? task.OwnerUserName,
+        ownerFullName: task.ownerFullName ?? task.OwnerFullName,
         designOrigin: task.designOrigin ?? task.DesignOrigin,
         groupCount: task.groupCount ?? task.GroupCount,
         stepCount: task.stepCount ?? task.StepCount,

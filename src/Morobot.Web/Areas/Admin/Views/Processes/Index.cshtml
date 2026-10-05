@@ -9,10 +9,21 @@
   <span class="admin-live-feed" id="admin-live-feed" aria-live="polite"></span>
 </div>
 
+@* Selection toolbar. Ticked rows are collected by admin-bulk.js into the DeleteMany form, so a
+   bulk delete post leaves the live-update rows in the same state as the single-row delete. *@
+<div class="admin-bulk-bar" data-bulk-for="#admin-process-rows">
+  <span class="admin-bulk-count" data-bulk-count></span>
+  <form method="post" asp-action="DeleteMany" data-bulk-form>
+    @Html.AntiForgeryToken()
+    <button type="submit" class="btn-admin danger" data-bulk-delete disabled>@L["admin.common.deleteSelected"]</button>
+  </form>
+</div>
+
 <div class="admin-table-wrap" data-page-size="20">
 <table class="admin-table" id="admin-process-table">
   <thead>
     <tr>
+      <th class="admin-bulk-col"><input type="checkbox" class="admin-bulk-all" aria-label="@L["admin.common.selectAll"]" /></th>
       <th>@L["admin.processes.colId"]</th>
       <th>@L["admin.processes.colTitle"]</th>
       <th>@L["admin.processes.colOwner"]</th>
@@ -28,9 +39,10 @@
   @foreach (var t in Model)
   {
     <tr data-task-id="@t.Id" data-flash="row">
+      <td class="admin-bulk-col"><input type="checkbox" class="admin-bulk-check" value="@t.Id" aria-label="@t.Title" /></td>
       <td>@t.Id</td>
       <td data-flash="title">@t.Title</td>
-      <td>@(t.OwnerUserName ?? "—")</td>
+      <td>@(t.OwnerFullName ?? t.OwnerUserName ?? "—")</td>
       <td>@t.DesignOrigin</td>
       <td data-flash="counts">@t.GroupCount / @t.StepCount / @t.DataSourceCount</td>
       <td>@t.CreatedAtUtc.ToString("u")</td>
@@ -60,7 +72,7 @@
   }
   @if (!Model.Any())
   {
-    <tr class="admin-empty-row"><td colspan="9" class="text-muted">@L["admin.processes.empty"]</td></tr>
+    <tr class="admin-empty-row"><td colspan="10" class="text-muted">@L["admin.processes.empty"]</td></tr>
   }
   </tbody>
 </table>

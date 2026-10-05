@@ -96,12 +96,14 @@ public class LegacyImportService
 {
     private readonly AppDbContext _db;
     private readonly ILogger<LegacyImportService> _log;
+    private readonly EntitlementService _entitlements;
     private readonly PasswordHasher<AppUser> _hasher = new();
 
-    public LegacyImportService(AppDbContext db, ILogger<LegacyImportService> log)
+    public LegacyImportService(AppDbContext db, ILogger<LegacyImportService> log, EntitlementService entitlements)
     {
         _db = db;
         _log = log;
+        _entitlements = entitlements;
     }
 
     public async Task<(List<LegacyUserRow>? users, string? error)> ListUsersAsync(
@@ -452,7 +454,10 @@ FROM Users WHERE Id=@id", conn);
     /// never be transferred twice.
     /// </summary>
     public async Task<LegacyImportReport> ImportProcessesAsync(
-        string connectionString, IReadOnlyList<int> taskIds, CancellationToken ct = default)
+        string connectionString,
+        IReadOnlyList<int> taskIds,
+        IReadOnlyDictionary<int, int>? newUserPlanIds = null,
+        CancellationToken ct = default)
     {
         var report = new LegacyImportReport();
         if (taskIds.Count == 0)
@@ -464,7 +469,31 @@ FROM Users WHERE Id=@id", conn);
         await using var conn = new SqlConnection(connectionString);
         await conn.OpenAsync(ct);
 
-        var freePlan = await _db.Plans.FirstOrDefaultAsync(p => p.Code == nameof(PlanCode.Free), ct);
+        // Where a newly-created account lands. Without plan management nobody can define a level, so
+        // every new account starts on the deployment's top plan; with it, the operator picks the plan
+        // per legacy user on the review step and that choice wins.
+        var managesPlans = await _entitlements.AllowsPlanManagementAsync(ct);
+        var defaultPlan = managesPlans
+            ? await _db.Plans.FirstOrDefaultAsync(p => p.Code == nameof(PlanCode.Free), ct)
+            : await _entitlements.FindTopPlanAsync(ct);
+
+        var requestedPlans = managesPlans && newUserPlanIds is { Count: > 0 }
+            ? newUserPlanIds.Values.Distinct().ToList()
+            : new List<int>();
+        var loadedPlans = requestedPlans.Count == 0
+            ? new List<Plan>()
+            : await _db.Plans.AsNoTracking()
+                .Where(p => requestedPlans.Contains(p.Id) && p.IsActive)
+                .ToListAsync(ct);
+        // An id that is not an active plan falls back to the default rather than failing the run:
+        // a stale form must not decide that an account gets no plan at all.
+        var planByLegacyUser = new Dictionary<int, Plan?>();
+        if (newUserPlanIds is not null)
+        {
+            foreach (var (legacyUserId, planId) in newUserPlanIds)
+                planByLegacyUser[legacyUserId] = loadedPlans.FirstOrDefault(p => p.Id == planId);
+        }
+
         var hasCreator = await ColumnExists(conn, "Tasks", "CreatorUserId", ct);
         var hasUserTasks = false;
 
@@ -503,7 +532,10 @@ FROM Users WHERE Id=@id", conn);
         {
             try
             {
-                await ImportOneUserAsync(conn, ownerId, freePlan, hasCreator, hasUserTasks, sourceMap, report, ct,
+                // The chosen plan applies only if this owner turns out to be a NEW account; a matched
+                // one keeps the plan it already has.
+                var planForNewUser = planByLegacyUser.TryGetValue(ownerId, out var chosen) ? chosen : defaultPlan;
+                await ImportOneUserAsync(conn, ownerId, planForNewUser, hasCreator, hasUserTasks, sourceMap, report, ct,
                     new HashSet<int>(ids));
             }
             catch (Exception ex)
@@ -518,7 +550,7 @@ FROM Users WHERE Id=@id", conn);
     }
 
     private async Task ImportOneUserAsync(
-        SqlConnection conn, int legacyUserId, Plan? freePlan,
+        SqlConnection conn, int legacyUserId, Plan? planForNewUser,
         bool hasCreator, bool hasUserTasks,
         Dictionary<(int OwnerUserId, int LegacySourceId), SourceMeta> sourceMap,
         LegacyImportReport report, CancellationToken ct,
@@ -572,7 +604,7 @@ FROM Users WHERE Id=@id", conn);
                 Email = email,
                 IsActive = true,
                 Role = UserRole.User,
-                PlanId = freePlan?.Id,
+                PlanId = planForNewUser?.Id,
                 CreatedAtUtc = DateTime.UtcNow,
                 PreferredLanguage = "fa"
             };

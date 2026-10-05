@@ -1,6 +1,8 @@
 @model IEnumerable<Morobot.Infrastructure.Services.AdminCanvasSourceRow>
 @{
   ViewData["Title"] = L["admin.sources.title"];
+  var sources = Model.ToList();
+  var unusedCount = sources.Count(s => s.LinkedProcessCount == 0);
 }
 <p class="text-muted small mb-3">@L["admin.sources.intro"]</p>
 <div class="admin-live-bar" id="admin-live-bar">
@@ -9,10 +11,26 @@
   <span class="admin-live-feed" id="admin-live-feed" aria-live="polite"></span>
 </div>
 
+@* Selection toolbar. The ticked rows are collected by admin-bulk.js into the DeleteMany form;
+   "delete unused" is a one-click server-side sweep and needs no selection at all. *@
+<div class="admin-bulk-bar" data-bulk-for="#admin-source-rows">
+  <span class="admin-bulk-count" data-bulk-count></span>
+  <form method="post" asp-action="DeleteMany" data-bulk-form>
+    @Html.AntiForgeryToken()
+    <button type="submit" class="btn-admin danger" data-bulk-delete disabled>@L["admin.common.deleteSelected"]</button>
+  </form>
+  <form method="post" asp-action="DeleteUnused" class="admin-bulk-unused"
+        onsubmit="return confirm('@L.T("admin.sources.deleteUnusedConfirm", ("count", unusedCount.ToString()))');">
+    @Html.AntiForgeryToken()
+    <button type="submit" class="btn-admin secondary" disabled="@(unusedCount == 0)">@L.T("admin.sources.deleteUnused", ("count", unusedCount.ToString()))</button>
+  </form>
+</div>
+
 <div class="admin-table-wrap" data-page-size="20">
 <table class="admin-table" id="admin-source-table">
   <thead>
     <tr>
+      <th class="admin-bulk-col"><input type="checkbox" class="admin-bulk-all" aria-label="@L["admin.common.selectAll"]" /></th>
       <th>@L["admin.sources.colId"]</th>
       <th>@L["admin.sources.colTitle"]</th>
       <th>@L["admin.sources.colLinked"]</th>
@@ -27,12 +45,13 @@
     </tr>
   </thead>
   <tbody id="admin-source-rows">
-  @foreach (var s in Model)
+  @foreach (var s in sources)
   {
     <tr data-source-id="@s.SourceId" data-flash="row">
+      <td class="admin-bulk-col"><input type="checkbox" class="admin-bulk-check" value="@s.SourceId" aria-label="@s.Title" /></td>
       <td>@s.SourceId</td>
       <td data-flash="title">@s.Title</td>
-      <td data-flash="linked">@s.TaskTitle</td>
+      <td data-flash="linked">@(s.LinkedProcessCount == 0 ? L["admin.sources.library"] : s.TaskTitle)</td>
       <td>@s.Owner</td>
       <td>@s.LastEditor</td>
       <td class="text-nowrap">@Morobot.Web.Services.DateDisplay.DateTimeLocal(s.CreatedAtUtc)</td>
@@ -43,12 +62,19 @@
       <td class="text-nowrap">
         <button type="button" class="btn-admin secondary js-admin-ds-view" data-id="@s.SourceId" title="@L["admin.sources.viewData"]">@L["admin.sources.viewData"]</button>
         <button type="button" class="btn-admin js-admin-ds-dl" data-id="@s.SourceId" title="@L["admin.sources.downloadExcel"]">@L["admin.sources.downloadExcel"]</button>
+        @* Deleting a source detaches it from every linked process and scrubs its snapshot, so the
+           confirmation names the source instead of asking a generic "are you sure". *@
+        <form method="post" asp-action="Delete" asp-route-id="@s.SourceId" class="d-inline"
+              onsubmit="return confirm('@L.T("admin.sources.deleteConfirm", ("title", s.Title))');">
+          @Html.AntiForgeryToken()
+          <button type="submit" class="btn-admin danger" title="@L["admin.sources.delete"]">@L["admin.sources.delete"]</button>
+        </form>
       </td>
     </tr>
   }
-  @if (!Model.Any())
+  @if (sources.Count == 0)
   {
-    <tr class="admin-empty-row"><td colspan="11" class="text-muted">@L["admin.sources.empty"]</td></tr>
+    <tr class="admin-empty-row"><td colspan="12" class="text-muted">@L["admin.sources.empty"]</td></tr>
   }
   </tbody>
 </table>
@@ -93,7 +119,12 @@
     },
     viewFail: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.viewFail"])),
     downloadFail: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.downloadFail"])),
-    noRows: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.noRows"]))
+    noRows: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.noRows"])),
+    viewData: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.viewData"])),
+    downloadExcel: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.downloadExcel"])),
+    delete: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.delete"])),
+    deleteConfirm: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.deleteConfirm"])),
+    library: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.sources.library"]))
   };
 </script>
 <script src="~/js/admin-sources.js?v=@V.AssetVersion"></script>

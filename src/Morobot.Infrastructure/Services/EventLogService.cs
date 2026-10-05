@@ -72,6 +72,24 @@ public class EventLogService
         return await q.OrderByDescending(x => x.Id).Take(take).ToListAsync(ct);
     }
 
+    /// <summary>
+    /// Delete event log rows, optionally narrowed to the same level/category filter the list is
+    /// showing. Returns how many rows were removed so the caller can report it.
+    /// </summary>
+    /// <remarks>
+    /// Uses <c>ExecuteDelete</c> rather than loading the rows: the table can hold a lot of history
+    /// and the delete is unconditional, so there is nothing to track in the change tracker.
+    /// </remarks>
+    public async Task<int> ClearAsync(string? level = null, string? category = null, CancellationToken ct = default)
+    {
+        var q = _db.EventLogs.AsQueryable();
+        if (!string.IsNullOrWhiteSpace(level))
+            q = q.Where(x => x.Level == level);
+        if (!string.IsNullOrWhiteSpace(category))
+            q = q.Where(x => x.Category == category);
+        return await q.ExecuteDeleteAsync(ct);
+    }
+
     public async Task UpsertDeviceSessionAsync(
         int userId,
         string? claimedUserName,

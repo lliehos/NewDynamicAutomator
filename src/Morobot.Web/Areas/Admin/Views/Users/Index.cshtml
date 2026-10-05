@@ -10,6 +10,9 @@
   var playingIds = ViewBag.PlayingUserIds as HashSet<int> ?? new HashSet<int>();
   var processCounts = ViewBag.ProcessCountByUserId as Dictionary<int, int> ?? new Dictionary<int, int>();
   var sourceCounts = ViewBag.SourceCountByUserId as Dictionary<int, int> ?? new Dictionary<int, int>();
+  // No licence plan management means every user sits on the top level, so the column would repeat
+  // one value and imply a choice the admin cannot make.
+  var allowsPlanManagement = TenantBrandingViewDataFilter.AllowsPlanManagement(ViewData);
   var now = DateTime.UtcNow;
   var onlineCount = list.Count(u =>
   {
@@ -25,22 +28,36 @@
   ActionIcon = "ti-user-plus"
 }' />
 
+@* Selection toolbar. Ticked rows post to DeleteMany, which reuses the single delete so the
+   "not yourself / not the last administrator" refusals still hold and are reported back. *@
+<div class="admin-bulk-bar" data-bulk-for="#admin-user-rows">
+  <span class="admin-bulk-count" data-bulk-count></span>
+  <form method="post" asp-action="DeleteMany" data-bulk-form>
+    @Html.AntiForgeryToken()
+    <button type="submit" class="btn-admin danger" data-bulk-delete disabled>@L["admin.common.deleteSelected"]</button>
+  </form>
+</div>
+
 <div class="admin-table-wrap" data-page-size="20">
 <table class="admin-table">
   <thead>
     <tr>
+      <th class="admin-bulk-col"><input type="checkbox" class="admin-bulk-all" aria-label="@L["admin.common.selectAll"]" /></th>
       <th>Id</th>
       <th>@L["admin.users.userName"]</th>
       <th>@L["admin.users.presence"]</th>
       <th>@L["admin.users.role"]</th>
-      <th>@L["admin.users.plan"]</th>
+      @if (allowsPlanManagement)
+      {
+        <th>@L["admin.users.plan"]</th>
+      }
       <th class="text-center">@L["admin.users.processCount"]</th>
       <th class="text-center">@L["admin.users.sourceCount"]</th>
       <th>@L["admin.users.active"]</th>
       <th></th>
     </tr>
   </thead>
-  <tbody>
+  <tbody id="admin-user-rows">
   @foreach (var u in list)
   {
     DateTime? seenUtc = lastSeen.TryGetValue(u.Id, out var seen) ? seen : null;
@@ -58,6 +75,7 @@
       tip = L["admin.users.playingNow"];
     }
     <tr>
+      <td class="admin-bulk-col"><input type="checkbox" class="admin-bulk-check" value="@u.Id" aria-label="@u.UserName" /></td>
       <td>@u.Id</td>
       <td>
         <span class="admin-user-cell">
@@ -83,7 +101,10 @@
         }' />
       </td>
       <td>@L["admin.users.roles." + u.Role]</td>
-      <td>@((isFa ? u.Plan?.NameFa : u.Plan?.NameEn) ?? "—")</td>
+      @if (allowsPlanManagement)
+      {
+        <td>@((isFa ? u.Plan?.NameFa : u.Plan?.NameEn) ?? "—")</td>
+      }
       <td class="text-center"><span class="admin-count-badge">@(processCounts.TryGetValue(u.Id, out var pc) ? pc : 0)</span></td>
       <td class="text-center"><span class="admin-count-badge">@(sourceCounts.TryGetValue(u.Id, out var sc) ? sc : 0)</span></td>
       <td><partial name="_AdminStatus" model="u.IsActive" /></td>

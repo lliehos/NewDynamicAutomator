@@ -9,6 +9,13 @@ public sealed class AdminSettingsViewModel
     public required IReadOnlyList<Plan> Plans { get; init; }
 
     /// <summary>
+    /// Whether the licence lets this deployment manage plan levels. The page hides the plan-related
+    /// controls (the "default register plan" field and the shortcut to the plans page) when it does
+    /// not, because there would be no page able to define what a level means.
+    /// </summary>
+    public bool AllowsPlanManagement { get; init; }
+
+    /// <summary>
     /// How many fields a group actually renders.
     /// </summary>
     /// <remarks>

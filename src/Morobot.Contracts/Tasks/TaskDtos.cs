@@ -19,6 +19,14 @@ public class TaskListItemDto
     /// <summary>Manual or Recorded</summary>
     public string DesignOrigin { get; set; } = "Manual";
     public string? OwnerUserName { get; set; }
+
+    /// <summary>
+    /// The owner's real name (first + last) when the account carries one, so admin lists can show
+    /// a person rather than a login. Null when neither name part is set, in which case the UI falls
+    /// back to <see cref="OwnerUserName"/>.
+    /// </summary>
+    public string? OwnerFullName { get; set; }
+
     public int SharedWithCount { get; set; }
     /// <summary>Last canvas/process save (UTC).</summary>
     public DateTime? UpdatedAtUtc { get; set; }

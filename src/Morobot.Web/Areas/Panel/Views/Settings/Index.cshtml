@@ -6,6 +6,9 @@
   var incomplete = ViewBag.Incomplete == true;
   var errKey = TempData["ProfileError"] as string;
   var okKey = TempData["ProfileOk"] as string;
+  // The upgrade page is a plan operation; without licence plan management there are no levels to
+  // move to, so the link is not offered at all.
+  var allowsPlanManagement = TenantBrandingViewDataFilter.AllowsPlanManagement(ViewData);
 }
 <div class="da-home da-settings">
   <header class="da-home-head">
@@ -100,8 +103,11 @@
             </div>
             <button type="submit" class="btn btn-primary" data-i18n="settings.saveProfile">@L["settings.saveProfile"]</button>
           </form>
-          <hr class="my-4" />
-          <a class="btn btn-label-primary" asp-area="Panel" asp-controller="Account" asp-action="Upgrade" data-i18n="plan.upgradeTitle">@L["plan.upgradeTitle"]</a>
+          @if (allowsPlanManagement)
+          {
+            <hr class="my-4" />
+            <a class="btn btn-label-primary" asp-area="Panel" asp-controller="Account" asp-action="Upgrade" data-i18n="plan.upgradeTitle">@L["plan.upgradeTitle"]</a>
+          }
         </div>
       </div>
     </div>

@@ -1610,6 +1610,59 @@ public class DataSourceService
         return true;
     }
 
+    /// <summary>
+    /// Admin-only: delete any library source regardless of who owns it. Shares
+    /// <see cref="DeleteLibraryAsync"/>'s cleanup (detach links, scrub process snapshots) so an
+    /// admin delete leaves linked processes in exactly the same state as an owner delete.
+    /// </summary>
+    public async Task<bool> DeleteLibraryForAdminAsync(int id, CancellationToken ct = default)
+    {
+        var entity = await _db.DataSources
+            .Include(d => d.ProcessLinks)
+            .FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (entity is null) return false;
+
+        var processIds = entity.ProcessLinks.Select(l => l.ProcessId).Distinct().ToList();
+        _db.ProcessDataSources.RemoveRange(entity.ProcessLinks);
+        _db.DataSources.Remove(entity);
+        await _db.SaveChangesAsync(ct);
+
+        // Scrub snapshot from linked process graphs (keep selector column names on nodes).
+        foreach (var pid in processIds)
+        {
+            try { await ScrubSourceFromProcessGraphAsync(pid, id, ct); }
+            catch (Exception ex) { _log.LogWarning(ex, "Scrub source {Ds} from process {P}", id, pid); }
+        }
+        return true;
+    }
+
+    /// <summary>Admin-only: delete several library sources, skipping ids that no longer exist.</summary>
+    /// <returns>How many sources were actually deleted.</returns>
+    public async Task<int> DeleteManyForAdminAsync(IEnumerable<int> ids, CancellationToken ct = default)
+    {
+        var deleted = 0;
+        foreach (var id in ids.Distinct())
+        {
+            if (await DeleteLibraryForAdminAsync(id, ct)) deleted++;
+        }
+        return deleted;
+    }
+
+    /// <summary>
+    /// Admin-only: delete every library source that no process links to. These are the leftovers of
+    /// trial imports and renamed files, and because nothing references them there is nothing to
+    /// detach or scrub.
+    /// </summary>
+    /// <returns>How many sources were deleted.</returns>
+    public async Task<int> DeleteUnusedForAdminAsync(CancellationToken ct = default)
+    {
+        var ids = await _db.DataSources.AsNoTracking()
+            .Where(d => !d.ProcessLinks.Any())
+            .Select(d => d.Id)
+            .ToListAsync(ct);
+        return await DeleteManyForAdminAsync(ids, ct);
+    }
+
     public async Task<(bool ok, string? error)> AttachAsync(
         int userId, int processId, int dataSourceId, bool setDefault = false, CancellationToken ct = default)
     {

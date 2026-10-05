@@ -839,6 +839,34 @@ label { font-size: .9rem; }
   gap: .35rem;
 }
 .admin-row-actions form { margin: 0; }
+/* ── Bulk selection bar (processes / sources / users) ── */
+.admin-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: .6rem;
+}
+.admin-bulk-bar form { margin: 0; }
+/* "Unused" cleanup belongs with the list it sweeps, not with the row-level actions. */
+.admin-bulk-unused { margin-inline-start: auto; }
+.admin-bulk-count {
+  color: #64748b;
+  font-size: .8rem;
+  font-variant-numeric: tabular-nums;
+}
+/* Narrow leading column so the tick costs the table as little width as possible. */
+.admin-bulk-col {
+  width: 2.1rem;
+  text-align: center;
+  padding-inline: .35rem;
+}
+.admin-bulk-col input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  cursor: pointer;
+  accent-color: var(--morobot-primary, var(--morobot-primary-default));
+}
 .admin-page-head {
   display: flex;
   flex-wrap: wrap;
@@ -972,6 +1000,8 @@ label { font-size: .9rem; }
   font-weight: 600;
   margin-inline-end: .15rem;
 }
+/* Clear-all sits at the far end of the filter row, away from the filter chips it belongs to. */
+.admin-filter-clear { margin-inline-start: auto; }
 a.admin-chip {
   text-decoration: none;
   background: #fff;
@@ -1683,6 +1713,26 @@ a.admin-chip.is-active {
 .admin-pager-info {
   padding: 0 .45rem;
   font-variant-numeric: tabular-nums;
+}
+/* Rows-per-page picker, pinned to the far end so it does not sit inside the page arrows. */
+.admin-pager-size {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  margin-inline-end: auto;
+  color: #64748b;
+}
+.admin-pager-size-label { font-size: .78rem; }
+.admin-pager-size-select {
+  height: 2rem;
+  padding: 0 .35rem;
+  border-radius: .45rem;
+  border: 1px solid rgba(226, 232, 240, .95);
+  background: #fff;
+  color: #334155;
+  font-family: inherit;
+  font-size: .8rem;
+  cursor: pointer;
 }
 
 /* ?? Users page: per-user ownership counts ?? */

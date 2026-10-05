@@ -23,6 +23,8 @@ public class UsersController : Controller
     private readonly DeploymentBindingService _deploymentBinding;
     private readonly SystemSettingsService _settings;
     private readonly TaskService _tasks;
+    private readonly ILocaleService _locale;
+    private readonly EntitlementService _entitlements;
     private readonly PasswordHasher<AppUser> _hasher = new();
 
     public UsersController(
@@ -32,7 +34,9 @@ public class UsersController : Controller
         LicenseService license,
         DeploymentBindingService deploymentBinding,
         SystemSettingsService settings,
-        TaskService tasks)
+        TaskService tasks,
+        ILocaleService locale,
+        EntitlementService entitlements)
     {
         _db = db;
         _events = events;
@@ -41,7 +45,17 @@ public class UsersController : Controller
         _deploymentBinding = deploymentBinding;
         _settings = settings;
         _tasks = tasks;
+        _locale = locale;
+        _entitlements = entitlements;
     }
+
+    /// <summary>
+    /// Whether the licence lets this deployment define plan levels. When it does not, no page can
+    /// edit a plan and every user resolves to the top one, so the plan fields are not offered and
+    /// the deployment-wide password policy takes over from the (unreachable) per-plan rule.
+    /// </summary>
+    private async Task<bool> AllowsPlanManagementAsync(CancellationToken ct)
+        => (await _license.GetRuntimeStateAsync(ct)).AllowsPlanManagement;
 
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -117,13 +131,22 @@ public class UsersController : Controller
             });
         }
 
+        var allowsPlans = await AllowsPlanManagementAsync(ct);
         Plan? plan = null;
-        if (planId is int pid)
+        // A plan posted by a crafted form is ignored when plans are not managed: the account then
+        // starts on the deployment's top plan, which is exactly what the resolver would report.
+        if (allowsPlans && planId is int pid)
             plan = await _db.Plans.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pid, ct);
+        // Without plan management the account starts on the deployment's top plan, which is what the
+        // entitlement resolver would report for it anyway; with it, an unset plan falls back to Free.
+        plan ??= allowsPlans
+            ? await _db.Plans.AsNoTracking().FirstOrDefaultAsync(p => p.Code == nameof(PlanCode.Free), ct)
+            : await _entitlements.FindTopPlanAsync(ct);
         plan ??= await _db.Plans.AsNoTracking().FirstAsync(p => p.Code == nameof(PlanCode.Free), ct);
 
         var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
-        var (pwdOk, pwdErr) = PasswordPolicy.Validate(password, plan, globalMinLen, globalComplexity);
+        var (pwdOk, pwdErr) = PasswordPolicy.Validate(
+            password, allowsPlans ? plan : null, globalMinLen, globalComplexity);
         if (!pwdOk)
         {
             ModelState.AddModelError(nameof(password), pwdErr ?? "Invalid password");
@@ -191,17 +214,22 @@ public class UsersController : Controller
         var user = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == id, ct);
         if (user is null) return NotFound();
 
+        var allowsPlans = await AllowsPlanManagementAsync(ct);
+
         Plan? targetPlan = user.Plan;
-        if (planId is int pid)
+        if (allowsPlans && planId is int pid)
             targetPlan = await _db.Plans.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pid, ct)
                          ?? targetPlan;
         targetPlan ??= await _db.Plans.AsNoTracking().FirstAsync(p => p.Code == nameof(PlanCode.Free), ct);
 
         var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
-        var wasStrict = PasswordPolicy.IsStrict(user.Plan, globalMinLen, globalComplexity);
-        var needsStrict = PasswordPolicy.IsStrict(targetPlan, globalMinLen, globalComplexity);
+        // A plan move only exists when plans are managed; without them the password rule is the
+        // global one and there is no stricter plan to move to, so the "changing plan needs a new
+        // password" rule must not fire.
+        var wasStrict = PasswordPolicy.IsStrict(allowsPlans ? user.Plan : null, globalMinLen, globalComplexity);
+        var needsStrict = PasswordPolicy.IsStrict(allowsPlans ? targetPlan : null, globalMinLen, globalComplexity);
 
-        if (needsStrict && !wasStrict && string.IsNullOrWhiteSpace(newPassword))
+        if (allowsPlans && needsStrict && !wasStrict && string.IsNullOrWhiteSpace(newPassword))
         {
             ModelState.AddModelError(nameof(newPassword), "Target plan requires a new password matching its policy.");
             await FillPlans(ct);
@@ -217,7 +245,8 @@ public class UsersController : Controller
 
         if (!string.IsNullOrWhiteSpace(newPassword))
         {
-            var (pwdOk, pwdErr) = PasswordPolicy.Validate(newPassword, targetPlan, globalMinLen, globalComplexity);
+            var (pwdOk, pwdErr) = PasswordPolicy.Validate(
+                newPassword, allowsPlans ? targetPlan : null, globalMinLen, globalComplexity);
             if (!pwdOk)
             {
                 ModelState.AddModelError(nameof(newPassword), pwdErr ?? "Invalid password");
@@ -252,7 +281,9 @@ public class UsersController : Controller
         user.LastName = string.IsNullOrWhiteSpace(lastName) ? null : lastName.Trim();
         user.Email = string.IsNullOrWhiteSpace(email) ? null : email.Trim();
         user.NationalId = string.IsNullOrWhiteSpace(nationalId) ? null : nationalId.Trim();
-        user.PlanId = planId;
+        // Only write the plan when it is managed: the field is hidden without the licence, so the
+        // POST carries nothing and assigning it would clear the stored plan on every edit.
+        if (allowsPlans) user.PlanId = planId;
         user.Role = role;
         user.IsActive = isActive;
         await _db.SaveChangesAsync(ct);
@@ -260,8 +291,53 @@ public class UsersController : Controller
         return RedirectToAction(nameof(Index));
     }
 
+    /// <summary>Removes a user together with everything that belongs to them.</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    {
+        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id, ct);
+        if (user is null) return NotFound();
+
+        var refusal = await DeleteUserCoreAsync(user, ct);
+        TempData["Ok"] = _locale[refusal ?? "admin.users.deleted"];
+        return RedirectToAction(nameof(Index));
+    }
+
     /// <summary>
-    /// Removes a user together with everything that belongs to them.
+    /// Delete the rows the admin ticked in the list. Each account goes through the same
+    /// <see cref="DeleteUserCoreAsync"/> as the single delete, so the two deliberate refusals (the
+    /// acting admin, the last active administrator) still hold — they are reported instead of
+    /// being silently dropped.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteMany(int[] ids, CancellationToken ct)
+    {
+        var deleted = 0;
+        var skipped = 0;
+        foreach (var id in (ids ?? Array.Empty<int>()).Distinct())
+        {
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id, ct);
+            if (user is null) continue;
+            if (await DeleteUserCoreAsync(user, ct) is null) deleted++;
+            else skipped++;
+        }
+
+        if (skipped > 0)
+        {
+            TempData["Warn"] = _locale.T("admin.users.deleteManySkipped",
+                ("deleted", deleted.ToString()), ("skipped", skipped.ToString()));
+        }
+        else if (deleted > 0)
+        {
+            TempData["Ok"] = _locale.T("admin.users.deletedMany", ("count", deleted.ToString()));
+        }
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Removes a user together with everything that belongs to them, or refuses with a reason.
     /// </summary>
     /// <remarks>
     /// The database cascades only part of this. <c>ProcessShares</c>, <c>DeviceSessions</c> and the
@@ -289,28 +365,16 @@ public class UsersController : Controller
     /// last active administrator cannot be deleted because doing so would lock every admin page —
     /// this one included — out of the system for good.
     /// </remarks>
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    /// <returns>Null when the account was deleted, otherwise the locale key of the refusal.</returns>
+    private async Task<string?> DeleteUserCoreAsync(AppUser user, CancellationToken ct)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id, ct);
-        if (user is null) return NotFound();
-
-        if (user.Id == CurrentUserId)
-        {
-            TempData["Ok"] = "admin.users.deleteSelfBlocked";
-            return RedirectToAction(nameof(Index));
-        }
+        if (user.Id == CurrentUserId) return "admin.users.deleteSelfBlocked";
 
         if (user.Role == UserRole.Admin && user.IsActive)
         {
             var otherActiveAdmins = await _db.Users
                 .CountAsync(u => u.Id != user.Id && u.Role == UserRole.Admin && u.IsActive, ct);
-            if (otherActiveAdmins == 0)
-            {
-                TempData["Ok"] = "admin.users.deleteLastAdminBlocked";
-                return RedirectToAction(nameof(Index));
-            }
+            if (otherActiveAdmins == 0) return "admin.users.deleteLastAdminBlocked";
         }
 
         var userName = user.UserName;
@@ -376,11 +440,10 @@ public class UsersController : Controller
         // Audit after the delete, with a null user id: the row must outlive the account it
         // describes, which is exactly what the denormalised UserName is for.
         await _events.LogAsync("Audit", "System", "UserDeleted",
-            $"User '{userName}' (#{id}) deleted with all owned processes and data sources.",
+            $"User '{userName}' (#{user.Id}) deleted with all owned processes and data sources.",
             userName: User.Identity?.Name, detailsJson: null, ct: ct);
 
-        TempData["Ok"] = "admin.users.deleted";
-        return RedirectToAction(nameof(Index));
+        return null;
     }
 
     /// <summary>The signed-in admin's id, or 0 when the claim is absent/unparsable.</summary>
@@ -391,6 +454,13 @@ public class UsersController : Controller
 
     private async Task FillPlans(CancellationToken ct)
     {
+        // No plans are offered when the licence has no plan management, so there is nothing to load.
+        if (!await AllowsPlanManagementAsync(ct))
+        {
+            ViewBag.Plans = null;
+            return;
+        }
+
         ViewBag.Plans = await _db.Plans.AsNoTracking()
             .OrderBy(p => p.SortOrder)
             .Select(p => new SelectListItem

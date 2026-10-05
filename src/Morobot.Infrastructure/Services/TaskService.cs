@@ -235,6 +235,11 @@ public class TaskService
                 t.GraphJson,
                 t.DesignOrigin,
                 OwnerUserName = t.Creator != null ? t.Creator.UserName : null,
+                // The admin list names the person, not the login. Composed here rather than in the
+                // view so the live-update payload (which reuses this DTO) carries it too.
+                OwnerFullName = t.Creator != null
+                    ? ((t.Creator.FirstName ?? "") + " " + (t.Creator.LastName ?? "")).Trim()
+                    : null,
                 LastEditorUserName = t.LastEditor != null ? t.LastEditor.UserName : null,
                 DataUpdatedAtUtc = t.DataSourceLinks
                     .Select(l => (DateTime?)l.DataSource!.UpdatedAtUtc)
@@ -286,6 +291,7 @@ public class TaskService
                 CanModify = true,
                 DesignOrigin = t.DesignOrigin.ToString(),
                 OwnerUserName = t.OwnerUserName,
+                OwnerFullName = string.IsNullOrWhiteSpace(t.OwnerFullName) ? null : t.OwnerFullName,
                 TemplateId = t.TemplateId,
                 TemplateTitle = t.TemplateTitle,
                 SourceProcessId = t.SourceProcessId,
@@ -306,9 +312,10 @@ public class TaskService
             SourceId = d.Id.ToString(),
             Title = d.Title,
             TaskId = 0,
-            TaskTitle = d.LinkedProcessCount == 0
-                ? "— (کتابخانه)"
-                : d.LinkedProcessTitles,
+            TaskTitle = d.LinkedProcessTitles,
+            // Kept alongside the titles so the page can tell "used by nobody" (and therefore
+            // deletable as unused) from "used by processes" without parsing the joined titles.
+            LinkedProcessCount = d.LinkedProcessCount,
             Owner = d.OwnerUserName,
             LastEditor = d.LastEditorUserName ?? d.OwnerUserName,
             CreatedAtUtc = d.CreatedAtUtc,
@@ -968,6 +975,8 @@ public class AdminCanvasSourceRow
     public string Title { get; set; } = "";
     public int TaskId { get; set; }
     public string TaskTitle { get; set; } = "";
+    /// <summary>How many processes link this source. Zero means it is unused.</summary>
+    public int LinkedProcessCount { get; set; }
     public string Owner { get; set; } = "";
     public string LastEditor { get; set; } = "";
     public DateTime CreatedAtUtc { get; set; }

@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Morobot.Infrastructure.Services;
 using Morobot.Licensing;
 using Morobot.Web.Models;
@@ -24,6 +25,19 @@ public sealed class TenantBrandingViewDataFilter : IAsyncActionFilter
         _license = license;
         _dbSetup = dbSetup;
     }
+
+    /// <summary>
+    /// True when the current licence lets the deployment manage user plan levels.
+    /// </summary>
+    /// <remarks>
+    /// The runtime state is stashed on ViewData by this filter for every MVC view, so a page can ask
+    /// the licence directly instead of each controller having to pass the answer down. When plan
+    /// management is off the whole plan concept is hidden — the settings field, the user-level
+    /// pickers and the self-upgrade page — because there would be nobody able to define what a level
+    /// means, and every user resolves to the top one anyway.
+    /// </remarks>
+    public static bool AllowsPlanManagement(ViewDataDictionary viewData) =>
+        (viewData[LicenseStateKey] as LicenseRuntimeState)?.AllowsPlanManagement == true;
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {

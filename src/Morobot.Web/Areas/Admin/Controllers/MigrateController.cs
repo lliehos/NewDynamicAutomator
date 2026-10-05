@@ -1,6 +1,8 @@
+using Morobot.Infrastructure.Persistence;
 using Morobot.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Morobot.Web.Services;
 
 namespace Morobot.Web.Areas.Admin.Controllers;
@@ -9,15 +11,20 @@ namespace Morobot.Web.Areas.Admin.Controllers;
 [Authorize(Roles = "Admin")]
 public class MigrateController : Controller
 {
+    /// <summary>Form field naming the plan a legacy user's NEW account should be created on.</summary>
+    internal const string NewUserPlanPrefix = "newPlan_";
+
     private readonly LegacyImportService _import;
     private readonly ILocaleService _locale;
     private readonly LicenseService _license;
+    private readonly AppDbContext _db;
 
-    public MigrateController(LegacyImportService import, ILocaleService locale, LicenseService license)
+    public MigrateController(LegacyImportService import, ILocaleService locale, LicenseService license, AppDbContext db)
     {
         _import = import;
         _locale = locale;
         _license = license;
+        _db = db;
     }
 
     /// <summary>
@@ -130,13 +137,19 @@ public class MigrateController : Controller
         ViewBag.Groups = groups;
         ViewBag.UserIds = userIds;
         ViewBag.SelectedTaskIds = new HashSet<int>(taskIds);
+        // The review step is where the plan for each NEW account is chosen, because this page already
+        // lists exactly the users whose processes are about to be transferred and marks the ones that
+        // match an existing account. Without plan management there is nothing to choose — each new
+        // account lands on the deployment's top plan.
+        await FillPlansAsync(ct);
         return View("Preprocess");
     }
 
     /// <summary>Transfer the selected processes (each to its own owner; duplicates refused server-side).</summary>
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> RunProcesses(string connectionString, int[]? taskIds, CancellationToken ct)
+    public async Task<IActionResult> RunProcesses(
+        string connectionString, int[]? taskIds, IFormCollection form, CancellationToken ct)
     {
         if (!await IsMigrationAllowedAsync(ct)) return MigrationNotAllowed();
         ViewData["Title"] = _locale["admin.migrate.resultTitle"];
@@ -148,9 +161,42 @@ public class MigrateController : Controller
             return View("Index");
         }
 
-        var report = await _import.ImportProcessesAsync(connectionString, taskIds, ct);
+        var report = await _import.ImportProcessesAsync(
+            connectionString, taskIds, ReadNewUserPlans(form), ct);
         ViewBag.Report = report;
         return View("Result");
+    }
+
+    /// <summary>
+    /// The plan chosen for each legacy user's new account, read from the review form. Returns null
+    /// when the page offered no choice (no plan management), which tells the import to place new
+    /// accounts on the deployment's top plan.
+    /// </summary>
+    private static Dictionary<int, int>? ReadNewUserPlans(IFormCollection form)
+    {
+        Dictionary<int, int>? map = null;
+        foreach (var key in form.Keys)
+        {
+            if (!key.StartsWith(NewUserPlanPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!int.TryParse(key[NewUserPlanPrefix.Length..], out var legacyUserId)) continue;
+            if (!int.TryParse(form[key].LastOrDefault(), out var planId)) continue;
+            map ??= new Dictionary<int, int>();
+            map[legacyUserId] = planId;
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// Load the plans a new migrated account may be created on. Nothing is offered when the licence
+    /// has no plan management: the import then places every new account on the top plan.
+    /// </summary>
+    private async Task FillPlansAsync(CancellationToken ct)
+    {
+        var allowsPlanManagement = (await _license.GetRuntimeStateAsync(ct)).AllowsPlanManagement;
+        ViewBag.AllowsPlanManagement = allowsPlanManagement;
+        ViewBag.Plans = allowsPlanManagement
+            ? await _db.Plans.AsNoTracking().Where(p => p.IsActive).OrderBy(p => p.SortOrder).ToListAsync(ct)
+            : new List<Morobot.Domain.Entities.Plan>();
     }
 
     /// <summary>

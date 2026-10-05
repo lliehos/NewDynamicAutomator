@@ -384,6 +384,52 @@ public class TemplateService
     }
 
     /// <summary>
+    /// Delete several templates. Each one goes through <see cref="DeleteAsync"/>, so its children are
+    /// detached rather than deleted and an id that is already gone is simply skipped.
+    /// </summary>
+    /// <returns>How many templates were removed and how many processes were detached.</returns>
+    public async Task<(int deleted, int detached)> DeleteManyAsync(
+        IEnumerable<int> templateIds, CancellationToken ct = default)
+    {
+        var deleted = 0;
+        var detached = 0;
+        foreach (var id in templateIds.Distinct())
+        {
+            var (ok, _, count) = await DeleteAsync(id, ct);
+            if (!ok) continue;
+            deleted++;
+            detached += count;
+        }
+        return (deleted, detached);
+    }
+
+    /// <summary>
+    /// Delete every template that no process follows: the leftovers of an adopted-then-dropped
+    /// template, or one that was never used at all.
+    /// </summary>
+    /// <returns>How many templates were removed.</returns>
+    /// <remarks>
+    /// "Unused" mirrors the count shown on the templates list: the mother is the SOURCE of the
+    /// template, not a child of it, so it does not count as a follower. <c>SourceProcessId</c> is
+    /// nullable — the mother may have been deleted — and the null test is spelled out because in SQL
+    /// <c>p.Id != NULL</c> is never true, which would make a template that DOES have children look
+    /// unused and delete it out from under them.
+    /// </remarks>
+    public async Task<int> DeleteUnusedAsync(CancellationToken ct = default)
+    {
+        // The follower count uses the very expression the list projection already ships, so "unused"
+        // here and the count an admin sees on the page cannot drift apart.
+        var ids = await _db.ProcessTemplates.AsNoTracking()
+            .Where(t => t.Processes.Count(p => t.SourceProcessId == null || p.Id != t.SourceProcessId) == 0)
+            .Select(t => t.Id)
+            .ToListAsync(ct);
+        if (ids.Count == 0) return 0;
+
+        var (deleted, _) = await DeleteManyAsync(ids, ct);
+        return deleted;
+    }
+
+    /// <summary>
     /// The other half of the cascade: after the MOTHER process is saved, copy its new graph into the
     /// template made from it and push that on to the template's children.
     /// </summary>

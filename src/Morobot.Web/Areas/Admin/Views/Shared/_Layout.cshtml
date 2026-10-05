@@ -26,8 +26,7 @@
       as Morobot.Licensing.LicenseRuntimeState)?.AllowsUpdates == true;
   // Plan levels are a licensed capability. Without it the deployment has no levels to manage —
   // every user sits at the top one — so the page would be a list of switches that change nothing.
-  var allowsPlanManagement = (ViewData[Morobot.Web.Filters.TenantBrandingViewDataFilter.LicenseStateKey]
-      as Morobot.Licensing.LicenseRuntimeState)?.AllowsPlanManagement == true;
+  var allowsPlanManagement = Morobot.Web.Filters.TenantBrandingViewDataFilter.AllowsPlanManagement(ViewData);
 }
 <!doctype html>
 <html lang="@culture" dir="@dir" data-admin-catalog="1">
@@ -131,8 +130,9 @@
   <script src="~/js/da-catalog.js?v=@V.AssetVersion"></script>
   <script src="~/js/admin-ui.js?v=@V.AssetVersion"></script>
   <script src="~/js/admin-charts.js?v=@V.AssetVersion"></script>
-  <script>window.AdminI18n = { strings: { pager: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.label"])), page: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.page"])), first: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.first"])), prev: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.prev"])), next: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.next"])), last: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.last"])), update: { title: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.availableTitle"])), available: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.availableBody"])), notes: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.notesLabel"])), open: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.openDownload"])), later: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.later"])) } } };</script>
+  <script>window.AdminI18n = { strings: { pager: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.label"])), page: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.page"])), perPage: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.perPage"])), first: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.first"])), prev: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.prev"])), next: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.next"])), last: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.last"])), bulk: { selected: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.common.selectedCount"])), noneSelected: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.common.noneSelected"])), confirm: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.common.deleteSelectedConfirm"])) }, update: { title: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.availableTitle"])), available: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.availableBody"])), notes: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.notesLabel"])), open: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.openDownload"])), later: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.later"])) } } };</script>
   <script src="~/js/admin-pager.js?v=@V.AssetVersion"></script>
+  <script src="~/js/admin-bulk.js?v=@V.AssetVersion"></script>
   <script src="~/js/da-switch.js?v=@V.AssetVersion"></script>
   <script src="~/js/da-cropper.js?v=@V.AssetVersion"></script>
   <script src="~/js/admin-update-notify.js?v=@V.AssetVersion"></script>

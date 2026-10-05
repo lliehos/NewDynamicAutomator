@@ -145,24 +145,40 @@ public class EntitlementService
         if (PasswordPolicy.IsLocal(plan.Code))
             return plan;
 
-        var top = await _db.Plans.AsNoTracking()
+        var top = await FindTopPlanAsync(ct);
+
+        // Only ever RAISE a level. If the install somehow has no usable top plan, the user keeps
+        // what they had rather than being silently dropped to nothing.
+        return top is not null && top.SortOrder > plan.SortOrder ? top : plan;
+    }
+
+    /// <summary>
+    /// The deployment's top plan: the active, non-Local plan with the greatest capability. Null when
+    /// the install has no such plan to offer.
+    /// </summary>
+    /// <remarks>
+    /// Sort order is the admin's own statement of which plan is highest, and falling back to a
+    /// capability comparison keeps the rule sane on an install whose sort orders are all equal (the
+    /// seeded default) rather than silently picking plan #1. Local is excluded on purpose: it is the
+    /// no-play account, not a level (see <see cref="FlattenToTopPlanAsync"/>).
+    /// <para>
+    /// This is the plan a plan-less install puts its users on, so the row stored for a new account
+    /// says the same thing the resolver would answer for it.
+    /// </para>
+    /// </remarks>
+    public Task<Plan?> FindTopPlanAsync(CancellationToken ct = default) =>
+        _db.Plans.AsNoTracking()
             .Where(p => p.IsActive && p.Code != nameof(PlanCode.Local))
             .OrderByDescending(p => p.SortOrder)
             // Prefer the plan that grants the most: unlimited caps rank above numeric ones, and the
             // capability switches break a remaining tie. Ordering is done in SQL as far as the
-            // columns allow. A plan row that cannot be expressed is not an option — the plan the
-            // user already holds is a safer answer than falling back to a hard-coded code.
+            // columns allow.
             .ThenByDescending(p => p.MaxTasks == null ? 1 : 0)
             .ThenByDescending(p => p.MaxDataSources == null ? 1 : 0)
             .ThenByDescending(p => p.CanSmart)
             .ThenByDescending(p => p.CanRecord)
             .ThenByDescending(p => p.CanPlay)
             .FirstOrDefaultAsync(ct);
-
-        // Only ever RAISE a level. If the install somehow has no usable top plan, the user keeps
-        // what they had rather than being silently dropped to nothing.
-        return top is not null && top.SortOrder > plan.SortOrder ? top : plan;
-    }
 
     /// <summary>True when this licence lets the deployment manage user plan levels.</summary>
     public async Task<bool> AllowsPlanManagementAsync(CancellationToken ct = default)

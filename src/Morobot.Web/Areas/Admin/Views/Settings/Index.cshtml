@@ -12,10 +12,12 @@
     .ToList();
 }
 
+@* The shortcut to the plans page only exists when the licence manages plans; without it the page
+   would link to a section that is itself hidden. *@
 <partial name="_AdminPageHead" model='new AdminPageHeadModel {
   Summary = L["admin.settings.intro"],
-  ActionText = L["admin.settings.gotoPlans"],
-  ActionUrl = Url.Action("Index", "Plans"),
+  ActionText = Model.AllowsPlanManagement ? L["admin.settings.gotoPlans"] : null,
+  ActionUrl = Model.AllowsPlanManagement ? Url.Action("Index", "Plans") : null,
   ActionIcon = "ti-layers-intersect"
 }' />
 

@@ -406,7 +406,8 @@
       "errorSame": "You already have this plan.",
       "errorDowngrade": "Downgrade is not available here.",
       "errorCurrentPassword": "Current password is incorrect.",
-      "errorInvalid": "Upgrade failed."
+      "errorInvalid": "Upgrade failed.",
+      "errorUnavailable": "Plan upgrades are not available on this deployment."
     }
   },
   "admin": {
@@ -416,7 +417,12 @@
       "edit": "Edit",
       "save": "Save",
       "back": "Back",
-      "create": "Create"
+      "create": "Create",
+      "selectAll": "Select all rows",
+      "selectedCount": "{count} selected",
+      "noneSelected": "No rows selected",
+      "deleteSelected": "Delete selected",
+      "deleteSelectedConfirm": "Delete {count} selected row(s)? This cannot be undone."
     },
     "ui": {
       "active": "Active",
@@ -462,6 +468,7 @@
     "pager": {
       "label": "Pagination",
       "page": "Page",
+      "perPage": "Rows per page",
       "first": "First",
       "prev": "Previous",
       "next": "Next",
@@ -498,6 +505,9 @@
       "user": "User",
       "ip": "IP",
       "details": "Details",
+      "clear": "Clear all",
+      "clearConfirmAll": "Delete all events? This cannot be undone.",
+      "clearConfirmFiltered": "Delete events with level \"{level}\" in category \"{category}\"? This cannot be undone.",
       "empty": "No events to show."
     },
     "devices": {
@@ -547,6 +557,7 @@
       "delete": "Delete",
       "deleteConfirm": "Delete this process?",
       "deleteMotherConfirm": "Warning: this process is the mother. Deleting it also deletes the template built from it, and {count} child process(es) become independent. Continue?",
+      "deletedMany": "{count} process(es) deleted.",
       "empty": "No processes yet.",
       "stopped": "Stopped"
     },
@@ -561,7 +572,14 @@
       "colMother": "Mother process",
       "colAttached": "Attached processes",
       "colCreator": "Created by",
-      "colUpdated": "Last published"
+      "colUpdated": "Last published",
+      "colOps": "Actions",
+      "delete": "Delete",
+      "deleteConfirm": "Delete template \"{title}\"? {attached} attached process(es) will be detached and keep their own copy.",
+      "deleted": "{count} template(s) deleted; {detached} process(es) detached.",
+      "deleteUnused": "Delete unused ({count})",
+      "deleteUnusedConfirm": "Delete all {count} template(s) that no process follows? This cannot be undone.",
+      "deletedUnused": "{count} unused template(s) deleted."
     },
     "sources": {
       "title": "Sources",
@@ -579,6 +597,12 @@
       "colOps": "Actions",
       "viewData": "View data",
       "downloadExcel": "Download Excel",
+      "delete": "Delete",
+      "deleteConfirm": "Delete source \"{title}\"? It will be detached from every linked process.",
+      "library": "— (library)",
+      "deletedMany": "{count} source(s) deleted.",
+      "deleteUnused": "Delete unused ({count})",
+      "deleteUnusedConfirm": "Delete all {count} source(s) that no process uses? This cannot be undone.",
       "viewerTitle": "Data source",
       "viewFail": "Failed to load source.",
       "downloadFail": "Excel download failed.",
@@ -952,10 +976,13 @@
       "lastSeen": "Last activity: {time}",
       "newPassword": "Set a new password",
       "passwordHint": "Fill in to change the password; leave blank to keep the current one. The user plan password policy is enforced.",
+      "passwordHintGlobal": "Fill in to change the password; leave blank to keep the current one. The deployment-wide password policy (Settings → Auth) is enforced.",
       "reservedHint": "Reserved names (admin, free, pro, guest, test, …) cannot be used.",
       "deleteTitle": "Delete user",
       "deleteConfirm": "User \"{userName}\" and everything that belongs to them will be deleted: {processes} process(es) and {sources} data source(s), along with their cells. Their shares and registered devices go too. This cannot be undone. Continue?",
       "deleted": "User deleted with all their processes and data sources.",
+      "deletedMany": "{count} user(s) deleted with all their processes and data sources.",
+      "deleteManySkipped": "{deleted} user(s) deleted; {skipped} skipped (you cannot delete yourself or the last active administrator).",
       "deleteSelfBlocked": "You cannot delete your own account.",
       "deleteLastAdminBlocked": "This is the only active administrator; deleting it would cut off access to the admin panel."
     },
@@ -1033,6 +1060,9 @@
       "backToProcesses": "Back to processes",
       "needProcessSelection": "A connection and at least one process are required.",
       "noProcesses": "This user has no processes.",
+      "newUserPlan": "Plan for the new account",
+      "newUserPlanHint": "This user has no account here yet, so the transferred processes create one on the plan you pick.",
+      "newUserPlanNone": "No active plan to choose — the new account will be created on the deployment's default level.",
       "backToUsers": "Back to user list"
     },
     "devices": {

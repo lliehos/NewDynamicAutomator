@@ -14,7 +14,12 @@
   <header class="da-home-head mb-4">
     <div>
       <h4 class="da-home-title mb-1" data-i18n="plan.upgradeTitle">@L["plan.upgradeTitle"]</h4>
-      <p class="da-home-sub mb-0" data-i18n="plan.upgrade.hint">@L["plan.upgrade.hint"]</p>
+      @* The hint describes a plan move; with no plans on offer it would explain a choice that is
+         not there. *@
+      @if (plans.Count > 0)
+      {
+        <p class="da-home-sub mb-0" data-i18n="plan.upgrade.hint">@L["plan.upgrade.hint"]</p>
+      }
     </div>
   </header>
 

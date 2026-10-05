@@ -36,11 +36,17 @@ public class SettingsController : Controller
     {
         ViewData["Title"] = _locale["admin.settings.title"];
         var all = await _settings.ListAsync(ct);
+        // Without plan management there is no plan for a new account to be registered on — the
+        // registration path picks the deployment's top plan — so the field is filtered out rather
+        // than shown as a choice that changes nothing.
+        var allowsPlanManagement = (await _license.GetRuntimeStateAsync(ct)).AllowsPlanManagement;
         var vm = new AdminSettingsViewModel
         {
+            AllowsPlanManagement = allowsPlanManagement,
             // Branding keys are edited on Admin → Branding only; showing them here too meant
             // two pages wrote the same rows and a stale save could clobber the other page.
             Settings = all
+                .Where(s => allowsPlanManagement || !string.Equals(s.Key, SystemSettingKeys.DefaultRegisterPlan, StringComparison.OrdinalIgnoreCase))
                 .Where(s => !SystemSettingKeys.IsBrandingOwned(s.Key))
                 // The legacy AuthMode row is superseded by the two provider switches. It survives
                 // in the table only so an install too old to have been seeded with them still
@@ -61,6 +67,10 @@ public class SettingsController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Index(IFormCollection form, CancellationToken ct)
     {
+        // The plan field is not rendered without plan management; ignoring it here keeps a crafted
+        // POST from writing a setting the page deliberately does not offer.
+        var allowsPlanManagement = (await _license.GetRuntimeStateAsync(ct)).AllowsPlanManagement;
+
         var pairs = form.Keys
             .Where(k => k.StartsWith("setting_", StringComparison.OrdinalIgnoreCase))
             // A hidden "false" plus a checkbox "true" of the same name is the standard HTML way to
@@ -70,6 +80,9 @@ public class SettingsController : Controller
             .Select(k => (k["setting_".Length..], LastValue(form, k)))
             // Defence in depth: ignore branding keys even if a crafted form posts them.
             .Where(p => !SystemSettingKeys.IsBrandingOwned(p.Item1))
+            // Likewise the plan field, which the page does not render without plan management.
+            .Where(p => allowsPlanManagement
+                || !string.Equals(p.Item1, SystemSettingKeys.DefaultRegisterPlan, StringComparison.OrdinalIgnoreCase))
             // Likewise for the superseded AuthMode row: the two switches are the only authority on
             // which providers are live, and a stale row must not be written back alongside them.
             .Where(p => !SystemSettingKeys.IsSuperseded(p.Item1))
