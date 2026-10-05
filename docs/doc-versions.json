@@ -1,7 +1,7 @@
 {
-  "updated": "2026-10-04",
+  "updated": "2026-10-05",
   "documents": {
-    "setupGuide": { "file": "setup-guide.md", "version": "1.12" },
+    "setupGuide": { "file": "setup-guide.md", "version": "1.13" },
     "vendorOpsGuide": { "file": "vendor-ops-guide.md", "version": "1.1.5" },
     "visualEditor": { "file": "visual-editor.md", "version": "1.4" },
     "playEngineLogic": { "file": "play-engine-logic.md", "version": "1.3" },

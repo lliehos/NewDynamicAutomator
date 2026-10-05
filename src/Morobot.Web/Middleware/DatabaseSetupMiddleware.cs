@@ -18,9 +18,11 @@ namespace Morobot.Web.Middleware;
 /// <b>Reachability.</b> The page shows the database name, the server name and the identity of the
 /// process. None of that is a secret — the connection string's credentials are never rendered, and
 /// under Windows authentication there are none to render — but the page is still restricted to
-/// loopback. On a server it is reached through a remote desktop session; it has no business being
-/// on the public internet, and keeping it local means no token has to be invented and explained.
-/// A request from anywhere else is told the application is not ready, without the detail.
+/// localhost: connection and URL both have to be local, which is what its footer promises. On a
+/// server it is reached through a remote desktop session and then <c>http://localhost</c>; it has
+/// no business being on the public internet, and keeping it local means no token has to be invented
+/// and explained. A request from anywhere else is told the application is not ready, without the
+/// detail.
 /// </para>
 /// </remarks>
 public sealed class DatabaseSetupMiddleware
@@ -42,6 +44,14 @@ public sealed class DatabaseSetupMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
+        // Whether this request came from the machine itself decides the WHOLE shape of the answer,
+        // not just the final branch. Every page below explains a database problem — the setup page
+        // even prints the SQL error — and the setup page's own footer promises it "is only visible
+        // from the server". Serving any of it to an off-server caller both breaks that promise and
+        // exposes the deployment's internals, which is exactly what an earlier version did when it
+        // let "/" through to the diagnosis and then checked loopback only afterwards.
+        var local = IsLocalRequest(context);
+
         // The status probe is answered in EVERY phase, before the phase checks below. A progress
         // page already open in a browser keeps polling after initialisation finishes, and at that
         // moment the phase is Ready — if the probe fell through to MVC there (where no such route
@@ -49,7 +59,13 @@ public sealed class DatabaseSetupMiddleware
         // would sit on the spinner forever. Answering it here is what lets the page navigate itself.
         if (IsStatusProbe(context.Request.Path))
         {
-            await WriteStatusAsync(context);
+            if (local)
+            {
+                await WriteStatusAsync(context);
+                return;
+            }
+
+            await WriteNotReadyAsync(context);
             return;
         }
 
@@ -59,58 +75,84 @@ public sealed class DatabaseSetupMiddleware
             return;
         }
 
-        // While initialisation is running there is no page to redirect to and no error to explain —
-        // the work is simply not finished. Serve the progress page in place, on whatever URL was
-        // asked for, so the browser shows a spinner instead of hanging on a port that is not open
-        // yet. This is why the initialiser was moved off the startup path.
-        if (_state.Phase == DatabaseSetupPhase.Preparing)
-        {
-            if (IsProgressAsset(context.Request.Path))
-            {
-                await _next(context);
-                return;
-            }
-
-            await WriteProgressPageAsync(context);
-            return;
-        }
-
-        // The front page and the dedicated setup page both render the diagnosis, so both are let
-        // through — the front page is the one an operator lands on by reflex, and redirecting it
-        // away would hide the problem behind a URL nobody was told about. Static assets pass too:
-        // the page that must be read cannot be served as unstyled HTML.
-        if (IsAllowedWhileBlocked(context.Request.Path))
+        // Static assets carry no diagnosis and the pages that are shown on the server cannot be
+        // read as unstyled HTML, so they pass for anyone.
+        if (IsStaticAsset(context.Request.Path))
         {
             await _next(context);
             return;
         }
 
-        if (!IsLoopback(context))
+        // While initialisation is running there is no page to redirect to and no error to explain —
+        // the work is simply not finished. The server shows a spinner in place of whatever URL was
+        // asked for, so nobody has to sit on a port that is not open yet; off-server callers are
+        // told the application is not ready and nothing more. This is why the initialiser was moved
+        // off the startup path.
+        if (_state.Phase == DatabaseSetupPhase.Preparing)
         {
-            // Do not confirm what the problem is to an off-server caller. The operator on the server
-            // gets the full explanation; everyone else gets "not ready".
-            _log.LogWarning(
-                "Blocked {Method} {Path} from {RemoteIp} while the database is not ready.",
-                context.Request.Method, context.Request.Path, context.Connection.RemoteIpAddress);
+            if (local)
+            {
+                await WriteProgressPageAsync(context);
+                return;
+            }
 
-            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            context.Response.ContentType = "text/plain; charset=utf-8";
-            await context.Response.WriteAsync(
-                "The application is not ready: its database is not reachable. " +
-                "See the server console for details.");
+            await WriteNotReadyAsync(context);
+            return;
+        }
+
+        // The diagnosis itself is the server's business: the front page (the one an operator lands
+        // on by reflex) and the dedicated setup URL both render it, and only from the machine the
+        // operator is already sitting at.
+        if (local && IsDiagnosisPath(context.Request.Path))
+        {
+            await _next(context);
+            return;
+        }
+
+        if (!local)
+        {
+            // Do not confirm what the problem is to an off-server caller.
+            await WriteNotReadyAsync(context);
             return;
         }
 
         context.Response.Redirect("/");
     }
 
+    /// <summary>
+    /// The off-server answer: a flat 503 with no phase, no SQL error and no hint about the cause.
+    /// </summary>
+    private async Task WriteNotReadyAsync(HttpContext context)
+    {
+        _log.LogWarning(
+            "Blocked {Method} {Path} for host {Host} from {RemoteIp} while the database is not ready.",
+            context.Request.Method, context.Request.Path, context.Request.Host.Value,
+            context.Connection.RemoteIpAddress);
+
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        context.Response.ContentType = "text/plain; charset=utf-8";
+        // The last sentence is for the operator who reached the server over its public name instead
+        // of localhost: the page they are looking for is one URL away, and without this they would
+        // be left with a bare 503 and no way in.
+        await context.Response.WriteAsync(
+            "The application is not ready: its database is not reachable. " +
+            "See the server console for details. " +
+            "On the server itself, open the site through http://localhost to see the diagnosis.");
+    }
+
     /// <summary>JSON endpoint the progress page polls to learn when initialisation has finished.</summary>
     private static bool IsStatusProbe(PathString path) =>
         path.StartsWithSegments("/setup/status", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Assets the progress page needs. Inlined today, but kept for the same reason as below.</summary>
-    private static bool IsProgressAsset(PathString path) =>
-        path.StartsWithSegments("/favicon.ico", StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// The static asset roots the diagnosis pages need. Inlined today, but kept because the page that
+    /// must be read cannot be served as unstyled HTML.
+    /// </summary>
+    private static bool IsStaticAsset(PathString path) =>
+        path.StartsWithSegments("/css", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWithSegments("/lib", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWithSegments("/img", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWithSegments("/favicon.ico", StringComparison.OrdinalIgnoreCase);
 
     private Task WriteStatusAsync(HttpContext context)
     {
@@ -216,25 +258,55 @@ public sealed class DatabaseSetupMiddleware
     }
 
     /// <summary>
-    /// True for the pages that explain the failure, and the static assets they need. Everything else
-    /// is a normal application URL that cannot work without a database.
+    /// True for the pages that explain the failure to whoever is sitting at the server: the front
+    /// page and the dedicated setup URL. Everything else is a normal application URL that cannot
+    /// work without a database.
     /// </summary>
-    private static bool IsAllowedWhileBlocked(PathString path) =>
+    private static bool IsDiagnosisPath(PathString path) =>
         path == "/"
         || path == string.Empty
-        || path.StartsWithSegments(SetupPathValue, StringComparison.OrdinalIgnoreCase)
-        || path.StartsWithSegments("/css", StringComparison.OrdinalIgnoreCase)
-        || path.StartsWithSegments("/lib", StringComparison.OrdinalIgnoreCase)
-        || path.StartsWithSegments("/img", StringComparison.OrdinalIgnoreCase)
-        || path.StartsWithSegments("/favicon.ico", StringComparison.OrdinalIgnoreCase);
+        || path.StartsWithSegments(SetupPathValue, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// True when the request came from the machine itself. Kestrel reports IPv4 and IPv6 loopback
-    /// differently depending on the binding, so both are checked; <c>IsLoopback</c> covers the rest.
+    /// True when the request came from the machine itself — from the connection <i>and</i> the URL.
     /// </summary>
-    private static bool IsLoopback(HttpContext context)
+    /// <remarks>
+    /// <para>
+    /// Both halves are needed. The connection address alone is not enough: behind the reverse proxy
+    /// this application is deployed with (IIS out-of-process, or the documented nginx), the socket
+    /// really does come from 127.0.0.1, so every caller on the network would be taken for the
+    /// server and shown the diagnosis — which is exactly what happened in production, where a
+    /// colleague opened the address from his own machine and read the page that says it is only
+    /// visible on the server.
+    /// </para>
+    /// <para>
+    /// The forwarded client IP is deliberately not consulted: it arrives in a header, nothing here
+    /// validates it, and a caller could then claim to be localhost. The page's own footer promises
+    /// localhost, so the URL is what decides — an operator on the server opens it through
+    /// <c>http://localhost</c> or <c>http://127.0.0.1</c>, and a request addressed to the public
+    /// name is not local no matter who made it.
+    /// </para>
+    /// </remarks>
+    private static bool IsLocalRequest(HttpContext context)
     {
-        var ip = context.Connection.RemoteIpAddress;
+        if (!IsLoopbackAddress(context.Connection.RemoteIpAddress))
+            return false;
+
+        // Host.Host drops the port and brackets an IPv6 literal, but the bracket is kept for the
+        // values Kestrel accepts, so both spellings are compared.
+        var host = context.Request.Host.Host;
+        return host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("::1", StringComparison.OrdinalIgnoreCase)
+            || host.Equals("[::1]", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Kestrel reports IPv4 and IPv6 loopback differently depending on the binding, so both are
+    /// checked; <c>IsLoopback</c> covers the rest.
+    /// </summary>
+    private static bool IsLoopbackAddress(System.Net.IPAddress? ip)
+    {
         if (ip is null)
             return false;   // Unknown origin is not treated as trusted.
         if (System.Net.IPAddress.IsLoopback(ip))

@@ -160,13 +160,40 @@ var app = builder.Build();
     };
 }
 
+// HTTPS is wired up from what the deployment can actually show, not from "this is not Development".
+//
+// Redirection first: telling a browser to go to https://host is only useful when something is
+// listening there. A server with no certificate answers that redirect with a handshake failure, so
+// the user is sent from a page that worked to one that cannot load. (The middleware is also noisy
+// in that state — it logs "Failed to determine the https port for redirect" on every request,
+// because it has no port and no address to build the URL from.)
+//
+// HSTS is the more expensive half, and it is why this is not left to chance: once a browser has
+// read the header it refuses plain HTTP to that host for the whole max-age, so a deployment that
+// later moves to a self-signed or internal certificate has to talk every user through clearing it.
+// The certificate's presence is the signal, and the log line records which way the decision went —
+// otherwise "no HSTS header" is invisible.
+var https = HasHttpsEndpoint(app.Configuration);
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Home/Error");
-    app.UseHsts();
+    if (https)
+    {
+        app.UseHsts();
+    }
 }
 
-app.UseHttpsRedirection();
+if (https)
+{
+    app.UseHttpsRedirection();
+}
+else
+{
+    app.Logger.LogInformation(
+        "No HTTPS endpoint is configured: HTTPS redirection and HSTS stay off. "
+        + "Set HTTPS_PORT (or an https address, or a Kestrel certificate) if TLS terminates in front of this app.");
+}
 app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = ctx =>
@@ -192,7 +219,8 @@ app.UseRouting();
 
 // Before authentication and before the controllers: while the database is unreachable there is
 // nothing to authenticate against, and the sign-in form would itself fail. This diverts everything
-// to the setup page except the page itself, its retry action, and the static assets it needs.
+// to the setup page except the page itself, its retry action, and the static assets it needs — and
+// only when the request arrived on localhost, so the diagnosis is never served to the network.
 app.UseMiddleware<Morobot.Web.Middleware.DatabaseSetupMiddleware>();
 
 app.UseMiddleware<CultureMiddleware>();
@@ -289,4 +317,44 @@ app.Services.GetRequiredService<DatabaseSetupState>().ResumeInitialisation =
 _ = Task.Run(() => RunInitialisationAsync(app.Services, CancellationToken.None));
 
 await app.RunAsync();
+
+// Is there HTTPS in front of this application? The deployment says so, in one of three ways, and
+// anything else — the default http://localhost:5000, for instance — is a deployment without a
+// certificate, which is exactly the state the middlewares above must not pretend otherwise about.
+//
+//   1. HTTPS_PORT. The port the outside world uses, which is the switch to set when the certificate
+//      lives in the web server rather than in Kestrel: IIS with an https binding, or the nginx
+//      proxy in docs/setup-guide.md. It comes from the environment as ASPNETCORE_HTTPS_PORT, or can
+//      be put in appsettings.Production.json. This is the one to use for a proxied deployment.
+//   2. An https address this process itself listens on — Kestrel:Endpoints in configuration, the
+//      --urls argument, ASPNETCORE_URLS ("urls" in configuration, under either name), or the https
+//      profile in launchSettings.json, which is what a development run uses.
+//   3. A certificate Kestrel would serve with, even without an endpoint naming https explicitly.
+static bool HasHttpsEndpoint(IConfiguration configuration)
+{
+    foreach (var key in new[] { "HTTPS_PORT", "ASPNETCORE_HTTPS_PORT" })
+    {
+        if (int.TryParse(configuration[key], out var port) && port > 0)
+            return true;
+    }
+
+    if (HasHttpsAddress(configuration["urls"]))
+        return true;
+
+    foreach (var endpoint in configuration.GetSection("Kestrel:Endpoints").GetChildren())
+    {
+        if (HasHttpsAddress(endpoint["Url"]))
+            return true;
+    }
+
+    return !string.IsNullOrWhiteSpace(configuration["Kestrel:Certificates:Default:Path"])
+        || !string.IsNullOrWhiteSpace(configuration["Kestrel:Certificates:Default:Subject"]);
+}
+
+// Kestrel takes a semicolon-separated list, and only one https address in it is enough.
+static bool HasHttpsAddress(string? addresses) =>
+    !string.IsNullOrWhiteSpace(addresses)
+    && addresses
+        .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Any(a => a.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
 
