@@ -9,6 +9,10 @@ html.flow-rtl {
   --morobot-primary-dark: @Model.ColorPrimaryDark;
   --morobot-primary-hover: @Model.ColorPrimaryDark;
   --morobot-primary-light: @Model.ColorPrimaryLight;
+  @* The r,g,b triplet of the primary, so rgba(...) tints (e.g. the portal sidebar active
+     gradient in portal-app.css) stay in the chosen palette instead of falling back to the
+     shipped teal. *@
+  --morobot-primary-rgb: @Model.PrimaryRgb;
   --morobot-accent: @Model.ColorAccent;
   --morobot-soft: @Model.ColorSoft;
   --morobot-soft-2: @Model.ColorSoft2;

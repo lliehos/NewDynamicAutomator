@@ -48,7 +48,15 @@ public sealed class TenantBrandingViewService
         var cached = _cookie.Read(culture);
         if (cached is not null && !string.IsNullOrEmpty(stamp)
             && string.Equals(cached.Version, stamp, StringComparison.Ordinal))
-            return BrandHeadModel.FromDto(cached.Data!.ToDto(), ResolveSiteOrigin(), isFa);
+        {
+            var fromCache = cached.Data!.ToDto();
+            // The referral link is deliberately NOT part of the cached payload: it is signed into the
+            // licence so that it cannot be repointed, and a cookie the reader can edit is no place for
+            // such a value. It is therefore filled in from the licence here, or a cached render would
+            // show the product page compiled into the app instead of the one the licence names.
+            fromCache.ReferralWidgetUrl = await _branding.GetReferralWidgetUrlAsync(ct);
+            return BrandHeadModel.FromDto(fromCache, ResolveSiteOrigin(), isFa);
+        }
 
         var dto = await _branding.GetAsync(ct);
         // Re-written on every miss so a client that has no cookie, a stale one, or one for the other

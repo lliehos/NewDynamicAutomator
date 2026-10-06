@@ -20,9 +20,9 @@
   --da-sw-h: 22px;
   --da-sw-pad: 3px;
   --da-sw-off-bg: #d4d4dd;
-  --da-sw-on-bg: var(--bs-primary, #7367f0);
+  --da-sw-on-bg: var(--morobot-primary, var(--bs-primary, #7367f0));
   --da-sw-thumb: #fff;
-  --da-sw-focus: rgba(115, 103, 240, .35);
+  --da-sw-focus: rgba(var(--morobot-primary-rgb, 13, 148, 136), .35);
 }
 
 /* Base: only inputs the upgrade script tagged, so nothing else is affected.

@@ -34,6 +34,20 @@ public sealed class BrandHeadModel
 
     public bool ShowReferralQr { get; init; } = true;
     public string ReferralProductUrl { get; init; } = BrandPaletteDefaults.ReferralProductUrl;
+
+    /// <summary>
+    /// Host of <see cref="ReferralProductUrl"/>, for the label under the widget's QR code.
+    /// </summary>
+    /// <remarks>
+    /// The link itself carries the full address, so a short label is enough — but it has to be the
+    /// host of the address actually used, not the product page compiled into the app, or the label
+    /// contradicts the code the reader is about to scan.
+    /// </remarks>
+    public string ReferralDisplayUrl =>
+        Uri.TryCreate(ReferralProductUrl, UriKind.Absolute, out var uri) && !string.IsNullOrWhiteSpace(uri.Host)
+            ? uri.Host
+            : ReferralProductUrl;
+
     public string PageTitleSuffix => AppName;
 
     /// <summary>

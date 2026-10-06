@@ -69,6 +69,19 @@ public sealed class BrandingService
     }
 
     /// <summary>
+    /// The vendor-signed referral link named by the licence, or null when the licence names none.
+    /// </summary>
+    /// <remarks>
+    /// Read from the licence rather than from <see cref="GetAsync"/>, because the browser's display
+    /// cache carries only the header and the palette: on a cache hit the resolved branding has no
+    /// referral link, and the widget then fell back to the product page compiled into the app even
+    /// when the licence named its own address. The runtime state is resolved for every request and
+    /// held in memory, so this costs nothing on the path that needs it.
+    /// </remarks>
+    public async Task<string?> GetReferralWidgetUrlAsync(CancellationToken ct = default)
+        => LicenseReferralUrl.TryNormalize((await _license.GetRuntimeStateAsync(ct)).Payload?.ReferralWidgetUrl);
+
+    /// <summary>
     /// The stored stamp of the current branding, or an empty string when none has been written yet.
     /// </summary>
     /// <remarks>

@@ -386,13 +386,13 @@ label { font-size: .9rem; }
 }
 .admin-switch input:checked + .admin-switch-ui {
   background: var(--morobot-primary, var(--morobot-primary-default));
-  box-shadow: inset 0 0 0 1px rgba(13, 148, 136, .35);
+  box-shadow: inset 0 0 0 1px rgba(var(--morobot-primary-rgb, 13, 148, 136), .35);
 }
 .admin-switch input:checked + .admin-switch-ui::after {
   inset-inline-start: 21px;
 }
 .admin-switch input:focus-visible + .admin-switch-ui {
-  outline: 2px solid rgba(13, 148, 136, .45);
+  outline: 2px solid rgba(var(--morobot-primary-rgb, 13, 148, 136), .45);
   outline-offset: 2px;
 }
 .admin-switch-text {
@@ -1851,7 +1851,7 @@ a.admin-chip.is-active {
   transition: inset-inline-start .18s ease;
 }
 .admin-settings-switch input:checked + .admin-settings-switch-track {
-  background: var(--brand-primary, #1b8777);
+  background: var(--morobot-primary, var(--morobot-primary-default));
 }
 .admin-settings-switch input:checked + .admin-settings-switch-track::after {
   inset-inline-start: 1.6rem;
@@ -1864,7 +1864,7 @@ a.admin-chip.is-active {
   cursor: not-allowed;
 }
 .admin-settings-switch input:focus-visible + .admin-settings-switch-track {
-  box-shadow: 0 0 0 3px var(--brand-bg-soft, #eef4f2);
+  box-shadow: 0 0 0 3px var(--morobot-soft, var(--morobot-soft-default));
 }
 /* While the LDAP sign-in switch is off its connection fields are hidden, but they stay in the
    form so their values survive a save rather than being blanked by tidying the page. */
