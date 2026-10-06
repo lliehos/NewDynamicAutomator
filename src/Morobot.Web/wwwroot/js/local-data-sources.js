@@ -733,23 +733,26 @@
       }
       return;
     }
-    const ds = applyCellToLocalStore(ev);
-    if (!viewing) return;
+    const isWrite = op.includes("write");
+    const hasValue = ev.cellValue != null || ev.CellValue != null;
+    const val = hasValue ? String(ev.cellValue ?? ev.CellValue) : "";
     const col = String(ev.columnKey ?? ev.ColumnKey ?? "");
+    // `applyCellToLocalStore` only knows the task cache, and a source opened from this page is a
+    // library row with no process behind it — so it answers null and the write used to fall through
+    // to the "read" branch below: the cell kept its old value and flashed green instead of red.
+    // Move the object the grid actually draws from (`viewerSource`, the server-loaded copy here) too.
+    let ds = applyCellToLocalStore(ev);
+    if (isWrite && hasValue && col && viewerState.sourceId != null && Number(viewerState.sourceId) === sid) {
+      ds = viewerSource() || ds;
+    }
+    if (!viewing) return;
     const table = document.getElementById("da-portal-ds-table");
-    if (op.includes("write") && ds) {
-      let td = table?.querySelector(`td[data-row="${idx}"][data-col="${CSS.escape(col)}"]`);
-      if (!td) {
-        renderViewerTable(ds);
-        td = table?.querySelector(`td[data-row="${idx}"][data-col="${CSS.escape(col)}"]`);
-      } else if (ev.cellValue != null || ev.CellValue != null) {
-        td.textContent = String(ev.cellValue ?? ev.CellValue ?? "");
-      }
-      flashCell(td, "write");
+    if (isWrite && ds && hasValue && col) {
+      showWrittenCell(ds, idx, col, val);
       showActor(ev);
     } else {
       const td = table?.querySelector(`td[data-row="${idx}"][data-col="${CSS.escape(col)}"]`);
-      flashCell(td, "read");
+      flashCell(td, isWrite ? "write" : "read");
       showActor(ev);
     }
   }
@@ -766,6 +769,50 @@
       const op = String(ev.op || ev.Op || "read").toLowerCase();
       daNotify(`${who}: ${op === "write" || op.includes("write") ? "نوشتن" : "خواندن"}`, op.includes("write") ? "warn" : "info", { ms: 2200 });
     }
+  }
+
+  /**
+   * Show the value a writer just put in one cell — the player's cell event and the catalog's
+   * `cell_patched` feed both land here, so a cell looks the same however the news arrived.
+   *
+   * The cache always moves (the next repaint draws from it). The DOM is left alone for the cell the
+   * user has open in the inline editor, which would otherwise be wiped out mid-typing — the editor
+   * still owns that cell and writes its own value on commit.
+   */
+  function showWrittenCell(ds, rowIndex, columnKey, value) {
+    setLocalCell(ds, rowIndex, columnKey, value);
+    const modal = document.getElementById("da-portal-ds-viewer");
+    if (!modal || modal.hidden) return;
+    const table = document.getElementById("da-portal-ds-table");
+    let td = table?.querySelector(`td[data-row="${rowIndex}"][data-col="${CSS.escape(columnKey)}"]`);
+    if (!td) {
+      // The write may have grown the grid (a row with no cell yet), so repaint and look again.
+      renderViewerTable(ds);
+      td = table?.querySelector(`td[data-row="${rowIndex}"][data-col="${CSS.escape(columnKey)}"]`);
+    } else if (!(editingCell && editingCell.td === td)) {
+      td.textContent = value;
+      td.title = cellTooltip(rowIndex, columnKey);
+    }
+    flashCell(td, "write");
+  }
+
+  /**
+   * Put one `cell_patched` catalog payload on the open grid: the value, the editor's stamp, the flash.
+   *
+   * The payload already names the source, the row, the column and the new value, so the cell can
+   * change the moment the server reports it — without a round trip and without the player's own
+   * window event, which only exists while the extension's bridge is open in this tab. This is what
+   * makes a library source live: it has no process to join, so the catalog feed is its only wire.
+   */
+  function applyCatalogCell(payload) {
+    const src = payload?.source || {};
+    const col = String(src.columnKey ?? src.ColumnKey ?? "");
+    const ds = viewerSource();
+    if (!ds || !col || (src.cellValue == null && src.CellValue == null)) return;
+    const idx = Number(src.rowIndex ?? src.RowIndex ?? 0) || 0;
+    setCellMeta(idx, col, src.editorUserId ?? src.EditorUserId,
+      src.editorUserName ?? src.EditorUserName, src.updatedAtUtc ?? src.UpdatedAtUtc);
+    showWrittenCell(ds, idx, col, String(src.cellValue ?? src.CellValue ?? ""));
   }
 
   async function ensureHub(taskId) {
@@ -1728,15 +1775,30 @@
       const changedId = Number(payload.source?.id ?? payload.source?.Id ?? payload.source?.sourceId ?? payload.sourceId);
       const actor = payload.actorUserName || payload.ActorUserName || "";
       const mine = actor && actor === (window.daCurrentUserName || "");
-      if ((!mine || structural) && viewerState.sourceId != null && changedId === Number(viewerState.sourceId)) {
+      if (viewerState.sourceId != null && changedId === Number(viewerState.sourceId)) {
         if (action === "deleted") closeViewer();
-        else refreshViewer();
+        // A cell write carries the new value itself, so apply it here instead of walking the whole
+        // source again. Without this the grid kept the old value: the engine writes as the same
+        // user, and "our own write" only meant "skip" — nothing refreshed until the next structural
+        // change happened to reload the source.
+        else if (action === "cell_patched") {
+          applyCatalogCell(payload);
+          // Someone else's write: still pull, so the revisions our next edit checks against are exact.
+          if (!mine) refreshViewer();
+        }
+        else if (!mine || structural) refreshViewer();
       }
 
       setTimeout(() => {
         const tid = payload.taskId ?? payload.TaskId;
+        // A process change names its process; a library change has no process at all, so the row to
+        // light up is the source itself — matching by taskId alone left every library row unlit.
+        const matchId = Number(payload.source?.id ?? payload.source?.Id ?? payload.source?.sourceId ?? payload.sourceId);
         document.querySelectorAll(`#da-source-rows tr, #da-source-cards .da-source-card`).forEach((el) => {
-          const link = el.querySelector(`a[href*="/Editor/${tid}"]`) || el.querySelector(`[data-task="${tid}"]`);
+          const self = Number.isFinite(matchId) && Number(el.dataset.daRow) === matchId;
+          const link = self
+            ? el
+            : (el.querySelector(`a[href*="/Editor/${tid}"]`) || el.querySelector(`[data-task="${tid}"]`));
           if (!link && !String(el.innerHTML || "").includes(`/Editor/${tid}`)) return;
           el.classList.add("da-row-flash");
           setTimeout(() => el.classList.remove("da-row-flash"), 1600);

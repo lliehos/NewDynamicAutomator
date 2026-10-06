@@ -850,6 +850,134 @@
   let canvasHubConn = null;
   let canvasConflictPromptOpen = false;
 
+  /**
+   * Reasons a `canvasChanged` event carries when the change came from a linked data source and not
+   * from the process graph itself.
+   */
+  const SOURCE_CHANGE_REASONS = new Set([
+    "datasource_renamed",
+    "datasource_reloaded",
+    "datasource_cell_patched",
+    "row_added",
+    "row_deleted",
+    "rows_cleared",
+    "column_added",
+    "column_renamed",
+    "column_deleted"
+  ]);
+  /**
+   * The subset that changes a source's shape — its columns, its rows, or the whole file. The graph
+   * carries a copy of that shape and hands it back on save, so the copy has to follow the server.
+   */
+  const SOURCE_SHAPE_REASONS = new Set([
+    "datasource_reloaded",
+    "rows_cleared",
+    "row_added",
+    "row_deleted",
+    "column_added",
+    "column_renamed",
+    "column_deleted"
+  ]);
+
+  /**
+   * Repaint the source list, plus the inspector when it belongs to no node — the process properties
+   * panel prints the default source name, so a renamed source has to repaint it too.
+   */
+  function repaintDataSources() {
+    renderDataSources();
+    const selectedId = [...selected][0];
+    if (!selectedId || !nodeById(selectedId)) renderInspector();
+  }
+
+  /**
+   * Take one linked source's current shape from the server into the in-memory graph copy.
+   *
+   * The editor writes its embedded source copy back on save (`SyncFromCanvasAsync` stores the
+   * columns it is handed), so a column added — or a grid cleared — on the sources page would be
+   * undone by the next save from an editor that never heard about it.
+   *
+   * Throttled per source, trailing edge: a run inserting rows fires one event per row, and each
+   * would otherwise cost a meta round trip (which counts the cells) for a state only the last event
+   * describes. One request is queued, and it always runs after the burst, so the copy still lands
+   * on the final shape.
+   */
+  const SHAPE_REFRESH_MIN_MS = 1500;
+  const shapeRefreshState = new Map();
+  function refreshSourceShapeInMemory(sourceId) {
+    const id = Number(sourceId);
+    if (!Number.isFinite(id) || id <= 0 || isLocalMode) return;
+    let st = shapeRefreshState.get(id);
+    if (!st) { st = { nextAllowedAt: 0, timer: null }; shapeRefreshState.set(id, st); }
+    if (st.timer) return;
+    st.timer = setTimeout(async () => {
+      st.timer = null;
+      st.nextAllowedAt = Date.now() + SHAPE_REFRESH_MIN_MS;
+      try {
+        const res = await fetch(`/api/datasources/${id}/meta`, { credentials: "same-origin" });
+        if (!res.ok) return;
+        const meta = await res.json();
+        const ds = findDataSourceById(id);
+        if (!ds) return;
+        if (meta.title) ds.title = meta.title;
+        if (meta.rowCount != null) ds.rowCount = meta.rowCount;
+        if (meta.columnCount != null) ds.columnCount = meta.columnCount;
+        if (Array.isArray(meta.columns) && meta.columns.length) ds.columns = meta.columns;
+        if (Array.isArray(meta.columnKeys) && meta.columnKeys.length) ds.columnKeys = meta.columnKeys;
+        if (meta.dataRevision != null) ds.dataRevision = meta.dataRevision;
+        repaintDataSources();
+      } catch { /* a later event or a reload reconciles */ }
+    }, Math.max(0, st.nextAllowedAt - Date.now()));
+  }
+
+  /**
+   * Move the revision this editor saves against to the one the server holds now.
+   *
+   * A source shape change re-stamps the process server-side, so without this the editor's next save
+   * would be refused as a conflict over a change the user never made. Bursts coalesce — a run
+   * inserting rows fires one event per row and they all need the same, latest stamp.
+   */
+  let saveBaselineFetchInFlight = null;
+  let saveBaselineFetchQueued = false;
+  async function refreshSaveBaseline() {
+    if (!/^\d+$/.test(String(taskId))) return;
+    if (saveBaselineFetchInFlight) { saveBaselineFetchQueued = true; return; }
+    saveBaselineFetchInFlight = (async () => {
+      try {
+        const res = await fetch(`/api/tasks/${taskId}/canvas`, { credentials: "same-origin" });
+        if (!res.ok) return;
+        const c = await res.json();
+        const remoteAt = c?.updatedAtUtc || c?.UpdatedAtUtc;
+        if (remoteAt) loadedUpdatedAtUtc = remoteAt;
+      } catch { /* keep the stamp we have */ }
+      finally {
+        saveBaselineFetchInFlight = null;
+        if (saveBaselineFetchQueued) {
+          saveBaselineFetchQueued = false;
+          await refreshSaveBaseline();
+        }
+      }
+    })();
+    return saveBaselineFetchInFlight;
+  }
+
+  /**
+   * Follow a change that came from a linked source instead of reloading the diagram for it.
+   *
+   * The graph the user drew is unchanged, so reloading here only threw away whatever was in the
+   * editor (and announced a new version) — for every cell the engine wrote during a run. Only the
+   * source's copy, and for a shape change the save baseline, move.
+   */
+  async function applySourceChange(payload, reason) {
+    const dsId = payload.dataSourceId ?? payload.DataSourceId;
+    const payloadTitle = payload.title || payload.Title;
+    const ds = dsId != null ? findDataSourceById(dsId) : null;
+    if (ds && payloadTitle) ds.title = payloadTitle;
+    if (SOURCE_SHAPE_REASONS.has(reason)) refreshSourceShapeInMemory(dsId);
+    else if (ds && payloadTitle) repaintDataSources();
+    // A shape change re-stamps the process graph on the server; a cell write never touches it.
+    if (reason !== "datasource_cell_patched") refreshSaveBaseline();
+  }
+
   async function ensureCanvasHub() {
     if (isLocalMode || !/^\d+$/.test(String(taskId))) return;
     if (typeof signalR === "undefined") return;
@@ -879,31 +1007,11 @@
           }
           return;
         }
-        // Soft-apply data-source rename from library without full conflict dialog.
+        // A change from a linked data source is not an edit of this process: follow the source
+        // itself (title/shape + save baseline) instead of treating the event as a canvas change.
         const reason = String(payload.reason || payload.Reason || "");
-        if (reason === "datasource_renamed") {
-          const dsId = payload.dataSourceId ?? payload.DataSourceId;
-          const newTitle = payload.title || payload.Title;
-          const ds = findDataSourceById(dsId);
-          if (ds && newTitle) {
-            ds.title = newTitle;
-            renderDataSources();
-            // The process properties panel (shown when nothing is selected) prints the
-            // default source name too, so repaint it as well - otherwise the sidebar
-            // updates while the panel keeps showing the old name.
-            const selectedId = [...selected][0];
-            if (!selectedId || !nodeById(selectedId)) renderInspector();
-          }
-          // Server bumped Process.UpdatedAtUtc — refresh stamp without reloading diagram.
-          if (/^\d+$/.test(String(taskId))) {
-            fetch(`/api/tasks/${taskId}/canvas`, { credentials: "same-origin" })
-              .then((r) => (r.ok ? r.json() : null))
-              .then((c) => {
-                const remoteAt = c?.updatedAtUtc || c?.UpdatedAtUtc;
-                if (remoteAt) loadedUpdatedAtUtc = remoteAt;
-              })
-              .catch(() => {});
-          }
+        if (SOURCE_CHANGE_REASONS.has(reason)) {
+          await applySourceChange(payload, reason);
           return;
         }
         // Extension / recorder PUT canvas (no editorSessionId) — server is authoritative.
@@ -3149,6 +3257,7 @@
   const CONDITION_TYPES = new Set([
     "Url", "FindElement", "NotFindElement", "FindElements", "ElementValue",
     "ElementVisible", "ElementHidden", "MemoryValue", "SourceValue",
+    "SourceColumnValue", "SourceRowValue",
     "DriverTabs", "SystemDate", "SystemTime"
   ]);
   /**
@@ -6267,7 +6376,7 @@
       return false;
     }
 
-    // (۳) بقیه (`SourceValue` و هر نوع دیگری): فقط اگر مقدارِ مقایسه از المان صفحه بیاید.
+    // (۳) بقیه (سه نوع «منبع» و هر نوع دیگری): فقط اگر مقدارِ مقایسه از المان صفحه بیاید.
     return (n.contentSourceType || "Constant") === "Elements";
   }
 
@@ -7519,14 +7628,20 @@
           || k === "saveTargetType" || k === "systemValueType") {
           if (k === "conditionType") {
             n.contentSourceType = n.contentSourceType || "Constant";
-            if (inp.value === "SourceValue") {
+            if (conditionSubjectIsSource(inp.value)) {
               if (!n.sourceId && !n.dataSourceId) {
                 n.sourceId = masterDataSourceId() || (graph.dataSources || [])[0]?.id || null;
               }
-              const cols = dataSourceColumnKeys(n.sourceId || n.dataSourceId);
-              if (cols.length && !cols.includes(n.dynamicSourceColumnName)) {
-                n.dynamicSourceColumnName = cols[0];
+              // The whole-row check names no column (it scans the row), so it gets no default one.
+              if (inp.value !== "SourceRowValue") {
+                const cols = dataSourceColumnKeys(n.sourceId || n.dataSourceId);
+                if (cols.length && !cols.includes(n.dynamicSourceColumnName)) {
+                  n.dynamicSourceColumnName = cols[0];
+                }
               }
+              // A compare operand borrowed from a source would share these same fields, so a type
+              // that switched to a source subject must not keep that choice.
+              if (n.contentSourceType === "DataSource") n.contentSourceType = "Constant";
             }
           }
           if (k === "contentSourceType" && inp.value === "DataSource") {
@@ -8350,6 +8465,18 @@
     return { ok: reasons.length === 0, reasons };
   }
 
+  /**
+   * Condition types whose SUBJECT is a data source — a cell, a whole column, or a whole row.
+   *
+   * They own the `sourceId` field (and, for the cell/column checks, the shared source column field),
+   * so the compare operand must not be another data source cell: the two would share those fields
+   * and the second choice would silently overwrite the first. Kept in step with
+   * `conditionSubjectIsSource` in the engine.
+   */
+  function conditionSubjectIsSource(ct) {
+    return ct === "SourceValue" || ct === "SourceColumnValue" || ct === "SourceRowValue";
+  }
+
   function validateConditionNode(n) {
     const reasons = [];
     const ct = n.conditionType || "None";
@@ -8364,10 +8491,11 @@
       const v = validateSelectorBlock(n, { label: "سلکتور شرط" });
       if (!v.ok) reasons.push(v.reason);
     }
-    if (ct === "SourceValue") {
+    if (ct === "SourceValue" || ct === "SourceColumnValue" || ct === "SourceRowValue") {
       if (!n.sourceId && !n.dataSourceId) {
         reasons.push("منبع مورد بررسی انتخاب نشده");
-      } else if (!String(n.dynamicSourceColumnName || "").trim()) {
+      } else if (ct !== "SourceRowValue" && !String(n.dynamicSourceColumnName || "").trim()) {
+        // The whole-row check looks at every cell of the row, so it names no column.
         reasons.push("ستون مورد بررسی انتخاب نشده");
       }
     }
@@ -8425,7 +8553,7 @@
           label: "سلکتور مقدار مقایسه"
         });
         if (!v.ok) reasons.push(v.reason);
-      } else if (src === "DataSource" && ct !== "SourceValue") {
+      } else if (src === "DataSource" && !conditionSubjectIsSource(ct)) {
         const v = validateDataSourcePick(n);
         if (!v.ok) reasons.push(v.reason);
       } else if (src === "Memory") {
@@ -9722,7 +9850,9 @@
     switch (ct) {
       case "Url": return "آدرس صفحه";
       case "ElementValue": return "مقدار المان";
-      case "SourceValue": return "مقدار منبع";
+      case "SourceValue": return "مقدار سلول منبع";
+      case "SourceColumnValue": return "مقداری در ستون منبع";
+      case "SourceRowValue": return "مقداری در ردیف منبع";
       case "FindElement": return "وجود المان";
       case "NotFindElement": return "نبود المان";
       case "FindElements": return "تعداد المان‌ها";
@@ -9750,7 +9880,7 @@
   }
 
   function conditionNeedsCompare(ct) {
-    return ["Url", "ElementValue", "SourceValue", "MemoryValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
+    return ["Url", "ElementValue", "SourceValue", "SourceColumnValue", "SourceRowValue", "MemoryValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
   }
 
   /** Whether a compare operand (constant / element / DS) is needed. */
@@ -9763,7 +9893,7 @@
   function conditionInspectorHtml(n) {
     const ct = n.conditionType || "None";
     const eq = n.equalityType || "equal";
-    const src = n.contentSourceType || "Constant";
+    const src0 = n.contentSourceType || "Constant";
     if (!n.contentSourceType) n.contentSourceType = "Constant";
 
     const outs = (graph.edges || []).filter((e) => e.from === n.id && (e.kind === "success" || e.kind === "fail"));
@@ -9775,11 +9905,28 @@
     };
 
     const needsSubjectSelector = ["ElementValue", "FindElement", "NotFindElement", "FindElements", "ElementVisible", "ElementHidden"].includes(ct);
-    const needsSubjectDs = ct === "SourceValue";
+    // Three checks read a data source as their SUBJECT: one cell, a whole column, or a whole row.
+    const subjectIsCell = ct === "SourceValue";
+    const subjectIsColumn = ct === "SourceColumnValue";
+    const subjectIsRow = ct === "SourceRowValue";
+    const needsSubjectDs = subjectIsCell || subjectIsColumn || subjectIsRow;
     // A memory condition compares a named variable instead of a page element or a source cell.
     const needsSubjectMemory = ct === "MemoryValue";
     const needsOperand = conditionNeedsCompareOperand(ct, eq);
-    const allowCompareDs = needsOperand && ct !== "SourceValue";
+    // None of the source-subject checks can take a data-source COMPARE operand: the subject already
+    // owns `sourceId` (and, for the cell/column checks, the shared source column field), so the
+    // operand would overwrite the very thing the condition asks about.
+    const allowCompareDs = needsOperand && !needsSubjectDs;
+
+    // A node that carries a data-source COMPARE operand while its subject IS a source (an older
+    // save, an import, a type the author just switched to) must not keep it: the editor renders no
+    // field for it any more, and the engine would read the subject cell as the operand — comparing
+    // the condition with itself. Falling back to «ثابت» is the choice the visible select shows.
+    let src = src0;
+    if (needsSubjectDs && src === "DataSource") {
+      n.contentSourceType = "Constant";
+      src = "Constant";
+    }
 
     if (needsSubjectDs && !n.sourceId && !n.dataSourceId) {
       const fallback = masterDataSourceId() || (graph.dataSources || [])[0]?.id || null;
@@ -9789,7 +9936,9 @@
     if (needsSubjectDs && subjectDsId && !n.sourceId) n.sourceId = subjectDsId;
     const subjectDsOpts = processDataSourceOptions(subjectDsId);
     const subjectCols = dataSourceColumnKeys(subjectDsId);
-    if (needsSubjectDs && subjectCols.length && !subjectCols.includes(n.dynamicSourceColumnName)) {
+    // The whole-row check names no column, so it must not be handed one: assigning a default here
+    // would leave a field the author cannot see pointing at some unrelated column.
+    if ((subjectIsCell || subjectIsColumn) && subjectCols.length && !subjectCols.includes(n.dynamicSourceColumnName)) {
       n.dynamicSourceColumnName = subjectCols[0];
     }
     const subjectColOpts = subjectCols.map((c) =>
@@ -9817,7 +9966,9 @@
           <option value="None" ${ct === "None" ? "selected" : ""}>— انتخاب کنید —</option>
           <option value="Url" ${ct === "Url" ? "selected" : ""}>آدرس صفحه (Url)</option>
           <option value="ElementValue" ${ct === "ElementValue" ? "selected" : ""}>مقدار المان صفحه</option>
-          <option value="SourceValue" ${ct === "SourceValue" ? "selected" : ""}>مقدار منبع داده</option>
+          <option value="SourceValue" ${ct === "SourceValue" ? "selected" : ""}>مقدار سلول منبع داده</option>
+          <option value="SourceColumnValue" ${ct === "SourceColumnValue" ? "selected" : ""}>مقداری در ستون منبع داده</option>
+          <option value="SourceRowValue" ${ct === "SourceRowValue" ? "selected" : ""}>مقداری در ردیف منبع داده</option>
           <option value="MemoryValue" ${ct === "MemoryValue" ? "selected" : ""}>${esc(t("editor.cond.memoryValue") || "مقدار متغیر حافظه")}</option>
           <option value="FindElement" ${ct === "FindElement" ? "selected" : ""}>وجود المان</option>
           <option value="NotFindElement" ${ct === "NotFindElement" ? "selected" : ""}>نبود المان</option>
@@ -9857,13 +10008,35 @@
     }
 
     if (needsSubjectDs) {
-      html += `<div class="insp-section-title">مقدار مورد بررسی (منبع)</div>` +
+      const subjectTitle = subjectIsColumn
+        ? "ستون مورد بررسی (منبع)"
+        : subjectIsRow
+          ? "ردیف مورد بررسی (منبع)"
+          : "مقدار مورد بررسی (منبع)";
+      const subjectHint = subjectIsColumn
+        ? `<p class="palette-hint" style="margin:4px 0 8px;line-height:1.6">
+            همهٔ سلول‌های این ستون با مقدار مقایسه سنجیده می‌شوند. «شامل» یعنی این مقدار جایی در ستون
+            هست؛ «نامساوی» یعنی هیچ سلولی در کل ستون آن مقدار را ندارد (مثلاً برای مطمئن شدن از اینکه
+            قبلاً درج نشده است).
+          </p>`
+        : subjectIsRow
+          ? `<p class="palette-hint" style="margin:4px 0 8px;line-height:1.6">
+              همهٔ سلول‌های این ردیف سنجیده می‌شوند. ردیفِ مورد بررسی را با «ردیف اختصاصی» پایین
+              انتخاب کنید (ردیف حلقه، ردیف والد، ردیف مشخص و …).
+            </p>`
+          : "";
+      html += `<div class="insp-section-title">${subjectTitle}</div>` +
         `<div class="insp-field"><label>منبع داده</label>
           <select data-k="sourceId"><option value="">— انتخاب منبع —</option>${subjectDsOpts}</select>
-        </div>
-        <div class="insp-field"><label>ستون</label>
-          <select data-k="dynamicSourceColumnName"><option value="">— انتخاب ستون —</option>${subjectColOpts}</select>
         </div>` +
+        // The row check scans every cell of the row, so it names no column; the cell and column
+        // checks name the one column they read or scan.
+        (subjectIsRow
+          ? ""
+          : `<div class="insp-field"><label>ستون</label>
+          <select data-k="dynamicSourceColumnName"><option value="">— انتخاب ستون —</option>${subjectColOpts}</select>
+        </div>`) +
+        subjectHint +
         // The row this read happens on is the condition's own choice: right under its source.
         (nodeNeedsNodeRowPointer(n) ? rowPointerSectionHtml(n, "node") : "");
     }
@@ -9888,7 +10061,7 @@
             <option value="UserSystemDate" ${src === "UserSystemDate" ? "selected" : ""}>تاریخ سیستم کاربر</option>
             <option value="UserSystemTime" ${src === "UserSystemTime" ? "selected" : ""}>زمان سیستم کاربر</option>
             <option value="Elements" ${src === "Elements" ? "selected" : ""}>مقدار المان صفحه</option>
-            ${allowCompareDs ? `<option value="DataSource" ${src === "DataSource" ? "selected" : ""}>مقدار منبع داده</option>` : ""}
+            ${allowCompareDs ? `<option value="DataSource" ${src === "DataSource" ? "selected" : ""}>مقدار سلول منبع داده</option>` : ""}
             <option value="Memory" ${src === "Memory" ? "selected" : ""}>حافظه (متغیر)</option>
             <option value="System" ${src === "System" ? "selected" : ""}>پیش‌فرض سیستم</option>
           </select>
@@ -10241,7 +10414,11 @@
       return false;
     }
     if (n.kind === "condition") {
-      if (String(n.conditionType || "") === "SourceValue") return true;
+      // The cell check reads one cell and the row check reads one whole row — both are pinned to a
+      // row, so both carry the row switch. The column check scans the entire column and has no row
+      // to point at.
+      const ct = String(n.conditionType || "");
+      if (ct === "SourceValue" || ct === "SourceRowValue") return true;
       if (String(n.contentSourceType || "") === "DataSource") return true;
       return false;
     }
@@ -10277,7 +10454,11 @@
       if (at === "InsertRow" || at === "DeleteRow") return true;
       return nodeNeedsNodeRowPointer(n);
     }
-    if (n.kind === "condition") return nodeNeedsNodeRowPointer(n);
+    if (n.kind === "condition") {
+      // Every source-subject check counts, including the whole-column one: it audits a column and
+      // therefore depends on that source like any cell read does.
+      return conditionSubjectIsSource(String(n.conditionType || "")) || nodeNeedsNodeRowPointer(n);
+    }
     if (n.kind === "group") {
       // The `seen` set keeps the walk finite even if a damaged graph made two groups each other's
       // ancestors; a group already being examined contributes nothing new.
@@ -10291,8 +10472,17 @@
     return false;
   }
 
-  /** The source a row pointer resolves against (same order as the engine's lookup). */
+  /**
+   * The source a row pointer resolves against (same order as the engine's lookup).
+   *
+   * A source-subject condition answers with `sourceId`: `dataSourceId` on such a node is the source
+   * of its COMPARE operand, and preferring it pinned the row to the wrong source. Kept in step with
+   * the engine's `nodeOwnSourceId`.
+   */
   function rowPointerSourceId(n) {
+    if (n && n.kind === "condition" && conditionSubjectIsSource(n.conditionType) && n.sourceId != null) {
+      return n.sourceId;
+    }
     return n.dataSourceId ?? n.saveDataSourceId ?? n.sourceId
       ?? n.selectorDataSourceId ?? n.equalSelectorDataSourceId ?? n.equalAttributeDataSourceId ?? null;
   }

@@ -2869,6 +2869,15 @@ function dataSourceSafeFileName(ds) {
         setTimeout(() => flashTaskFields(id, ["title", "steps"]), 300);
         return;
       }
+      if (action === "data_updated") {
+        // A linked source changed — cells, shape, file or title — so only the data side of this row
+        // is fresh. The process itself was not edited: refreshing the row and blinking its data
+        // columns says that, where "فرآیند به‌روز شد" claimed an edit that never happened (once per
+        // cell the engine wrote during a run). No toast on purpose — the blink is the message.
+        scheduleRender();
+        setTimeout(() => flashTaskFields(id, ["dataEdit", "sources"]), 320);
+        return;
+      }
       // updated / shared
       const prev = findTask(readTasks(), id);
       scheduleRender();

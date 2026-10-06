@@ -240,7 +240,9 @@ function normalizeStepValueSource(n) {
 }
 
 function conditionNeedsCompare(ct) {
-  return ["Url", "ElementValue", "SourceValue", "MemoryValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
+  // Kept in step with the editor's conditionNeedsCompare in flow.js: the whole-column / whole-row
+  // checks compare their cells against a value, exactly like the single-cell check does.
+  return ["Url", "ElementValue", "SourceValue", "SourceColumnValue", "SourceRowValue", "MemoryValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
 }
 
 function conditionNeedsCompareOperand(ct, eq) {
@@ -418,6 +420,17 @@ function validateActionNodeForPlay(n, graph) {
   return { ok: reasons.length === 0, reasons };
 }
 
+/**
+ * Condition types whose SUBJECT is a data source (a cell, a whole column, a whole row).
+ *
+ * Their subject owns the `sourceId` field — and, for the cell/column checks, the shared
+ * `dynamicSourceColumnName` — so a data-source COMPARE operand would have to borrow those very
+ * fields and overwrite the subject. The editor therefore does not offer that combination either.
+ */
+function conditionSubjectIsSource(ct) {
+  return ct === "SourceValue" || ct === "SourceColumnValue" || ct === "SourceRowValue";
+}
+
 function validateConditionNodeForPlay(n, graph) {
   const reasons = [];
   const ct = n.conditionType || "None";
@@ -432,10 +445,12 @@ function validateConditionNodeForPlay(n, graph) {
     const v = validateSelectorBlock(n, { labelKey: "label.conditionSelector" });
     if (!v.ok) reasons.push(v.reason);
   }
-  if (ct === "SourceValue") {
+  if (ct === "SourceValue" || ct === "SourceColumnValue" || ct === "SourceRowValue") {
     if (!n.sourceId && !n.dataSourceId) {
       reasons.push(tv("cond.srcDsMissing"));
-    } else if (!String(n.dynamicSourceColumnName || "").trim()) {
+    } else if (ct !== "SourceRowValue" && !String(n.dynamicSourceColumnName || "").trim()) {
+      // The whole-row check names no column — every cell of the row is looked at — so only the cell
+      // and column checks can be missing one.
       reasons.push(tv("cond.srcColMissing"));
     }
   }
@@ -482,7 +497,7 @@ function validateConditionNodeForPlay(n, graph) {
         labelKey: "label.compareSelector"
       });
       if (!v.ok) reasons.push(v.reason);
-    } else if (src === "DataSource" && ct !== "SourceValue") {
+    } else if (src === "DataSource" && !conditionSubjectIsSource(ct)) {
       const v = validateDataSourcePick(n);
       if (!v.ok) reasons.push(v.reason);
     } else if (src === "Memory") {
@@ -2845,6 +2860,39 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
       return compareConditionValues(left, right, node.equalityType || "equal");
     }
 
+    // Whole-column / whole-row checks: the same comparison, asked of every cell of a column (or of
+    // the row the pointer chose) instead of one cell. "Is this value anywhere in that column?" is a
+    // different question from "is it in this cell", and it is the one an author asks before
+    // inserting: has this row been written before at all?
+    if (ct === "SourceColumnValue" || ct === "SourceRowValue") {
+      const ds = findDataSourceForValue(node, graph);
+      const col = String(node.dynamicSourceColumnName || "").trim();
+      if (!ds) {
+        lastConditionError = "منبع مورد بررسی برای این شرط مشخص نیست";
+        appendPlayLog("warn", `شرط «${node.title || node.id}»: ${lastConditionError} → شاخه fail`);
+        return false;
+      }
+      if (ct === "SourceColumnValue" && !col) {
+        lastConditionError = "ستون مورد بررسی برای این شرط مشخص نیست";
+        appendPlayLog("warn", `شرط «${node.title || node.id}»: ${lastConditionError} → شاخه fail`);
+        return false;
+      }
+      // The compare operand is read FIRST: a failure there is the author's setup, and it must not
+      // look like "the column does not contain the value".
+      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
+      const values = ct === "SourceColumnValue"
+        ? await readSourceColumnForCheck(ds, col)
+        : await readSourceRowForCheck(ds, rowIndex);
+      if (values == null) {
+        lastConditionError = ct === "SourceColumnValue"
+          ? `مقادیر ستون «${col}» از سرور خوانده نشد`
+          : `مقادیر ردیف ${(Number(rowIndex) || 0) + 1} از سرور خوانده نشد`;
+        appendPlayLog("warn", `شرط «${node.title || node.id}»: ${lastConditionError} → شاخه fail`);
+        return false;
+      }
+      return collectionMatches(node.equalityType || "equal", values, right);
+    }
+
     // The subject is a memory variable, so this condition needs no page and no tab: it compares
     // what an earlier step stored against the compare operand, just like SourceValue does for a
     // source cell. An unset variable is "" so a HasValue/HasNotValue check still means something.
@@ -2903,7 +2951,11 @@ async function resolveConditionCompareValue(tabId, node, graph, rowIndex, opts =
       const vars = await getPlayMemoryVars();
       return vars[name] != null ? String(vars[name]) : "";
     }
-    if (src === "DataSource") {
+    if (src === "DataSource" && !conditionSubjectIsSource(node.conditionType)) {
+      // A source-subject condition cannot take a data-source operand: `resolveStepParamAsync` would
+      // read the subject cell (the same fields the subject owns) and the condition would compare the
+      // cell with itself — always true. The editor does not offer the combination; an older save or
+      // hand-edited graph may still carry it, so the constant is what is actually compared.
       return (await resolveStepParamAsync(node, graph, rowIndex))
         || node.constantEqualValue || node.constantValue || "";
     }
@@ -4565,6 +4617,143 @@ function cellValue(ds, columnKey, rowIndex, opts = {}) {
   return val;
 }
 
+/**
+ * Ask a whole collection of cells one comparison question.
+ *
+ * A column or a row holds many cells, so the operator decides the shape of the answer: a positive
+ * operator asks "does ANY cell satisfy this?"; a negative one asks "does NO cell satisfy it?".
+ * Reading a negative operator as "some cell differs" would make almost every non-empty column match,
+ * which is never why anyone asks about a whole column.
+ */
+const NEGATIVE_OPERATOR_POSITIVE = {
+  notequal: "equal",
+  "!=": "equal",
+  notcontain: "contain",
+  notcontains: "contain",
+  hasnotvalue: "hasvalue"
+};
+function collectionMatches(equalityType, values, expected) {
+  const eq = String(equalityType || "equal").trim().toLowerCase().replace(/[_\s-]+/g, "");
+  const positive = NEGATIVE_OPERATOR_POSITIVE[eq];
+  return positive
+    ? !values.some((v) => compareConditionValues(v, expected, positive))
+    : values.some((v) => compareConditionValues(v, expected, eq));
+}
+
+/** Case-insensitive value lookup for a row's `values` map (keys come back in their stored casing). */
+function rowMapValue(map, columnKey) {
+  if (!map) return "";
+  if (map[columnKey] != null) return String(map[columnKey]);
+  const want = String(columnKey).trim().toLowerCase();
+  for (const k of Object.keys(map)) {
+    if (k.trim().toLowerCase() === want) return String(map[k] ?? "");
+  }
+  return "";
+}
+
+/**
+ * Every value of one column, in row order, for a whole-column check.
+ *
+ * Returns `null` when a page could not be read — "we could not find out" must not be answered as
+ * "the column does not contain it", which would silently insert a duplicate.
+ *
+ * Read in pages through the bulk row endpoint rather than cell by cell: a column check is a scan,
+ * and one request per row would make a 500-row source 500 round trips. The values also land in the
+ * run's cell cache (with their revisions) so later single-cell reads of the same rows are free; no
+ * per-cell live events are emitted, because a scan is not the author watching one cell.
+ */
+const COLUMN_SCAN_PAGE = 1000;
+const COLUMN_SCAN_MAX_PAGES = 50;
+async function readSourceColumnForCheck(ds, columnKey) {
+  const id = Number(ds?.id);
+  const col = String(columnKey || "").trim();
+  if (!id || !col) return null;
+  let rowCount = Number(ds.rowCount) || 0;
+  if (rowCount <= 0) {
+    const meta = await readDataSourceMetaFromServer(id);
+    rowCount = Number(meta?.body?.rowCount ?? meta?.body?.RowCount) || 0;
+    if (rowCount > 0) ds.rowCount = rowCount;
+  }
+  const values = [];
+  let from = 0;
+  for (let pageNo = 0; pageNo < COLUMN_SCAN_MAX_PAGES; pageNo++) {
+    let page;
+    try {
+      page = await callBackground({
+        type: "readDataSourceRows",
+        dataSourceId: id,
+        from,
+        count: COLUMN_SCAN_PAGE,
+        keys: [col]
+      });
+    } catch (err) {
+      appendPlayLog("warn", `خواندن ستون «${col}» از سرور ناموفق بود — ${err?.message || err}`);
+      return null;
+    }
+    if (!page?.ok || !page.body) {
+      appendPlayLog("warn", `خواندن ستون «${col}» از سرور ناموفق بود — ${page?.error || "پاسخی نرسید"}`);
+      return null;
+    }
+    const rows = page.body.rows || page.body.Rows || [];
+    const revisions = page.body.cellRevisions || page.body.CellRevisions || {};
+    // The page reports the SOURCE's total row count (not this page's), and the rows it returns are
+    // only the cells of the requested column — a row whose cell does not exist yet is simply
+    // absent from the page. So how many rows came back says nothing about where the source ends:
+    // advancing by that number would stop the scan early and answer "the column does not contain
+    // it" for values that live beyond the gap. Advance by the WINDOW and trust the row count.
+    const pageRowCount = Number(page.body.rowCount ?? page.body.RowCount) || 0;
+    if (pageRowCount > 0 && pageRowCount !== rowCount) {
+      rowCount = pageRowCount;
+      ds.rowCount = pageRowCount;
+    }
+    for (const row of rows) {
+      const idx = Number(row.rowIndex ?? row.RowIndex) || 0;
+      const value = rowMapValue(row.values || row.Values, col);
+      values.push(value);
+      const rev = revisions[idx]?.[col] ?? revisions[String(idx)]?.[col];
+      applyCellToLocalCache(ds, idx, col, value, rev, page.body.dataRevision ?? page.body.DataRevision);
+    }
+    from += COLUMN_SCAN_PAGE;
+    if (rowCount > 0) {
+      if (from >= rowCount) break;
+    } else if (rows.length < COLUMN_SCAN_PAGE) {
+      // No row count at all (the source was never read from the server): the page size is the only
+      // end-of-source signal left, which is exactly the "best effort" case this fallback serves.
+      break;
+    }
+  }
+  // The page cap is a safety net, not an answer: a scan that stopped in the middle must not be
+  // reported as "the column does not contain this value" (see COLUMN_SCAN_MAX_PAGES).
+  if (rowCount > 0 && from < rowCount) {
+    appendPlayLog("warn",
+      `ستون «${col}» کامل خوانده نشد (${from} از ${rowCount} ردیف) — نتیجهٔ ناقص پذیرفته نمی‌شود`);
+    return null;
+  }
+  return values;
+}
+
+/** Every value of one row, for a whole-row check. `null` means the read itself failed. */
+async function readSourceRowForCheck(ds, rowIndex) {
+  const id = Number(ds?.id);
+  const row = Number(rowIndex) || 0;
+  if (!id) return null;
+  try {
+    const res = await callBackground({ type: "readDataSourceRow", dataSourceId: id, rowIndex: row });
+    if (!res?.ok || !res.body) {
+      appendPlayLog("warn", `خواندن ردیف ${row + 1} از سرور ناموفق بود — ${res?.error || "پاسخی نرسید"}`);
+      return null;
+    }
+    const map = res.body.values || res.body.Values || {};
+    for (const [key, value] of Object.entries(map)) {
+      applyCellToLocalCache(ds, row, key, String(value ?? ""), null, res.body.dataRevision ?? res.body.DataRevision);
+    }
+    return Object.values(map).map((v) => String(v ?? ""));
+  } catch (err) {
+    appendPlayLog("warn", `خواندن ردیف ${row + 1} از سرور ناموفق بود — ${err?.message || err}`);
+    return null;
+  }
+}
+
 function stepUsesDataSourceValue(step) {
   const cst = step?.contentSourceType || "";
   // A SourceValue condition reads its SUBJECT cell, and for a condition `contentSourceType`
@@ -4917,11 +5106,27 @@ function dataSourceUnavailable(step, ds, columnKey, rowIndex) {
   return err;
 }
 
+/**
+ * The id of the source a node itself means, most specific choice first.
+ *
+ * A condition's SUBJECT is `sourceId`, while `dataSourceId` on a condition carries the source of its
+ * COMPARE operand — a choice that only exists when the subject is not itself a source. Plain field
+ * order therefore made a condition whose subject IS a source (the author switched its type after
+ * picking a source operand) read that source's cell as its subject, and resolve its row pointer
+ * against it. Kept in step with `rowPointerSourceId` in the editor's flow.js.
+ */
+function nodeOwnSourceId(node) {
+  if (node?.kind === "condition" && conditionSubjectIsSource(node.conditionType) && node.sourceId != null) {
+    return node.sourceId;
+  }
+  return node?.dataSourceId ?? node?.saveDataSourceId ?? node?.sourceId;
+}
+
 function findDataSourceForValue(step, graph) {
   const sources = graph?.dataSources || [];
   // Actions pick their source with `dataSourceId`; a condition's subject uses `sourceId`. Both are
   // the same choice — the node's own source — so both are honoured before the process default.
-  for (const id of [step?.dataSourceId, step?.sourceId]) {
+  for (const id of [nodeOwnSourceId(step), step?.dataSourceId, step?.sourceId]) {
     if (id != null) {
       const found = sources.find((d) => Number(d.id) === Number(id));
       if (found) return found;
@@ -5175,8 +5380,7 @@ function findRowPointerSource(node, graph) {
   // value/target source first, then a condition's subject, then the dynamic-selector sources —
   // including the COMPARE side (`equalSelector*`), because a node whose only source is its compare
   // selector is source-dependent just the same.
-  const id = node?.dataSourceId ?? node?.saveDataSourceId ?? node?.sourceId
-    ?? node?.selectorDataSourceId ?? node?.equalSelectorDataSourceId
+  const id = nodeOwnSourceId(node) ?? node?.selectorDataSourceId ?? node?.equalSelectorDataSourceId
     ?? node?.equalAttributeDataSourceId ?? graph?.dataSourceId;
   if (id == null || id === "") return null;
   return sources.find((d) => Number(d.id) === Number(id)) || null;

@@ -88,7 +88,7 @@ background.js خط ۱:  importScripts("lib/branding.js", "player/engine.js", "bg
    - بدون تب صریح → تب فعال جاری اگر `isReusablePlayTab` باشد؛ وگرنه `null`.
    - بررسی شرط: `activateTab=false` (تب فوکوس نمی‌شود).
    - تب `chrome://newtab` → به `about:blank` تبدیل می‌شود (نیوتب اجازهٔ content script نمی‌دهد).
-   - اگر تب پیدا نشد و شرط به تب نیاز **نداشته** باشد (`SourceValue`/`DriverTabs`) → `tabId=null`.
+   - اگر تب پیدا نشد و شرط به تب نیاز **نداشته** باشد (`SourceValue`/`SourceColumnValue`/`SourceRowValue`/`DriverTabs`) → `tabId=null`.
 10. **حافظه:** `ensurePlayMemory(graph)` — اگر ساختار حافظه عوض شده باشد، پاک می‌شود.
 11. ذخیرهٔ `lastPlayRequest` در storage (برای نمایش/بازیابی).
 12. **تعیین تکرار:** اگر دامنه محدود باشد (group/step/condition) →
@@ -307,7 +307,8 @@ effectiveRow = moveLoop ? gRow : parentRow
 
 | گروه | شرط‌ها |
 |------|--------|
-| نیازمند مقدار مقایسه | `Url`، `ElementValue`، `SourceValue`، `FindElements`، `DriverTabs`، `SystemDate`، `SystemTime` |
+| نیازمند مقدار مقایسه | `Url`، `ElementValue`، `SourceValue`، `SourceColumnValue`، `SourceRowValue`، `FindElements`، `DriverTabs`، `SystemDate`، `SystemTime` |
+| با موضوعِ منبع داده | `SourceValue` (یک سلول)، `SourceColumnValue` (یک ستون)، `SourceRowValue` (یک ردیف) |
 | بدون مقدار مقایسه | `HasValue` / `HasNotValue` هرگز مقدار نمی‌خواهند |
 | وابسته به المان | `FindElement`، `NotFindElement`، `ElementVisible`، `ElementHidden`، `FindElements`، `ElementValue` |
 | وابسته به تب | موارد المان + `Url` + `DriverTabs` |
@@ -319,6 +320,36 @@ effectiveRow = moveLoop ? gRow : parentRow
   باید **دقیقاً** هم‌شکل باشد (ارقام ASCII).
 - `ElementVisible`/`ElementHidden` علاوه بر وجود، **مرئی‌بودن** را هم می‌خواهند
   (`requireVisible`: نه `display:none`، نه `visibility:hidden`، نه `opacity:0`، و دارای ابعاد).
+
+### شرط‌های «همهٔ ستون» و «همهٔ ردیف»
+
+`SourceColumnValue` و `SourceRowValue` همان مقایسهٔ `SourceValue` را از **هر سلول** یک ستون (یا یک
+ردیف) می‌پرسند، نه از یک سلول. موضوع، منبع و ستونِ خود شرط است؛ مقدار مقایسه مثل بقیهٔ شرط‌ها
+resolve می‌شود.
+
+- خواندن ستون با **درخواست صفحه‌ای** `GET /api/datasources/{id}/rows?from&count&keys` انجام می‌شود
+  (`COLUMN_SCAN_PAGE = 1000`، حداکثر `COLUMN_SCAN_MAX_PAGES = 50` صفحه). خواندن ردیف با
+  `GET /api/datasources/{id}/rows/{rowIndex}`. مقادیر در کش سلولِ همان اجرا (همراه با
+  `cellRevisions`) می‌نشینند تا خواندن‌های تک‌سلولی بعدی رایگان باشند؛ **هیچ رویداد زندهٔ
+  تک‌سلولی منتشر نمی‌شود** — اسکن یک ستون، تماشای یک سلول نیست.
+  صفحات با **اندازهٔ پنجره** جلو می‌روند، نه با تعداد ردیف‌های برگشتی: این نقطهٔ پایانی سلول
+  برمی‌گرداند، پس ردیفی که سلولش هنوز نوشته نشده در پاسخ نیست و یک صفحهٔ کوتاه به‌معنای «منبع
+  تمام شد» نیست. شمارش کل ردیف‌ها از خودِ پاسخ (`rowCount`) گرفته می‌شود و اگر اسکن به سقف
+  صفحه‌ها بخورد، نتیجهٔ ناقص **پذیرفته نمی‌شود** (`null`).
+- جمع‌بندی (`collectionMatches`): عملگر **مثبت** → «یک سلولی مطابق است؟»؛ عملگر **منفی** →
+  «هیچ سلولی مطابق نیست؟» (نقشهٔ `NEGATIVE_OPERATOR_POSITIVE`). خواندن «نامساوی» به‌صورت «یک
+  سلول متفاوت وجود دارد» تقریباً هر ستون پرشده‌ای را مطابق می‌کرد.
+- اگر خواندن از سرور ناموفق باشد، تابع `null` برمی‌گرداند — «نتوانستم بفهمم» — و شرط **fail**
+  می‌شود، نه «برقرار». پاسخ‌دادن «این مقدار در ستون نبود» بدون خواندن ستون، درج تکراری می‌سازد.
+  مقدار مقایسه **اول** خوانده می‌شود تا خطای تنظیمات نویسنده شبیه «نبودِ مقدار در ستون» نشود.
+- در اعتبارسنجی، هر سه شرطِ منبع یک مقدار مقایسه لازم دارند (`conditionNeedsCompare`) و
+  مقدار مقایسه نمی‌تواند خودش «منبع داده» باشد (`conditionSubjectIsSource`): موضوعِ شرط همان
+  فیلدهای منبع/ستون را در اختیار دارد.
+- **موضوع، منبعِ خودش را تعیین می‌کند:** در این سه شرط `sourceId` (منبعِ موضوع) بر `dataSourceId`
+  (منبعِ سمت **مقایسه** در سیوهای قدیمی) مقدم است — هم در خواندن سلول/ستون/ردیف و هم در
+  اشاره‌گر ردیف (`nodeOwnSourceId`، و `rowPointerSourceId` در ادیتور). ترتیب فیلدها پیش‌تر
+  باعث می‌شد شرطی که نویسنده نوعش را بعد از انتخاب «مقدار مقایسه از منبع» عوض کرده بود،
+  مقدار **موضوع** را از منبعِ طرف مقایسه بخواند.
 
 ---
 
@@ -388,8 +419,9 @@ effectiveRow = moveLoop ? gRow : parentRow
   بود — در گروه یک‌باره یعنی ردیف ۰.)
 - **نوع صریح برنده است:** اگر `contentSourceType` روی «ثابت»/«حافظه»/… باشد، فیلدهای ماندهٔ
   قدیمی (`valueFromSource` / جفت منبع+ستون) **نادیده** می‌شوند و سلول خوانده نمی‌شود؛ فال‌بک قدیمی
-  فقط برای سیوهای بدون نوع فعال است. استثنا: `conditionType=SourceValue` همیشه سلول موضوع را
-  می‌خواند (در شرط، `contentSourceType` مربوط به سمت **مقایسه** است).
+  فقط برای سیوهای بدون نوع فعال است. استثنا: شرط‌های موضوع‌منبع (`SourceValue`،
+  `SourceColumnValue`، `SourceRowValue`) همیشه سلول/ستون/ردیفِ موضوع را می‌خوانند (در شرط،
+  `contentSourceType` مربوط به سمت **مقایسه** است).
 - **حالت درج (`InsertContent`):** فیلد `insertMode` یکی از `Replace` (پیش‌فرض، بازنویسی)،
   `Prepend` (مقدار جدید + جداکننده + مقدار قبلی) یا `Append` (مقدار قبلی + جداکننده + مقدار جدید)
   است؛ `insertSeparator` متن جداکننده است. ترکیب **روی سرور و داخل همان قفل ردیف** انجام می‌شود
@@ -542,6 +574,9 @@ effectiveRow = moveLoop ? gRow : parentRow
 | `resolveProcessIterations` | 902 | تکرار سطح فرآیند |
 | `expandGroupByRepeatSource` | 3303 | تکرار سطح گروه |
 | `writeServerCellWait` | 2828 | نوشتن سلول با قفل/revision |
+| `readSourceColumnForCheck` | 4663 | خواندن همهٔ سلول‌های یک ستون (صفحه‌ای، برای شرط ستون) |
+| `readSourceRowForCheck` | 4710 | خواندن همهٔ سلول‌های یک ردیف (برای شرط ردیف) |
+| `collectionMatches` | 4631 | جمع‌بندی اسکن ستون/ردیف با توجه به جهت عملگر |
 | `playExecuteInjected` | 3478 | اجرای واقعی در صفحه |
 | `collectPlaySteps` | 3230 | تخمین مراحل برای HUD |
 | `resolveStepDelayMs` | 784 | فاصلهٔ بین مراحل |

@@ -809,7 +809,7 @@ public class DataSourcesApiController : ControllerBase
                 editorUserName = result.LastEditorUserName,
                 updatedAtUtc = result.UpdatedAtUtc
             }, "cell_patched", User.Identity?.Name, ct);
-            await _catalog.BroadcastProcessListItemAsync(processId, "updated", User.Identity?.Name, ct);
+            await _catalog.BroadcastProcessListItemAsync(processId, "data_updated", User.Identity?.Name, ct);
             // An editor holding this canvas needs to know the data under it moved. This is what the
             // canvas/source-side listeners subscribe to.
             await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
@@ -881,7 +881,7 @@ public class DataSourcesApiController : ControllerBase
         foreach (var processId in linked)
         {
             await _catalog.SourceChangedAsync(processId, new { id, title }, "renamed", User.Identity?.Name, ct);
-            await _catalog.BroadcastProcessListItemAsync(processId, "updated", User.Identity?.Name, ct);
+            await _catalog.BroadcastProcessListItemAsync(processId, "data_updated", User.Identity?.Name, ct);
             await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
             {
                 taskId = processId,
@@ -962,7 +962,7 @@ public class DataSourcesApiController : ControllerBase
                 title = result.DataSourceTitle,
                 dataRevision = result.DataRevision
             }, "reloaded", User.Identity?.Name, ct);
-            await _catalog.BroadcastProcessListItemAsync(processId, "updated", User.Identity?.Name, ct);
+            await _catalog.BroadcastProcessListItemAsync(processId, "data_updated", User.Identity?.Name, ct);
             // Tell any editor holding this canvas that the source's shape changed under it.
             await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
             {

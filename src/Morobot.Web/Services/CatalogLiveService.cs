@@ -29,7 +29,13 @@ public class CatalogLiveService
         await NotifyAdminsAsync("taskChanged", payload, ct);
     }
 
-    /// <summary>Push per-user list rows after linked data-source cell/metadata changes.</summary>
+    /// <summary>
+    /// Push per-user list rows after a linked data source changed (cells, shape, file, title).
+    ///
+    /// Callers pass <c>data_updated</c>, not <c>updated</c>: the row is fresh, but the process itself
+    /// was not edited — announcing "the process was updated" for a source write made a running
+    /// process's own cell writes look like somebody had re-saved the process.
+    /// </summary>
     public async Task BroadcastProcessListItemAsync(int processId, string action, string? actorUserName, CancellationToken ct = default)
     {
         var recipients = await ResolveAccessUserIdsAsync(processId, ct);

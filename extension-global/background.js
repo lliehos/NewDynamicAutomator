@@ -495,6 +495,8 @@ async function handleMessage(message, sender) {
       return readDataSourceMetaMessage(message);
     case "readDataSourceRow":
       return readDataSourceRowMessage(message);
+    case "readDataSourceRows":
+      return readDataSourceRowsMessage(message);
     case "patchDataSourceCell":
       return patchDataSourceCellMessage(message);
     case "deleteDataSourceRow":
@@ -2016,6 +2018,30 @@ async function readDataSourceRowMessage(message) {
   const portal = String(await portalBase()).replace(/\/$/, "");
   try {
     const res = await fetch(`${portal}/api/datasources/${id}/rows/${rowIndex}`, {
+      method: "GET",
+      headers: await authHeaders()
+    });
+    if (res.status === 401 || res.status === 403) return { ok: false, error: "auth" };
+    if (!res.ok) return { ok: false, error: `http ${res.status}` };
+    const body = await res.json();
+    return { ok: true, body };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+/** Bulk row page — what a whole-column check needs (one request per page, not one per row). */
+async function readDataSourceRowsMessage(message) {
+  const id = Number(message?.dataSourceId);
+  if (!id) return { ok: false, error: "invalid" };
+  const from = Math.max(0, Number(message?.from) || 0);
+  const count = Math.max(1, Number(message?.count) || 1000);
+  const keys = Array.isArray(message?.keys) ? message.keys.filter((k) => String(k || "").trim()) : [];
+  if (keys.length === 0) return { ok: false, error: "invalid" };
+  const portal = String(await portalBase()).replace(/\/$/, "");
+  const query = `from=${from}&count=${count}&keys=${encodeURIComponent(keys.join(","))}`;
+  try {
+    const res = await fetch(`${portal}/api/datasources/${id}/rows?${query}`, {
       method: "GET",
       headers: await authHeaders()
     });
