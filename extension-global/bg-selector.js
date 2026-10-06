@@ -186,14 +186,37 @@ const BUILD_ITEMS = [
 const BUILD_MENU_IDS = new Set(BUILD_ITEMS.map(([id]) => id));
 
 /**
- * Every menu id this extension creates, used to suppress the whole menu on our own panel.
- * Built from the same source lists as the creates, so a new entry cannot be forgotten here.
+ * Menu ids for the "build element" branch.
+ *
+ * A flat list of action types cannot say WHICH open process to append to, so the target editor tab
+ * is carried in the id itself: `da-build-act:<editorTabId>:<ActionType>`. When more than one editor
+ * is open, the parent gains one child per process (`da-build-proc:<editorTabId>`) and the action
+ * list moves under it — "Add action ▸ process ▸ action type". With a single editor the process
+ * level is skipped so the common case keeps its short path.
+ */
+const CTX_BUILD_PROC_PREFIX = "da-build-proc:";
+const CTX_BUILD_ACT_PREFIX = "da-build-act:";
+function buildActionMenuId(tabId, type) { return `${CTX_BUILD_ACT_PREFIX}${tabId}:${type}`; }
+/** Decode an action menu id back into its target tab and action, or null when it is not one. */
+function parseBuildActionMenuId(id) {
+  if (typeof id !== "string" || !id.startsWith(CTX_BUILD_ACT_PREFIX)) return null;
+  const rest = id.slice(CTX_BUILD_ACT_PREFIX.length);
+  const sep = rest.indexOf(":");
+  if (sep < 0) return null;
+  const tabId = Number(rest.slice(0, sep));
+  const actionType = rest.slice(sep + 1);
+  if (!Number.isFinite(tabId) || !actionType) return null;
+  return { tabId, actionType };
+}
+
+/**
+ * The static menu ids this extension creates. The build action/process ids are dynamic (they carry
+ * the editor tab id), so they are matched by prefix instead of being listed here.
  */
 const ALL_MENU_IDS = [
   CTX_PARENT,
   CTX_BUILD_PARENT,
-  ...CTX_ITEMS.map(([id]) => id),
-  ...BUILD_ITEMS.map(([id]) => id)
+  ...CTX_ITEMS.map(([id]) => id)
 ];
 
 
@@ -238,7 +261,9 @@ const CTX_LABELS = {
     "build.manyEditors": "بیش از یک ادیتور باز است؛ فقط یکی را باز بگذارید.",
     "build.locked": "این فرآیند قفل است و نود جدید نمی‌پذیرد.",
     "build.noElement": "المانی انتخاب نشده است. ابتدا روی آن راست‌کلیک کنید.",
-    "build.unknownType": "این نوع اقدام پشتیبانی نمی‌شود؛ افزونه را به‌روز کنید."
+    "build.unknownType": "این نوع اقدام پشتیبانی نمی‌شود؛ افزونه را به‌روز کنید.",
+    "build.process": "فرآیند #{id}",
+    "build.wrongProcess": "این زبانه فرآیند دیگری را باز کرده است؛ زبانهٔ درست را باز کنید."
   },
   en: {
     "ctx.parent": "Copy selector",
@@ -269,7 +294,9 @@ const CTX_LABELS = {
     "build.manyEditors": "More than one editor is open; keep only one.",
     "build.locked": "This process is locked and cannot take a new node.",
     "build.noElement": "No element selected. Right-click one first.",
-    "build.unknownType": "This action type is not supported; update the extension."
+    "build.unknownType": "This action type is not supported; update the extension.",
+    "build.process": "Process #{id}",
+    "build.wrongProcess": "This tab has a different process open; open the right one."
   }
 };
 
@@ -326,6 +353,85 @@ async function isOnOurPortal(url) {
   return /:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
 }
 
+/**
+ * Build the "add element to process" branch of the context menu.
+ *
+ * The target process is baked into the item ids, because a context menu cannot ask a question at
+ * click time. With one editor open the process level is skipped — the action list sits directly
+ * under the parent, exactly as before. With several open, each process becomes a submenu holding
+ * the action list, which is what lets the user say which open diagram the node belongs to. Zero
+ * editors still shows the flat list so a click can explain what is missing, rather than the menu
+ * looking broken.
+ */
+async function createBuildMenuItems(culture, urlPatterns) {
+  const create = (opts) => chrome.contextMenus.create(opts, () => { void chrome.runtime.lastError; });
+
+  create({
+    id: CTX_BUILD_PARENT,
+    title: ctxT(culture, "build.parent"),
+    contexts: ["all"],
+    documentUrlPatterns: urlPatterns
+  });
+
+  const editors = typeof listEditorTabs === "function" ? await listEditorTabs() : [];
+
+  if (editors.length > 1) {
+    for (const ed of editors) {
+      const procId = `${CTX_BUILD_PROC_PREFIX}${ed.id}`;
+      create({
+        id: procId,
+        parentId: CTX_BUILD_PARENT,
+        title: await editorProcessLabel(ed, culture),
+        contexts: ["all"],
+        documentUrlPatterns: urlPatterns
+      });
+      for (const [type, key] of BUILD_ITEMS) {
+        create({
+          id: buildActionMenuId(ed.id, type),
+          parentId: procId,
+          title: ctxT(culture, key),
+          contexts: ["all"],
+          documentUrlPatterns: urlPatterns
+        });
+      }
+    }
+    return;
+  }
+
+  const tabId = editors[0]?.id ?? 0;
+  for (const [type, key] of BUILD_ITEMS) {
+    create({
+      id: buildActionMenuId(tabId, type),
+      parentId: CTX_BUILD_PARENT,
+      title: ctxT(culture, key),
+      contexts: ["all"],
+      documentUrlPatterns: urlPatterns
+    });
+  }
+}
+
+/**
+ * Label for a process submenu entry: the editor's own heading when it can be read, else its id.
+ *
+ * The tab's own title is the generic "editor — <app>", identical for every process, so it cannot
+ * tell two open diagrams apart. The heading inside the page can, and the id is a serviceable
+ * fallback that is at least unambiguous.
+ */
+async function editorProcessLabel(ed, culture) {
+  let name = "";
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: ed.id },
+      func: () => {
+        const el = document.getElementById("flow-title");
+        return el ? String(el.textContent || "").trim() : "";
+      }
+    });
+    name = String(res?.result || "").trim();
+  } catch { /* tab gone or not scriptable — fall through to the id */ }
+  return name || ctxT(culture, "build.process").replace("{id}", String(ed.taskId || ed.id));
+}
+
 function ensureContextMenus() {
   // Collapse a burst of triggers into a single rebuild.
   if (ctxMenuQueued) return ctxMenuChain;
@@ -359,24 +465,9 @@ function ensureContextMenus() {
           }, () => { void chrome.runtime.lastError; });
         }
 
-        // The second top-level menu. Its children ARE the element types: a context menu is a flat
-        // list, so an extra nesting level would only repeat the parent's own label as a second,
-        // identical entry (which is exactly the duplication the owner spotted).
-        chrome.contextMenus.create({
-          id: CTX_BUILD_PARENT,
-          title: ctxT(culture, "build.parent"),
-          contexts: ["all"],
-          documentUrlPatterns: urlPatterns
-        }, () => { void chrome.runtime.lastError; });
-        for (const [type, key] of BUILD_ITEMS) {
-          chrome.contextMenus.create({
-            id: type,
-            parentId: CTX_BUILD_PARENT,
-            title: ctxT(culture, key),
-            contexts: ["all"],
-            documentUrlPatterns: urlPatterns
-          }, () => { void chrome.runtime.lastError; });
-        }
+        // The second top-level menu, built from the CURRENT set of open editors so the user can
+        // pick the process instead of the extension having to guess at click time.
+        await createBuildMenuItems(culture, urlPatterns);
       } catch (err) {
         console.warn("[selector] context menu rebuild failed", err?.message || err);
       }
@@ -401,6 +492,52 @@ try {
   });
 } catch { /* ignore */ }
 ensureContextMenus();
+
+/**
+ * Keep the build branch in step with the open editor tabs.
+ *
+ * The menu lists processes, so it must be rebuilt when one is opened, closed or replaced. Tab events
+ * fire far more often than that set changes, so a rebuild only happens when the decoded editor set
+ * (id + url) actually differs, and bursts are debounced.
+ */
+let editorMenuTimer = null;
+let editorMenuSettleTimer = null;
+let editorMenuSig = null;
+
+async function rebuildEditorMenus() {
+  if (typeof listEditorTabs !== "function") return;
+  let editors = [];
+  try { editors = await listEditorTabs(); } catch { return; }
+  const sig = editors.map((e) => `${e.id}|${e.url}`).sort().join("\n");
+  if (sig === editorMenuSig) return;
+  editorMenuSig = sig;
+  ensureContextMenus();
+  // An editor fills its heading in only after the graph loads, so with several processes open one
+  // later rebuild refreshes the submenu names (which are read from that heading).
+  if (editors.length > 1 && editorMenuSettleTimer == null) {
+    editorMenuSettleTimer = setTimeout(() => {
+      editorMenuSettleTimer = null;
+      ensureContextMenus();
+    }, 2000);
+  }
+}
+
+function scheduleEditorMenuRefresh() {
+  if (typeof listEditorTabs !== "function") return;
+  if (editorMenuTimer) clearTimeout(editorMenuTimer);
+  editorMenuTimer = setTimeout(() => { editorMenuTimer = null; void rebuildEditorMenus(); }, 400);
+}
+
+try {
+  if (chrome.tabs?.onCreated?.addListener) chrome.tabs.onCreated.addListener(() => scheduleEditorMenuRefresh());
+  if (chrome.tabs?.onRemoved?.addListener) chrome.tabs.onRemoved.addListener(() => scheduleEditorMenuRefresh());
+  if (chrome.tabs?.onUpdated?.addListener) {
+    chrome.tabs.onUpdated.addListener((_tabId, info) => {
+      // URL changes decide whether a tab still is an editor; "complete" is when its heading exists.
+      if (info?.url || info?.status === "complete") scheduleEditorMenuRefresh();
+    });
+  }
+} catch { /* ignore */ }
 
 /**
  * URL patterns for the menus: all ordinary web pages.
@@ -446,9 +583,13 @@ if (chrome.contextMenus?.onClicked?.addListener) {
     // Our own panel is not a target surface: these entries mean nothing there.
     if (await isOnOurPortal(tab.url || info.pageUrl)) return;
 
-    // "Build element": append a node to the flow open in the (single) editor tab.
-    if (BUILD_MENU_IDS.has(info.menuItemId)) {
-      await handleBuildElement(info, tab).catch((err) => {
+    // Process submenu headers are containers, not actions.
+    if (typeof info.menuItemId === "string" && info.menuItemId.startsWith(CTX_BUILD_PROC_PREFIX)) return;
+
+    // "Build element": append a node to the editor the user picked (its tab id is in the menu id).
+    const buildTarget = parseBuildActionMenuId(info.menuItemId);
+    if (buildTarget) {
+      await handleBuildElement(info, tab, buildTarget).catch((err) => {
         console.warn("[selector] build element failed", err?.message || err);
         notifyBuildError(tab.id, "build.noElement");
       });
@@ -479,17 +620,25 @@ if (chrome.contextMenus?.onClicked?.addListener) {
 }
 
 /**
- * Append a node for the right-clicked element to the flow open in the editor.
+ * Append a node for the right-clicked element to a SPECIFIC editor.
  *
  * Order of checks is deliberate — each failure has a different fix, and reporting the wrong one
  * sends the user to the wrong place:
- *   1. is an element actually captured?   (else: right-click the element first)
- *   2. is EXACTLY ONE editor open?        (else: no editor / too many editors)
- *   3. hand the node to that editor and let IT validate the graph (locked, child-of-template).
+ *   1. is the action type one this build supports?
+ *   2. is an element actually captured?   (else: right-click the element first)
+ *   3. which editor?  the user already answered when the menu listed the open processes; that
+ *      choice is revalidated here because the menu is built ahead of time and its tab may have
+ *      closed or navigated away.
+ *   4. hand the node to that editor and let IT validate the graph (locked, child-of-template).
  * The editor is the only place that knows the graph shape and its write permissions, so the
  * decision to accept the node belongs there, not here.
  */
-async function handleBuildElement(info, tab) {
+async function handleBuildElement(info, tab, target) {
+  if (!BUILD_MENU_IDS.has(target.actionType)) {
+    notifyBuildError(tab.id, "build.unknownType");
+    return;
+  }
+
   const frameId = info.frameId ?? 0;
 
   const cap = await captureLeaf(tab, frameId, true);
@@ -498,27 +647,47 @@ async function handleBuildElement(info, tab) {
     return;
   }
 
-  const found = await findEditorTab();
-  if (!found.ok) {
-    notifyBuildError(tab.id, found.reason === "many_editors" ? "build.manyEditors" : "build.noEditor");
-    return;
+  let editorTabId = 0;
+  let taskId = "";
+  if (target.tabId > 0) {
+    let live = null;
+    try { live = await chrome.tabs.get(target.tabId); } catch { live = null; }
+    const liveTaskId = live ? editorTaskIdFromUrl(live.url || live.pendingUrl || "") : "";
+    if (liveTaskId) {
+      editorTabId = target.tabId;
+      taskId = liveTaskId;
+    }
+  }
+  // The encoded tab is gone (or was never known because no editor was open when the menu was
+  // built). Fall back to the single-editor lookup, which still explains an ambiguous state.
+  if (!editorTabId) {
+    const found = await findEditorTab();
+    if (!found.ok) {
+      notifyBuildError(tab.id, found.reason === "many_editors" ? "build.manyEditors" : "build.noEditor");
+      return;
+    }
+    editorTabId = found.tabId;
+    taskId = found.taskId;
   }
 
   const payload = {
     source: "da-extension",
     type: "da-build-node",
-    actionType: info.menuItemId,
+    actionType: target.actionType,
     selector: cap.captured.selector,
     framePathJson: cap.captured.framePathJson || null,
     url: cap.captured.url || null,
-    matchCount: cap.captured.matchCount ?? null
+    matchCount: cap.captured.matchCount ?? null,
+    // Echo the process so the editor can refuse a tab that no longer shows it, instead of editing
+    // a graph the user did not pick.
+    taskId: taskId || null
   };
 
   let res = null;
   try {
     // The editor listens in the PAGE world (see content/portal-ui.js), so the message is
     // relayed through its content script rather than posted directly from the worker.
-    res = await chrome.tabs.sendMessage(found.tabId, {
+    res = await chrome.tabs.sendMessage(editorTabId, {
       type: "relayToPage",
       payload
     });

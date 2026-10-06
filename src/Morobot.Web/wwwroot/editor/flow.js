@@ -6456,6 +6456,13 @@
     if (!canModify) return buildRefusal("build.locked", "فقط مشاهده");
     if (structLocked) return buildRefusal("build.locked", "فرآیند فرزند قالب");
 
+    // The extension resolves which open editor to target (the menu lists the open processes) and
+    // echoes the chosen process id back. If this tab now shows a different process, refusing is the
+    // only safe answer — otherwise the node lands in a graph the user did not pick.
+    if (msg.taskId != null && String(msg.taskId) !== String(taskId)) {
+      return buildRefusal("build.wrongProcess");
+    }
+
     const actionType = String(msg.actionType || "").trim();
     const selector = String(msg.selector || "").trim();
     if (!actionType) return buildRefusal("build.noElement");
@@ -8394,8 +8401,14 @@
     let src = n.contentSourceType;
     const at = n.actionType || "";
     if (!src || src === "None") {
+      // The spec's elementVal flag says an action MAY read its value from a page element; it is not
+      // a default. Defaulting to "Elements" made a recorded step — which carries the value it was
+      // given (a constant, or navigateUrl for GoToUrl) and no source — render as if it read from the
+      // page, pointing at a selector the recorder never captured. Only a real element-source
+      // selector proves the value comes from an element; otherwise the constant is the honest
+      // reading, and it matches what the player assumes when the field is absent.
       src = n.valueFromSource ? "DataSource"
-        : (stepAllowsElementValue(at) ? "Elements" : "Constant");
+        : (stepAllowsElementValue(at) && n.equalSelectorValue ? "Elements" : "Constant");
     }
     const allowed = new Set(["Constant", "DataSource"]);
     if (stepAllowsElementValue(at)) allowed.add("Elements");

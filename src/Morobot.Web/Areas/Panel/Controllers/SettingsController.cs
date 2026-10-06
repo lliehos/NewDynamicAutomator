@@ -44,7 +44,29 @@ public class SettingsController : Controller
         ViewBag.Email = dbUser?.Email ?? "";
         ViewBag.Mobile = dbUser?.Mobile ?? "";
         ViewBag.AvatarPath = dbUser?.AvatarPath ?? "";
+
+        var (pwdMin, pwdComplexity, pwdDirectory) = await _auth.GetPasswordPolicyAsync(UserId, ct);
+        ViewBag.PasswordMinLength = pwdMin;
+        ViewBag.PasswordRequireComplexity = pwdComplexity;
+        ViewBag.PasswordDirectoryManaged = pwdDirectory;
         return View();
+    }
+
+    /// <summary>Change the signed-in user's own password, after verifying the current one.</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ChangePassword(
+        string? currentPassword, string? newPassword, string? confirmPassword, CancellationToken ct)
+    {
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var (ok, errorKey) = await _auth.ChangePasswordAsync(
+            UserId, currentPassword, newPassword, confirmPassword, ip, ct);
+
+        // Reuses the profile alert slots so the page needs no extra banner plumbing.
+        TempData[ok ? "ProfileOk" : "ProfileError"] = ok
+            ? "settings.passwordSaved"
+            : errorKey ?? "settings.passwordFailed";
+        return RedirectToAction(nameof(Index));
     }
 
     [HttpPost]

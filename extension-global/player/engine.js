@@ -185,8 +185,10 @@ function normalizeStepValueSource(n) {
 
   let src = n.contentSourceType;
   if (!src || src === "None") {
+    // elementVal is a capability, not a default: a step with no source that carries no element
+    // selector is a constant (this is how recorded steps arrive — see the editor's matching rule).
     src = n.valueFromSource ? "DataSource"
-      : (spec.elementVal ? "Elements" : "Constant");
+      : (spec.elementVal && n.equalSelectorValue ? "Elements" : "Constant");
   }
 
   const allowed = new Set(["Constant"]);

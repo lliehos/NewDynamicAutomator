@@ -666,29 +666,50 @@ async function listOpenTabs() {
 }
 
 /**
- * Find the ONE flow-editor tab, or explain why there is not exactly one.
+ * The process id encoded in an editor URL, or "" when the URL is not an editor route.
+ *
+ * The editor route is /Panel/Tasks/Editor/{id}; the id is read from the URL so a caller knows which
+ * process it is talking to.
+ */
+function editorTaskIdFromUrl(url) {
+  const m = /\/Panel\/Tasks\/Editor\/([^/?#]+)/i.exec(String(url || ""));
+  return m ? decodeURIComponent(m[1]) : "";
+}
+
+/**
+ * Every open flow-editor tab: `{ id, url, taskId }`.
  *
  * The editor holds the graph in memory, so a node can only be appended while that page is open.
- * More than one editor is refused rather than guessed at: appending to the wrong process is a
- * silent, wrong edit, and the user has no way to tell it happened. The owner asked for exactly
- * this rule.
- *
- * The editor route is /Panel/Tasks/Editor/{id}; the id is read from the URL so the caller knows
- * which process it is talking to.
+ * Knowing them ALL — not just whether there is exactly one — is what lets the context menu offer
+ * the open processes and lets the user pick the target instead of the extension refusing whenever
+ * two diagrams happen to be open.
  */
-async function findEditorTab() {
+async function listEditorTabs() {
   const portal = String(await portalBase()).replace(/\/$/, "");
-  const tabs = await chrome.tabs.query({});
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({}); } catch { return []; }
   const editors = [];
   for (const t of tabs) {
     if (!t.id) continue;
     const url = t.url || t.pendingUrl || "";
-    const m = /\/Panel\/Tasks\/Editor\/([^/?#]+)/i.exec(url);
-    if (!m) continue;
+    const taskId = editorTaskIdFromUrl(url);
+    if (!taskId) continue;
     // Same portal only: a stale tab from another host must not be mistaken for the editor.
     if (portal && !url.startsWith(portal) && !/:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url)) continue;
-    editors.push({ id: t.id, url, taskId: decodeURIComponent(m[1]) });
+    editors.push({ id: t.id, url, taskId });
   }
+  return editors;
+}
+
+/**
+ * Find the ONE flow-editor tab, or explain why there is not exactly one.
+ *
+ * Used as the fallback when the menu could not name a tab (no editor was open when it was built, or
+ * the chosen one has since closed). Ambiguity is still refused rather than guessed at: appending to
+ * the wrong process is a silent, wrong edit — the menu is the place where the user resolves it.
+ */
+async function findEditorTab() {
+  const editors = await listEditorTabs();
   if (editors.length === 0) return { ok: false, reason: "no_editor" };
   if (editors.length > 1) return { ok: false, reason: "many_editors", count: editors.length };
   return { ok: true, tabId: editors[0].id, taskId: editors[0].taskId, url: editors[0].url };
@@ -1845,6 +1866,10 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
         title: buildRecordedActionTitle(a, i),
         groupNodeId: gid,
         actionType: a.actionType || "Click",
+        // The recorded value is a constant (the typed text, or the target address for GoToUrl).
+        // Stating it stops the editor/player from inferring "element" for an action that merely
+        // permits an element source.
+        contentSourceType: "Constant",
         selectorValue: a.elementValue || "",
         constantValue: isNav ? "" : (a.value || ""),
         navigateUrl: isNav ? (a.url || a.value || "") : null,
@@ -2210,6 +2235,10 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
         title: buildRecordedActionTitle(a, i),
         groupNodeId: gid,
         actionType: a.actionType || "Click",
+        // The recorded value is a constant (the typed text, or the target address for GoToUrl).
+        // Stating it stops the editor/player from inferring "element" for an action that merely
+        // permits an element source.
+        contentSourceType: "Constant",
         selectorValue: a.elementValue || "",
         constantValue: isNav ? "" : (a.value || ""),
         navigateUrl: isNav ? (a.url || a.value || "") : null,

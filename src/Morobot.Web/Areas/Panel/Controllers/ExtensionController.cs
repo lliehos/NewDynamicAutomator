@@ -162,11 +162,11 @@ public class ExtensionController : Controller
             }
         }
         ms.Position = 0;
-        var name = role.Equals(ExtensionSyncService.RoleSmart, StringComparison.OrdinalIgnoreCase)
-            || role.Equals("smart-recorder", StringComparison.OrdinalIgnoreCase)
-            ? "morobot-smart-recorder.zip"
-            : "morobot-global.zip";
-        return File(ms, "application/zip", name);
+        // The version is read from the package that was just synced, so the file the browser saves
+        // is named after the exact build inside it — otherwise every release lands in the user's
+        // Downloads folder under the same name and the older one is silently overwritten.
+        var version = _sync.GetStamp(role, syncFirst: false).Version;
+        return File(ms, "application/zip", PackageFileName(role, version));
     }
 
     /// <summary>
@@ -235,6 +235,30 @@ public class ExtensionController : Controller
         var key = (role ?? "").Trim().ToLowerInvariant();
         if (key is "smart" or "smart-recorder" or "smartrecorder" or "ai" or "learn") return "smart";
         return "global";
+    }
+
+    /// <summary>
+    /// The zip name handed to the browser, version included (e.g. <c>morobot-global-1.4.2.zip</c>).
+    /// Callers that reach the same package through different role aliases still get one name because
+    /// the role is canonicalised first, and the version is sanitised because it comes from the
+    /// extension manifest and ends up in both a file name and a Content-Disposition header.
+    /// </summary>
+    private static string PackageFileName(string? role, string? version)
+    {
+        var baseName = CanonicalRole(role) == "smart" ? "morobot-smart-recorder" : "morobot-global";
+        var suffix = SanitizeVersion(version);
+        return suffix.Length == 0 ? $"{baseName}.zip" : $"{baseName}-{suffix}.zip";
+    }
+
+    private static string SanitizeVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version)) return "";
+        var sb = new StringBuilder(version.Length);
+        foreach (var ch in version.Trim())
+        {
+            if (char.IsAsciiLetterOrDigit(ch) || ch is '.' or '-' or '_') sb.Append(ch);
+        }
+        return sb.ToString();
     }
 
     /// <summary>

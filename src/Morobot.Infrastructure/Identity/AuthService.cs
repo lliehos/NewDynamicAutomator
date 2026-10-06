@@ -637,4 +637,88 @@ public class AuthService
             Entitlements = entitlements
         }, null);
     }
+
+    /// <summary>
+    /// The password rules that apply to a user's own password, plus whether this account may change
+    /// its password here at all. The panel uses it to guard the input length and to hide the form for
+    /// accounts whose credential the directory owns.
+    /// </summary>
+    public async Task<(int minLength, bool requireLetterAndDigit, bool directoryManaged)> GetPasswordPolicyAsync(
+        int userId, CancellationToken ct = default)
+    {
+        var user = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == userId, ct);
+        var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
+        var allowsPlans = await _entitlements.AllowsPlanManagementAsync(ct);
+        var (min, complexity) = PasswordPolicy.Resolve(
+            allowsPlans ? user?.Plan : null, globalMinLen, globalComplexity);
+        var directoryManaged = user is not null && await IsDirectoryManagedAsync(user, ct);
+        return (min, complexity, directoryManaged);
+    }
+
+    /// <summary>
+    /// Change the signed-in user's own password. The current password must be supplied and verified
+    /// first so a stolen session alone cannot lock the owner out, and the new one must satisfy the
+    /// same effective policy the account is held to everywhere else.
+    /// </summary>
+    public async Task<(bool ok, string? errorKey)> ChangePasswordAsync(
+        int userId,
+        string? currentPassword,
+        string? newPassword,
+        string? confirmPassword,
+        string? ip = null,
+        CancellationToken ct = default)
+    {
+        var user = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == userId, ct);
+        if (user is null) return (false, "settings.errorNotFound");
+
+        // A directory-owned account has no local credential to change; writing one would only create
+        // a password the directory never sees. The Admin break-glass row is the exception, because its
+        // local password is exactly what lets an administrator back in when the directory is down.
+        if (await IsDirectoryManagedAsync(user, ct))
+            return (false, "password.errorDirectoryManaged");
+
+        var verify = _hasher.VerifyHashedPassword(user, user.PasswordHash, currentPassword ?? "");
+        if (verify == PasswordVerificationResult.Failed)
+            return (false, "password.errorCurrent");
+
+        if (string.IsNullOrEmpty(newPassword))
+            return (false, "password.errorRequired");
+
+        if (string.Equals(newPassword, currentPassword, StringComparison.Ordinal))
+            return (false, "password.errorSameAsCurrent");
+
+        if (!string.Equals(newPassword, confirmPassword ?? "", StringComparison.Ordinal))
+            return (false, "register.errorPasswordMismatch");
+
+        var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
+        var allowsPlans = await _entitlements.AllowsPlanManagementAsync(ct);
+        var (pwdOk, pwdErr) = PasswordPolicy.Validate(
+            newPassword, allowsPlans ? user.Plan : null, globalMinLen, globalComplexity);
+        if (!pwdOk)
+            return (false, pwdErr);
+
+        user.PasswordHash = _hasher.HashPassword(user, newPassword);
+        await _db.SaveChangesAsync(ct);
+
+        await _events.LogAsync(
+            "Audit", "Auth", "ChangePassword",
+            $"Password changed for: {user.UserName}",
+            user.Id, user.UserName,
+            ipAddress: ip,
+            ct: ct);
+
+        return (true, null);
+    }
+
+    /// <summary>
+    /// True when the account's credentials live in the directory rather than in the local table. The
+    /// Admin row is never treated as directory-owned: its local password is the documented
+    /// break-glass path, so an administrator must remain able to change it.
+    /// </summary>
+    private async Task<bool> IsDirectoryManagedAsync(AppUser user, CancellationToken ct)
+    {
+        if (user.Role == UserRole.Admin) return false;
+        var providers = await _authMode.GetProvidersAsync(ct);
+        return providers.ResolveFor(user.UserName) == AuthMode.Ldap;
+    }
 }

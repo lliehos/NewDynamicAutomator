@@ -382,6 +382,9 @@
     "errorFreeShort": "Password must be at least 3 characters.",
     "errorStrongShort": "For Pro/Gold, password must be at least 8 characters.",
     "errorStrongComplexity": "Password must include a letter and a digit.",
+    "errorCurrent": "Current password is incorrect.",
+    "errorSameAsCurrent": "The new password must be different from the current one.",
+    "errorDirectoryManaged": "This account's password is managed by the organizational directory (LDAP).",
     "strongHint": "Password must match the target plan policy (length and complexity)."
   },
   "plan": {
@@ -1189,6 +1192,15 @@
     "avatarSaveFailed": "Could not save the profile image.",
     "errorRequired": "First name, last name, email, and mobile are required.",
     "errorNotFound": "User not found.",
+    "changePassword": "Change password",
+    "currentPassword": "Current password",
+    "newPassword": "New password",
+    "confirmPassword": "Confirm new password",
+    "passwordMinHint": "The new password must be at least {min} characters.",
+    "passwordComplexityHint": "It must also include a letter and a digit.",
+    "passwordSaved": "Password changed.",
+    "passwordFailed": "Could not change the password.",
+    "passwordDirectoryNote": "This account's password is managed by the organizational directory (LDAP) and cannot be changed here.",
     "noteLocal": "Your profile is stored on the server; the selected language is kept in a cookie."
   },
   "tasks": {

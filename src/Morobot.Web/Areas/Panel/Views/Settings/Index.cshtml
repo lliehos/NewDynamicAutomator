@@ -6,6 +6,14 @@
   var incomplete = ViewBag.Incomplete == true;
   var errKey = TempData["ProfileError"] as string;
   var okKey = TempData["ProfileOk"] as string;
+  var pwdMinLength = (int)(ViewBag.PasswordMinLength ?? 3);
+  var pwdRequireComplexity = ViewBag.PasswordRequireComplexity == true;
+  var pwdDirectoryManaged = ViewBag.PasswordDirectoryManaged == true;
+  var pwdHint = L.T("settings.passwordMinHint", ("min", pwdMinLength.ToString()));
+  if (pwdRequireComplexity)
+  {
+    pwdHint += " " + L["settings.passwordComplexityHint"];
+  }
   // The upgrade page is a plan operation; without licence plan management there are no levels to
   // move to, so the link is not offered at all.
   var allowsPlanManagement = TenantBrandingViewDataFilter.AllowsPlanManagement(ViewData);
@@ -107,6 +115,43 @@
           {
             <hr class="my-4" />
             <a class="btn btn-label-primary" asp-area="Panel" asp-controller="Account" asp-action="Upgrade" data-i18n="plan.upgradeTitle">@L["plan.upgradeTitle"]</a>
+          }
+        </div>
+      </div>
+
+      <div class="card mt-4">
+        <div class="card-header">
+          <h5 class="mb-0" data-i18n="settings.changePassword">@L["settings.changePassword"]</h5>
+        </div>
+        <div class="card-body">
+          @if (pwdDirectoryManaged)
+          {
+            @* The directory owns this credential; offering a form that cannot take effect would be
+               worse than saying so. *@
+            <p class="text-muted small mb-0" data-i18n="settings.passwordDirectoryNote">@L["settings.passwordDirectoryNote"]</p>
+          }
+          else
+          {
+            <form method="post" asp-area="Panel" asp-controller="Settings" asp-action="ChangePassword">
+              @Html.AntiForgeryToken()
+              <div class="mb-3">
+                <label class="form-label" for="da-pwd-current" data-i18n="settings.currentPassword">@L["settings.currentPassword"]</label>
+                <input class="form-control" id="da-pwd-current" name="currentPassword" type="password"
+                       autocomplete="current-password" required />
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="da-pwd-new" data-i18n="settings.newPassword">@L["settings.newPassword"]</label>
+                <input class="form-control" id="da-pwd-new" name="newPassword" type="password"
+                       autocomplete="new-password" required minlength="@pwdMinLength" />
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="da-pwd-confirm" data-i18n="settings.confirmPassword">@L["settings.confirmPassword"]</label>
+                <input class="form-control" id="da-pwd-confirm" name="confirmPassword" type="password"
+                       autocomplete="new-password" required minlength="@pwdMinLength" />
+              </div>
+              <div class="form-text mb-3">@pwdHint</div>
+              <button type="submit" class="btn btn-primary" data-i18n="settings.changePassword">@L["settings.changePassword"]</button>
+            </form>
           }
         </div>
       </div>

@@ -38,7 +38,8 @@ public sealed class RequireProfileCompleteFilter : IAsyncActionFilter
             || (string.Equals(controller, "Settings", StringComparison.OrdinalIgnoreCase)
                 && (string.Equals(action, "Index", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(action, "SaveProfile", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(action, "SetLanguage", StringComparison.OrdinalIgnoreCase)));
+                    || string.Equals(action, "SetLanguage", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(action, "ChangePassword", StringComparison.OrdinalIgnoreCase)));
 
         if (allowed)
         {
