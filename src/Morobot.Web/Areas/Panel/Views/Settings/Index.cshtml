@@ -4,6 +4,7 @@
   var culture = L.Culture;
   var userName = (string)(ViewBag.UserName ?? User.Identity?.Name ?? "");
   var incomplete = ViewBag.Incomplete == true;
+  var pwdChangeRequired = ViewBag.PasswordChangeRequired == true;
   var errKey = TempData["ProfileError"] as string;
   var okKey = TempData["ProfileOk"] as string;
   var pwdMinLength = (int)(ViewBag.PasswordMinLength ?? 3);
@@ -30,6 +31,13 @@
   @if (incomplete)
   {
     <div class="alert alert-warning">برای ادامه کار با پنل، نام، نام خانوادگی، ایمیل و موبایل را تکمیل کنید.</div>
+  }
+  @if (pwdChangeRequired)
+  {
+    <div class="alert alert-warning">
+      <span data-i18n="settings.passwordChangeRequired">@L["settings.passwordChangeRequired"]</span>
+      <a class="alert-link" href="#da-pwd-current" data-i18n="settings.passwordChangeRequiredLink">@L["settings.passwordChangeRequiredLink"]</a>
+    </div>
   }
   @if (!string.IsNullOrEmpty(errKey))
   {

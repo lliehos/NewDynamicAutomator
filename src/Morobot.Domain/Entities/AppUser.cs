@@ -30,6 +30,14 @@ public class AppUser
     public int? PlanId { get; set; }
     public DateTime? PlanExpiresAtUtc { get; set; }
 
+    /// <summary>
+    /// Set when the account's password no longer satisfies the policy its plan now states — an admin
+    /// moved the user to a stricter plan without setting a new password. Nobody can tell whether the
+    /// stored one would pass (only its hash is kept), so the user picks a new one: the next sign-in
+    /// sends them to the change-password form, and this clears once they save a compliant password.
+    /// </summary>
+    public bool PasswordChangeRequired { get; set; }
+
     public Plan? Plan { get; set; }
     public ICollection<Process> CreatedProcesses { get; set; } = new List<Process>();
     public ICollection<ProcessShare> ProcessShares { get; set; } = new List<ProcessShare>();

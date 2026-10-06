@@ -164,6 +164,7 @@ public class AppDbContext : DbContext
             e.HasIndex(x => x.NationalId);
             e.HasIndex(x => x.DeploymentInstanceId);
             e.Property(x => x.PreferredLanguage).HasMaxLength(10).HasDefaultValue("fa");
+            e.Property(x => x.PasswordChangeRequired).HasDefaultValue(false);
             e.Property(x => x.Role).HasConversion<int>();
             e.HasOne(x => x.Plan)
                 .WithMany(x => x.Users)

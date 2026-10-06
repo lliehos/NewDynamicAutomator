@@ -70,6 +70,12 @@
       @* The rule behind the field follows the same licence switch as the plan picker: with plans the
          chosen plan states it, without them the deployment-wide policy does. *@
       <div class="admin-field-hint">@L[allowsPlanManagement ? "admin.users.passwordHint" : "admin.users.passwordHintGlobal"]</div>
+      @* A pending requirement is the outcome of an earlier plan move, so say it is still waiting
+         rather than letting it look like nothing happened. *@
+      @if (Model.PasswordChangeRequired)
+      {
+        <div class="admin-field-hint text-warning">@L["admin.users.passwordChangePending"]</div>
+      }
     </div>
   </div>
   <div asp-validation-summary="All" class="text-danger small" style="grid-column:1/-1"></div>

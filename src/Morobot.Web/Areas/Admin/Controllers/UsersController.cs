@@ -1,6 +1,7 @@
 using Morobot.Domain.Entities;
 using Morobot.Domain.Enums;
 using Morobot.Domain;
+using Morobot.Infrastructure.Identity;
 using Morobot.Infrastructure.Persistence;
 using Morobot.Infrastructure.Services;
 using Morobot.Web.Services;
@@ -25,6 +26,7 @@ public class UsersController : Controller
     private readonly TaskService _tasks;
     private readonly ILocaleService _locale;
     private readonly EntitlementService _entitlements;
+    private readonly AuthService _auth;
     private readonly PasswordHasher<AppUser> _hasher = new();
 
     public UsersController(
@@ -36,7 +38,8 @@ public class UsersController : Controller
         SystemSettingsService settings,
         TaskService tasks,
         ILocaleService locale,
-        EntitlementService entitlements)
+        EntitlementService entitlements,
+        AuthService auth)
     {
         _db = db;
         _events = events;
@@ -47,6 +50,7 @@ public class UsersController : Controller
         _tasks = tasks;
         _locale = locale;
         _entitlements = entitlements;
+        _auth = auth;
     }
 
     /// <summary>
@@ -228,20 +232,14 @@ public class UsersController : Controller
         // password" rule must not fire.
         var wasStrict = PasswordPolicy.IsStrict(allowsPlans ? user.Plan : null, globalMinLen, globalComplexity);
         var needsStrict = PasswordPolicy.IsStrict(allowsPlans ? targetPlan : null, globalMinLen, globalComplexity);
-
-        if (allowsPlans && needsStrict && !wasStrict && string.IsNullOrWhiteSpace(newPassword))
-        {
-            ModelState.AddModelError(nameof(newPassword), "Target plan requires a new password matching its policy.");
-            await FillPlans(ct);
-            user.FirstName = firstName;
-            user.LastName = lastName;
-            user.Email = email;
-            user.NationalId = nationalId;
-            user.PlanId = planId;
-            user.Role = role;
-            user.IsActive = isActive;
-            return View(user);
-        }
+        // Nobody can tell whether the password the user already has would satisfy the stricter plan —
+        // only its hash is stored. Blocking the move until the admin invents one would mean the admin
+        // also has to hand it over, so the move is saved and the user is asked to choose their own at
+        // the next sign-in. A directory-owned account is the exception: it has no local password to
+        // strengthen (and no local password its owner knows), so nothing is asked of it here.
+        var moveNeedsPasswordChange = allowsPlans && needsStrict && !wasStrict
+            && string.IsNullOrWhiteSpace(newPassword)
+            && !await _auth.IsDirectoryManagedAsync(user, ct);
 
         if (!string.IsNullOrWhiteSpace(newPassword))
         {
@@ -284,10 +282,20 @@ public class UsersController : Controller
         // Only write the plan when it is managed: the field is hidden without the licence, so the
         // POST carries nothing and assigning it would clear the stored plan on every edit.
         if (allowsPlans) user.PlanId = planId;
+        // A password the admin just set ends any pending requirement; a move to a stricter plan starts
+        // one; a move back to a plan without its own rule clears it (there is nothing left to meet).
+        // Nothing is guessed from a plan that manages nothing.
+        if (!string.IsNullOrWhiteSpace(newPassword)) user.PasswordChangeRequired = false;
+        else if (moveNeedsPasswordChange) user.PasswordChangeRequired = true;
+        else if (allowsPlans && !needsStrict) user.PasswordChangeRequired = false;
         user.Role = role;
         user.IsActive = isActive;
         await _db.SaveChangesAsync(ct);
-        TempData["Ok"] = "Saved.";
+        // Say which of the two happened: the edit is saved either way, but a plan move without a
+        // password is not the end of it for the user.
+        TempData["Ok"] = moveNeedsPasswordChange
+            ? _locale["admin.users.passwordChangeScheduled"]
+            : "Saved.";
         return RedirectToAction(nameof(Index));
     }
 

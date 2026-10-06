@@ -212,6 +212,8 @@ public class AuthService
         user.PlanId = plan.Id;
         user.Plan = plan;
         user.PasswordHash = _hasher.HashPassword(user, newPwd);
+        // The user just chose a password that satisfies this very plan, so nothing is pending any more.
+        user.PasswordChangeRequired = false;
         await _db.SaveChangesAsync(ct);
 
         await _events.LogAsync(
@@ -551,7 +553,10 @@ public class AuthService
             // Carried in the token so the layout can render the avatar without an
             // extra per-request user query. Refreshed whenever the token is reissued.
             new("avatar_path", user.AvatarPath ?? ""),
-            new("profile_complete", IsProfileComplete(user) ? "1" : "0")
+            new("profile_complete", IsProfileComplete(user) ? "1" : "0"),
+            // Read by the panel gate: a pending password change must be finished before the rest of
+            // the panel opens. Lives in the token so the gate costs no query per request.
+            new("password_change_required", user.PasswordChangeRequired ? "1" : "0")
         };
         if (!string.IsNullOrWhiteSpace(user.FirstName))
             claims.Add(new Claim(ClaimTypes.GivenName, user.FirstName));
@@ -660,7 +665,11 @@ public class AuthService
     /// first so a stolen session alone cannot lock the owner out, and the new one must satisfy the
     /// same effective policy the account is held to everywhere else.
     /// </summary>
-    public async Task<(bool ok, string? errorKey)> ChangePasswordAsync(
+    /// <returns>
+    /// A freshly minted token on success — the password-change flag lives in the cookie claims, so
+    /// the gate has to be released by reissuing it — or an error key.
+    /// </returns>
+    public async Task<(bool ok, string? errorKey, string? token)> ChangePasswordAsync(
         int userId,
         string? currentPassword,
         string? newPassword,
@@ -669,35 +678,37 @@ public class AuthService
         CancellationToken ct = default)
     {
         var user = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == userId, ct);
-        if (user is null) return (false, "settings.errorNotFound");
+        if (user is null) return (false, "settings.errorNotFound", null);
 
         // A directory-owned account has no local credential to change; writing one would only create
         // a password the directory never sees. The Admin break-glass row is the exception, because its
         // local password is exactly what lets an administrator back in when the directory is down.
         if (await IsDirectoryManagedAsync(user, ct))
-            return (false, "password.errorDirectoryManaged");
+            return (false, "password.errorDirectoryManaged", null);
 
         var verify = _hasher.VerifyHashedPassword(user, user.PasswordHash, currentPassword ?? "");
         if (verify == PasswordVerificationResult.Failed)
-            return (false, "password.errorCurrent");
+            return (false, "password.errorCurrent", null);
 
         if (string.IsNullOrEmpty(newPassword))
-            return (false, "password.errorRequired");
+            return (false, "password.errorRequired", null);
 
         if (string.Equals(newPassword, currentPassword, StringComparison.Ordinal))
-            return (false, "password.errorSameAsCurrent");
+            return (false, "password.errorSameAsCurrent", null);
 
         if (!string.Equals(newPassword, confirmPassword ?? "", StringComparison.Ordinal))
-            return (false, "register.errorPasswordMismatch");
+            return (false, "register.errorPasswordMismatch", null);
 
         var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
         var allowsPlans = await _entitlements.AllowsPlanManagementAsync(ct);
         var (pwdOk, pwdErr) = PasswordPolicy.Validate(
             newPassword, allowsPlans ? user.Plan : null, globalMinLen, globalComplexity);
         if (!pwdOk)
-            return (false, pwdErr);
+            return (false, pwdErr, null);
 
         user.PasswordHash = _hasher.HashPassword(user, newPassword);
+        // Whatever a plan move asked for is satisfied now.
+        user.PasswordChangeRequired = false;
         await _db.SaveChangesAsync(ct);
 
         await _events.LogAsync(
@@ -707,7 +718,8 @@ public class AuthService
             ipAddress: ip,
             ct: ct);
 
-        return (true, null);
+        var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
+        return (true, null, CreateToken(user, entitlements));
     }
 
     /// <summary>
@@ -715,10 +727,17 @@ public class AuthService
     /// Admin row is never treated as directory-owned: its local password is the documented
     /// break-glass path, so an administrator must remain able to change it.
     /// </summary>
-    private async Task<bool> IsDirectoryManagedAsync(AppUser user, CancellationToken ct)
+    public async Task<bool> IsDirectoryManagedAsync(AppUser user, CancellationToken ct = default)
     {
         if (user.Role == UserRole.Admin) return false;
         var providers = await _authMode.GetProvidersAsync(ct);
         return providers.ResolveFor(user.UserName) == AuthMode.Ldap;
+    }
+
+    /// <summary>Id-based overload for callers holding only the signed-in id (the panel gate).</summary>
+    public async Task<bool> IsDirectoryManagedAsync(int userId, CancellationToken ct = default)
+    {
+        var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
+        return user is not null && await IsDirectoryManagedAsync(user, ct);
     }
 }

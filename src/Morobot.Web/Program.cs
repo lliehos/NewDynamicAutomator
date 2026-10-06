@@ -39,6 +39,7 @@ builder.Services.AddControllersWithViews(o =>
         o.Filters.Add<Morobot.Web.Filters.BlockAdminFromPanelFilter>();
         o.Filters.Add<Morobot.Web.Filters.LicenseGateFilter>();
         o.Filters.Add<Morobot.Web.Filters.RequireProfileCompleteFilter>();
+        o.Filters.Add<Morobot.Web.Filters.RequirePasswordChangeFilter>();
         o.Filters.Add<Morobot.Web.Filters.UserPresenceFilter>();
         o.Filters.Add<Morobot.Web.Filters.TenantBrandingViewDataFilter>();
     })

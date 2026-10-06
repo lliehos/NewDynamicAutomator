@@ -980,6 +980,8 @@
       "newPassword": "Set a new password",
       "passwordHint": "Fill in to change the password; leave blank to keep the current one. The user plan password policy is enforced.",
       "passwordHintGlobal": "Fill in to change the password; leave blank to keep the current one. The deployment-wide password policy (Settings → Auth) is enforced.",
+      "passwordChangePending": "This user must choose a new password at their next sign-in (moved to a stricter plan without a new password being set).",
+      "passwordChangeScheduled": "Saved. This user must choose a new password at their next sign-in.",
       "reservedHint": "Reserved names (admin, free, pro, guest, test, …) cannot be used.",
       "deleteTitle": "Delete user",
       "deleteConfirm": "User \"{userName}\" and everything that belongs to them will be deleted: {processes} process(es) and {sources} data source(s), along with their cells. Their shares and registered devices go too. This cannot be undone. Continue?",
@@ -1204,6 +1206,8 @@
     "passwordComplexityHint": "It must also include a letter and a digit.",
     "passwordSaved": "Password changed.",
     "passwordFailed": "Could not change the password.",
+    "passwordChangeRequired": "Your plan requires a stronger password than the one you signed in with. Choose a new one that matches the rules below to continue.",
+    "passwordChangeRequiredLink": "Go to the change-password form",
     "passwordDirectoryNote": "This account's password is managed by the organizational directory (LDAP) and cannot be changed here.",
     "noteLocal": "Your profile is stored on the server; the selected language is kept in a cookie."
   },

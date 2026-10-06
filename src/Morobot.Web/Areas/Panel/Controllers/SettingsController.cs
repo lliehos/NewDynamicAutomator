@@ -31,12 +31,15 @@ public class SettingsController : Controller
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
     [HttpGet]
-    public async Task<IActionResult> Index(int? incomplete, CancellationToken ct)
+    public async Task<IActionResult> Index(int? incomplete, int? pwd, CancellationToken ct)
     {
         ViewData["Title"] = _locale["settings.title"];
         ViewBag.Culture = _locale.Culture;
         ViewBag.UserName = User.Identity?.Name ?? "";
         ViewBag.Incomplete = incomplete == 1 || User.FindFirstValue("profile_complete") != "1";
+        // `pwd=1` is what the gate redirects with, so the notice shows even for a session whose token
+        // predates the flag (a plan change does not reissue cookies that are already out there).
+        ViewBag.PasswordChangeRequired = pwd == 1 || User.FindFirstValue("password_change_required") == "1";
 
         var dbUser = await _auth.GetUserAsync(UserId, ct);
         ViewBag.FirstName = dbUser?.FirstName ?? "";
@@ -59,8 +62,12 @@ public class SettingsController : Controller
         string? currentPassword, string? newPassword, string? confirmPassword, CancellationToken ct)
     {
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-        var (ok, errorKey) = await _auth.ChangePasswordAsync(
+        var (ok, errorKey, token) = await _auth.ChangePasswordAsync(
             UserId, currentPassword, newPassword, confirmPassword, ip, ct);
+
+        // The gate reads its flag from the cookie claims, so a successful change has to reissue it —
+        // otherwise the user would be sent back to this same form on every page.
+        if (ok && !string.IsNullOrEmpty(token)) RefreshAuthCookie(token);
 
         // Reuses the profile alert slots so the page needs no extra banner plumbing.
         TempData[ok ? "ProfileOk" : "ProfileError"] = ok
