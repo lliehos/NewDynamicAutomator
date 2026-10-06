@@ -217,14 +217,21 @@ public class TasksController : Controller
     [IgnoreAntiforgeryToken]
     public async Task<IActionResult> NotifyCellEvent([FromBody] DataSourceCellEventDto? ev, CancellationToken ct)
     {
-        if (ev is null || string.IsNullOrWhiteSpace(ev.TaskId) || ev.DataSourceId == 0 || string.IsNullOrWhiteSpace(ev.ColumnKey))
+        if (ev is null || string.IsNullOrWhiteSpace(ev.TaskId) || ev.DataSourceId == 0)
             return BadRequest(new { message = "رویداد سلول ناقص است." });
 
         var op = string.IsNullOrWhiteSpace(ev.Op) ? "read" : ev.Op.Trim().ToLowerInvariant();
-        if (op != "read" && op != "write") op = "read";
+        // insert/delete are structural: a row was added or removed, so they carry no column and the
+        // viewers use RowIndex to shift their cached rows before the next cell flash.
+        var structural = op is "insert" or "delete";
+        if (!structural && op != "read" && op != "write") op = "read";
+        if (!structural && string.IsNullOrWhiteSpace(ev.ColumnKey))
+            return BadRequest(new { message = "رویداد سلول ناقص است." });
         ev.Op = op;
         ev.TaskId = ev.TaskId.Trim();
-        ev.ColumnKey = ev.ColumnKey.Trim();
+        ev.ColumnKey = (ev.ColumnKey ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(ev.EventId))
+            ev.EventId = Guid.NewGuid().ToString("N");
         if (string.IsNullOrWhiteSpace(ev.UserName))
             ev.UserName = User.Identity?.IsAuthenticated == true ? User.Identity.Name : ev.UserName;
 

@@ -1581,16 +1581,70 @@
     return ds;
   }
 
+  /**
+   * Move a source's cached rows to match a row inserted or removed elsewhere.
+   *
+   * The viewer labels each cell with the row index the server gave it, so after a structural change
+   * every index from the touched row down is off by one. Shifting the cache here — rather than
+   * waiting for a reload — is what makes the inserted row appear and keeps the next read/write flash
+   * on the row it really happened on (before this, the flash lit up a neighbour: the cell that now
+   * holds a different row's value).
+   */
+  function shiftDsRows(ds, atIndex, delta) {
+    if (!ds || !delta) return;
+    const at = Number(atIndex);
+    if (!Number.isFinite(at) || at < 0) return;
+    const cells = Array.isArray(ds.cells) ? ds.cells : (ds.cells = []);
+    const rowOf = (c) => Number(c.index ?? c.Index ?? c.rowIndex);
+    const setRow = (c, v) => {
+      if (c.index !== undefined) c.index = v;
+      else if (c.Index !== undefined) c.Index = v;
+      else c.rowIndex = v;
+    };
+    if (delta > 0) {
+      cells.forEach((c) => { const i = rowOf(c); if (Number.isFinite(i) && i >= at) setRow(c, i + delta); });
+      // The new row must exist in the cache even though it is blank, or the row numbering after it
+      // would collapse and every later cell would be one row off again. One empty cell per column
+      // keeps the grid dense, exactly like the server's own AddRows does.
+      const keys = (ds.columnKeys || (ds.columns || []).map((c) => c.key || c.Key) || []).filter(Boolean);
+      keys.forEach((key) => cells.push({ key: String(key), index: at, cellValue: "" }));
+      ds.rowCount = Math.max((Number(ds.rowCount) || 0) + delta, at + 1);
+    } else {
+      for (let i = cells.length - 1; i >= 0; i--) {
+        const idx = rowOf(cells[i]);
+        if (idx === at) cells.splice(i, 1);
+        else if (Number.isFinite(idx) && idx > at) setRow(cells[i], idx + delta);
+      }
+      ds.rowCount = Math.max(0, (Number(ds.rowCount) || 0) + delta);
+    }
+  }
+
   function handleDsCellEvent(ev) {
     if (!ev) return;
     const sid = Number(ev.dataSourceId ?? ev.DataSourceId ?? ev.sourceId ?? ev.SourceId);
     const modal = document.getElementById("ds-viewer");
     const viewing = modal && !modal.hidden && Number(dsViewerState.sourceId) === sid;
+    const op = String(ev.op || ev.Op || "read").toLowerCase();
+    const idx = Number(ev.rowIndex ?? ev.RowIndex ?? 0) || 0;
+    if (op === "insert" || op === "delete") {
+      const target = findDataSourceById(sid);
+      if (target) {
+        shiftDsRows(target, idx, op === "insert" ? 1 : -1);
+        if (viewing) {
+          renderDsViewerTable(target);
+          // Light the first cell of the row that moved, so an insert/delete is seen rather than
+          // inferred from a re-numbered grid.
+          const row = document.getElementById("ds-viewer-table")
+            ?.querySelector(`td[data-row="${idx}"]`);
+          if (row) flashDsCell(row, op === "insert" ? "write" : "read");
+        }
+        renderDataSources();
+      }
+      return;
+    }
     const ds = applyDsCellEventToGraph(ev);
     if (!viewing) return;
-    const op = String(ev.op || ev.Op || "read").toLowerCase();
     const col = String(ev.columnKey ?? ev.ColumnKey ?? "");
-    const idx = Number(ev.rowIndex ?? ev.RowIndex ?? 0) || 0;
     const table = document.getElementById("ds-viewer-table");
     if (op.includes("write") && ds) {
       let td = table?.querySelector(`td[data-row="${idx}"][data-col="${CSS.escape(col)}"]`);
@@ -2132,9 +2186,60 @@
     }
   }
 
+  /**
+   * Empty the open source's grid, keeping its columns.
+   *
+   * Columns survive on purpose: every node binding names a column, so clearing the rows is a way to
+   * start the data over without breaking the process that reads it.
+   */
+  async function clearDsViewerData() {
+    if (!canModify) return;
+    const ds = findDataSourceById(dsViewerState.sourceId);
+    if (!ds) return;
+    const name = ds.title || dataSourceSafeFileName(ds);
+    const question = t("editor.ds.clearDataConfirm", { name }) || `همهٔ ردیف‌های «${name}» پاک شود؟ ستون‌ها می‌مانند.`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(question, {
+          title: t("editor.ds.clearData"),
+          okText: t("common.yes"),
+          cancelText: t("common.no")
+        })
+      : window.confirm(question);
+    if (!ask) return;
+    const btn = document.getElementById("ds-viewer-clear");
+    if (btn) btn.disabled = true;
+    try {
+      if (!isLocalMode && Number(ds.id) > 0) {
+        const res = await fetch(`/api/datasources/${ds.id}/rows`, {
+          method: "DELETE",
+          credentials: "same-origin"
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.message || t("editor.ds.clearDataFail"));
+        }
+      }
+      ds.cells = [];
+      ds.rowCount = 0;
+      // The grid is empty, so there is no revision to arm a stale-write check with.
+      dsViewerState.cellRevisions = {};
+      renderDsViewerTable(ds);
+      renderDataSources();
+      if (isLocalMode) await save();
+      setStatus(t("editor.ds.clearDataDone") || "داده‌های منبع پاک شد.", "success");
+    } catch (e) {
+      setStatus(e.message || t("editor.ds.clearDataFail") || "پاک‌سازی داده انجام نشد.", "error");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function bindDsViewerChrome() {
     document.querySelectorAll("[data-ds-viewer-close]").forEach((el) => {
       el.addEventListener("click", () => closeDsViewer());
+    });
+    document.getElementById("ds-viewer-clear")?.addEventListener("click", () => {
+      clearDsViewerData();
     });
     document.getElementById("ds-viewer-refresh")?.addEventListener("click", () => {
       reloadDsViewer();
@@ -2320,9 +2425,8 @@
       if (!keys.length) {
         throw new Error(t("editor.ds.tooManySheets"));
       }
-      if (!(data.rowCount > 0) && !(Array.isArray(data.cells) && data.cells.length)) {
-        throw new Error(t("editor.ds.emptySheet"));
-      }
+      // A header-only sheet is a valid source — rows can be added later from the grid, so an empty
+      // source must be attachable to a process. Only a sheet without any column is refused.
 
       setDsProgress(88, t("editor.ds.progressSaving"));
       let entry = {
@@ -6272,6 +6376,19 @@
       return;
     }
 
+    // Warnings that do NOT block: a repeat over a source that currently has no rows still runs (the
+    // engine does one pass), and it is the author's call whether that is what they want. Saying it
+    // here is the difference between "nothing happened" and "it ran once on purpose".
+    const playWarnings = collectPlayWarnings();
+    if (playWarnings.length) {
+      setStatus(playWarnings[0], "warn");
+      try {
+        window.dispatchEvent(new CustomEvent("da-notify", {
+          detail: { message: playWarnings.join("\n"), type: "warn" }
+        }));
+      } catch { /* ignore */ }
+    }
+
     // Second line of defence. The menu already hides these, but the engine must not depend on the
     // menu: a keyboard shortcut, a replayed editor event or a stale menu could still ask to run a
     // node that is not filled in. Re-check the node this request actually targets and refuse with a
@@ -7267,6 +7384,30 @@
           n.alertType = inp.value;
           renderInspector();
           return;
+        } else if (/DynamicMode$/.test(k)) {
+          // Switching a dynamic selector between a source cell and a loop index swaps which fields
+          // are meaningful, so the block is re-rendered rather than left half-filled.
+          n[k] = normalizeDynMode(inp.value);
+          renderInspector();
+          return;
+        } else if (/DynamicIndexType$/.test(k)) {
+          // The fixed-index field only exists for «شمارهٔ ثابت», so the block is re-rendered; seed a
+          // valid number so it is never blank-and-invalid on first show.
+          n[k] = inp.value;
+          const fixedKey = k.replace(/Type$/, "Value");
+          if (inp.value === "SpecificRow" && n[fixedKey] == null) n[fixedKey] = 0;
+          renderInspector();
+          return;
+        } else if (k === "insertMode") {
+          // Prepend/Append reveal the separator field, so the body is re-rendered. The first time one
+          // of them is chosen the separator is seeded with a readable default; whatever the author
+          // later types is never overwritten.
+          n.insertMode = normalizeInsertMode(inp.value);
+          if (n.insertMode !== "Replace" && !String(n.insertSeparator || "").trim()) {
+            n.insertSeparator = ", ";
+          }
+          renderInspector();
+          return;
         } else if (k === "rowIndexType") {
           n.rowIndexType = inp.value;
           if (inp.value === "SpecificRow") {
@@ -7317,6 +7458,10 @@
             n.selectorSpecificRowIndex = null;
           }
           renderInspector();
+          return;
+        } else if (/DynamicIndexValue$/.test(k)) {
+          // A loop index, stored as a number like the other index fields.
+          n[k] = Math.max(0, Math.floor(Number(inp.value) || 0));
           return;
         } else if (k === "selectorSpecificRowIndex") {
           const raw = String(inp.value || "").trim();
@@ -7602,6 +7747,14 @@
     const h = specHelpers();
     if (h) return h.writesSource(actionType) === true;
     return actionType === "InsertContent";
+  }
+
+  /**
+   * How a source-cell write meets the value already in the cell — replace (default), prepend or
+   * append. Unknown/legacy values fall back to replace, which is what every older graph meant.
+   */
+  function normalizeInsertMode(mode) {
+    return mode === "Prepend" || mode === "Append" ? mode : "Replace";
   }
 
   /** True when the step writes into a memory variable (so it names the variable). */
@@ -8042,7 +8195,9 @@
       if (!selectorHasDynPlaceholder(sel)) {
         return { ok: false, reason: `${label} پویا باید «{مقدار پویا}» یا {{ستون}} داشته باشد` };
       }
-      if (sel.includes(DYN_SEL_PLACEHOLDER) && !String(n[dynCol] || "").trim()) {
+      // Only a source-driven selector needs a column: a loop-index one gets its number from the run.
+      const dynFromSource = normalizeDynMode(n[dynModeKey(dynFlag)]) === "Source";
+      if (dynFromSource && sel.includes(DYN_SEL_PLACEHOLDER) && !String(n[dynCol] || "").trim()) {
         return { ok: false, reason: `ستون ${label} پویا مشخص نیست` };
       }
     }
@@ -8050,7 +8205,8 @@
       if (!String(n[attrName] || "").trim()) {
         return { ok: false, reason: `نام اتریبیوت ${label} خالی است` };
       }
-      if (n[attrDyn] === true && !String(n[attrCol] || "").trim()) {
+      const attrFromSource = normalizeDynMode(n[dynModeKey(attrDyn)]) === "Source";
+      if (n[attrDyn] === true && attrFromSource && !String(n[attrCol] || "").trim()) {
         return { ok: false, reason: `ستون اتریبیوت پویای ${label} مشخص نیست` };
       }
     }
@@ -8507,8 +8663,9 @@
           <option value="Last" ${tgt === "Last" ? "selected" : ""}>آخرین تب پنجره</option>
           <option value="Next" ${tgt === "Next" ? "selected" : ""}>تب بعدی نسبت به تب اجرا</option>
           <option value="Previous" ${tgt === "Previous" ? "selected" : ""}>تب قبلی نسبت به تب اجرا</option>
+          <option value="Current" ${tgt === "Current" ? "selected" : ""}>تب جاری (همان تب اجرا)</option>
         </select>
-        <p class="palette-hint">تبی که فرآیند روی آن اجرا می‌شود بسته نمی‌شود، مگر خودش هدف باشد. اگر فقط یک تب باز باشد، مرحله خطا می‌دهد.</p>
+        <p class="palette-hint">با «تب جاری» خودِ تب اجرا بسته می‌شود و اجرا در تب کنارش ادامه پیدا می‌کند؛ بقیهٔ گزینه‌ها تب اجرا را دست نمی‌زنند. اگر فقط یک تب باز باشد، مرحله خطا می‌دهد.</p>
       </div>`;
     }
 
@@ -8666,6 +8823,8 @@
       return `<div class="insp-section-title">مقصد درج</div>
         <p class="palette-hint">منبعی نیست — روی نود شروع اکسل اضافه کنید.</p>`;
     }
+    const mode = normalizeInsertMode(n.insertMode);
+    const sep = n.insertSeparator == null ? "" : String(n.insertSeparator);
     return `
       <div class="insp-section-title">مقصد درج</div>
       <div class="insp-field"><label>منبع مقصد</label>
@@ -8674,9 +8833,29 @@
       <div class="insp-field"><label>ستون مقصد</label>
         <select data-k="saveColumnName"><option value="">—</option>${colOpts}</select>
       </div>
+      <div class="insp-section-title">نحوهٔ درج</div>
+      <div class="insp-field"><label>نوع درج</label>
+        <select data-k="insertMode">
+          <option value="Replace" ${mode === "Replace" ? "selected" : ""}>جایگزینی با مقدار فعلی سلول</option>
+          <option value="Prepend" ${mode === "Prepend" ? "selected" : ""}>افزودن به ابتدای مقدار فعلی</option>
+          <option value="Append" ${mode === "Append" ? "selected" : ""}>افزودن به انتهای مقدار فعلی</option>
+        </select>
+      </div>
+      ${mode === "Replace" ? "" : `
+        <div class="insp-field"><label>عبارت جداکننده</label>
+          <input data-k="insertSeparator" value="${esc(sep)}" placeholder="مثلاً , یا -" />
+          <p class="palette-hint" style="margin:4px 0 0;line-height:1.6">
+            بین مقدار جدید و مقدار قبلیِ سلول قرار می‌گیرد.
+            ${mode === "Prepend"
+              ? "مقدار جدید اول، بعد جداکننده و سپس مقدار قبلی."
+              : "مقدار قبلی اول، بعد جداکننده و سپس مقدار جدید."}
+            اگر سلول خالی باشد فقط مقدار جدید نوشته می‌شود (جداکننده بی‌اثر است).
+          </p>
+        </div>`}
       ${nodeNeedsNodeRowPointer(n) && normalizeStepValueSource(n) !== "DataSource"
         ? rowPointerSectionHtml(n, "node") : ""}
-      <p class="palette-hint">مقدار بالا در سلول ردیف جاری همین ستون نوشته می‌شود.</p>`;
+      <p class="palette-hint">مقدار بالا در سلول ردیف جاری همین ستون نوشته می‌شود${
+        mode === "Replace" ? "." : "؛ در حالت افزودن، با مقدار موجود سلول ترکیب می‌شود."}</p>`;
   }
 
   function stepValueSourceHtml(n) {
@@ -8894,6 +9073,62 @@
     return s.includes(DYN_SEL_PLACEHOLDER) || /\{\{[^}]+\}\}/.test(s);
   }
 
+  /**
+   * A dynamic selector is fed either by a source cell or by a loop index — both are "dynamic", but
+   * only the first needs a source and a column, so the author has to say which one it is.
+   *
+   * The field names follow the selector instance (target / compare / attribute) so each keeps its
+   * own choice, and an older graph has no mode field at all — that reads as "Source", which is
+   * exactly what it meant before this existed.
+   */
+  function dynModeKey(dynFlag) {
+    return `${String(dynFlag || "selectorIsDynamic").replace(/IsDynamic$/, "")}DynamicMode`;
+  }
+  function dynIndexKeys(valueKey) {
+    const base = String(valueKey || "selectorValue").replace(/Value$/, "");
+    return { type: `${base}DynamicIndexType`, value: `${base}DynamicIndexValue` };
+  }
+  function normalizeDynMode(mode) {
+    return mode === "LoopIndex" ? "LoopIndex" : "Source";
+  }
+
+  /**
+   * Loop-index picker for a selector built from an index instead of a source cell.
+   *
+   * Same vocabulary as the row pointers, because it answers the same question — which number goes
+   * into the selector — and it deliberately stops at the loop-scoped choices: the fixed one covers
+   * "a literal index", while first/last row of a *source* would drag the source dependency back in.
+   */
+  function dynIndexPointerHtml(n, keys, title) {
+    const typeKey = keys.type;
+    const valueKey = keys.value;
+    const pointer = String(n[typeKey] || "CurrentLoop");
+    n[typeKey] = pointer;
+    const fixed = n[valueKey] == null ? "" : String(n[valueKey]);
+    const rows = [
+      ["CurrentLoop", t("editor.row.currentLoop") || "ردیف حلقهٔ فعلی"],
+      ["ParentLoop", t("editor.row.parentLoop") || "ردیف حلقهٔ والد"],
+      ["TotalLoop", t("editor.row.totalLoop") || "اندیس کل حلقه"],
+      ["GroupLoop", t("editor.row.groupLoop") || "ردیف اجرای گروه"],
+      ["ProcessLoop", t("editor.row.processLoop") || "ردیف اجرای فرآیند"],
+      ["SpecificRow", t("editor.row.specificIndex") || "شمارهٔ ثابت"]
+    ];
+    return `
+      <div class="insp-section-title">${esc(title || "ایندکس حلقه")}</div>
+      <div class="insp-field"><label>نوع ایندکس</label>
+        <select data-k="${typeKey}">
+          ${rows.map(([v, label]) => `<option value="${v}" ${pointer === v ? "selected" : ""}>${esc(label)}</option>`).join("")}
+        </select>
+      </div>
+      ${pointer === "SpecificRow" ? `
+        <div class="insp-field"><label>${esc(t("editor.row.specificIndex") || "شمارهٔ ثابت")}</label>
+          <input type="number" min="0" data-k="${valueKey}" value="${esc(fixed)}" />
+        </div>` : ""}
+      <p class="palette-hint" style="margin:0 0 4px;line-height:1.6">
+        عددِ همین ایندکس (از صفر) جای «${esc(DYN_SEL_PLACEHOLDER)}» در سلکتور قرار می‌گیرد — بدون نیاز به منبع داده.
+      </p>`;
+  }
+
   /** Red/green border when dynamic selector is on; no auto-insert of the token. */
   function syncDynSelectorValidation(inp, dynOn) {
     if (!inp) return;
@@ -8967,6 +9202,24 @@
 
     const selVal = n[valueKey] || "";
     const hasPh = selectorHasDynPlaceholder(selVal);
+    // Which feed this dynamic selector uses: a source cell (default) or a loop index. Its own keys
+    // are derived from the instance so target / compare / attribute keep separate choices.
+    const modeKey = dynModeKey(dynFlag);
+    const modeOn = normalizeDynMode(n[modeKey]);
+    n[modeKey] = modeOn;
+    const idxKeys = dynIndexKeys(valueKey);
+    const attrModeKey = dynModeKey(attrDynFlag);
+    const attrModeOn = normalizeDynMode(n[attrModeKey]);
+    n[attrModeKey] = attrModeOn;
+    const attrIdxKeys = dynIndexKeys(attrValueKey);
+    const modeBlockHtml = (key, value, idxK, rowSwitchBlock, label) => `
+      <div class="insp-field"><label>نوع پویایی</label>
+        <select data-k="${key}">
+          <option value="Source" ${value === "Source" ? "selected" : ""}>بر اساس مقدار یک سلول منبع</option>
+          <option value="LoopIndex" ${value === "LoopIndex" ? "selected" : ""}>بر اساس ایندکس حلقه</option>
+        </select>
+      </div>
+      ${value === "Source" ? rowSwitchBlock : dynIndexPointerHtml(n, idxK, label)}`;
     const empty = !(graph.dataSources || []).length
       ? `<p class="palette-hint">منبعی نیست — روی نود شروع اضافه کنید.</p>`
       : "";
@@ -8981,18 +9234,19 @@
             <span class="da-switch-ui" aria-hidden="true"></span>
             <span class="da-switch-text">سلکتور پویا</span>
           </label>
-          <p class="palette-hint" style="margin:4px 0 0">با روشن بودن، منبع و ستون را انتخاب کنید و «${esc(DYN_SEL_PLACEHOLDER)}» را داخل سلکتور بنویسید.</p>
+          <p class="palette-hint" style="margin:4px 0 0">با روشن بودن، نوع پویایی را انتخاب کنید (سلول منبع یا ایندکس حلقه) و «${esc(DYN_SEL_PLACEHOLDER)}» را داخل سلکتور بنویسید.</p>
         </div>
         ${dynOn ? `
           <div class="insp-sel-dyn">
-            <div class="insp-field"><label>منبع پویا</label>
-              <select data-k="${dynDs}"><option value="">— انتخاب منبع —</option>${dsOpts}</select>
-            </div>
-            <div class="insp-field"><label>ستون پویا</label>
-              <select data-k="${dynCol}"><option value="">— انتخاب ستون —</option>${colOpts}</select>
-            </div>
-            ${rowSwitch ? rowPointerSectionHtml(n, "selector") : ""}
-            ${empty}
+            ${modeBlockHtml(modeKey, modeOn, idxKeys, `
+              <div class="insp-field"><label>منبع پویا</label>
+                <select data-k="${dynDs}"><option value="">— انتخاب منبع —</option>${dsOpts}</select>
+              </div>
+              <div class="insp-field"><label>ستون پویا</label>
+                <select data-k="${dynCol}"><option value="">— انتخاب ستون —</option>${colOpts}</select>
+              </div>
+              ${rowSwitch ? rowPointerSectionHtml(n, "selector") : ""}
+              ${empty}`, "ایندکس حلقه")}
           </div>
         ` : ""}
         <div class="insp-field">
@@ -9058,14 +9312,15 @@
             </div>
             ${attrDynOn ? `
               <div class="insp-sel-dyn">
-                <div class="insp-field"><label>منبع مقدار</label>
-                  <select data-k="${attrDynDs}"><option value="">— انتخاب منبع —</option>${attrDsOpts}</select>
-                </div>
-                <div class="insp-field"><label>ستون مقدار</label>
-                  <select data-k="${attrDynCol}"><option value="">— انتخاب ستون —</option>${attrColOpts}</select>
-                </div>
-                ${rowSwitch && !dynOn ? rowPointerSectionHtml(n, "selector") : ""}
-                ${empty}
+                ${modeBlockHtml(attrModeKey, attrModeOn, attrIdxKeys, `
+                  <div class="insp-field"><label>منبع مقدار</label>
+                    <select data-k="${attrDynDs}"><option value="">— انتخاب منبع —</option>${attrDsOpts}</select>
+                  </div>
+                  <div class="insp-field"><label>ستون مقدار</label>
+                    <select data-k="${attrDynCol}"><option value="">— انتخاب ستون —</option>${attrColOpts}</select>
+                  </div>
+                  ${rowSwitch && !dynOn ? rowPointerSectionHtml(n, "selector") : ""}
+                  ${empty}`, "ایندکس حلقه (مقدار اتریبیوت)")}
               </div>
             ` : `
               <div class="insp-field"><label>مقدار اتریبیوت (ثابت)</label>
@@ -9833,6 +10088,7 @@
           : `<option value="">— ابتدا منبع اضافه کنید —</option>`}</select>
         <p class="palette-hint" style="margin:4px 0 0">وقتی نوع تکرار «منبع پیش‌فرض» باشد این انتخاب الزامی است.</p>
         ${dsWarn}
+        ${rst === "DataSource" ? rowlessRepeatWarn(n.dataSourceId ?? graph.dataSourceId) : ""}
       </div>
       ${repeatRangeHtml(n, rst)}
     `;
@@ -9910,6 +10166,7 @@
       <div class="insp-field" id="insp-ds">
         <label>منبع داده</label>
         <select data-k="dataSourceId"><option value="">— انتخاب منبع —</option>${dsOpts}</select>
+        ${rst === "DataSource" ? rowlessRepeatWarn(n.dataSourceId) : ""}
       </div>
       <div id="insp-el">
         ${selectorFieldHtml(n, "سلکتور المان‌ها (تکرار گروه)", { rowSwitch: true })}
@@ -9924,6 +10181,44 @@
     if (!ds) return 0;
     const n = Number(ds.rowCount);
     return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  /**
+   * Does this source exist and hold no rows at all?
+   *
+   * Used for the repeat warnings: a source may legitimately start empty (the create gate was
+   * relaxed for exactly that) and rows can arrive during the run, so an empty one is never an
+   * error — but a repeat that walks rows has nothing to walk, which the author should hear.
+   */
+  function sourceHasNoRows(dsId) {
+    if (dsId == null || dsId === "") return false;
+    const ds = (graph.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+    return !!ds && dataSourceRowCount(dsId) === 0;
+  }
+
+  function rowlessRepeatWarn(dsId) {
+    if (!sourceHasNoRows(dsId)) return "";
+    return `<p class="palette-hint" style="margin:6px 0 0;color:#ff9f43">منبع انتخابی ردیفی ندارد؛ یک‌بار اجرا می‌شود (بدون تکرار). اگر ردیف‌ها در طول اجرا اضافه شوند، تکرار از همان لحظه معنا پیدا می‌کند.</p>`;
+  }
+
+  /**
+   * Non-blocking notes for the moment a run starts — the same warnings the engine writes to the play
+   * log, said before the first step so the author is not left guessing why nothing repeated.
+   */
+  function collectPlayWarnings() {
+    const out = [];
+    const start = processStart();
+    const rst = start?.repeatSourceType || graph.repeatSourceType || "None";
+    if (rst === "DataSource" && sourceHasNoRows(start?.dataSourceId ?? graph.dataSourceId)) {
+      out.push(t("editor.play.rowlessRepeat") || "منبع تکرار ردیفی ندارد؛ فرآیند یک‌بار اجرا می‌شود (بدون تکرار).");
+    }
+    for (const n of graph.nodes || []) {
+      if (n.kind !== "start" || !n.groupNodeId) continue;
+      if (String(n.repeatSourceType || "None") !== "DataSource") continue;
+      if (!sourceHasNoRows(n.dataSourceId)) continue;
+      out.push(`${t("editor.play.rowlessRepeatGroup") || "منبع تکرار گروه ردیفی ندارد؛ گروه یک‌بار اجرا می‌شود"} — «${nodeGroupLabel(n)}»`);
+    }
+    return out;
   }
 
   /**
@@ -10171,6 +10466,7 @@
     "highlightColor", "url", "value", "waitMaxMs", "selectorWaitMs",
     "loopCount", "loopBackLimit", "stepDelayMs", "delayBeforeMs", "delayAfterMs",
     "repeatFromIndex", "repeatToIndex",
+    "insertSeparator",
     "specificRowIndex",
     "selectorSpecificRowIndex",
     "systemClockFormat"

@@ -74,6 +74,18 @@ public class PatchDataSourceCellRequest
     public string? CellValue { get; set; }
     /// <summary>Must match server cell revision when updating an existing cell (omit for new cells).</summary>
     public long? ExpectedCellRevision { get; set; }
+
+    /// <summary>
+    /// How the incoming value meets the value already in the cell:
+    /// <c>Replace</c> (default — overwrite), <c>Prepend</c> (incoming first) or <c>Append</c>
+    /// (incoming last). The composition happens under the same row lock as the write, so two
+    /// writers cannot both read the old value and lose one another's addition. Ignored when the
+    /// cell is empty — there is nothing to join with, so the value is stored as-is.
+    /// </summary>
+    public string? InsertMode { get; set; }
+
+    /// <summary>Text placed between the incoming value and the previous one for Prepend/Append.</summary>
+    public string? InsertSeparator { get; set; }
 }
 
 public class PatchDataSourceCellResponse

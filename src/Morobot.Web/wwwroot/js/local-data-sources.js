@@ -646,18 +646,96 @@
     return ds;
   }
 
+  /**
+   * Ids of the live events already applied, so the two delivery paths cannot double-apply one.
+   *
+   * The player sends every event twice on this page: once as a window event through the extension's
+   * content script and once over SignalR. A repeated cell write is harmless (it sets the same
+   * value), but a structural shift is not — applying an "insert row" twice would invent a second
+   * blank row. Bounded, because a long run produces a great many events.
+   */
+  const seenEventIds = new Set();
+  function isDuplicateEvent(ev) {
+    const id = String(ev?.eventId ?? ev?.EventId ?? "");
+    if (!id) return false;
+    if (seenEventIds.has(id)) return true;
+    seenEventIds.add(id);
+    if (seenEventIds.size > 200) {
+      const keep = [...seenEventIds].slice(-100);
+      seenEventIds.clear();
+      keep.forEach((k) => seenEventIds.add(k));
+    }
+    return false;
+  }
+
+  /**
+   * Move the viewer's cached rows to match a row inserted or removed elsewhere.
+   *
+   * The grid labels each cell with the row index the server gave it, so after a structural change
+   * every index from the touched row down is off by one. Shifting the cache here — rather than
+   * waiting for a reload — makes the new row appear at once and keeps the next read/write flash on
+   * the row it really happened on. The blank row is materialised as empty cells (one per column),
+   * exactly like the server's own AddRows, because a missing index would collapse the numbering.
+   */
+  function shiftViewerRows(ds, atIndex, delta) {
+    if (!ds || !delta) return;
+    const at = Number(atIndex);
+    if (!Number.isFinite(at) || at < 0) return;
+    const cells = Array.isArray(ds.cells) ? ds.cells : (ds.cells = []);
+    const rowOf = (c) => Number(c.index ?? c.Index ?? c.rowIndex);
+    const setRow = (c, v) => {
+      if (c.index !== undefined) c.index = v;
+      else if (c.Index !== undefined) c.Index = v;
+      else c.rowIndex = v;
+    };
+    if (delta > 0) {
+      cells.forEach((c) => { const i = rowOf(c); if (Number.isFinite(i) && i >= at) setRow(c, i + delta); });
+      const keys = (ds.columnKeys || (ds.columns || []).map((c) => c.key || c.Key) || []).filter(Boolean);
+      keys.forEach((key) => cells.push({ key: String(key), index: at, cellValue: "" }));
+      ds.rowCount = Math.max((Number(ds.rowCount) || 0) + delta, at + 1);
+    } else {
+      for (let i = cells.length - 1; i >= 0; i--) {
+        const idx = rowOf(cells[i]);
+        if (idx === at) cells.splice(i, 1);
+        else if (Number.isFinite(idx) && idx > at) setRow(cells[i], idx + delta);
+      }
+      ds.rowCount = Math.max(0, (Number(ds.rowCount) || 0) + delta);
+    }
+    // The task cache is what a library-only row does not have, so keep it in step when it exists.
+    if (viewerState.taskId != null) {
+      const entry = findEntry(viewerState.taskId, Number(ds.id));
+      if (entry) writeTasks(entry.tasks);
+    }
+  }
+
   function handleCellEvent(ev) {
     if (!ev) return;
+    if (isDuplicateEvent(ev)) return;
     const taskId = String(ev.taskId ?? ev.TaskId ?? "");
     const sid = Number(ev.dataSourceId ?? ev.DataSourceId ?? ev.sourceId ?? ev.SourceId);
     if (taskId && viewerState.taskId != null && String(viewerState.taskId) !== taskId) return;
     const modal = document.getElementById("da-portal-ds-viewer");
     const viewing = modal && !modal.hidden && Number(viewerState.sourceId) === sid;
+    const op = String(ev.op || ev.Op || "read").toLowerCase();
+    const idx = Number(ev.rowIndex ?? ev.RowIndex ?? 0) || 0;
+    // A row was added or removed: shift the cached rows, repaint, and light the affected row. Without
+    // this the inserted row stayed invisible and the next flash pointed at a neighbour's value.
+    if (op === "insert" || op === "delete") {
+      const target = viewerSource();
+      if (target && Number(target.id) === sid) {
+        shiftViewerRows(target, idx, op === "insert" ? 1 : -1);
+        if (viewing) {
+          renderViewerTable(target);
+          const td = document.getElementById("da-portal-ds-table")
+            ?.querySelector(`td[data-row="${idx}"]`);
+          if (td) flashCell(td, op === "insert" ? "write" : "read");
+        }
+      }
+      return;
+    }
     const ds = applyCellToLocalStore(ev);
     if (!viewing) return;
-    const op = String(ev.op || ev.Op || "read").toLowerCase();
     const col = String(ev.columnKey ?? ev.ColumnKey ?? "");
-    const idx = Number(ev.rowIndex ?? ev.RowIndex ?? 0) || 0;
     const table = document.getElementById("da-portal-ds-table");
     if (op.includes("write") && ds) {
       let td = table?.querySelector(`td[data-row="${idx}"][data-col="${CSS.escape(col)}"]`);
@@ -695,11 +773,12 @@
       setLiveStatus(false, "● بدون SignalR");
       return;
     }
-    // A library row has no process to observe, so there is nothing to join — say offline instead
-    // of connecting to a group named "undefined".
+    // A library row has no process to observe, so there is no play group to join (joining one named
+    // "undefined" would be a lie too). It is NOT offline though: edits arrive over the catalog feed
+    // and refresh this very grid — hence "آنلاین" rather than the old "آفلاین".
     const joinId = String(taskId ?? "").trim();
     if (!joinId) {
-      setLiveStatus(false, "● آفلاین");
+      setLiveStatus(!!window.DaCatalog, "● آنلاین");
       return;
     }
     try {
@@ -1255,6 +1334,56 @@
     finally { if (busy) setGridBusy(false); }
   }
 
+  /**
+   * Empty the open source's rows and keep its columns — the viewer's "clear data" button. Columns
+   * survive because every node binding names one, so the processes that read this source keep working.
+   */
+  async function clearViewerData() {
+    const sourceId = Number(viewerState.sourceId);
+    const ds = viewerSource();
+    if (!ds || !Number.isFinite(sourceId) || sourceId <= 0) {
+      notify(t("sources.clearDataFail") || "پاک‌سازی داده انجام نشد.", "error");
+      return;
+    }
+    const title = ds.title || dataSourceSafeFileName(ds);
+    const msg = t("sources.clearDataConfirm", { title })
+      || `همهٔ ردیف‌های منبع «${title}» پاک شود؟ ستون‌ها می‌مانند.`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("sources.clearData") || "پاک‌سازی داده",
+          okText: t("common.yes") || "بله",
+          cancelText: t("common.no") || "خیر"
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+    const btn = document.getElementById("da-portal-ds-clear");
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/rows`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.clearDataFail") || "پاک‌سازی داده انجام نشد.");
+      ds.cells = [];
+      ds.rowCount = 0;
+      // The grid is empty, so there is no revision or stamp left to show.
+      viewerState.cellRevisions = {};
+      viewerState.cellMeta = {};
+      viewerState.page = 0;
+      renderViewerTable(ds);
+      if (viewerState.taskId != null) {
+        const entry = findEntry(viewerState.taskId, sourceId);
+        if (entry) writeTasks(entry.tasks);
+      }
+      notify(t("sources.clearDataDone") || "داده‌های منبع پاک شد (ستون‌ها دست‌نخورده ماندند).", "success");
+    } catch (e) {
+      notify(e.message || t("sources.clearDataFail") || "پاک‌سازی داده انجام نشد.", "error");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function openViewer(taskId, sourceId) {
     // `undefined`/empty (a library row's button) must become a real null, or the hub would be
     // joined with the string "undefined" and the live indicator would lie.
@@ -1542,6 +1671,10 @@
     if (e.key === "Escape" && !editingCell) closeViewer();
   });
 
+  document.getElementById("da-portal-ds-clear")?.addEventListener("click", () => {
+    if (viewerState.sourceId != null) clearViewerData();
+  });
+
   window.addEventListener("da-local-tasks", () => {
     renderAsync();
     // The local cache is a summary shape; repainting the open grid from it would drop the real
@@ -1586,12 +1719,16 @@
       scheduleRender();
 
       // A source that is open in the viewer has to follow the change, not just the list. Our own
-      // write already updated the grid, so re-reading on every event would fight the editor; we
-      // only pull when somebody else changed the source we are looking at.
+      // cell write already updated the grid, so re-reading on every event would fight the editor; we
+      // only pull when somebody else changed the source we are looking at — except for a structural
+      // change (rows added/removed/cleared), which must repaint even when the actor is us: the engine
+      // runs under the same logged-in user, so the process's own InsertRow looked like "our own
+      // write" and the refresh was skipped, leaving the grid on the old row numbering.
+      const structural = action === "row_added" || action === "row_deleted" || action === "rows_cleared";
       const changedId = Number(payload.source?.id ?? payload.source?.Id ?? payload.source?.sourceId ?? payload.sourceId);
       const actor = payload.actorUserName || payload.ActorUserName || "";
       const mine = actor && actor === (window.daCurrentUserName || "");
-      if (!mine && viewerState.sourceId != null && changedId === Number(viewerState.sourceId)) {
+      if ((!mine || structural) && viewerState.sourceId != null && changedId === Number(viewerState.sourceId)) {
         if (action === "deleted") closeViewer();
         else refreshViewer();
       }

@@ -2038,7 +2038,11 @@ async function patchDataSourceCellMessage(message) {
     rowIndex,
     columnKey,
     cellValue: message?.cellValue ?? "",
-    expectedCellRevision: message?.expectedCellRevision ?? message?.cellRevision ?? null
+    expectedCellRevision: message?.expectedCellRevision ?? message?.cellRevision ?? null,
+    // Prepend/Append + their separator ride along so the server composes the value under the same
+    // row lock as the write; the editor's own grid writes leave both null and overwrite as before.
+    insertMode: message?.insertMode ?? null,
+    insertSeparator: message?.insertSeparator ?? null
   };
   try {
     const res = await fetch(`${portal}/api/datasources/${id}/cells`, {

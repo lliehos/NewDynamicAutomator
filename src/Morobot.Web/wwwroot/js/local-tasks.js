@@ -1119,6 +1119,41 @@ function dataSourceSafeFileName(ds) {
     }
   }
 
+  /**
+   * Move a source's cached rows to match a row inserted or removed elsewhere.
+   *
+   * Every cell carries the row index the server gave it, so after a structural change each index
+   * from the touched row down is off by one. Shifting the cache here — instead of waiting for a
+   * reload — makes the new row visible immediately and keeps the next read/write flash on the row it
+   * really happened on. The blank row is materialised as empty cells (one per column), exactly like
+   * the server's own AddRows, because a missing index would collapse the numbering again.
+   */
+  function shiftProcessRows(ds, atIndex, delta) {
+    if (!ds || !delta) return;
+    const at = Number(atIndex);
+    if (!Number.isFinite(at) || at < 0) return;
+    const cells = Array.isArray(ds.cells) ? ds.cells : (ds.cells = []);
+    const rowOf = (c) => Number(c.index ?? c.Index ?? c.rowIndex);
+    const setRow = (c, v) => {
+      if (c.index !== undefined) c.index = v;
+      else if (c.Index !== undefined) c.Index = v;
+      else c.rowIndex = v;
+    };
+    if (delta > 0) {
+      cells.forEach((c) => { const i = rowOf(c); if (Number.isFinite(i) && i >= at) setRow(c, i + delta); });
+      const keys = (ds.columnKeys || (ds.columns || []).map((c) => c.key || c.Key) || []).filter(Boolean);
+      keys.forEach((key) => cells.push({ key: String(key), index: at, cellValue: "" }));
+      ds.rowCount = Math.max((Number(ds.rowCount) || 0) + delta, at + 1);
+    } else {
+      for (let i = cells.length - 1; i >= 0; i--) {
+        const idx = rowOf(cells[i]);
+        if (idx === at) cells.splice(i, 1);
+        else if (Number.isFinite(idx) && idx > at) setRow(cells[i], idx + delta);
+      }
+      ds.rowCount = Math.max(0, (Number(ds.rowCount) || 0) + delta);
+    }
+  }
+
   function handleProcessCellEvent(ev) {
     if (!ev) return;
     const taskId = String(ev.taskId ?? ev.TaskId ?? "");
@@ -1127,6 +1162,22 @@ function dataSourceSafeFileName(ds) {
     const op = String(ev.op || ev.Op || "read").toLowerCase();
     const col = String(ev.columnKey ?? ev.ColumnKey ?? "").trim();
     const idx = Number(ev.rowIndex ?? ev.RowIndex ?? 0) || 0;
+    // A row was added or removed: shift the cached rows, repaint, and light the affected row. Without
+    // this the inserted row stayed invisible and the next flash pointed at a neighbour's value.
+    if (op === "insert" || op === "delete") {
+      const ds = processViewerState.source;
+      if (ds && Number(ds.id) === sid) {
+        shiftProcessRows(ds, idx, op === "insert" ? 1 : -1);
+        const modal = document.getElementById("da-portal-ds-viewer");
+        if (modal && !modal.hidden) {
+          renderProcessViewerTable(ds);
+          const td = document.getElementById("da-portal-ds-table")
+            ?.querySelector(`td[data-row="${idx}"]`);
+          if (td) flashProcessCell(td, op === "insert" ? "write" : "read");
+        }
+      }
+      return;
+    }
     // A write also moves the grid's own copy — even before (or without) the modal showing this
     // source — so the next paint of this source is never stale.
     if (op.includes("write") && col && processViewerState.source
@@ -1204,6 +1255,51 @@ function dataSourceSafeFileName(ds) {
     if (processViewerState.connection) {
       try { await processViewerState.connection.stop(); } catch { /* ignore */ }
       processViewerState.connection = null;
+    }
+  }
+
+  /**
+   * Empty the open source's rows and keep its columns — the viewer's "clear data" button. Columns
+   * survive because every node binding names one, so the process that reads this source keeps working.
+   */
+  async function clearProcessViewerData() {
+    const ds = processViewerState.source;
+    const sourceId = Number(ds?.id);
+    if (!ds || !Number.isFinite(sourceId) || sourceId <= 0) {
+      notifyHome(t("sources.clearDataFail") || "پاک‌سازی داده انجام نشد.", "error");
+      return;
+    }
+    const title = ds.title || dataSourceSafeFileName(ds);
+    const msg = t("sources.clearDataConfirm", { title })
+      || `همهٔ ردیف‌های منبع «${title}» پاک شود؟ ستون‌ها می‌مانند.`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("sources.clearData") || "پاک‌سازی داده",
+          okText: t("common.yes") || "بله",
+          cancelText: t("common.no") || "خیر"
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+    const btn = document.getElementById("da-portal-ds-clear");
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/rows`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.clearDataFail") || "پاک‌سازی داده انجام نشد.");
+      ds.cells = [];
+      ds.rowCount = 0;
+      // The grid is empty, so there is no revision or stamp left to show.
+      processViewerState.cellRevisions = {};
+      processViewerState.cellMeta = {};
+      renderProcessViewerTable(ds);
+      notifyHome(t("sources.clearDataDone") || "داده‌های منبع پاک شد (ستون‌ها دست‌نخورده ماندند).", "success");
+    } catch (e) {
+      notifyHome(e.message || t("sources.clearDataFail") || "پاک‌سازی داده انجام نشد.", "error");
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 
@@ -2821,11 +2917,15 @@ function dataSourceSafeFileName(ds) {
       // wrong on screen until the user thought to hit refresh.
       const action = String(payload.action || payload.Action || "");
       const changedId = Number(payload.source?.id ?? payload.source?.Id ?? payload.source?.sourceId);
+      // A structural change repaints even when the actor is us: the engine runs under the same
+      // logged-in user, so the process's own InsertRow/DeleteRow looked like "our own write" and the
+      // refresh was skipped — leaving the open grid on the old row numbering.
+      const structural = action === "row_added" || action === "row_deleted" || action === "rows_cleared";
       if (processViewerState.source && Number(processViewerState.source.id) === changedId) {
-        // Our own write already updated the grid optimistically; only a foreign action needs a pull.
+        // Our own cell write already updated the grid optimistically; other actions need a pull.
         const actor = payload.actorUserName || payload.ActorUserName;
         const mine = actor && actor === (window.daCurrentUserName || null);
-        if (!mine) refreshProcessViewer();
+        if (!mine || structural) refreshProcessViewer();
       } else if (action === "cell_patched" && processViewerState.source) {
         refreshProcessViewer();
       }
@@ -2843,6 +2943,9 @@ function dataSourceSafeFileName(ds) {
     });
     document.getElementById("da-portal-ds-refresh")?.addEventListener("click", () => {
       if (processViewerState.source) refreshProcessViewer();
+    });
+    document.getElementById("da-portal-ds-clear")?.addEventListener("click", () => {
+      if (processViewerState.source) clearProcessViewerData();
     });
 
     table.addEventListener("dblclick", (e) => {

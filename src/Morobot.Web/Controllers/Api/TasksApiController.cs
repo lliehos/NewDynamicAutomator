@@ -699,6 +699,25 @@ public class DataSourcesApiController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// Empty the grid but keep the columns — the "clear data" button on the source viewer. Columns
+    /// stay so every node binding that names one keeps working; only the rows are gone.
+    /// </summary>
+    [HttpDelete("{id:int}/rows")]
+    public async Task<IActionResult> ClearRows(int id, CancellationToken ct)
+    {
+        var result = await _sources.ClearRowsAsync(UserId, id, ct);
+        if (!result.Ok)
+            return result.Code switch
+            {
+                "notfound" => NotFound(),
+                "forbidden" => Forbid(),
+                _ => BadRequest(result)
+            };
+        await BroadcastSourceShapeAsync(id, result, "rows_cleared", ct);
+        return Ok(result);
+    }
+
     /// <summary>Tell clients + connected editors that a source's shape (columns/rows) changed.</summary>
     private async Task BroadcastSourceShapeAsync(
         int dataSourceId, Morobot.Contracts.DataSources.DataSourceStructureResponse result, string reason, CancellationToken ct)

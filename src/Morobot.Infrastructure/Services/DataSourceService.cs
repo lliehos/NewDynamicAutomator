@@ -429,6 +429,38 @@ public class DataSourceService
         return Convert.ToHexString(bytes, 0, 8).ToLowerInvariant();
     }
 
+    private const string InsertModeReplace = "replace";
+    private const string InsertModePrepend = "prepend";
+    private const string InsertModeAppend = "append";
+
+    /// <summary>Normalise an insert mode — anything missing or unknown means a plain overwrite.</summary>
+    static string NormalizeInsertMode(string? mode) => (mode ?? "").Trim().ToLowerInvariant() switch
+    {
+        "prepend" => InsertModePrepend,
+        "append" => InsertModeAppend,
+        _ => InsertModeReplace
+    };
+
+    /// <summary>
+    /// Join an incoming value with the one already in the cell, for Prepend/Append.
+    ///
+    /// An empty previous value has nothing to join with, so the incoming value is stored as-is — a
+    /// lone separator would be noise the author never asked for.
+    /// </summary>
+    internal static string ComposeInsertValue(string? previous, string? incoming, string? mode, string? separator)
+    {
+        var prev = previous ?? "";
+        var text = incoming ?? "";
+        if (prev.Length == 0) return text;
+        var sep = separator ?? "";
+        return NormalizeInsertMode(mode) switch
+        {
+            InsertModeAppend => prev + sep + text,
+            InsertModePrepend => text + sep + prev,
+            _ => text
+        };
+    }
+
     public async Task<PatchDataSourceCellResponse> PatchCellAsync(
         int userId, int id, PatchDataSourceCellRequest req, CancellationToken ct = default)
     {
@@ -450,6 +482,7 @@ public class DataSourceService
 
         var value = req.CellValue ?? "";
         var expectedRev = req.ExpectedCellRevision;
+        var insertMode = NormalizeInsertMode(req.InsertMode);
 
         // A cell write that lands on a NEW row is exactly how "insert into the source" grows the
         // table, so the row/byte ceiling has to be checked here too — otherwise the action could
@@ -517,6 +550,12 @@ public class DataSourceService
                     CurrentCellUpdatedAtUtc = locked.UpdatedAtUtc
                 };
             }
+
+            // Prepend/Append compose the incoming value with the one already in the cell — inside the
+            // same row lock the write takes. Reading it outside the transaction would let two writers
+            // both start from the same old value and lose one another's addition.
+            if (insertMode != InsertModeReplace)
+                value = ComposeInsertValue(locked?.CellValue, value, insertMode, req.InsertSeparator);
 
             if (locked is null)
             {
@@ -1574,6 +1613,65 @@ public class DataSourceService
         }
     }
 
+    /// <summary>
+    /// Empty a source's grid: every row goes, every column stays.
+    ///
+    /// This is the "clear data" button on the source viewer — a starting-over that keeps the table's
+    /// shape, so node bindings (which name columns) keep working and the source simply has no data
+    /// yet. The legacy CellsJson blob is blanked too: it is only re-materialised while the
+    /// DataSourceCells table is empty, so leaving it would resurrect the cleared rows on the next read.
+    /// </summary>
+    public async Task<DataSourceStructureResponse> ClearRowsAsync(
+        int userId, int id, CancellationToken ct = default)
+    {
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var cells = await _db.DataSourceCells
+                .Where(c => c.DataSourceId == id)
+                .ToListAsync(ct);
+            if (cells.Count > 0) _db.DataSourceCells.RemoveRange(cells);
+
+            entity.RowCount = 0;
+            entity.CellsJson = "[]";
+            if (cells.Count > 0) entity.DataRevision += 1;
+            entity.UpdatedAtUtc = DateTime.UtcNow;
+            StampDataEditor(entity, userId);
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+            return new DataSourceStructureResponse
+            {
+                Ok = true,
+                DataSourceId = entity.Id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList(),
+                ColumnCount = columns.Count,
+                RowCount = 0,
+                DataRevision = entity.DataRevision
+            };
+        }
+        catch (Exception ex)
+        {
+            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+            _log.LogWarning(ex, "Clear rows of source {Ds} failed", id);
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "error",
+                DataSourceId = id,
+                Message = "پاک‌سازی داده انجام نشد — دوباره تلاش کنید."
+            };
+        }
+    }
+
     /// <summary>Re-stamp every linked process graph with this source's current shape.</summary>
     private async Task RefreshLinkedProcessSnapshotsAsync(DataSource entity, CancellationToken ct)
     {
@@ -2371,9 +2469,8 @@ public class DataSourceService
         if (columns.Count == 0)
             throw new InvalidOperationException("فایل اکسل ستون معتبری ندارد (ردیف اول باید هدر باشد).");
 
-        if (lastRow <= firstRow)
-            throw new InvalidOperationException("جدول فقط هدر دارد — حداقل یک سطر داده لازم است.");
-
+        // A header-only table is a valid source: rows can be added later from the grid, so an empty
+        // source must be attachable to a process. Only a sheet without any usable header is refused.
         var cells = new List<DataSourceCellDto>();
         var dataIndex = 0;
         for (var r = firstRow + 1; r <= lastRow; r++)
@@ -2399,9 +2496,6 @@ public class DataSourceService
             }
             dataIndex++;
         }
-
-        if (dataIndex == 0)
-            throw new InvalidOperationException("هیچ سطر داده‌ای در جدول پیدا نشد.");
 
         return (columns, cells);
     }

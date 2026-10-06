@@ -19,6 +19,42 @@ function selectorHasDynPlaceholder(val) {
   const s = String(val || "");
   return s.includes(DYN_SEL_PLACEHOLDER) || /\{\{[^}]+\}\}/.test(s);
 }
+
+/**
+ * Field names for one dynamic-selector configuration (target / compare / attribute selector).
+ *
+ * A dynamic selector is fed either by a source cell or by a loop index, and the author picks which;
+ * the keys follow the instance so the three configurations keep separate choices. A graph saved
+ * before the choice existed has no mode field, which reads as "Source" — its old meaning.
+ */
+function dynModeKey(dynFlag) {
+  return `${String(dynFlag || "selectorIsDynamic").replace(/IsDynamic$/, "")}DynamicMode`;
+}
+function dynIndexKeys(valueKey) {
+  const base = String(valueKey || "selectorValue").replace(/Value$/, "");
+  return { type: `${base}DynamicIndexType`, value: `${base}DynamicIndexValue` };
+}
+function dynUsesLoopIndex(node, dynFlag) {
+  return String(node?.[dynModeKey(dynFlag)] || "") === "LoopIndex";
+}
+
+/**
+ * The loop index a dynamic selector is built from.
+ *
+ * The walker's scope numbers travel on the node as `_rowScope` (the same marker trick `_selectorRow`
+ * uses), because the selector resolver is reached from places that no longer know the loop depth.
+ * Returns "" when the pointer cannot be resolved — the tolerance the row pointers have as well.
+ */
+function dynIndexText(node, graph, valueKey, dynFlag, fallbackRow) {
+  const keys = dynIndexKeys(valueKey);
+  const raw = resolveRowPointer(node, graph, node?._rowScope || {}, { type: keys.type, specific: keys.value });
+  // `raw != null` is not redundant: Number(null) is 0, and a resolver that cannot answer returns
+  // null — reading that as index 0 would silently build the selector for the wrong row.
+  if (raw != null && Number.isFinite(Number(raw))) return String(Number(raw));
+  // A resolver reached from a path that does not walk through the action runner has no scope on the
+  // node; the row it was handed is then the closest thing to "the current loop index".
+  return Number.isFinite(Number(fallbackRow)) ? String(Number(fallbackRow)) : "";
+}
 /**
  * The action spec table lives in `action-specs.js`, which BOTH this file and the editor page load.
  * It used to be four helpers here (`stepReceivesValue`, `stepNeedsSelector`, `stepAllowsElementValue`,
@@ -243,7 +279,9 @@ function validateSelectorBlock(n, opts = {}) {
     if (!selectorHasDynPlaceholder(sel)) {
       return { ok: false, reason: tv("sel.dynNeedsPlaceholder", { label, placeholder: DYN_SEL_PLACEHOLDER }) };
     }
-    if (sel.includes(DYN_SEL_PLACEHOLDER) && !String(n[dynCol] || "").trim()) {
+    // A loop-index selector gets its number from the run, so only a source-driven one needs a column.
+    if (!dynUsesLoopIndex(n, dynFlag)
+      && sel.includes(DYN_SEL_PLACEHOLDER) && !String(n[dynCol] || "").trim()) {
       return { ok: false, reason: tv("sel.dynColMissing", { label }) };
     }
   }
@@ -251,7 +289,7 @@ function validateSelectorBlock(n, opts = {}) {
     if (!String(n[attrName] || "").trim()) {
       return { ok: false, reason: tv("sel.attrNameEmpty", { label }) };
     }
-    if (n[attrDyn] === true && !String(n[attrCol] || "").trim()) {
+    if (n[attrDyn] === true && !dynUsesLoopIndex(n, attrDyn) && !String(n[attrCol] || "").trim()) {
       return { ok: false, reason: tv("sel.attrDynColMissing", { label }) };
     }
   }
@@ -2588,6 +2626,19 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
   }, SELECTOR_ROW_KEYS);
   if (selectorRow != null) step = { ...step, _selectorRow: selectorRow };
 
+  // The scope numbers a loop-index-driven selector needs ("the current / parent / overall loop
+  // index"). Same marker trick as `_selectorRow`: the selector resolver cannot see the walker's
+  // stack, so the numbers travel on the node.
+  step = {
+    ...step,
+    _rowScope: {
+      groupRow: rowIndex,
+      parentRow: step?._parentRow,
+      processRow: processStatusRow(step, rowIndex),
+      loopIndex
+    }
+  };
+
   playStatus.currentNodeId = step.id;
   const label = step.title || step.actionType || `مرحله ${stepIndex}`;
   appendPlayLog("step", `[حلقه ${loopIndex}] ${stepIndex}/${stepTotal} — ${label}`);
@@ -3248,6 +3299,11 @@ async function closeWindowTab(currentTabId, target) {
     case "Previous":
       victim = here >= 0 ? ordered[here - 1] || null : null;
       break;
+    // The run's own tab. The walker is told which tab to continue in (below), so the run moves to a
+    // neighbour instead of dying with the tab it just closed.
+    case "Current":
+      victim = here >= 0 ? ordered[here] : null;
+      break;
     case "Last":
     default:
       victim = ordered[ordered.length - 1];
@@ -3257,11 +3313,10 @@ async function closeWindowTab(currentTabId, target) {
   if (!victim) {
     // Next from the last tab, or Previous from the first: there is nothing there. Reported as a
     // step failure rather than quietly closing a different tab, which would be the worse surprise.
-    return {
-      ok: false,
-      error: target === "Next" ? tv("run.noNextTab") : tv("run.noPrevTab"),
-      reason: "no_such_tab"
-    };
+    const missing = target === "Next" ? tv("run.noNextTab")
+      : target === "Current" ? tv("run.tabNotFound")
+      : tv("run.noPrevTab");
+    return { ok: false, error: missing, reason: "no_such_tab" };
   }
 
   // Closing the run's own tab would leave the walk with no page to act on. Chrome would also pick a
@@ -3410,6 +3465,22 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     appendPlayLog("info", isInsert
       ? `ردیف خالی در جای ${targetRow} منبع ${dsId} درج شد`
       : `ردیف ${targetRow} از منبع ${dsId} حذف شد`);
+    // The row grid moved, so the run's own mirror of the source is now wrong at every index from
+    // `targetRow` down. Drop the cached cells (a later read falls back to the server, which now
+    // holds the shifted values) and take the new row count from the server's answer — the LastRow
+    // pointer reads it, and a stale count would address a row that no longer exists.
+    const rowDs = (graph?.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+    if (rowDs) {
+      rowDs.cells = [];
+      const rc = Number(res?.body?.rowCount ?? res?.body?.RowCount);
+      if (Number.isFinite(rc) && rc >= 0) rowDs.rowCount = rc;
+      else rowDs.rowCount = Math.max(0, (Number(rowDs.rowCount) || 0) + (isInsert ? 1 : -1));
+    }
+    // Tell the live viewers the grid moved — and wait for it, so the next step's read/write flash
+    // cannot arrive first and be applied to a row that is about to shift.
+    await emitDataSourceCellEvent(
+      graph, rowDs || { id: dsId }, "", targetRow,
+      isInsert ? "insert" : "delete", null, step?.title, { wait: true });
     return isInsert
       ? { ok: true, rowInserted: { dataSourceId: dsId, rowIndex: targetRow } }
       : { ok: true, rowDeleted: { dataSourceId: dsId, rowIndex: targetRow } };
@@ -3703,7 +3774,8 @@ async function runInsertContentStep(tabId, taskId, step, runMode, graph, rowInde
     }, store.error);
   }
   appendPlayLog("info", `مقدار در سلول «${column}» منبع ${ds?.id ?? dsId} درج شد`);
-  return { ok: true, text, inserted: true };
+  // Prepend/Append composed a longer value than the step produced, so report what was really stored.
+  return { ok: true, text: store.value ?? text, inserted: true };
 }
 
 /**
@@ -3768,9 +3840,12 @@ function resolveDynamicSelector(step, graph, rowIndex, opts = {}) {
     const col = step[dynCol];
 
     if (hasPh) {
-      const val = (col && ds)
-        ? (cellValue(ds, col, row, { emitRead: true, graph, stepTitle: step?.title }) ?? "")
-        : "";
+      // A loop-index selector reads no cell at all, so the source/column plumbing stays untouched.
+      const val = dynUsesLoopIndex(step, dynFlag)
+        ? dynIndexText(step, graph, valueKey, dynFlag, row)
+        : (col && ds)
+          ? (cellValue(ds, col, row, { emitRead: true, graph, stepTitle: step?.title }) ?? "")
+          : "";
       sel = sel.split(DYN_SEL_PLACEHOLDER).join(val);
     }
     if (/\{\{[^}]+\}\}/.test(sel)) {
@@ -3803,7 +3878,9 @@ async function resolveDynamicSelectorAsync(step, graph, rowIndex, opts = {}) {
 
     if (hasPh) {
       let val = "";
-      if (col && ds) {
+      if (dynUsesLoopIndex(step, dynFlag)) {
+        val = dynIndexText(step, graph, valueKey, dynFlag, row);
+      } else if (col && ds) {
         const got = await readDataSourceCellForPlay(ds, col, row, step, graph);
         // A selector is the most dangerous place to accept a missing value: dropping the
         // placeholder yields a selector that still PARSES but points somewhere else, so the
@@ -3850,9 +3927,11 @@ function appendAttributeFilter(sel, step, graph, rowIndex, opts = {}) {
       ds = sources.find((d) => Number(d.id) === Number(step[dynDsKey])) || null;
     }
     if (!ds) ds = findDataSourceForStep(step, graph);
-    attrVal = cellValue(ds, step[dynColKey], rowIndex ?? 0, {
-      emitRead: true, graph, stepTitle: step?.title
-    }) ?? "";
+    attrVal = dynUsesLoopIndex(step, attrDynFlag)
+      ? dynIndexText(step, graph, opts.attrValue || "attributeValue", attrDynFlag, rowIndex ?? 0)
+      : cellValue(ds, step[dynColKey], rowIndex ?? 0, {
+          emitRead: true, graph, stepTitle: step?.title
+        }) ?? "";
   } else {
     attrVal = step[opts.attrValue || "attributeValue"] ?? "";
   }
@@ -3878,11 +3957,15 @@ async function appendAttributeFilterAsync(sel, step, graph, rowIndex, opts = {})
       ds = sources.find((d) => Number(d.id) === Number(step[dynDsKey])) || null;
     }
     if (!ds) ds = findDataSourceForStep(step, graph);
-    // The attribute value is part of the selector, so an unavailable value would produce a
-    // selector matching the wrong element (e.g. [data-id=""]). Refuse rather than guess.
-    const got = await readDataSourceCellForPlay(ds, step[dynColKey], rowIndex ?? 0, step, graph);
-    if (got === undefined) throw dataSourceUnavailable(step, ds, step[dynColKey], rowIndex);
-    attrVal = got;
+    if (dynUsesLoopIndex(step, attrDynFlag)) {
+      attrVal = dynIndexText(step, graph, opts.attrValue || "attributeValue", attrDynFlag, rowIndex ?? 0);
+    } else {
+      // The attribute value is part of the selector, so an unavailable value would produce a
+      // selector matching the wrong element (e.g. [data-id=""]). Refuse rather than guess.
+      const got = await readDataSourceCellForPlay(ds, step[dynColKey], rowIndex ?? 0, step, graph);
+      if (got === undefined) throw dataSourceUnavailable(step, ds, step[dynColKey], rowIndex);
+      attrVal = got;
+    }
   } else {
     attrVal = step[opts.attrValue || "attributeValue"] ?? "";
   }
@@ -4240,7 +4323,9 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
           rowIndex: row,
           columnKey: col,
           cellValue: text,
-          expectedCellRevision
+          expectedCellRevision,
+          insertMode: opts.insertMode || null,
+          insertSeparator: opts.insertSeparator == null ? null : opts.insertSeparator
         });
       } catch {
         res = null;
@@ -4248,7 +4333,10 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
       if (res?.ok && res.body) {
         const rev = res.body.cellRevision ?? res.body.CellRevision;
         const dRev = res.body.dataRevision ?? res.body.DataRevision;
-        applyCellToLocalCache(ds, row, col, text, rev, dRev);
+        // The server may have composed the value (Prepend/Append), so cache what it wrote — not the
+        // fragment we sent, which would make the next mirrored read return half the cell.
+        const written = res.body.cellValue ?? res.body.CellValue;
+        applyCellToLocalCache(ds, row, col, written == null ? text : String(written), rev, dRev);
         return { ok: true, body: res.body };
       }
       if (res?.error === "auth") return { ok: false, error: "auth" };
@@ -4384,9 +4472,15 @@ async function storeCapturedContent(step, graph, text, rowIndex) {
     }
     const idx = Number(rowIndex) || 0;
     const id = Number(ds.id);
+    // How the value meets what is already in the cell. The server composes it for a server-backed
+    // source (under the cell's row lock); a local-only source is composed here from the cache.
+    const mode = normalizeInsertMode(step.insertMode);
+    const separator = step.insertSeparator == null ? "" : String(step.insertSeparator);
     if (id > 0) {
-      emitDataSourceCellEvent(graph, ds, col, idx, "write", text, step?.title);
-      const saved = await writeServerCellWait(ds, graph, idx, col, text);
+      const saved = await writeServerCellWait(ds, graph, idx, col, text, {
+        insertMode: mode,
+        insertSeparator: separator
+      });
       if (!saved.ok) {
         // A ceiling breach is not a transient failure: report the server's own message (which names
         // the row/byte cap and whether the license or the plan set it) instead of the generic
@@ -4406,26 +4500,54 @@ async function storeCapturedContent(step, graph, text, rowIndex) {
           reason: saved.error || "cell_patch_failed"
         };
       }
-      return { ok: true };
+      // Prepend/Append were composed by the server, so ITS value is the one the viewers must show
+      // and the one the run stays in step with — the step's own fragment is only half of it.
+      const written = saved.body?.cellValue ?? saved.body?.CellValue;
+      const composed = written == null ? text : String(written);
+      emitDataSourceCellEvent(graph, ds, col, idx, "write", composed, step?.title);
+      return { ok: true, value: composed };
     }
     ds.cells = ds.cells || [];
+    const previous = cellValue(ds, col, idx, { emitRead: false });
+    const finalText = composeInsertValue(previous, text, mode, separator);
     const hit = ds.cells.find((c) =>
       (c.key === col || c.Key === col || c.columnName === col)
       && Number(c.index ?? c.Index ?? c.rowIndex) === idx
     );
     if (hit) {
-      if (hit.cellValue !== undefined) hit.cellValue = text;
-      else if (hit.CellValue !== undefined) hit.CellValue = text;
-      else hit.value = text;
+      if (hit.cellValue !== undefined) hit.cellValue = finalText;
+      else if (hit.CellValue !== undefined) hit.CellValue = finalText;
+      else hit.value = finalText;
     } else {
-      ds.cells.push({ key: col, index: idx, cellValue: text });
+      ds.cells.push({ key: col, index: idx, cellValue: finalText });
     }
     const rc = Number(ds.rowCount) || 0;
     if (idx + 1 > rc) ds.rowCount = idx + 1;
-    emitDataSourceCellEvent(graph, ds, col, idx, "write", text, step?.title);
-    return { ok: true };
+    emitDataSourceCellEvent(graph, ds, col, idx, "write", finalText, step?.title);
+    return { ok: true, value: finalText };
   }
   return setPlayMemoryVar(step.memoryVariableName || step.constantValue, text);
+}
+
+/** Normalise a step's insert mode — anything missing or unknown means a plain overwrite. */
+function normalizeInsertMode(mode) {
+  const m = String(mode || "").trim().toLowerCase();
+  return m === "prepend" ? "Prepend" : m === "append" ? "Append" : "Replace";
+}
+
+/**
+ * Join an incoming value with the cell's existing one.
+ *
+ * An empty previous value has nothing to join with, so the incoming value is stored as-is — a
+ * separator on its own (`, value`) would be noise the author never asked for.
+ */
+function composeInsertValue(previous, incoming, mode, separator) {
+  const prev = previous == null ? "" : String(previous);
+  const text = incoming == null ? "" : String(incoming);
+  if (!prev) return text;
+  if (mode === "Prepend") return text + (separator || "") + prev;
+  if (mode === "Append") return prev + (separator || "") + text;
+  return text;
 }
 
 function cellValue(ds, columnKey, rowIndex, opts = {}) {
@@ -4637,11 +4759,24 @@ async function detectOrphanedPlay() {
   }
 }
 
-async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellValue, stepTitle) {
+let cellEventSeq = 0;
+
+/**
+ * Tell the open viewers what just happened to a source cell or row.
+ *
+ * Fire-and-forget by default: a run must not wait on a notification. Structural events are the
+ * exception — the caller passes `{ wait: true }` so the next step's read/write cannot overtake the
+ * row shift, which would make a viewer move the value it just flashed into the wrong row.
+ */
+async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellValue, stepTitle, opts = {}) {
   try {
     const taskId = String(graph?.taskId || playStatus.taskId || "").trim();
     const dsId = Number(ds?.id || 0);
-    if (!taskId || !dsId || !columnKey) return;
+    // insert/delete are structural: the row grid moved, so there is no column to name. They still
+    // have to reach the viewers — without them a viewer keeps its old rows and the next cell flash
+    // lights up a row that now holds a different value (the row inserted above shifted everything).
+    const structural = op === "insert" || op === "delete";
+    if (!taskId || !dsId || (!columnKey && !structural)) return;
     let userName = null;
     try {
       const stored = await chrome.storage.local.get(["da_local_user", "da_session_user"]).catch(() => ({}));
@@ -4653,29 +4788,38 @@ async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellV
     const payload = {
       taskId,
       dataSourceId: dsId,
-      op: op === "write" ? "write" : "read",
-      columnKey: String(columnKey),
+      // One id for both delivery paths (content-script window event + SignalR broadcast) so a
+      // viewer applies the event once — a doubled structural shift would invent an extra row.
+      eventId: `${Date.now().toString(36)}-${++cellEventSeq}`,
+      op: structural ? op : (op === "write" ? "write" : "read"),
+      columnKey: structural ? "" : String(columnKey),
       rowIndex: Number(rowIndex) || 0,
       cellValue: cellValue == null ? null : String(cellValue),
       stepTitle: stepTitle || null,
       userName
     };
     // Fan-out to open portal/editor tabs (fast local path).
+    let localSent = null;
     try {
-      callBackground({ type: "broadcastDsCellEvent", event: payload }).catch(() => {});
+      localSent = callBackground({ type: "broadcastDsCellEvent", event: payload }).catch(() => {});
     } catch { /* ignore */ }
     // SignalR path via portal HTTP.
     const portal = typeof portalBase === "function"
       ? await portalBase().catch(() => null)
       : null;
     const base = String(portal || "").replace(/\/$/, "");
-    if (!base) return;
-    fetch(`${base}/Panel/Tasks/NotifyCellEvent`, {
+    if (!base) {
+      if (opts.wait && localSent) await Promise.race([localSent, sleep(2000)]);
+      return;
+    }
+    const posted = fetch(`${base}/Panel/Tasks/NotifyCellEvent`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(payload),
       credentials: "omit"
     }).catch(() => {});
+    // Bounded: an unreachable portal must not stall the run behind a notification.
+    if (opts.wait) await Promise.race([Promise.all([localSent, posted]), sleep(2000)]);
   } catch { /* ignore */ }
 }
 
@@ -5097,7 +5241,12 @@ async function expandGroupByRepeatSource(tabId, groupOrStart, graph, ctx = {}) {
     if (node.selectorIsDynamic === true || node.attributeValueIsDynamic === true) {
       try {
         const selRow = resolveRowPointer(node, graph, ctx, SELECTOR_ROW_KEYS);
-        const dynNode = selRow != null ? { ...node, _selectorRow: selRow } : node;
+        // `_rowScope` carries the same scope numbers for a selector fed by a loop index.
+        const dynNode = {
+          ...node,
+          ...(selRow != null ? { _selectorRow: selRow } : {}),
+          _rowScope: ctx
+        };
         const resolved = await resolveDynamicSelectorAsync(
           dynNode, graph,
           selRow != null

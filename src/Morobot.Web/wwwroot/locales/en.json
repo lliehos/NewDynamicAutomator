@@ -1132,6 +1132,10 @@
     "cellSaved": "Cell saved.",
     "cellSaveFail": "Could not save the cell.",
     "cellConflict": "Another user changed this cell.",
+    "clearData": "Clear data",
+    "clearDataConfirm": "Clear every row of \"{title}\"? The columns stay.",
+    "clearDataDone": "Source data cleared (columns are untouched).",
+    "clearDataFail": "Could not clear the data.",
     "cellMetaImported": "imported from file",
     "working": "Working…",
     "listLoading": "Loading the source list…",
@@ -1317,6 +1321,10 @@
   "editor": {
     "title": "{brand} — Workflow Designer",
     "appName": "{brand}",
+    "play": {
+      "rowlessRepeat": "The repeat source has no rows; the process runs once (no repeat).",
+      "rowlessRepeatGroup": "The group's repeat source has no rows; the group runs once"
+    },
     "ribbon": {
       "home": "Home",
       "processes": "Processes",
@@ -1617,6 +1625,10 @@
       "downloadDone": "File “{name}.xlsx” downloaded.",
       "downloadCsvFallback": "Excel unavailable — CSV downloaded. {err}",
       "downloadFail": "Download failed.",
+      "clearData": "Clear data",
+      "clearDataConfirm": "Clear every row of \"{name}\"? The columns stay.",
+      "clearDataDone": "Source data cleared (columns are untouched).",
+      "clearDataFail": "Could not clear the data.",
       "refresh": "Refresh",
       "close": "Close",
       "read": "Read",
