@@ -239,10 +239,239 @@ public class BillingController : Controller
         return View();
     }
 
+    // ---- Software package wizard -----------------------------------------------------------------
+
+    /// <summary>
+    /// The software-purchase wizard: tick the features and limits, see the price, then buy.
+    /// </summary>
+    /// <remarks>
+    /// Gated on AllowSoftwarePurchase rather than only AllowCommerce: a reseller may be licensed to
+    /// sell plan subscriptions without being allowed to hand out the software outright, and that
+    /// distinction has to hold at the page as well as in the licence.
+    /// </remarks>
+    [HttpGet]
+    public async Task<IActionResult> Package(CancellationToken ct)
+    {
+        var runtime = await _license.GetRuntimeStateAsync(ct);
+        if (!runtime.AllowsCommerce) return CommerceBlocked();
+        if (!runtime.AllowsSoftwarePurchase)
+        {
+            TempData["BillingError"] = "فروش بستهٔ نرم‌افزار در لایسنس این نصب فعال نیست.";
+            return RedirectToAction(nameof(History));
+        }
+        ViewBag.Options = await _pricing.ListPackageOptionsAsync(ct);
+        return View();
+    }
+
+    /// <summary>
+    /// Price a chosen package configuration, for the wizard's live total.
+    /// </summary>
+    /// <remarks>
+    /// A POST rather than a GET because the selection is a set of units per option, which does not fit
+    /// a query string cleanly. The price comes from the SAME service the order will use, so the total
+    /// the buyer sees is the total they are charged.
+    /// </remarks>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> QuotePackage([FromForm] Dictionary<string, int> units, CancellationToken ct)
+    {
+        var runtime = await _license.GetRuntimeStateAsync(ct);
+        if (!runtime.AllowsCommerce) return Json(new { error = "commerce-disabled" });
+
+        var options = await _pricing.ListPackageOptionsAsync(ct);
+        var normalized = NormalizeUnits(options, units);
+        var quote = PricingService.QuotePackage(options, normalized);
+        return Json(new
+        {
+            total = quote.Total,
+            currency = quote.Currency,
+            lines = quote.Lines.Select(l => new { l.Title, l.Amount, l.Detail })
+        });
+    }
+
+    /// <summary>Turn a wizard selection into a priced order and go to checkout.</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BuyPackage([FromForm] Dictionary<string, int> units, string? organization, CancellationToken ct)
+    {
+        var runtime = await _license.GetRuntimeStateAsync(ct);
+        if (!runtime.AllowsCommerce) return CommerceBlocked();
+        if (!runtime.AllowsSoftwarePurchase)
+        {
+            TempData["BillingError"] = "فروش بستهٔ نرم‌افزار در لایسنس این نصب فعال نیست.";
+            return RedirectToAction(nameof(History));
+        }
+
+        var options = await _pricing.ListPackageOptionsAsync(ct);
+        var normalized = NormalizeUnits(options, units);
+        var quote = PricingService.QuotePackage(options, normalized);
+        if (quote.Total <= 0 && normalized.Values.All(v => v <= 0))
+        {
+            TempData["BillingError"] = "حداقل یک گزینه را انتخاب کنید.";
+            return RedirectToAction(nameof(Package));
+        }
+
+        // The terms carry BOTH the price breakdown and the feature set, because the license issued
+        // after payment is built from them: what the buyer ticked is what the license will allow.
+        var terms = quote.ToTerms();
+        terms["units"] = new JsonObject(normalized.Select(kv => new KeyValuePair<string, JsonNode?>(kv.Key, kv.Value)));
+        terms["users"] = normalized.TryGetValue("base", out var u) ? u : 1;
+        terms["term"] = "perpetual";
+        terms["organization"] = organization;
+        foreach (var option in options)
+        {
+            if (option.Kind == PackageOptionKind.Feature)
+                terms[option.Key] = normalized.TryGetValue(option.Key, out var on) && on > 0;
+        }
+
+        var draft = new OrderDraft(
+            OrderKind.SoftwarePackage,
+            "software-package",
+            "بستهٔ نرم‌افزار",
+            "perpetual",
+            quote.Total,
+            quote.Total,
+            quote.Currency,
+            terms.ToJsonString());
+
+        var order = await _checkout.CreateOrderAsync(UserId, draft, ct);
+        return RedirectToAction(nameof(Checkout), new { orderId = order.Id });
+    }
+
+    // ---- License renewal wizard ------------------------------------------------------------------
+
+    /// <summary>
+    /// Buy a new license for this deployment, or upload an activation request to have one issued.
+    /// </summary>
+    /// <remarks>
+    /// Two paths on one page because they are the same customer problem — "my license is over" — and
+    /// which one applies depends on whether this deployment sells licenses to itself. Offering only
+    /// the one that does not apply would be a dead end.
+    /// </remarks>
+    [HttpGet]
+    public async Task<IActionResult> Renew(CancellationToken ct)
+    {
+        var runtime = await _license.GetRuntimeStateAsync(ct);
+        if (!runtime.AllowsCommerce) return CommerceBlocked();
+        ViewBag.SelfIssued = runtime.AllowsSelfIssuedLicenses;
+        ViewBag.CanIssue = _license.CanIssueLicenses;
+        ViewBag.Pricing = await _pricing.GetLicensePricingAsync(ct);
+        ViewBag.Current = await _license.GetDisplayAsync(ct);
+        return View();
+    }
+
+    /// <summary>Price a license term, for the renewal wizard's live total.</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> QuoteLicense([FromForm] int users, [FromForm] string term, CancellationToken ct)
+    {
+        var runtime = await _license.GetRuntimeStateAsync(ct);
+        if (!runtime.AllowsCommerce) return Json(new { error = "commerce-disabled" });
+        var pricing = await _pricing.GetLicensePricingAsync(ct);
+        var quote = PricingService.QuoteLicense(pricing, users, term);
+        return Json(new
+        {
+            total = quote.Total,
+            currency = quote.Currency,
+            lines = quote.Lines.Select(l => new { l.Title, l.Amount, l.Detail })
+        });
+    }
+
+    /// <summary>Buy a license: create the order and go to checkout.</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BuyLicense([FromForm] int users, [FromForm] string term, string? organization, CancellationToken ct)
+    {
+        var runtime = await _license.GetRuntimeStateAsync(ct);
+        if (!runtime.AllowsCommerce) return CommerceBlocked();
+        if (!runtime.AllowsSelfIssuedLicenses)
+        {
+            TempData["BillingError"] = "صدور لایسنس توسط این نصب فعال نیست؛ از مسیر درخواست لایسنس استفاده کنید.";
+            return RedirectToAction(nameof(Renew));
+        }
+
+        var pricing = await _pricing.GetLicensePricingAsync(ct);
+        var quote = PricingService.QuoteLicense(pricing, users, term);
+        var terms = quote.ToTerms();
+        terms["users"] = users;
+        terms["term"] = term;
+        terms["organization"] = organization;
+
+        var draft = new OrderDraft(
+            OrderKind.LicenseRenewal,
+            $"license-{term}",
+            $"لایسنس {(term == "yearly" ? "سالانه" : term == "perpetual" ? "دائمی" : "ماهانه")} ({users} کاربر)",
+            term,
+            quote.Total,
+            quote.Total,
+            quote.Currency,
+            terms.ToJsonString());
+
+        var order = await _checkout.CreateOrderAsync(UserId, draft, ct);
+        return RedirectToAction(nameof(Checkout), new { orderId = order.Id });
+    }
+
+    // ---- Commerce gate → plan page ---------------------------------------------------------------
+    /// <summary>
+    /// Where a user who hit a plan limit should be sent.
+    /// </summary>
+    /// <remarks>
+    /// Answered by the server because it depends on the LICENCE: a deployment that sells sends the
+    /// user to the paid plan page, and one that does not has nothing to sell — so it must say so
+    /// rather than open a page that cannot help. The browser cannot make that distinction, and
+    /// hard-coding a redirect there would have produced a dead end on every install without
+    /// commerce.
+    /// </remarks>
+    [HttpGet]
+    public async Task<IActionResult> UpgradeTarget(string? capability = null, CancellationToken ct = default)
+    {
+        var runtime = await _license.GetRuntimeStateAsync(ct);
+        if (!runtime.AllowsCommerce)
+        {
+            return Json(new
+            {
+                url = (string?)null,
+                message = "قابلیت فروش در لایسنس این نصب فعال نیست؛ برای ارتقای پلن با مدیر تماس بگیرید."
+            });
+        }
+        return Json(new
+        {
+            url = Url.Action(nameof(Plans), "Billing", new { area = "Panel" }),
+            message = (string?)null
+        });
+    }
+
     // ---- Helpers ---------------------------------------------------------------------------------
 
     private static object BuildCheckoutModel(Order order, IReadOnlyList<PriceLine> lines)
         => new CheckoutView(order, lines);
+
+    /// <summary>
+    /// Clamp a wizard selection to what each option is actually allowed to sell.
+    /// </summary>
+    /// <remarks>
+    /// The browser is not trusted for price or bounds: a unit count arrives as a form value, so it is
+    /// clamped to the option's own ceiling and floored at zero here. Without this, a hand-made POST
+    /// could buy a license for a negative number of users and be refunded the difference.
+    /// </remarks>
+    private static Dictionary<string, int> NormalizeUnits(
+        IReadOnlyList<SoftwarePackageOption> options, Dictionary<string, int> raw)
+    {
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var option in options)
+        {
+            if (!raw.TryGetValue(option.Key, out var units)) continue;
+            var value = units;
+            if (option.Kind == PackageOptionKind.Feature) value = value > 0 ? 1 : 0;
+            else
+            {
+                value = Math.Max(0, value);
+                if (option.MaxUnits is int cap) value = Math.Min(value, cap);
+            }
+            result[option.Key] = value;
+        }
+        return result;
+    }
 
     private IActionResult CommerceBlocked()
     {

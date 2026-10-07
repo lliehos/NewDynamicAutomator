@@ -78,12 +78,36 @@
     return t("plan.upgradeTitle");
   }
 
+  /**
+   * How the "you hit a limit" moment is handled.
+   *
+   * Delegated to the server, not decided here, because the right destination depends on whether this
+   * deployment is LICENSED TO SELL: a storefront sends the user to the paid plan page, while an
+   * install that does not sell has nothing to buy and must say so instead of showing a dead page.
+   * The browser cannot know that, so it asks.
+   */
   function showUpgrade(capability) {
     const msg = upgradeMessage(capability);
     if (window.DaNotify) DaNotify.toast(msg, "warn");
     else if (window.daNotify) daNotify(msg, "warn");
-    const target = capability === "smart" ? "Gold" : "Pro";
-    setTimeout(() => {
+    setTimeout(async () => {
+      try {
+        const res = await fetch("/Panel/Billing/UpgradeTarget", { credentials: "same-origin" });
+        if (res.ok) {
+          const body = await res.json().catch(() => ({}));
+          if (body.url) {
+            window.location.href = body.url;
+            return;
+          }
+          // Selling is off: say why rather than landing on a page that cannot help.
+          if (body.message) {
+            if (window.DaNotify) DaNotify.toast(body.message, "error");
+            else daNotify(body.message, "error");
+          }
+          return;
+        }
+      } catch { /* fall through to the in-panel upgrade page */ }
+      const target = capability === "smart" ? "Gold" : "Pro";
       window.location.href = "/Panel/Account/Upgrade?target=" + encodeURIComponent(target);
     }, 900);
   }

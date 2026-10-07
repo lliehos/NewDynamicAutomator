@@ -26,10 +26,23 @@
   @if (plans.Count == 0)
   {
     <div class="alert alert-info">در حال حاضر پلنی برای فروش عرضه نشده است.</div>
-    return;
   }
 
-  <div class="billing-plans">
+  <div class="d-flex gap-2 mb-3 flex-wrap">
+    @if (Morobot.Web.Filters.TenantBrandingViewDataFilter.AllowsSoftwarePurchase(ViewData))
+    {
+      <a class="btn btn-label-primary btn-sm" asp-action="Package">خرید بستهٔ نرم‌افزار</a>
+    }
+    @if (Morobot.Web.Filters.TenantBrandingViewDataFilter.AllowsSelfIssuedLicenses(ViewData))
+    {
+      <a class="btn btn-label-secondary btn-sm" asp-action="Renew">خرید / تمدید لایسنس</a>
+    }
+    <a class="btn btn-label-secondary btn-sm" asp-action="History">تاریخچهٔ مالی</a>
+  </div>
+
+  @if (plans.Count > 0)
+  {
+    <div class="billing-plans">
     @foreach (var plan in plans)
     {
       var monthly = plan.MonthlyPrice;
@@ -90,5 +103,6 @@
         </div>
       </div>
     }
-  </div>
+    </div>
+  }
 </div>

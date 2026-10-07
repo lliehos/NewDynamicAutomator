@@ -1,0 +1,217 @@
+@using Morobot.Domain.Entities
+@using Morobot.Domain.Enums
+@{
+    ViewData["Title"] = "قیمت‌گذاری فروش";
+    var commerceAllowed = ViewBag.CommerceAllowed is true;
+    var softwareAllowed = ViewBag.SoftwarePurchaseAllowed is true;
+    var selfIssuedAllowed = ViewBag.SelfIssuedAllowed is true;
+    var canIssue = ViewBag.CanIssueLicenses is true;
+    var options = ViewBag.Options as List<SoftwarePackageOption> ?? new List<SoftwarePackageOption>();
+    var lp = ViewBag.LicensePricing as LicensePricing ?? new LicensePricing();
+    var ok = TempData["CommerceOk"] as string;
+    var err = TempData["CommerceError"] as string;
+}
+
+<div class="admin-page">
+  <h4 class="mb-1">قیمت‌گذاری فروش</h4>
+  <p class="text-muted small mb-3">
+    قیمت بستهٔ نرم‌افزار و لایسنس — جدا از قیمت پلن‌ها که در صفحهٔ پلن‌ها تنظیم می‌شود.
+  </p>
+
+  @if (!string.IsNullOrWhiteSpace(ok))
+  {
+    <div class="alert alert-success">@ok</div>
+  }
+  @if (!string.IsNullOrWhiteSpace(err))
+  {
+    <div class="alert alert-danger">@err</div>
+  }
+
+  @if (!commerceAllowed)
+  {
+    @* Nothing to price on an install that cannot sell: editing numbers nobody can charge would be
+       a page that looks functional and does nothing. *@
+    <div class="alert alert-warning">
+      قابلیت فروش در لایسنس این نصب فعال نیست. برای فعال‌سازی با فروشنده تماس بگیرید.
+    </div>
+    return;
+  }
+
+  <div class="alert alert-info small">
+    وضعیت لایسنس:
+    @if (softwareAllowed)
+    {
+      <span class="badge bg-label-success me-2">فروش بستهٔ نرم‌افزار فعال</span>
+    }
+    else
+    {
+      <span class="badge bg-label-secondary me-2">فروش بستهٔ نرم‌افزار غیرفعال</span>
+    }
+    @if (selfIssuedAllowed && canIssue)
+    {
+      <span class="badge bg-label-success">صدور لایسنس توسط این نصب فعال</span>
+    }
+    else if (selfIssuedAllowed && !canIssue)
+    {
+      @* The flag is on but no signing key is configured, so the wizard would fail at the last step.
+         Saying so here is kinder than letting an operator discover it after a customer has paid. *@
+      <span class="badge bg-label-warning">صدور لایسنس: کلید امضا تنظیم نشده است</span>
+    }
+    else
+    {
+      <span class="badge bg-label-secondary">صدور لایسنس غیرفعال</span>
+    }
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="fw-semibold mb-3">گزینه‌های بستهٔ نرم‌افزار</div>
+
+      @if (options.Count == 0)
+      {
+        <div class="alert alert-info small">گزینه‌ای ثبت نشده است.</div>
+      }
+      else
+      {
+        <div class="table-responsive">
+          <table class="table table-sm">
+            <thead>
+              <tr>
+                <th>کلید</th>
+                <th>عنوان</th>
+                <th>نوع</th>
+                <th>مبلغ ثابت</th>
+                <th>مبلغ واحد</th>
+                <th>شامل</th>
+                <th>سقف</th>
+                <th>وضعیت</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              @foreach (var o in options)
+              {
+                <tr class="@(o.IsActive ? null : "text-muted")">
+                  <td><code>@o.Key</code></td>
+                  <td>@o.Title</td>
+                  <td>@(o.Kind == PackageOptionKind.Feature ? "فیچر" : "محدودیت")</td>
+                  <td>@o.Amount.ToString("N0")</td>
+                  <td>@o.UnitAmount.ToString("N0")</td>
+                  <td>@o.IncludedUnits</td>
+                  <td>@(o.MaxUnits?.ToString("N0") ?? "—")</td>
+                  <td>@(o.IsActive ? "فعال" : "غیرفعال")</td>
+                  <td>
+                    @if (o.IsActive)
+                    {
+                      <form method="post" asp-action="DeleteOption" class="d-inline">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="id" value="@o.Id" />
+                        <button type="submit" class="btn btn-sm btn-label-danger">غیرفعال</button>
+                      </form>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+
+      <hr />
+      <div class="fw-semibold mb-2">افزودن / ویرایش گزینه</div>
+      <form method="post" asp-action="SaveOption" class="row g-2 align-items-end">
+        @Html.AntiForgeryToken()
+        <div class="col-md-2">
+          <label class="form-label small">کلید</label>
+          <input name="Key" class="form-control form-control-sm" placeholder="local_run" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">عنوان</label>
+          <input name="Title" class="form-control form-control-sm" />
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">نوع</label>
+          <select name="Kind" class="form-select form-select-sm">
+            <option value="1">فیچر (مبلغ ثابت)</option>
+            <option value="2">محدودیت (به‌ازای واحد)</option>
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">مبلغ ثابت</label>
+          <input name="Amount" type="number" step="1000" class="form-control form-control-sm" value="0" />
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">مبلغ هر واحد</label>
+          <input name="UnitAmount" type="number" step="1000" class="form-control form-control-sm" value="0" />
+        </div>
+        <div class="col-md-1">
+          <label class="form-label small">شامل</label>
+          <input name="IncludedUnits" type="number" class="form-control form-control-sm" value="0" />
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">واحد</label>
+          <input name="UnitLabel" class="form-control form-control-sm" placeholder="کاربر" />
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">سقف واحد</label>
+          <input name="MaxUnits" type="number" class="form-control form-control-sm" />
+        </div>
+        <div class="col-md-1">
+          <label class="form-label small">ترتیب</label>
+          <input name="SortOrder" type="number" class="form-control form-control-sm" value="0" />
+        </div>
+        <div class="col-md-2 form-check ms-2">
+          <input name="IsActive" type="checkbox" value="true" class="form-check-input" checked />
+          <label class="form-check-label small">فعال</label>
+        </div>
+        <div class="col-12">
+          <label class="form-label small">توضیح</label>
+          <input name="Description" class="form-control form-control-sm" />
+        </div>
+        <div class="col-12">
+          <button type="submit" class="btn btn-primary btn-sm">ذخیرهٔ گزینه</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <div class="fw-semibold mb-3">قیمت‌گذاری لایسنس</div>
+      <form method="post" asp-action="SaveLicensePricing" class="row g-2 align-items-end">
+        @Html.AntiForgeryToken()
+        <div class="col-md-2">
+          <label class="form-label small">مبلغ پایه</label>
+          <input name="BaseAmount" type="number" step="1000" class="form-control form-control-sm" value="@lp.BaseAmount" />
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">به‌ازای هر کاربر</label>
+          <input name="PerUserAmount" type="number" step="1000" class="form-control form-control-sm" value="@lp.PerUserAmount" />
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">کاربران شامل</label>
+          <input name="IncludedUsers" type="number" class="form-control form-control-sm" value="@lp.IncludedUsers" />
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">سقف کاربر</label>
+          <input name="MaxUsers" type="number" class="form-control form-control-sm" value="@lp.MaxUsers" />
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">ضریب سالانه</label>
+          <input name="YearlyTermMultiplier" type="number" step="0.1" class="form-control form-control-sm" value="@lp.YearlyTermMultiplier" />
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">ضریب دائمی</label>
+          <input name="PerpetualMultiplier" type="number" step="0.1" class="form-control form-control-sm" value="@lp.PerpetualMultiplier" />
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">واحد پول</label>
+          <input name="Currency" class="form-control form-control-sm" value="@lp.Currency" />
+        </div>
+        <div class="col-12">
+          <button type="submit" class="btn btn-primary btn-sm">ذخیرهٔ قیمت لایسنس</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
