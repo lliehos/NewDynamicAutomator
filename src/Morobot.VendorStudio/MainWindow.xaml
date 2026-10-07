@@ -101,6 +101,23 @@
               <TextBox x:Name="Organization" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"/>
             </StackPanel>
 
+            <!-- Server base URL -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE774;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="آدرس پایهٔ سرور (برای اجرای محلی)"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="آدرس عمومی همین سرور مشتری. اجراکنندهٔ دسکتاپ از این مقدار می‌خواند تا کاربر آدرس را دستی وارد نکند."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="مثلاً https://panel.customer.ir — امضا می‌شود و از سمت مشتری قابل تغییر نیست. خالی = استفاده از قفل دامنه یا آدرس لوکال."/>
+              <TextBox x:Name="ServerBaseUrl" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"
+                       ToolTip="مثال: https://panel.customer.ir"/>
+            </StackPanel>
+
             <!-- Allowed host -->
             <StackPanel Style="{StaticResource VsFieldBlock}">
               <StackPanel Orientation="Horizontal">
@@ -276,6 +293,38 @@
               <TextBlock TextWrapping="Wrap">
                 <Run FontWeight="SemiBold" Text="بستهٔ فرانت (سایت عمومی) فعال باشد"/>
                 <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — روشن یعنی صفحهٔ پیش‌فرض، فرانت است)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowLocalRun" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="اگر روشن باشد، اجرای فرآیندها روی ماشین خود کاربر (اجراکنندهٔ دسکتاپ و خاموش‌بودن سوئیچ «اجرا روی سرور») مجاز است. برای لایسنس‌های قدیمی غیرفعال در نظر گرفته می‌شود.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجرای محلی روی ماشین کاربر"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — قابلیت جداانهٔ فروش)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowCommerce" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="دروازهٔ همهٔ سطوح فروش: صفحهٔ عمومی پلن‌ها، پرداخت، ویزارد خرید، فرآیند تمدید و تاریخچهٔ مالی. برای نصب مشتری (on-premise) خاموش بماند.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازهٔ فروش (پلن، بستهٔ نرم‌افزار، لایسنس)"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — فقط برای سرور فروشنده)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowSoftwarePurchase" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="فروش خود بستهٔ نرم‌افزار (ویزارد خرید) جدا از فروش پلن. فقط وقتی «اجازهٔ فروش» روشن باشد اثر دارد.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازهٔ فروش بستهٔ نرم‌افزار (ویزارد خرید)"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — نیازمند روشن‌بودن «اجازهٔ فروش»)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowSelfIssuedLicenses" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="اجازهٔ صدور لایسنس توسط خود پنل (ویزارد تمدید) بدون دخالت فروشنده. فقط برای سرور فروشندهٔ خودی. نیازمند روشن‌بودن «اجازهٔ فروش».">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازهٔ صدور لایسنس توسط خود پنل"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — نیازمند روشن‌بودن «اجازهٔ فروش»)"/>
               </TextBlock>
             </CheckBox>
 
