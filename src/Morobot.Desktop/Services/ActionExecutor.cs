@@ -90,6 +90,9 @@ public sealed class ActionExecutor
                 case "WaitForLoading":
                     return await DoWaitForLoadingAsync(driver, step, timeout, ct);
 
+                case "RemoveElements":
+                    return DoRemoveElements(driver, step, timeout);
+
                 default:
                     // An action this runner does not implement must stop the step rather than be
                     // skipped: silently continuing would run the rest of the process against a page
@@ -152,7 +155,7 @@ public sealed class ActionExecutor
         {
             var found = d.FindElements(by);
             return found.Count > index ? found : null;
-        });
+        }) ?? throw new NoSuchElementException($"المنت با اندیس {index} پیدا نشد.");
         return all[index];
     }
 
@@ -303,12 +306,66 @@ public sealed class ActionExecutor
                 var state = (string)((IJavaScriptExecutor)driver)
                     .ExecuteScript("return document.readyState")!;
                 if (string.Equals(state, "complete", StringComparison.OrdinalIgnoreCase))
+                {
+                    // readyState covers the document; if the step also waits for one element, wait
+                    // for that too, so "loading finished" means the thing the author was waiting for
+                    // is actually on the page rather than merely fetched.
+                    if (!string.IsNullOrWhiteSpace(step.Selector))
+                    {
+                        var found = driver.FindElements(BuildBy(step));
+                        if (found.Count == 0)
+                        {
+                            await Task.Delay(200, ct);
+                            continue;
+                        }
+                    }
                     return StepOutcome.Success;
+                }
             }
             catch { /* a navigating document throws; wait and retry */ }
             await Task.Delay(200, ct);
         }
         return StepOutcome.Success; // readyState never settling is not itself a step failure
+    }
+
+    /// <summary>
+    /// Remove matched elements from the page.
+    /// </summary>
+    /// <remarks>
+    /// Honours the step's `removeAllMatches` flag (default true), because the two behaviours are
+    /// genuinely wanted: clearing a repeated block removes every match, while "the one banner that
+    /// is currently up" removes only the first. Removing nothing is an ERROR rather than a quiet
+    /// success — the step existed to remove something, and a run that silently skipped it would
+    /// carry on against a page it did not actually change.
+    /// </remarks>
+    private static StepOutcome DoRemoveElements(IWebDriver driver, GraphNode step, TimeSpan timeout)
+    {
+        if (string.IsNullOrWhiteSpace(step.Selector))
+            return StepOutcome.Fail("برای حذف المنت، انتخابگر لازم است.");
+
+        var by = BuildBy(step);
+        var wait = new WebDriverWait(driver, timeout);
+        try
+        {
+            wait.Until(d => d.FindElements(by).Count > 0);
+        }
+        catch (WebDriverTimeoutException)
+        {
+            return StepOutcome.Fail("المنتی برای حذف پیدا نشد.");
+        }
+
+        var removeAll = !step.ReadExtraBool("removeAllMatchesFalse");
+        var removedRaw = ((IJavaScriptExecutor)driver).ExecuteScript(
+            "const all=Array.from(document.querySelectorAll(arguments[0]));" +
+            "const wanted=arguments[1]?all:all.slice(0,1);" +
+            "let n=0;for(const e of wanted){try{if(e.parentNode){e.parentNode.removeChild(e);n++;}}catch(_){}}" +
+            "return n;",
+            step.Selector, removeAll);
+        var removed = removedRaw is null ? 0L : Convert.ToInt64(removedRaw);
+
+        if (removed == 0)
+            return StepOutcome.Fail("هیچ المنتی حذف نشد.");
+        return StepOutcome.Read(removed.ToString());
     }
 
     // ---- Values ---------------------------------------------------------------------------------

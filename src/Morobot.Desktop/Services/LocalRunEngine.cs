@@ -44,6 +44,7 @@ public sealed record LocalCellWrite(int DataSourceId, int RowIndex, string Colum
 public sealed class LocalRunEngine
 {
     private readonly ActionExecutor _actions = new();
+    private readonly ConditionEvaluator _conditions = new();
     private readonly PanelClient _client;
     private readonly FirefoxRunner _browser;
     private readonly bool _allowServerCalls;
@@ -207,10 +208,11 @@ public sealed class LocalRunEngine
 
                 if (node.IsCondition)
                 {
-                    var passed = EvaluateCondition(graph, node, rowIndex);
-                    Log(passed ? "info" : "warn",
-                        $"نتیجه شرط «{node.Title ?? node.Id}»: {(passed ? "برقرار" : "برقرار نیست")}");
-                    currentId = graph.NextNodeId(currentId, passed);
+                    var result = EvaluateCondition(graph, node, rowIndex);
+                    if (result.Problem is not null) Log("warn", result.Problem);
+                    Log(result.Passed ? "info" : "warn",
+                        $"نتیجه شرط «{node.Title ?? node.Id}»: {(result.Passed ? "برقرار" : "برقرار نیست")}");
+                    currentId = graph.NextNodeId(currentId, result.Passed);
                     continue;
                 }
 
@@ -256,6 +258,12 @@ public sealed class LocalRunEngine
             if (action == "InsertContent" && !read.Ok) return StepOutcome.Fail(read.Error ?? "مقدار از صفحه خوانده نشد.");
             return WriteCell(graph, node, rowIndex, text);
         }
+
+        // Row-level actions change the SHAPE of a source's content, so they are not a page action and
+        // not a single cell write: they are handled here where the local/server split for a source is
+        // already decided.
+        if (action is "InsertRow" or "DeleteRow")
+            return await ResizeRowsAsync(graph, node, rowIndex, ct);
 
         return await _actions.RunAsync(_browser.Driver, node, value, TimeSpan.FromSeconds(30), ct);
     }
@@ -341,73 +349,76 @@ public sealed class LocalRunEngine
     }
 
     /// <summary>
-    /// Evaluate a condition node.
+    /// Evaluate a condition node, delegating to the dedicated evaluator.
     /// </summary>
     /// <remarks>
-    /// The runner supports the condition kinds that are decidable from the values it already holds —
-    /// memory and source comparisons. A browser-DOM condition (element exists, text matches) needs
-    /// the full selector/matching layer the extension has, and is reported as unsupported rather
-    /// than guessed at, because a wrong verdict would send the run down the wrong branch silently.
+    /// The engine supplies the pieces the evaluator cannot own: the graph walk's current row, the
+    /// memory table, and the cell reader (which itself decides local vs server per source). The
+    /// evaluation logic lives in <see cref="ConditionEvaluator"/> so every condition type is
+    /// comparable against its counterpart in engine.js in one place.
     /// </remarks>
-    private bool EvaluateCondition(ProcessGraph graph, GraphNode node, int rowIndex)
-    {
-        var condType = node.ReadExtraString("conditionType");
-        string? left = null, right = null;
-
-        var subject = node.ReadExtraString("conditionSubject");
-        if (string.Equals(subject, "Memory", StringComparison.OrdinalIgnoreCase))
-        {
-            var name = node.MemoryVariableName ?? "";
-            left = _memory.TryGetValue(name, out var v) ? v : "";
-        }
-        else if (string.Equals(subject, "Source", StringComparison.OrdinalIgnoreCase)
-              || string.Equals(subject, "SourceColumnValue", StringComparison.OrdinalIgnoreCase)
-              || string.Equals(subject, "SourceValue", StringComparison.OrdinalIgnoreCase))
-        {
-            var dsId = node.DataSourceId;
-            var col = node.DynamicSourceColumnName ?? "";
-            left = ReadCell(graph, dsId, rowIndex, col);
-        }
-        else
-        {
-            Log("warn", $"شرط «{node.Title ?? node.Id}» از نوع صفحه‌محور است و در اجراکننده محلی ارزیابی نشد؛ نتیجه «ناموفق» فرض شد.");
-            return false;
-        }
-
-        var operandType = node.ReadExtraString("compareValueSourceType");
-        if (string.Equals(operandType, "Memory", StringComparison.OrdinalIgnoreCase))
-        {
-            var name = node.ReadExtraString("compareMemoryVariableName");
-            right = _memory.TryGetValue(name, out var v) ? v : "";
-        }
-        else
-        {
-            right = node.ReadExtraString("compareConstantValue");
-        }
-
-        var op = node.ReadExtraString("conditionOperator");
-        return Compare(left ?? "", right ?? "", op);
-    }
-
-    private static bool Compare(string left, string right, string op) => op switch
-    {
-        "Equals" or "" => string.Equals(left, right, StringComparison.Ordinal),
-        "NotEquals" => !string.Equals(left, right, StringComparison.Ordinal),
-        "Contains" => left.Contains(right, StringComparison.Ordinal),
-        "NotContains" => !left.Contains(right, StringComparison.Ordinal),
-        "StartsWith" => left.StartsWith(right, StringComparison.Ordinal),
-        "EndsWith" => left.EndsWith(right, StringComparison.Ordinal),
-        "GreaterThan" => Num(left) > Num(right),
-        "LessThan" => Num(left) < Num(right),
-        "GreaterOrEqual" => Num(left) >= Num(right),
-        "LessOrEqual" => Num(left) <= Num(right),
-        _ => string.Equals(left, right, StringComparison.Ordinal)
-    };
-
-    private static double Num(string s)
-        => double.TryParse(s, out var d) ? d : 0;
+    private ConditionResult EvaluateCondition(ProcessGraph graph, GraphNode node, int rowIndex)
+        => _conditions.Evaluate(_browser.Driver, graph, node, rowIndex, _memory,
+            (dsId, row, col) => ReadCell(graph, dsId, row, col));
 
     private static string CellKey(int dsId, int row, string col) => $"{dsId}|{row}|{col.Trim()}";
+
+    /// <summary>
+    /// Insert a blank row into, or delete a row from, the step's source.
+    /// </summary>
+    /// <remarks>
+    /// A row change moves every index after it, so the run's own mirror of the source is wrong from
+    /// that point on. The cached cells for that source are dropped rather than shifted: a later read
+    /// then goes back to the source of truth instead of a mirror the run itself has invalidated.
+    ///
+    /// Shared sources go to the server in both modes, because a row added to shared data is shared
+    /// data. A private source in local mode is edited in the run's own mirror only.
+    /// </remarks>
+    private async Task<StepOutcome> ResizeRowsAsync(ProcessGraph graph, GraphNode node, int rowIndex, CancellationToken ct)
+    {
+        var dsId = node.DataSourceId ?? node.SaveDataSourceId;
+        if (dsId is null || dsId <= 0)
+            return StepOutcome.Fail("برای این اقدام، منبع مشخص نشده است.");
+
+        var isInsert = string.Equals(node.ActionType, "InsertRow", StringComparison.OrdinalIgnoreCase);
+        var targetRow = node.SpecificRowIndex ?? rowIndex;
+        var isShared = graph.DataSources.FirstOrDefault(d => d.Id == dsId)?.IsPublic == true;
+
+        if (!(_allowServerCalls && isShared))
+        {
+            Log("info", isInsert
+                ? $"ردیف خالی در جای {targetRow} منبع #{dsId} (محلی) درج شد"
+                : $"ردیف {targetRow} از منبع #{dsId} (محلی) حذف شد");
+            DropCachedCells(dsId.Value);
+            await Task.CompletedTask;
+            return StepOutcome.Success;
+        }
+
+        var result = isInsert
+            ? await _client.InsertRowAsync(dsId.Value, targetRow, ct)
+            : await _client.DeleteRowAsync(dsId.Value, targetRow, ct);
+        if (!result.Ok)
+            return StepOutcome.Fail(result.Error ?? "تغییر ردیف‌های منبع روی سرور ناموفق بود.");
+
+        Log("info", isInsert
+            ? $"ردیف خالی در جای {targetRow} منبع #{dsId} درج شد"
+            : $"ردیف {targetRow} از منبع #{dsId} حذف شد");
+        DropCachedCells(dsId.Value);
+
+        // The row count moves with the grid; the LastRow pointer reads it, and a stale count would
+        // address a row that no longer exists.
+        var ds = graph.DataSources.FirstOrDefault(d => d.Id == dsId);
+        if (ds is not null)
+            ds.RowCount = Math.Max(0, ds.RowCount + (isInsert ? 1 : -1));
+
+        return StepOutcome.Success;
+    }
+
+    private void DropCachedCells(int dsId)
+    {
+        foreach (var key in _localCells.Keys.Where(k => k.StartsWith($"{dsId}|", StringComparison.Ordinal)).ToList())
+            _localCells.Remove(key);
+    }
 
     private static int ReadTaskId(ProcessGraph graph)
     {

@@ -166,6 +166,12 @@
               <div data-i18n="panel.navGuide">@L["panel.navGuide"]</div>
             </a>
           </li>
+          <li class="menu-item">
+            <a asp-area="Panel" asp-controller="Desktop" asp-action="Install" class="menu-link">
+              <i class="menu-icon tf-icons ti ti-download"></i>
+              <div data-i18n="panel.navDownloads">@L["panel.navDownloads"]</div>
+            </a>
+          </li>
           <li class="menu-item @(isSettings ? "active" : null)">
             <a asp-area="Panel" asp-controller="Settings" asp-action="Index" class="menu-link">
               <i class="menu-icon tf-icons ti ti-settings"></i>

@@ -42,6 +42,11 @@ public partial class MainWindow : Window
         UserBox.Text = saved.UserName ?? "";
         RememberBox.IsChecked = saved.Remember;
 
+        // Check for an update before sign-in. The endpoint is unauthenticated precisely so a client
+        // too old to talk to this server is told to update rather than failing at login with an
+        // error it cannot interpret.
+        _ = CheckForUpdateAsync(saved.ServerUrl, interactive: false);
+
         if (!string.IsNullOrWhiteSpace(saved.ServerUrl) && !string.IsNullOrWhiteSpace(saved.Token))
         {
             _client = new PanelClient(saved.ServerUrl);
@@ -56,6 +61,57 @@ public partial class MainWindow : Window
             saved.Token = null;
             AppSettings.Save(saved);
         }
+    }
+
+    /// <summary>
+    /// Look for a newer runner build and offer to install it.
+    /// </summary>
+    /// <remarks>
+    /// Offered rather than forced: an update replaces the running executable, so doing that without
+    /// consent mid-session would be a surprise. The user decides when to restart.
+    /// </remarks>
+    private async Task CheckForUpdateAsync(string? serverUrl, bool interactive)
+    {
+        if (string.IsNullOrWhiteSpace(serverUrl)) return;
+        var info = await UpdateService.CheckAsync(serverUrl);
+        if (info is null || !info.Available) return;
+        if (!UpdateService.IsNewer(info.Version, UpdateService.CurrentVersion)) return;
+
+        var ask = MessageBox.Show(this,
+            $"نسخهٔ جدید {info.Version} روی سرور موجود است (نسخهٔ فعلی {UpdateService.CurrentVersion}).\n\n" +
+            "اکنون دانلود و نصب شود؟ برنامه پس از نصب دوباره باز می‌شود.",
+            "به‌روزرسانی",
+            MessageBoxButton.YesNo, MessageBoxImage.Information);
+        if (ask != MessageBoxResult.Yes) return;
+
+        UpdateStatus.Text = "در حال دانلود به‌روزرسانی…";
+        var progress = new Progress<int>(p => UpdateStatus.Text = $"در حال دانلود به‌روزرسانی… {p}%");
+        var (ok, newExe, error) = await UpdateService.DownloadAndStageAsync(
+            serverUrl, info.DownloadUrl ?? "/desktop/download", progress);
+
+        if (!ok || newExe is null)
+        {
+            UpdateStatus.Text = error ?? "به‌روزرسانی ناموفق بود.";
+            return;
+        }
+
+        UpdateStatus.Text = "به‌روزرسانی آماده است؛ برنامه در حال راه‌اندازی مجدد…";
+        // Start the new build, then close this one so the file lock on the old exe is released. The
+        // new build runs from its staging folder, which is the only way Windows allows this.
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(newExe)
+            {
+                UseShellExecute = true,
+                WorkingDirectory = System.IO.Path.GetDirectoryName(newExe)
+            });
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus.Text = $"اجرای نسخهٔ جدید ناموفق بود: {ex.Message}";
+            return;
+        }
+        Application.Current.Shutdown();
     }
 
     // ---- Login ----------------------------------------------------------------------------------
@@ -118,6 +174,9 @@ public partial class MainWindow : Window
         LicenseText.Foreground = _license.AllowsLocalRun
             ? (System.Windows.Media.Brush)FindResource("DsSuccessBrush")
             : (System.Windows.Media.Brush)FindResource("DsDangerBrush");
+
+        // Now that the server URL is known for certain, check for updates against it.
+        _ = CheckForUpdateAsync(_client.BaseUrl, interactive: false);
 
         await LoadProcessesAsync();
     }
@@ -301,6 +360,30 @@ public partial class MainWindow : Window
             ok ? $"پیش‌نیازها آماده است.\n\n{detail}" : $"{DsStrings.DriverMissingBody}\n\n{detail}",
             ok ? "بررسی پیش‌نیازها" : DsStrings.DriverMissing,
             MessageBoxButton.OK, ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
+    }
+
+    private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        var url = _client?.BaseUrl ?? ServerUrlBox.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            UpdateStatus.Text = "ابتدا آدرس سرور را وارد کنید.";
+            return;
+        }
+        UpdateStatus.Text = "در حال بررسی…";
+        var info = await UpdateService.CheckAsync(url);
+        if (info is null)
+        {
+            UpdateStatus.Text = "سرور در دسترس نبود.";
+            return;
+        }
+        if (!info.Available || !UpdateService.IsNewer(info.Version, UpdateService.CurrentVersion))
+        {
+            UpdateStatus.Text = $"برنامه به‌روز است (نسخهٔ {UpdateService.CurrentVersion}).";
+            return;
+        }
+        UpdateStatus.Text = "";
+        await CheckForUpdateAsync(url, interactive: true);
     }
 }
 

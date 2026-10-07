@@ -84,6 +84,17 @@ public sealed class LicenseRuntimeState
     public bool AllowsFrontPackage => Mode == LicenseRuntimeMode.Licensed && (Payload?.AllowFrontPackage ?? false);
 
     /// <summary>
+    /// Whether this deployment may run processes locally (the desktop runner and the per-process
+    /// "run on server" switch being off).
+    /// </summary>
+    /// <remarks>
+    /// Strictly <see cref="LicenseRuntimeMode.Licensed"/>-only, like <see cref="AllowsFrontPackage"/>
+    /// and for the same reason: local execution moves work off the server, so it is a capability the
+    /// vendor grants rather than one a trial or a lapsed install should be able to exercise.
+    /// </remarks>
+    public bool AllowsLocalRun => Mode == LicenseRuntimeMode.Licensed && (Payload?.AllowLocalRun ?? false);
+
+    /// <summary>
     /// Row ceiling implied by the license. A trial or restricted install falls back to the small
     /// trial cap; a licensed install uses the signed value (null = the vendor sold no ceiling).
     /// </summary>

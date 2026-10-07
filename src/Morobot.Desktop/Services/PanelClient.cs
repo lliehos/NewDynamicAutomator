@@ -230,6 +230,41 @@ public sealed class PanelClient : IDisposable
         catch { return false; }
     }
 
+    /// <summary>Insert a blank row into a source at the given index.</summary>
+    public Task<ApiResult<string>> InsertRowAsync(int dataSourceId, int rowIndex, CancellationToken ct = default)
+        => PostRowAsync($"{BaseUrl}/api/datasources/{dataSourceId}/rows/add", new { rowIndex }, ct);
+
+    /// <summary>Delete one row from a source.</summary>
+    public async Task<ApiResult<string>> DeleteRowAsync(int dataSourceId, int rowIndex, CancellationToken ct = default)
+    {
+        try
+        {
+            var res = await _http.DeleteAsync($"{BaseUrl}/api/datasources/{dataSourceId}/rows/{rowIndex}", ct);
+            return res.IsSuccessStatusCode
+                ? ApiResult<string>.Success("ok")
+                : ApiResult<string>.Fail(await ReadErrorAsync(res, ct) ?? "حذف ردیف ناموفق بود.");
+        }
+        catch (Exception ex)
+        {
+            return ApiResult<string>.Fail($"خطا در حذف ردیف: {ex.Message}");
+        }
+    }
+
+    private async Task<ApiResult<string>> PostRowAsync(string url, object body, CancellationToken ct)
+    {
+        try
+        {
+            var res = await _http.PostAsJsonAsync(url, body, JsonOpts, ct);
+            return res.IsSuccessStatusCode
+                ? ApiResult<string>.Success("ok")
+                : ApiResult<string>.Fail(await ReadErrorAsync(res, ct) ?? "تغییر ردیف‌های منبع ناموفق بود.");
+        }
+        catch (Exception ex)
+        {
+            return ApiResult<string>.Fail($"خطا در تغییر ردیف‌ها: {ex.Message}");
+        }
+    }
+
     private static ProcessRow MapProcessRow(JsonElement e) => new()
     {
         Id = ReadInt(e, "id"),
