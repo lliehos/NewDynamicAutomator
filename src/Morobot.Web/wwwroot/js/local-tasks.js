@@ -294,18 +294,51 @@
     };
   }
 
+  /**
+   * Return a task object that actually carries a graph, resolving it from the server when needed.
+   *
+   * The process list is a SUMMARY: a server-backed row has counts and no `graph`, so exporting it
+   * straight away wrote `"graph": null` — a file that was valid and encrypted but had no structure,
+   * and every import then failed with "no graph". The canvas API is the authoritative source, so a
+   * missing/empty graph is filled from it here before the file is built. Local-only rows already
+   * carry their graph and are returned untouched.
+   */
+  async function resolveTaskGraphForExport(task) {
+    if (!task) return task;
+    const hasGraph = task.graph && Array.isArray(task.graph.nodes) && task.graph.nodes.length;
+    if (hasGraph) return task;
+    const id = String(task.id ?? "").trim();
+    // Only server-backed ids have a canvas to fetch; a local row without a graph cannot be exported.
+    if (!/^\d+$/.test(id)) return task;
+    try {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/canvas`, { credentials: "same-origin" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || `canvas ${res.status}`);
+      }
+      const canvas = await res.json();
+      if (!canvas || !Array.isArray(canvas.nodes)) throw new Error(t("tasks.noGraph") || "گراف فرآیند پیدا نشد.");
+      return { ...task, graph: canvas };
+    } catch (e) {
+      notifyHome(e.message || t("tasks.noGraph") || "گراف فرآیند پیدا نشد.", "error");
+      return null;
+    }
+  }
+
   async function downloadTask(task) {
     if (!task) return;
-    const payload = exportTaskPayload(task);
+    const full = await resolveTaskGraphForExport(task);
+    if (!full) return;
+    const payload = exportTaskPayload(full);
     let body;
     let fileName;
     try {
       if (window.DaSecureStore) {
         body = await DaSecureStore.packMrbt(payload);
-        fileName = `${safeFileName(task.title)}.mrbt`;
+        fileName = `${safeFileName(full.title)}.mrbt`;
       } else {
         body = JSON.stringify(payload, null, 2);
-        fileName = `${safeFileName(task.title)}.json`;
+        fileName = `${safeFileName(full.title)}.json`;
       }
     } catch (e) {
       notifyHome(e.message || "export failed", "error");
@@ -320,7 +353,7 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
-    notifyHome(t("tasks.downloaded", { title: task.title }), "success");
+    notifyHome(t("tasks.downloaded", { title: full.title }), "success");
   }
 
   async function parseImportedTask(raw) {

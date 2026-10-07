@@ -645,6 +645,11 @@ async function listOpenTabs() {
       continue;
     }
     const portal = !isNewBlank && (await isPortalTabUrl(url));
+    // The portal/panel tab is where the editor and the run menu live — it is the CONTROL surface,
+    // never a valid place to play a process. Including it let the user pick "run in this tab" and
+    // watch the run drive the very page that was orchestrating it. A blank tab is kept: it is a
+    // legitimate throwaway target for a run that opens its own page.
+    if (portal && !isNewBlank) continue;
     const title = isNewBlank
       ? (t.title && t.title !== "New Tab" && t.title !== "برگهٔ جدید" ? t.title : "تب جدید / خالی")
       : (t.title || "بدون عنوان");
@@ -658,9 +663,9 @@ async function listOpenTabs() {
       isBlank: !!isNewBlank
     });
   }
-  // Prefer non-portal tabs first; active tabs near the top within each group.
+  // Active tabs first; portal tabs are no longer in this list (see the `continue` above), so there
+  // is no portal/non-portal ordering left to do.
   items.sort((a, b) => {
-    if (a.isPortal !== b.isPortal) return a.isPortal ? 1 : -1;
     if (a.active !== b.active) return a.active ? -1 : 1;
     return 0;
   });

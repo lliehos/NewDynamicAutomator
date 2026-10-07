@@ -967,6 +967,31 @@ function buildInvalidNodesError(graph, lang) {
   return `${title}\n\n${lines.join("\n\n")}\n\n${tail}`;
 }
 
+/**
+ * Validation error for a SINGLE-node test, naming only the node under test.
+ *
+ * A probe of one action/condition is not a run of the process, so the rest of the diagram must not be
+ * able to veto it. The node's own leaf validation still applies, and its reasons are reported exactly
+ * as the whole-graph version reports them — this only narrows the SCOPE, it does not relax the rules.
+ */
+function buildScopedNodeError(graph, nodeId, lang) {
+  if (!nodeId) return "";
+  const item = collectInvalidNodesForPlay(graph).find((it) => String(it.id) === String(nodeId));
+  if (!item) return "";
+  const en = lang === "en";
+  const why = item.reasons.map((r) => `   • ${r}`).join("\n");
+  const head = en
+    ? `${item.kind} «${item.title}» — in group: ${item.group}`
+    : `${item.kind} «${item.title}» — در گروه: ${item.group}`;
+  const title = en
+    ? "This node cannot run: its settings are invalid."
+    : "این نود قابل اجرا نیست: تنظیماتش نامعتبر است.";
+  const tail = en
+    ? "Fix it in the editor and save, then test again."
+    : "آن را در ویرایشگر اصلاح و ذخیره کنید، سپس دوباره تست کنید.";
+  return `${title}\n\n${head}\n${why}\n\n${tail}`;
+}
+
 /** Play engine — imported by background via importScripts. */
 
 const RunMode = { Play: 0, Learn: 1 };
@@ -1702,12 +1727,22 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     return { ok: false, error: "فرآیند در حافظهٔ محلی پیدا نشد. صفحهٔ فرآیندها را رفرش کنید و دوباره اجرا بزنید." };
   }
 
-  const validationError = buildInvalidNodesError(graph, playUiCulture());
+  // A single-node test validates ONLY the node under test. Whole-graph validation is for a whole-graph
+  // run: refusing to probe one action because an unrelated node is unfinished made the menu entry
+  // unusable, and it contradicted the editor, which already scopes its own check the same way.
+  // "from this node onward" is NOT scoped — it walks the graph, so every node it can reach must be valid.
+  const isSingleNodeTest = !opts.nextFromNodeId && !!(opts.stepNodeId || opts.conditionNodeId);
+  const validationError = isSingleNodeTest
+    ? buildScopedNodeError(graph, opts.stepNodeId || opts.conditionNodeId, playUiCulture())
+    : buildInvalidNodesError(graph, playUiCulture());
   if (validationError) {
     return {
       ok: false,
       error: validationError,
-      invalidNodes: collectInvalidNodesForPlay(graph).map((it) => ({
+      invalidNodes: (isSingleNodeTest
+        ? collectInvalidNodesForPlay(graph).filter((it) => String(it.id) === String(opts.stepNodeId || opts.conditionNodeId))
+        : collectInvalidNodesForPlay(graph)
+      ).map((it) => ({
         id: it.id,
         title: it.title,
         kind: it.kind,
@@ -3614,6 +3649,9 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     scrollType: step.scrollType || "Amount",
     typeMode: step.typeMode || "Instant",
     typeDelayMs: Math.max(0, Number(step.typeDelayMs) || 0),
+    // Click's dispatch mode: "Synthetic" (plain el.click()) or "RealMouse" (full down/up
+    // sequence) — the bypass for frameworks that ignore a machine-generated click.
+    clickMode: step.clickMode || "Synthetic",
     removeAllMatches: step.removeAllMatches !== false,
     highlightColor: resolveHighlightColor(graph),
     waitTimeoutMs,
@@ -5777,6 +5815,52 @@ async function playExecuteInjected(payload) {
   highlightTarget(el, highlightColor);
 
   if (actionType === "Click" || actionType === "DoubleClick" || actionType === "RightClick") {
+    /**
+     * Some legacy frameworks (the FFM-style `onclick="ffm.call(...)"` menus, and pages whose real
+     * handler is on `onmouseup`) do not respond to `el.click()`. That synthetic click carries no
+     * coordinates, `detail === 0` and `isTrusted === false`, and it reaches the page with no
+     * preceding mousedown/mouseup — so a handler that reads the event (button, which, clientX/Y)
+     * or that listens across the down..up window sees nothing it recognises and does nothing.
+     *
+     * `RealMouse` replays the whole sequence a human generates — pointerdown, mousedown, pointerup,
+     * mouseup, click — at the element's centre, with real coordinates and detail. It is opt-in per
+     * step because the browser still marks these as untrusted, so it is a bypass for pages that
+     * ignore the plain click, not a replacement for it.
+     */
+    const mode = String(payload.clickMode || "Synthetic");
+    if (mode === "RealMouse") {
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const base = {
+        bubbles: true, cancelable: true, view: window, composed: true,
+        clientX: cx, clientY: cy, screenX: cx, screenY: cy
+      };
+      const emitPair = (type) => {
+        const isDown = type === "down";
+        const mouseOpts = {
+          ...base,
+          button: 0,
+          buttons: isDown ? 1 : 0,
+          detail: 1
+        };
+        try {
+          el.dispatchEvent(new PointerEvent(`pointer${type}`, {
+            ...mouseOpts, pointerId: 1, pointerType: "mouse", isPrimary: true
+          }));
+        } catch { /* older engines without PointerEvent */ }
+        el.dispatchEvent(new MouseEvent(`mouse${type}`, mouseOpts));
+      };
+      try {
+        emitPair("down");
+        await new Promise((res) => setTimeout(res, 10));
+        emitPair("up");
+        el.dispatchEvent(new MouseEvent("click", { ...base, button: 0, buttons: 0, detail: 1 }));
+      } catch (err) {
+        return { ok: false, error: String(err && err.message || err), reason: "click_failed" };
+      }
+      return { ok: true, clickMode: "RealMouse" };
+    }
     if (actionType === "DoubleClick") {
       el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window }));
     } else if (actionType === "RightClick") {

@@ -307,6 +307,10 @@
   let playFocusNodeId = null;
   let playSessionActive = false;
   let playSessionPaused = false;
+  // Reconciliation guard: a play-state reply is only honoured if it belongs to the request that was
+  // outstanding when it was sent, so a slow reply cannot clear a run that started in the meantime.
+  let playReconcileSeq = 0;
+  let reconcileSeqAtSend = -1;
   const PLAY_PAUSE_ICO = `<svg class="btn-play-ctrl-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>`;
   const PLAY_RESUME_ICO = `<svg class="btn-play-ctrl-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>`;
   /** Stack of parent group ids when drilling into nested group designers. */
@@ -3154,6 +3158,24 @@
     } catch {
       window.dispatchEvent(new CustomEvent("da-stop-play"));
     }
+  }
+
+  /**
+   * Ask the extension for the engine's real state and clear a Stop button that is showing while
+   * nothing is actually running.
+   *
+   * The diagram's play controls are driven by broadcasts from the Player extension. If one is missed —
+   * a dropped message, a run that ended in this very tab, a reloaded target page — the editor keeps
+   * the Stop button forever while the FAB (reading the engine directly) correctly shows idle. That
+   * mismatch is confusing and the Stop button then does nothing. This is the cheap way to make the
+   * extension the single source of truth on demand, instead of guessing from the last event seen.
+   */
+  function reconcilePlayState() {
+    if (!playSessionActive) return;
+    reconcileSeqAtSend = playReconcileSeq;
+    try {
+      window.postMessage({ source: "da-editor", type: "get-play-state" }, "*");
+    } catch { /* the extension may not be present; the UI simply stays as it is */ }
   }
 
   function scopedEdges() {
@@ -6471,7 +6493,15 @@
   }
 
   function requestPlayInTab(scope) {
-    if (graphHasInvalidNodes()) {
+    /**
+     * A single-node test («اجرای این اقدام» / «بررسی شرط») is a probe of ONE node, so it must not be
+     * blocked by an unrelated node elsewhere in the diagram. Whole-graph validation belongs to a
+     * whole-graph run ("run the process" / "from here onward"). The targeted node is still validated
+     * below, so a broken probe is refused — just not for somebody else's mess.
+     */
+    const isSingleNodeTest = !scope?.nextFromNodeId
+      && !!(scope?.stepNodeId || scope?.conditionNodeId);
+    if (!isSingleNodeTest && graphHasInvalidNodes()) {
       const msg = buildInvalidNodesMessage();
       setStatus(msg.split("\n").filter(Boolean)[0] || msg, "error");
       try {
@@ -6628,6 +6658,20 @@
     }
     if (d.type === "play-ui") {
       applyPlayUiPhase(d.phase);
+      return;
+    }
+    if (d.type === "play-state") {
+      // Authoritative answer to reconcilePlayState(): the engine is the source of truth, so the
+      // diagram's Stop button is cleared the moment the engine says it is idle — however the terminal
+      // broadcast was lost. Guarded by playSessionActive so a stale reply cannot clobber a NEW run
+      // that started while this request was in flight.
+      if (playReconcileSeq === reconcileSeqAtSend && playSessionActive && !d.playing) {
+        playSessionActive = false;
+        playSessionPaused = false;
+        playFocusNodeId = null;
+        updatePlayControlsUi();
+        applyPlayFocusHighlight();
+      }
       return;
     }
     if (d.type === "build-notice") {
@@ -6835,6 +6879,8 @@
     if (phase === "started" || phase === "preparing" || phase === "reloading") {
       playSessionActive = true;
       playSessionPaused = false;
+      // New run: invalidate any reconciliation reply still in flight.
+      playReconcileSeq += 1;
       updatePlayControlsUi();
       return;
     }
@@ -6842,6 +6888,7 @@
       playSessionActive = false;
       playSessionPaused = false;
       playFocusNodeId = null;
+      playReconcileSeq += 1;
       updatePlayControlsUi();
       applyPlayFocusHighlight();
     }
@@ -6849,6 +6896,13 @@
   window.addEventListener("da-play-ui", (ev) => {
     applyPlayUiPhase(ev.detail?.phase);
   });
+  // Safety net for a lost "done": reconcile whenever the tab becomes visible (the user returning to a
+  // run that already ended is exactly when the stuck Stop button is noticed), and on a slow heartbeat
+  // so a background tab still recovers. Both are no-ops while no run is marked active.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) reconcilePlayState();
+  });
+  setInterval(reconcilePlayState, 5000);
   window.addEventListener("click", () => { if (ctxMenu) ctxMenu.hidden = true; });
 
   document.getElementById("btn-play-pause")?.addEventListener("click", (ev) => {
@@ -8817,6 +8871,19 @@
           <option value="PerCharacter" ${perChar ? "selected" : ""}>کاراکتر به کاراکتر</option>
         </select>
         <p class="palette-hint">«یک‌جا» مقدار را مستقیم می‌گذارد. «کاراکتر به کاراکتر» برای هر نویسه کلید واقعی می‌فرستد؛ برای سایت‌هایی که به هر کلید واکنش نشان می‌دهند (تکمیل خودکار، جست‌وجوی زنده).</p>
+      </div>`;
+    }
+
+    // Click: some legacy pages ignore a machine-generated click. "RealMouse" replays the whole
+    // pointer/mouse down..up sequence so a handler that reads the event sees what a human produces.
+    if (at === "Click") {
+      const realMouse = n.clickMode === "RealMouse";
+      body += `<div class="insp-field"><label>روش کلیک</label>
+        <select data-k="clickMode">
+          <option value="Synthetic" ${!realMouse ? "selected" : ""}>معمولی (کلیک سریع)</option>
+          <option value="RealMouse" ${realMouse ? "selected" : ""}>شبیه کلیک واقعی ماوس</option>
+        </select>
+        <p class="palette-hint">اگر صفحه به کلیک معمولی واکنش نشان نداد (منوهای فریم‌ورک قدیمی که فقط <b>mouseup</b> را می‌خوانند، یا هندلری که به مختصات رویداد نگاه می‌کند)، «شبیه کلیک واقعی ماوس» کل توالی فشردن‌و‌رهاشدن را با مختصات واقعی می‌فرستد.</p>
       </div>`;
     }
 

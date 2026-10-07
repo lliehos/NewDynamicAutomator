@@ -588,6 +588,23 @@
         window.dispatchEvent(new CustomEvent("da-open-tabs", { detail: res }));
       } catch { /* ignore */ }
     }
+    if (d.type === "get-play-state") {
+      // Reconciler for the editor: it may have missed a "done" broadcast (a dropped message, or a run
+      // that ended in the editor's own tab). Reading the engine's real state lets the editor clear a
+      // Stop button it is otherwise stuck showing forever.
+      const st = await chrome.runtime.sendMessage({ type: "getPlayState" }).catch(() => null);
+      const detail = {
+        playing: !!st?.playing,
+        paused: !!st?.paused,
+        scope: st?.scope || null,
+        lastError: st?.lastError || null,
+        currentNodeId: st?.currentNodeId || null
+      };
+      try {
+        window.postMessage({ source: "da-player-ext", type: "play-state", ...detail }, "*");
+        window.dispatchEvent(new CustomEvent("da-play-state", { detail }));
+      } catch { /* ignore */ }
+    }
     if (d.type === "record") {
       if (!d.taskId) return;
       await recordTask(d.taskId, {
