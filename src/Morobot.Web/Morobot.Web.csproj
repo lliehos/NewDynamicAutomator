@@ -185,10 +185,24 @@
       warning NETSDK1198 — and, worse, would try to apply FTP settings to the player. Empty means
       "no profile", which is exactly right: we drive the player's publish entirely through the
       Properties below.
+
+      TargetFramework is pinned for the same class of reason, and it is NOT redundant with the
+      player's own <TargetFramework>. Visual Studio (and `dotnet msbuild`) passes the OUTER
+      project's TargetFramework down as a GLOBAL property. A global property overrides the value
+      in every project it reaches, so the nested player build received net9.0 instead of its own
+      net9.0-windows — and a WPF project on a non-Windows target framework fails the whole publish
+      with NETSDK1136 ("The target platform must be set to Windows ... when using Windows Forms or
+      WPF"). Pinning it here makes the player's publish independent of whatever target framework
+      the caller used for the server, which is the point: shipping the server must never fail
+      because of how the player is built.
+
+      Do NOT add TargetFramework to the include list by adding it to the outer project instead —
+      the server legitimately targets plain net9.0, and the mismatch is only a problem because the
+      value leaks. Pin it at the boundary.
     -->
     <MSBuild Projects="$(DesktopPlayerProject)"
              Targets="Publish"
-             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=false;PublishDir=$(DesktopPlayerPublishDir);PublishProfile=" />
+             Properties="Configuration=$(Configuration);TargetFramework=net9.0-windows;RuntimeIdentifier=win-x64;SelfContained=false;PublishDir=$(DesktopPlayerPublishDir);PublishProfile=" />
 
     <!--
       version.txt is what DesktopSyncService reads to know what it is serving. Written AFTER the
