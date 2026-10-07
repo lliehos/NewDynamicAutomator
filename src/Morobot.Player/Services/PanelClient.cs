@@ -4,9 +4,9 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Morobot.Desktop.Models;
+using Morobot.Player.Models;
 
-namespace Morobot.Desktop.Services;
+namespace Morobot.Player.Services;
 
 /// <summary>One call result: the body on success, or a human-readable reason on failure.</summary>
 public sealed record ApiResult<T>(bool Ok, T? Value, string? Error)
@@ -178,7 +178,27 @@ public sealed class PanelClient : IDisposable
     }
 
     /// <summary>
-    /// Fetch the deployment's signed licence document, so the runner can honour the same gate the
+    /// The deployment's app name, for naming this app "&lt;AppName&gt; Player".
+    /// </summary>
+    /// <remarks>
+    /// Reuses the branding endpoint the extension already reads, so the desktop app and the
+    /// extension cannot disagree about what the product is called on one server. The endpoint
+    /// exposes one resolved name (`appName`), not the per-language pair — which is what we want:
+    /// the product identity, already resolved by the panel.
+    /// </remarks>
+    public async Task<string?> GetAppNameAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var res = await _http.GetAsync($"{BaseUrl}/extension/branding", ct);
+            if (!res.IsSuccessStatusCode) return null;
+            var doc = await res.Content.ReadFromJsonAsync<JsonElement>(JsonOpts, ct);
+            return ReadString(doc, "appName");
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Fetch the deployment's signed licence document, so the runner can honour the same gate the
     /// server does.
     /// </summary>
     public async Task<string?> GetLicenseJsonAsync(CancellationToken ct = default)
@@ -262,6 +282,24 @@ public sealed class PanelClient : IDisposable
         catch (Exception ex)
         {
             return ApiResult<string>.Fail($"خطا در تغییر ردیف‌ها: {ex.Message}");
+        }
+    }
+
+    /// <summary>Persist the step gap and highlight colour onto the process's start node.</summary>
+    public async Task<ApiResult<string>> SaveRunSettingsAsync(
+        int taskId, int stepDelayMs, string highlightColor, CancellationToken ct = default)
+    {
+        try
+        {
+            var res = await _http.PostAsJsonAsync($"{BaseUrl}/api/tasks/{taskId}/run-settings",
+                new { stepDelayMs, highlightColor }, JsonOpts, ct);
+            return res.IsSuccessStatusCode
+                ? ApiResult<string>.Success("ok")
+                : ApiResult<string>.Fail(await ReadErrorAsync(res, ct) ?? "ذخیرهٔ تنظیمات ناموفق بود.");
+        }
+        catch (Exception ex)
+        {
+            return ApiResult<string>.Fail($"خطا در ذخیرهٔ تنظیمات: {ex.Message}");
         }
     }
 

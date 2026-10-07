@@ -1,4 +1,4 @@
-namespace Morobot.Desktop;
+namespace Morobot.Player;
 
 public partial class App
 {

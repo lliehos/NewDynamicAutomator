@@ -335,6 +335,60 @@ public class TasksApiController : ControllerBase
         return Ok(new { ok = true, applied, skipped });
     }
 
+    /// <summary>
+    /// Persist a process's step gap and highlight colour, onto its start node.
+    /// </summary>
+    /// <remarks>
+    /// These are properties of the PROCESS, not of one client: the panel editor reads the same two
+    /// fields, so a desktop-only copy would make one process pace itself differently depending on who
+    /// started it. The write patches only those two keys, so saving a setting can never clobber an
+    /// edit someone made in the editor meanwhile.
+    /// </remarks>
+    [HttpPost("{id:int}/run-settings")]
+    public async Task<IActionResult> SaveRunSettings(int id, [FromBody] RunSettingsRequest? body, CancellationToken ct)
+    {
+        var taskKey = id.ToString();
+        // A run owns its settings while it is going: changing the gap mid-run would alter the pacing
+        // the already-taken steps were started under.
+        if (_plays.IsPlaying(taskKey))
+            return Conflict(new { message = "Process is currently running.", code = "playing" });
+
+        var canvas = await _tasks.GetCanvasAsync(UserId, id, ct);
+        if (canvas is null) return NotFound();
+
+        // Reject a non-#RRGGBB colour rather than storing it: both clients only understand that form,
+        // so accepting anything else would silently stop the outline from drawing.
+        var color = NormalizeHighlightColor(body?.HighlightColor);
+        var delay = Math.Clamp(body?.StepDelayMs ?? 0, 0, 60000);
+
+        var ok = await _tasks.PatchRunSettingsAsync(UserId, id, delay, color, ct);
+        if (!ok) return NotFound();
+
+        await _catalog.BroadcastProcessListItemAsync(id, "data_updated", User.Identity?.Name, ct);
+        await _canvasHub.Clients.Group(CanvasHub.TaskGroup(id)).SendAsync("canvasChanged", new
+        {
+            taskId = id,
+            userId = UserId,
+            userName = User.Identity?.Name,
+            reason = "run_settings_changed"
+        }, ct);
+
+        return Ok(new { ok = true, id, stepDelayMs = delay, highlightColor = color });
+    }
+
+    private static string? NormalizeHighlightColor(string? raw)
+    {
+        var s = (raw ?? "").Trim();
+        if (s.Length == 0) return null;
+        if (!s.StartsWith('#')) s = "#" + s;
+        if (s.Length != 7) return null;
+        for (var i = 1; i < 7; i++)
+        {
+            if (!Uri.IsHexDigit(s[i])) return null;
+        }
+        return s.ToUpperInvariant();
+    }
+
     [HttpPut("{id:int}/canvas")]
     public async Task<IActionResult> SaveCanvas(int id, [FromBody] System.Text.Json.JsonElement body, CancellationToken ct)
     {

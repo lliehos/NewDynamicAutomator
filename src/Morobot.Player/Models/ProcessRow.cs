@@ -2,7 +2,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
 
-namespace Morobot.Desktop.Models;
+namespace Morobot.Player.Models;
 
 /// <summary>One process as the desktop list needs it: enough to show a row and start a run.</summary>
 public sealed class ProcessRow : INotifyPropertyChanged

@@ -1,6 +1,6 @@
 using Morobot.Licensing;
 
-namespace Morobot.Desktop.Services;
+namespace Morobot.Player.Services;
 
 /// <summary>
 /// Reads the deployment's signed license and answers the one question the runner asks of it:

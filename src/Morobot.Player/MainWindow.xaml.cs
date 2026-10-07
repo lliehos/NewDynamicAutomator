@@ -3,10 +3,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
-using Morobot.Desktop.Models;
-using Morobot.Desktop.Services;
+using Morobot.Player.Models;
+using Morobot.Player.Services;
 
-namespace Morobot.Desktop;
+namespace Morobot.Player;
 
 /// <summary>
 /// The runner's shell: sign in, see the process list, start a run.
@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<ProcessRow> _rows = new();
     private PanelClient? _client;
     private LicenseGate _license = LicenseGate.Blocked();
+    private UpdateListener? _updateListener;
 
     /// <summary>Open run windows, so several runs can be watched at once.</summary>
     private readonly List<RunWindow> _runs = new();
@@ -29,8 +30,22 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         ProcessGrid.ItemsSource = _rows;
+        ApplyProductName();
         Loaded += async (_, _) => await BootstrapAsync();
         LicenseText.Text = DsStrings.LicenseMissing;
+    }
+
+    /// <summary>
+    /// Name the window after the deployment, once its branding is known.
+    /// </summary>
+    /// <remarks>
+    /// Called again after sign-in, when the panel's own app name replaces the shipped default — so
+    /// a customer's installation calls itself their product name plus "Player", not ours.
+    /// </remarks>
+    private void ApplyProductName()
+    {
+        Title = PlayerIdentity.ProductName;
+        ProductNameText.Text = PlayerIdentity.ProductName;
     }
 
     // ---- Startup --------------------------------------------------------------------------------
@@ -167,6 +182,11 @@ public partial class MainWindow : Window
         ProcessPanel.Visibility = Visibility.Visible;
         WhoamiText.Text = $"کاربر: {_client.UserName} — {_client.BaseUrl}";
 
+        // Branding first, so the window and every later prompt carry the deployment's own product
+        // name rather than the shipped one.
+        PlayerIdentity.SetAppName(await _client.GetAppNameAsync());
+        ApplyProductName();
+
         _license = LicenseGate.FromJson(await _client.GetLicenseJsonAsync());
         LicenseText.Text = _license.AllowsLocalRun
             ? $"لایسنس: اجرای محلی فعال{(string.IsNullOrWhiteSpace(_license.OrganizationName) ? "" : $" — {_license.OrganizationName}")}"
@@ -175,10 +195,32 @@ public partial class MainWindow : Window
             ? (System.Windows.Media.Brush)FindResource("DsSuccessBrush")
             : (System.Windows.Media.Brush)FindResource("DsDangerBrush");
 
-        // Now that the server URL is known for certain, check for updates against it.
+        // Now that the server URL is known for certain, check for updates against it, and start the
+        // push listener so a release staged later reaches this client without it having to poll.
         _ = CheckForUpdateAsync(_client.BaseUrl, interactive: false);
+        await StartUpdateListenerAsync(_client.BaseUrl);
 
         await LoadProcessesAsync();
+    }
+
+    /// <summary>
+    /// Attach the SignalR listener that the server pushes new releases to.
+    /// </summary>
+    /// <remarks>
+    /// A push is preferred over polling because the server already knows when it staged a package;
+    /// making every client ask on a timer spends their resources to learn something the server could
+    /// simply say. The launch-time and manual checks remain as the fallback, so a client that cannot
+    /// hold a WebSocket connection (a strict proxy, an older server) still learns of updates.
+    /// </remarks>
+    private async Task StartUpdateListenerAsync(string serverBase)
+    {
+        if (_updateListener is not null) return;
+        _updateListener = new UpdateListener(serverBase);
+        _updateListener.UpdateAvailable += info => Dispatcher.Invoke(() =>
+        {
+            UpdateStatus.Text = $"نسخهٔ جدید {info.Version} روی سرور موجود است. برای نصب از دکمهٔ به‌روزرسانی استفاده کنید.";
+        });
+        await _updateListener.StartAsync();
     }
 
     private void Logout_Click(object sender, RoutedEventArgs e)
@@ -355,11 +397,17 @@ public partial class MainWindow : Window
 
     private void DriverCheck_Click(object sender, RoutedEventArgs e)
     {
-        var (ok, detail) = FirefoxRunner.CheckPrerequisites();
+        // Every available way to drive a browser is listed, so the user can see that a missing
+        // GeckoDriver is not the end of the road — the point of probing rather than assuming.
+        var lines = new List<string>();
+        foreach (var (_, label, probe) in ExecutionModeProbe.ProbeAll())
+            lines.Add($"{(probe.Available ? "✔" : "✖")} {label}\n    {probe.Detail}");
+
+        var anyAvailable = ExecutionModeProbe.ProbeAll().Any(p => p.Probe.Available);
         MessageBox.Show(this,
-            ok ? $"پیش‌نیازها آماده است.\n\n{detail}" : $"{DsStrings.DriverMissingBody}\n\n{detail}",
-            ok ? "بررسی پیش‌نیازها" : DsStrings.DriverMissing,
-            MessageBoxButton.OK, ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            string.Join("\n\n", lines),
+            anyAvailable ? "روش‌های اجرای موجود" : DsStrings.DriverMissing,
+            MessageBoxButton.OK, anyAvailable ? MessageBoxImage.Information : MessageBoxImage.Warning);
     }
 
     private async void CheckUpdate_Click(object sender, RoutedEventArgs e)

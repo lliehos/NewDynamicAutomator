@@ -642,6 +642,68 @@ public class TaskService
     }
 
     /// <summary>
+    /// Patch the step gap and highlight colour onto the process's start node.
+    /// </summary>
+    /// <remarks>
+    /// A surgical write rather than a canvas save. The player only owns these two fields, and sending
+    /// a whole canvas back would make it a second author of the graph — it would overwrite any edit
+    /// made in the panel editor between the player opening the process and saving a setting. Touching
+    /// two keys cannot do that.
+    /// </remarks>
+    public async Task<bool> PatchRunSettingsAsync(
+        int userId, int taskId, int stepDelayMs, string? highlightColor, CancellationToken ct = default)
+    {
+        if (!await CanViewAsync(userId, taskId, ct)) return false;
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == taskId, ct);
+        if (process is null) return false;
+
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+
+        JsonNode? root;
+        try { root = JsonNode.Parse(bodyJson); }
+        catch { return false; }
+        if (root is not JsonObject obj) return false;
+
+        var startNode = (obj["nodes"] as JsonArray)?
+            .OfType<JsonObject>()
+            .FirstOrDefault(n =>
+                string.Equals(n["kind"]?.GetValue<string>(), "start", StringComparison.OrdinalIgnoreCase)
+                && n["groupNodeId"] is null);
+        // A process always has a start node; if it does not, the graph is not one we should be
+        // editing blind, so the caller is told nothing was written rather than being lied to.
+        if (startNode is null) return false;
+
+        startNode["stepDelayMs"] = stepDelayMs;
+        // The graph-level mirrors are kept in step, exactly as the editor keeps them: a payload
+        // without a start node, or an older reader, still finds the values where it expects them.
+        obj["stepDelayMs"] = stepDelayMs;
+        if (highlightColor is not null)
+        {
+            startNode["highlightColor"] = highlightColor;
+            obj["highlightColor"] = highlightColor;
+        }
+
+        var newBody = obj.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+        if (envelope is null)
+        {
+            process.GraphJson = newBody;
+        }
+        else
+        {
+            // Write the patched graph back INTO the envelope, preserving every other field the
+            // envelope carries (session/concurrency metadata). Replacing the envelope wholesale would
+            // drop those.
+            if (envelope["graphJson"] is not null) envelope["graphJson"] = newBody;
+            else envelope["GraphJson"] = newBody;
+            process.GraphJson = envelope.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+        }
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    /// <summary>
     /// If this process was created from a template it is that template's CHILD, and the editor has
     /// to open in restricted mode: the diagram is read-only apart from the start node's own
     /// parameters (data source, border colour, repeat mode/range, delay, loop limits), because

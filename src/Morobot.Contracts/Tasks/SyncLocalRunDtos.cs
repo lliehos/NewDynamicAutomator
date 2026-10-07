@@ -24,3 +24,15 @@ public class SyncLocalRunCellDto
     public string ColumnKey { get; set; } = string.Empty;
     public string? CellValue { get; set; }
 }
+
+/// <summary>
+/// The two run settings the desktop player can edit, both of which live on the process's start node.
+/// </summary>
+public class RunSettingsRequest
+{
+    /// <summary>Pause between steps, in milliseconds. Clamped to 0..60000.</summary>
+    public int StepDelayMs { get; set; }
+
+    /// <summary>The outline colour drawn during a run, as #RRGGBB.</summary>
+    public string? HighlightColor { get; set; }
+}

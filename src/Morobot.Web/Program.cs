@@ -117,6 +117,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton<ExtensionSyncService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ExtensionSyncService>());
+builder.Services.AddSingleton<DesktopSyncService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<DesktopSyncService>());
 builder.Services.AddHostedService<UpdateNotifyBackgroundService>();
 
 var app = builder.Build();

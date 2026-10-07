@@ -1,8 +1,8 @@
 using System.Text.Json;
-using Morobot.Desktop.Models;
+using Morobot.Player.Models;
 using OpenQA.Selenium;
 
-namespace Morobot.Desktop.Services;
+namespace Morobot.Player.Services;
 
 /// <summary>Live state of one run, surfaced to the run window.</summary>
 public sealed class RunState
@@ -16,6 +16,7 @@ public sealed class RunState
     public int LoopIndex { get; set; }
     public int LoopTotal { get; set; }
     public string? LastError { get; set; }
+    public bool Paused { get; set; }
     public DateTime StartedAtUtc { get; set; } = DateTime.UtcNow;
     public List<RunLogLine> Log { get; } = new();
     /// <summary>Cells written locally, ready to be pushed by Sync.</summary>
@@ -69,10 +70,33 @@ public sealed class LocalRunEngine
 
     public bool IsRunning => State.Running;
 
+    /// <summary>
+    /// Pause or resume the run.
+    /// </summary>
+    /// <remarks>
+    /// Pausing is cooperative: the walk checks the flag between steps rather than suspending a
+    /// thread, so a pause never leaves the browser mid-action. That is the same rule the extension
+    /// follows, and it is why the step counter is the right place to show "paused" — the run stops
+    /// on a step boundary, never inside one.
+    /// </remarks>
+    public void SetPaused(bool paused)
+    {
+        State.Paused = paused;
+        Changed?.Invoke();
+    }
+
     public void Stop()
     {
         State.Stopped = true;
+        State.Paused = false;
         _cts?.Cancel();
+    }
+
+    /// <summary>Wait here while paused, so a long pause does not burn the loop-back guard.</summary>
+    private async Task WaitWhilePausedAsync(CancellationToken ct)
+    {
+        while (State.Paused && !State.Stopped)
+            await Task.Delay(120, ct);
     }
 
     public async Task StartAsync(
@@ -141,11 +165,62 @@ public sealed class LocalRunEngine
         var start = graph.StartNode;
         if (start is null) return;
         // Step gap and the loop guard live on the process-level start node, exactly as they do in the
-        // editor; reading them here keeps one source of truth for both clients.
+        // editor; reading them here keeps one source of truth for both.
         if (start.Extra.TryGetValue("stepDelayMs", out var d) && d.TryGetInt32(out var ms))
             graph.StepDelayMs = ms;
         if (start.Extra.TryGetValue("loopBackLimit", out var l) && l.TryGetInt32(out var lim) && lim > 0)
             graph.LoopBackLimit = lim;
+
+        // The run outline colour is the process's own setting, so the highlight here matches what the
+        // panel shows for this process rather than a desktop-only default.
+        var color = start.HighlightColor ?? start.ReadExtraString("highlightColor");
+        if (!string.IsNullOrWhiteSpace(color)) HighlightColor = color;
+    }
+
+    /// <summary>
+    /// The colour drawn around the element a step is about to act on.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from the editor's own default on purpose: while a run is happening the outline must
+    /// read as "this is being executed", not as "this is being edited". A separate value also lets
+    /// two processes running side by side be told apart at a glance.
+    /// </remarks>
+    public string HighlightColor { get; set; } = "#7367F0";
+
+    /// <summary>
+    /// Draw the run outline around the element, then remove it.
+    /// </summary>
+    /// <remarks>
+    /// The outline is removed after a short delay rather than left in place: a page that is being
+    /// driven accrues dozens of these, and leaving them all would both obscure the page and make the
+    /// last action indistinguishable from the current one.
+    /// </remarks>
+    private async Task FlashElementAsync(GraphNode node)
+    {
+        if (string.IsNullOrWhiteSpace(node.Selector)) return;
+        try
+        {
+            var selector = node.Selector.Replace("'", "\\'");
+            ((IJavaScriptExecutor)_browser.Driver).ExecuteScript(
+                "const id='da-run-outline';" +
+                "const old=document.getElementById(id);if(old)old.remove();" +
+                $"const el=document.querySelector('{selector}');" +
+                "if(!el)return;" +
+                "const r=el.getBoundingClientRect();" +
+                "const box=document.createElement('div');" +
+                "box.id=id;" +
+                "Object.assign(box.style,{" +
+                "position:'fixed',pointerEvents:'none',zIndex:2147483647," +
+                "border:'3px solid " + HighlightColor + "',borderRadius:'6px'," +
+                "boxShadow:'0 0 0 2px rgba(255,255,255,.7)'" +
+                "});" +
+                "box.style.left=(r.left-3)+'px';box.style.top=(r.top-3)+'px';" +
+                "box.style.width=r.width+'px';box.style.height=r.height+'px';" +
+                "document.body.appendChild(box);" +
+                "setTimeout(()=>box.remove(),1200);");
+        }
+        catch { /* the outline is a courtesy; the action below is the real work */ }
+        await Task.CompletedTask;
     }
 
     /// <summary>
@@ -183,6 +258,8 @@ public sealed class LocalRunEngine
             while (!string.IsNullOrEmpty(currentId))
             {
                 ct.ThrowIfCancellationRequested();
+                // Pause is honoured on the step boundary, so the browser is never left mid-action.
+                await WaitWhilePausedAsync(ct);
                 if (State.Stopped) return;
 
                 // A loop back to a node we have already been through many times means the graph's
@@ -242,6 +319,11 @@ public sealed class LocalRunEngine
         Log("info", $"اجرای «{label}»");
 
         var value = ResolveValue(graph, node, rowIndex);
+
+        // Outline the target before acting, so a human watching can see what is about to be touched.
+        // Done only for the actions that have a selector — a wait or a memory write has no element.
+        if (!string.IsNullOrWhiteSpace(node.Selector))
+            await FlashElementAsync(node);
 
         // Actions that only write into a source never touch the page.
         var action = node.ActionType ?? "";

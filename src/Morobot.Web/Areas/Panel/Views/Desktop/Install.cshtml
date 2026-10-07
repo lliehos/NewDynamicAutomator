@@ -3,15 +3,17 @@
     var version = ViewBag.Version as string;
     var hasPackage = ViewBag.HasPackage is true;
     var allowed = ViewBag.LocalRunAllowed is true;
+    var notes = ViewBag.Notes as string;
     var serverBase = ViewBag.ServerBase as string ?? "";
     var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+    var playerName = $"{brandHead.AppName} Player";
 }
 
 <div class="da-home">
   <header class="da-home-head">
     <div>
       <div class="da-home-brand" data-i18n="brand.name">@L["brand.name"]</div>
-      <h4 class="da-home-title mb-0">دانلود اجراکننده محلی</h4>
+      <h4 class="da-home-title mb-0">دانلود @playerName</h4>
       <p class="da-home-sub mb-0">
         اجرای فرآیندها روی همین سیستم با فایرفاکس — نتیجهٔ اجرا مثل افزونه نمایش داده می‌شود.
       </p>
@@ -20,12 +22,12 @@
 
   @if (!allowed)
   {
-    @* The runner refuses to run local processes without the licence flag, so offering the download
+    @* The player refuses to run local processes without the licence flag, so offering the download
        would hand the user an app that cannot do the one thing it is for. *@
     <div class="alert alert-warning">
       <div class="fw-semibold mb-1">قابلیت اجرای محلی در لایسنس این نصب فعال نیست</div>
       <div class="small">
-        دانلود و اجرای اجراکننده محلی نیازمند فعال‌سازی این قابلیت در لایسنس است.
+        دانلود و اجرای @playerName نیازمند فعال‌سازی این قابلیت در لایسنس است.
         برای فعال‌سازی با فروشنده تماس بگیرید.
       </div>
     </div>
@@ -36,7 +38,7 @@
     <div class="card-body">
       <div class="d-flex align-items-center justify-content-between mb-3">
         <div>
-          <div class="fw-semibold">@brandHead.AppName — اجراکننده محلی (Windows)</div>
+          <div class="fw-semibold">@playerName — Windows</div>
           <div class="text-muted small mt-1">
             نسخه: <span class="fw-semibold">@(string.IsNullOrWhiteSpace(version) ? "—" : version)</span>
           </div>
@@ -51,11 +53,16 @@
         }
       </div>
 
+      @if (!string.IsNullOrWhiteSpace(notes))
+      {
+        <div class="alert alert-info small mb-3" style="white-space:pre-wrap">@notes</div>
+      }
+
       @if (!hasPackage)
       {
         <div class="alert alert-info small mb-0">
-          بستهٔ اجراکننده روی این سرور قرار نگرفته است. مدیر سیستم باید آن را در پوشهٔ
-          <code>App_Data/desktop</code> قرار دهد (فایل <code>package.zip</code> و <code>version.txt</code>).
+          بستهٔ اجراکننده روی این سرور قرار نگرفته است. با هر بار publish سرور، نسخهٔ دسکتاپ در پوشهٔ
+          <code>desktop</code> خروجی publish قرار می‌گیرد و به‌صورت خودکار آماده می‌شود.
         </div>
       }
     </div>
@@ -67,8 +74,8 @@
       <ul class="small mb-3">
         <li class="mb-1"><strong>Firefox</strong> باید روی سیستم نصب باشد.</li>
         <li class="mb-1">
-          <strong>geckodriver</strong> لازم است. برخلاف ChromeDriver نیازی به تطابق نسخه با فایرفاکس ندارد،
-          پس به‌روزرسانی فایرفاکس آن را بی‌استفاده نمی‌کند.
+          <strong>geckodriver</strong> برای روش پیش‌فرض لازم است. برخلاف ChromeDriver نیازی به تطابق نسخه با
+          فایرفاکس ندارد، پس به‌روزرسانی فایرفاکس آن را بی‌استفاده نمی‌کند.
         </li>
         <li class="mb-1">ویندوز ۱۰ یا بالاتر با .NET Desktop Runtime.</li>
       </ul>
@@ -76,12 +83,12 @@
       <div class="fw-semibold mb-2">روش نصب</div>
       <ol class="small mb-0">
         <li class="mb-1">بسته را دانلود و در یک پوشهٔ ثابت استخراج کنید.</li>
-        <li class="mb-1">فایل <code>Morobot.Desktop.exe</code> را اجرا کنید.</li>
+        <li class="mb-1">فایل <code>Morobot.Player.exe</code> را اجرا کنید.</li>
         <li class="mb-1">
           آدرس سرور (<code>@serverBase</code>) و نام کاربری و رمز پنل را وارد کنید.
         </li>
         <li class="mb-1">
-          در لیست فرآیندها، اجرای روی سرور را روشن یا خاموش کنید و «اجرا» را بزنید.
+          برنامه هنگام ورود، نسخهٔ جدید را از همین سرور بررسی می‌کند و تغییرات را زنده دریافت می‌کند.
         </li>
       </ol>
     </div>

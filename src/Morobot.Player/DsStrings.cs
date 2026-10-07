@@ -1,4 +1,4 @@
-namespace Morobot.Desktop;
+namespace Morobot.Player;
 
 /// <summary>
 /// All user-facing text in one place, matching the VendorStudio convention.

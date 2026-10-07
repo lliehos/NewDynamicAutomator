@@ -1,10 +1,10 @@
 using System.Text.RegularExpressions;
-using Morobot.Desktop.Models;
+using Morobot.Player.Models;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Interactions;
 using OpenQA.Selenium.Support.UI;
 
-namespace Morobot.Desktop.Services;
+namespace Morobot.Player.Services;
 
 /// <summary>Outcome of one action, in the same shape the engine uses.</summary>
 public sealed record StepOutcome(bool Ok, string? Error = null, string? Value = null, bool Navigated = false)

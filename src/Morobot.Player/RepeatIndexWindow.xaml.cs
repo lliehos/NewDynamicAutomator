@@ -1,7 +1,7 @@
 using System.Windows;
-using Morobot.Desktop.Models;
+using Morobot.Player.Models;
 
-namespace Morobot.Desktop;
+namespace Morobot.Player;
 
 /// <summary>
 /// Asks which iteration indices to run.

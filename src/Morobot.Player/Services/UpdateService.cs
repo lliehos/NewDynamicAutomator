@@ -4,7 +4,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
 
-namespace Morobot.Desktop.Services;
+namespace Morobot.Player.Services;
 
 /// <summary>What the server says the current runner build is.</summary>
 public sealed record UpdateInfo(string Version, bool Available, string? DownloadUrl);
@@ -111,7 +111,7 @@ public sealed class UpdateService
 
             // The zip may nest the build one level down (a packaged folder); find the exe rather than
             // assuming a layout, so either packaging works.
-            var exe = Directory.EnumerateFiles(extractDir, "Morobot.Desktop.exe", SearchOption.AllDirectories)
+            var exe = Directory.EnumerateFiles(extractDir, "Morobot.Player.exe", SearchOption.AllDirectories)
                 .FirstOrDefault();
             if (exe is null) return (false, null, "فایل اجرایی در بستهٔ به‌روزرسانی پیدا نشد.");
 

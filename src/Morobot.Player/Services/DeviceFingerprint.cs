@@ -2,7 +2,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Morobot.Desktop.Services;
+namespace Morobot.Player.Services;
 
 /// <summary>
 /// A stable per-machine id for the desktop runner.

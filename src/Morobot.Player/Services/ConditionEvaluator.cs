@@ -1,7 +1,7 @@
-using Morobot.Desktop.Models;
+using Morobot.Player.Models;
 using OpenQA.Selenium;
 
-namespace Morobot.Desktop.Services;
+namespace Morobot.Player.Services;
 
 /// <summary>
 /// Evaluates a condition node, including the page-based kinds.

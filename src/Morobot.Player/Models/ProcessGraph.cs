@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Morobot.Desktop.Models;
+namespace Morobot.Player.Models;
 
 /// <summary>
 /// A process graph, parsed from the canvas JSON the panel serves.

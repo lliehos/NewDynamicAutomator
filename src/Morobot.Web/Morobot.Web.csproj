@@ -101,4 +101,52 @@
     </None>
   </ItemGroup>
 
+  <!--
+    Publish the desktop player beside this app, so one publish ships both clients.
+
+    The extension ships by being copied into the publish output (see the include above); the player
+    needs more than a copy, because it is a compiled app rather than loose files: it has to be
+    PUBLISHED (net9.0-windows, win-x64) into `desktop/`, and it has to carry a version.txt so
+    DesktopSyncService can tell a client whether it is behind. Doing that here — in the same publish
+    that produces the server — is what makes "a publish also ships the latest player" true rather
+    than a step someone has to remember.
+
+    It is skippable: pass -p:SkipDesktopPlayer=true for a server-only publish (and in an environment
+    that cannot build a windows-targeted app at all, the target simply does not run).
+  -->
+  <PropertyGroup>
+    <DesktopPlayerProject>$(MSBuildThisFileDirectory)..\Morobot.Player\Morobot.Player.csproj</DesktopPlayerProject>
+    <!--
+      Built with Path.Combine rather than string concatenation: $(PublishDir) has no trailing
+      separator, so "$(PublishDir)desktop\" collapsed to "...\pubtestdesktop" (MSBuild strips the
+      trailing backslash) and scattered the player beside the app instead of inside it. Path.Combine
+      inserts the separator itself and cannot lose it.
+    -->
+    <DesktopPlayerPublishDir>$([System.IO.Path]::Combine($(PublishDir), 'desktop'))\</DesktopPlayerPublishDir>
+    <!--
+      The player's version in the package. Kept as a property rather than read from the project file
+      so an operator can ship a specific build with -p:DesktopPlayerVersion=1.2.0 without editing
+      anything, which is what a hotfix needs.
+    -->
+    <DesktopPlayerVersion Condition="'$(DesktopPlayerVersion)' == ''">1.0.0</DesktopPlayerVersion>
+  </PropertyGroup>
+
+  <Target Name="PublishDesktopPlayer"
+          AfterTargets="Publish"
+          Condition="'$(SkipDesktopPlayer)' != 'true' and Exists('$(DesktopPlayerProject)')">
+    <Message Importance="high" Text="Publishing desktop player $(DesktopPlayerVersion) → $(DesktopPlayerPublishDir)" />
+
+    <MSBuild Projects="$(DesktopPlayerProject)"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=false;PublishDir=$(DesktopPlayerPublishDir)" />
+
+    <!--
+      version.txt is what DesktopSyncService reads to know what it is serving. Written AFTER the
+      publish so it is never swept away by the player's own publish output.
+    -->
+    <WriteLinesToFile File="$(DesktopPlayerPublishDir)version.txt"
+                      Lines="$(DesktopPlayerVersion)"
+                      Overwrite="true" />
+  </Target>
+
 </Project>

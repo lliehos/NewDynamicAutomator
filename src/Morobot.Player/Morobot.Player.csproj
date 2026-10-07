@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Morobot.Player</RootNamespace>
+    <AssemblyName>Morobot.Player</AssemblyName>
+    <ApplicationIcon>Assets\morobot-icon.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <!--
+      The player is published for win-x64 by the web publish (see PublishDesktopPlayer in
+      Morobot.Web.csproj). Listing the RID here is what lets restore produce a win-x64 asset target —
+      without it, the publish fails asking for the target it was told to build.
+    -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <!-- The product name is not the branding name: the window and title bar take the deployment's
+         own app name from the panel (see PlayerIdentity), so this only has to identify the binary. -->
+    <Product>Morobot Player</Product>
+    <AssemblyTitle>Morobot Player</AssemblyTitle>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\morobot-icon.png" />
+    <Resource Include="Assets\morobot-icon.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The license model is shared with the web app, so a signed license means the same thing in
+         both and the feature gate cannot drift between them. -->
+    <ProjectReference Include="..\Morobot.Licensing\Morobot.Licensing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Selenium drives the user's own Firefox. GeckoDriver is version-match free by design (unlike
+         ChromeDriver), which is why it is the default driver rather than the only one. -->
+    <PackageReference Include="Selenium.WebDriver" Version="4.27.0" />
+    <PackageReference Include="Selenium.Support" Version="4.27.0" />
+    <!-- The SignalR client lets the server push a new version to a running player instead of the
+         player having to poll for one. -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

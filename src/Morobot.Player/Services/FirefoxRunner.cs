@@ -2,7 +2,7 @@ using System.IO;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Firefox;
 
-namespace Morobot.Desktop.Services;
+namespace Morobot.Player.Services;
 
 /// <summary>
 /// Owns one Firefox instance per run.
