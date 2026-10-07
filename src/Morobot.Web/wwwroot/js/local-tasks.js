@@ -158,7 +158,15 @@
       sharedUsers: Array.isArray(t.sharedUsers)
         ? t.sharedUsers.map((u) => String(u || "").trim()).filter(Boolean)
         : [],
-      createdAt: t.createdAt || null
+      createdAt: t.createdAt || null,
+      // Where the run is managed. ON (the default) means the server tracks the play session, so the
+      // run is visible to the admin and blocked from concurrent edits. OFF means the extension runs
+      // it entirely on this machine: no server registration, and non-shared sources are read and
+      // written locally. Absent means ON — an old record predates the switch and behaved that way.
+      runOnServer: t.runOnServer !== false,
+      // Set when a local run has produced results that are not on the server yet; the row then shows
+      // the Sync button. Cleared by a successful sync.
+      localRunPendingSync: t.localRunPendingSync === true
     };
   }
 
@@ -198,6 +206,8 @@
   const ICO_COPY = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 3h7l5 5v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm7 1.5V8h3.5L14 4.5zM4 7h1v13h10v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/></svg>`;
   const ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
   const ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
+  /** Circular arrows — "push the local result up to the server". */
+  const ICO_SYNC = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 4a8 8 0 0 1 7.4 5H17a6 6 0 0 0-10.6-1.3L8.5 9.8H3V4.3l2.2 2.2A8 8 0 0 1 12 4zm0 16a8 8 0 0 1-7.4-5H7a6 6 0 0 0 10.6 1.3l-2.1-2.1H21v5.5l-2.2-2.2A8 8 0 0 1 12 20z"/></svg>`;
   const ICO_XLSX = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm1 7V3.5L19.5 9H15zM8.2 18l2.3-3.2L8.3 12h1.7l1.4 2.1L12.8 12H14.4l-2.2 2.8L14.5 18h-1.7l-1.5-2.2L9.9 18H8.2z"/></svg>`;
   const ICO_INFO = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 3.2a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8zM13.4 17h-2.8v-1.3l.7-.3V10.8l-.7-.3V9.2h2.1v6.2l.7.3V17z"/></svg>`;
   // The template a row came from / was made into. A sheet with a stack behind it, so it reads as
@@ -577,10 +587,125 @@
         : ""}
       ${task.canDelete !== false
         ? iconBtn("is-danger", t("tasks.delete"), ICO_DEL, `data-da-del="${tid}"`)
-        : ""}`;
+        : ""}
+      ${task.localRunPendingSync
+        ? iconBtn("is-sync", t("tasks.syncLocalRun"), ICO_SYNC, `data-da-sync="${tid}"`)
+        : ""}
+      ${runOnServerSwitch(task, tid)}`;
+  }
+
+  /**
+   * The per-row "run on server" switch.
+   *
+   * Default ON: the server tracks the run (visible to the admin, and an edit while it plays is
+   * refused). Turning it OFF runs the process entirely on this machine — no server registration,
+   * and only shared sources are still server-backed — and arms the Sync button that appears after
+   * such a run so its results can be pushed up deliberately.
+   *
+   * A switch rather than a menu item because it is a standing property of the process, not an
+   * action: the user should be able to see its state at a glance on every row.
+   */
+  function runOnServerSwitch(task, tid) {
+    const on = task.runOnServer !== false;
+    const title = on ? t("tasks.runOnServerOn") : t("tasks.runOnServerOff");
+    return `<label class="da-runswitch" title="${escapeHtml(title)}">
+      <input type="checkbox" class="da-runswitch-input" data-da-runserver="${tid}" ${on ? "checked" : ""} />
+      <span class="da-runswitch-ui" aria-hidden="true"></span>
+      <span class="da-runswitch-text">${escapeHtml(t("tasks.runOnServer"))}</span>
+    </label>`;
+  }
+
+  /**
+   * Flip where this process is run and persist it on the task record.
+   *
+   * Kept local-first: the flag lives with the process, so it survives a reload and travels with the
+   * record. Turning it OFF is a real change of behaviour, so it is confirmed once — the user is
+   * about to lose the server-side visibility and concurrency guard they may be relying on.
+   */
+  async function setRunOnServer(taskId, on) {
+    const tasks = readTasks();
+    const idx = findTaskIndex(tasks, taskId);
+    if (idx < 0) return;
+    if (!on) {
+      const msg = t("tasks.runOnServerOffConfirm")
+        || "اجرای این فرآیند به سیستم خودتان منتقل می‌شود و روی سرور ثبت نمی‌شود. مطمئنید؟";
+      const ok = window.DaNotify
+        ? await DaNotify.confirm(msg, {
+            title: t("tasks.runOnServer"),
+            okText: t("common.confirm") || "تأیید",
+            cancelText: t("common.cancel"),
+            danger: false
+          })
+        : window.confirm(msg);
+      if (!ok) {
+        // The switch already moved under the pointer; put it back so it never lies about the state.
+        render(tasks);
+        return;
+      }
+    }
+    tasks[idx] = { ...tasks[idx], runOnServer: on !== false };
+    writeTasks(tasks);
+    render(tasks);
+    notifyHome(on !== false ? t("tasks.runOnServerNowOn") : t("tasks.runOnServerNowOff"), "success");
+  }
+
+  /**
+   * Push the results of a local run up to the server.
+   *
+   * A local run is deliberately off the server's books, so the sync is also where the two can
+   * disagree: the server copy may have moved on, or the local run may have written values the
+   * server never saw. The confirmation therefore names the risk before anything is written rather
+   * than after, because this is not a reversible action.
+   */
+  async function syncLocalRun(taskId) {
+    const tasks = readTasks();
+    const task = findTask(tasks, taskId);
+    if (!task) return;
+    const msg = t("tasks.syncConfirm")
+      || "نتیجهٔ اجرای محلی روی سرور نوشته می‌شود. اگر فرآیند یا منبع روی سرور تغییر کرده باشد، ممکن است اطلاعات روی سرور جایگزین یا از دست برود. ادامه می‌دهید؟";
+    const ok = window.DaNotify
+      ? await DaNotify.confirm(msg, {
+          title: t("tasks.syncLocalRun"),
+          okText: t("tasks.syncConfirmOk") || "سینک کن",
+          cancelText: t("common.cancel"),
+          danger: true
+        })
+      : window.confirm(msg);
+    if (!ok) return;
+
+    try {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/sync-local-run`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          localRunAt: task.lastLocalRunAt || null,
+          dataSources: (task.locallyRunSources || [])
+        })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || t("tasks.syncFail"));
+      }
+      const idx = findTaskIndex(tasks, taskId);
+      if (idx >= 0) {
+        tasks[idx] = { ...tasks[idx], localRunPendingSync: false };
+        writeTasks(tasks);
+        render(tasks);
+      }
+      notifyHome(t("tasks.syncDone") || "نتیجهٔ اجرای محلی روی سرور سینک شد.", "success");
+    } catch (e) {
+      notifyHome(String(e.message || e), "error");
+    }
   }
 
   function bindTaskActions(root) {
+    root?.querySelectorAll("[data-da-runserver]").forEach((inp) => {
+      inp.addEventListener("change", () => setRunOnServer(inp.getAttribute("data-da-runserver"), inp.checked));
+    });
+    root?.querySelectorAll("[data-da-sync]").forEach((btn) => {
+      btn.addEventListener("click", () => syncLocalRun(btn.getAttribute("data-da-sync")));
+    });
     root?.querySelectorAll("[data-da-del]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = btn.getAttribute("data-da-del");
@@ -3025,6 +3150,12 @@ function dataSourceSafeFileName(ds) {
   scheduleRender();
   document.addEventListener("da:locale", () => scheduleRender());
   window.addEventListener("da-task-list-sync", () => scheduleRender());
+  // A local run finishes in the extension, which writes the pending-sync flag into the task record.
+  // The page cannot be told while it is hidden, so re-reading when it comes back to the foreground
+  // is what makes the Sync button appear without the user having to reload.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) scheduleRender();
+  });
   if (window.DaEntitlements?.fetch) {
     DaEntitlements.fetch().then(() => scheduleRender()).catch(() => {});
   }

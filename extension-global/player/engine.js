@@ -1007,6 +1007,10 @@ let playStatus = {
   paused: false,
   taskId: null,
   title: null,
+  // Where this run is managed. Undefined/true = server-managed; false = local (set at start from the
+  // task record). Kept on the status object so every cell read/write can consult it without a
+  // second lookup, and so the HUD can show which mode a run is in.
+  runOnServer: true,
   stepIndex: 0,
   stepTotal: 0,
   loopIndex: 0,
@@ -1916,7 +1920,23 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     results: priorResults
   };
   await chrome.storage.local.set({ playing: true, playTabId: tabId, playPaused: false });
-  startPlayAbortWatch(String(graph.taskId || taskId));
+  // Every run starts with an empty write log, so a previous run's local writes are never re-synced.
+  resetLocalRunWrites();
+  // Where this run is managed. A process switched to local runs entirely on this machine: nothing is
+  // registered on the server, so no play session is created, no abort poll runs and no save is
+  // blocked -- the server only ever learns about it if the user presses Sync afterwards. The mode is
+  // read from the task record itself (the portal stores the switch there), so the engine and the
+  // checkbox can never disagree.
+  const taskRecord = tasks.find((t) => String(t.id) === String(taskId));
+  const runOnServer = taskRecord?.runOnServer !== false;
+  playStatus.runOnServer = runOnServer;
+  if (runOnServer) {
+    startPlayAbortWatch(String(graph.taskId || taskId));
+  } else {
+    // Local mode still needs the in-memory HUD/liveness bookkeeping, just none of the server halves.
+    await markPlayHeartbeat(graph.taskId || taskId, 1);
+    appendPlayLog("info", "اجرای محلی: روی سرور ثبت نمی‌شود و منابع غیرعمومی محلی خوانده/نوشته می‌شوند.");
+  }
   // HUD (pause/stop + results) on the execution tab — skip for condition-only check.
   if (scopeLabel !== "condition") {
     // This tab OWNS the HUD until the user closes it by hand or closes the tab. A run commonly ends
@@ -2148,7 +2168,16 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
     await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
     broadcastPlayState();
     const finishedTaskId = String(playStatus.taskId || graph?.taskId || "").trim();
-    if (finishedTaskId) await unregisterPlayOnServer(finishedTaskId);
+    // Only a server-managed run has a registration to clear. A local run was never registered, so
+    // there is nothing to unregister -- instead it records that its results are not on the server
+    // yet, which is what makes the Sync button appear in the processes list.
+    if (finishedTaskId) {
+      if (playStatus.runOnServer !== false) {
+        await unregisterPlayOnServer(finishedTaskId);
+      } else if (!playAbort && !playStatus.lastError) {
+        await markLocalRunPendingSync(finishedTaskId, playStatus.results || []);
+      }
+    }
     await clearPlayPageMode(playingTabId);
   }
 }
@@ -4356,6 +4385,78 @@ async function readServerCell(dataSourceId, rowIndex, columnKey) {
   }
 }
 
+/**
+ * Read a cell for a LOCAL run.
+ *
+ * Local mode keeps non-shared sources off the server entirely, so their cells come from the copy
+ * the portal pushed into the task record. A SHARED (public) source is the deliberate exception: it
+ * belongs to everyone, so it stays server-backed even in a local run — reading it locally would
+ * show one machine's stale view of data other people are writing.
+ *
+ * Falls back to the server when the local copy has no value, so a source the user never opened
+ * locally still reads correctly rather than coming back empty.
+ */
+async function readCellForRun(ds, graph, rowIndex, columnKey) {
+  if (playStatus.runOnServer !== false || isPublicSource(ds, graph)) {
+    return await readServerCell(Number(ds?.id), rowIndex, columnKey);
+  }
+  const col = String(columnKey || "").trim();
+  const row = Number(rowIndex) || 0;
+  const hit = (ds?.cells || []).find((c) =>
+    (c.key === col || c.Key === col || c.columnName === col)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === row
+  );
+  if (hit) {
+    const v = hit.cellValue !== undefined ? hit.cellValue : hit.CellValue;
+    return { ok: true, body: { cellValue: v == null ? "" : String(v), local: true } };
+  }
+  // Nothing cached: one server read keeps behaviour correct instead of returning a False empty.
+  return await readServerCell(Number(ds?.id), rowIndex, columnKey);
+}
+
+/**
+ * Whether a source is shared (public) and therefore must stay server-backed in a local run.
+ *
+ * The flag rides on the source entry the portal put in the canvas, so no extra lookup is needed.
+ */
+function isPublicSource(ds, graph) {
+  if (!ds) return false;
+  if (ds.isPublic === true || ds.IsPublic === true) return true;
+  const id = Number(ds.id);
+  if (!Number.isFinite(id)) return false;
+  const entry = (graph?.dataSources || []).find((d) => Number(d.id) === id);
+  return entry?.isPublic === true || entry?.IsPublic === true;
+}
+
+/**
+ * Cells a local run has written, newest value per address.
+ *
+ * Kept per run so the Sync payload is exactly the set of writes the run made — not the whole grid,
+ * which would push values the user never touched and make an accidental overwrite far more likely.
+ * A repeated address keeps its LAST value: the same cell written twice in a loop should sync once.
+ */
+let localRunWrites = new Map();
+
+function recordLocalWrite(ds, rowIndex, columnKey, text) {
+  const id = Number(ds?.id);
+  if (!Number.isFinite(id) || id <= 0) return;
+  const key = `${id}|${Number(rowIndex) || 0}|${String(columnKey || "").trim()}`;
+  localRunWrites.set(key, {
+    dataSourceId: id,
+    rowIndex: Number(rowIndex) || 0,
+    columnKey: String(columnKey || "").trim(),
+    cellValue: text == null ? "" : String(text)
+  });
+}
+
+function resetLocalRunWrites() {
+  localRunWrites = new Map();
+}
+
+function collectLocalRunWrites() {
+  return Array.from(localRunWrites.values());
+}
+
 function applyCellToLocalCache(ds, rowIndex, columnKey, value, cellRevision, dataRevision) {
   if (!ds) return;
   ds.cells = ds.cells || [];
@@ -4378,6 +4479,16 @@ function applyCellToLocalCache(ds, rowIndex, columnKey, value, cellRevision, dat
 /** Write one cell on server — waits (retry) until the cell lock/revision allows it. */
 async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = {}) {
   const id = Number(ds?.id);
+  // A local run writes non-shared sources into the local copy only: no revision to negotiate, no
+  // lock to wait on, because there is no other writer. A shared source keeps the server path below,
+  // so its concurrency rules still apply even from a local run.
+  if (playStatus.runOnServer === false && id && !isPublicSource(ds, graph)) {
+    const col = String(columnKey || "").trim();
+    const row = Number(rowIndex) || 0;
+    applyCellToLocalCache(ds, row, col, text, null, null);
+    recordLocalWrite(ds, row, col, text);
+    return { ok: true, local: true, body: { cellValue: text } };
+  }
   if (!id) return { ok: true, local: true };
   const col = String(columnKey || "").trim();
   const row = Number(rowIndex) || 0;
@@ -4519,7 +4630,7 @@ async function fetchServerCellForPlay(id, row, col, ds, graph, step) {
     return playCellReadInflight.get(cacheKey);
   }
   const work = (async () => {
-    const fresh = await readServerCell(id, row, col);
+    const fresh = await readCellForRun(ds, graph, row, col);
     if (!fresh?.ok || !fresh.body) {
       const why = fresh?.error || "پاسخی از سرور نرسید";
       appendPlayLog(
@@ -4901,6 +5012,60 @@ async function unregisterPlayOnServer(taskId) {
     method: "POST",
     body: JSON.stringify({ taskId: String(taskId) })
   });
+}
+
+/**
+ * Flag a process as "has local results the server has not seen".
+ *
+ * Written into the task record itself rather than a side table, so the processes list can read it
+ * from the same place it already reads everything else, and so it survives a browser restart. The
+ * flag is what turns the Sync button on; only a successful sync clears it.
+ */
+async function markLocalRunPendingSync(taskId, results) {
+  try {
+    const tasks = await loadUserTasks();
+    const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
+    if (idx < 0) return;
+    // Prefer the writes the run actually made; fall back to the result rows only if the write log
+    // is empty (a run that wrote nothing still deserves the flag cleared honestly).
+    const written = collectLocalRunWrites();
+    tasks[idx] = {
+      ...tasks[idx],
+      localRunPendingSync: true,
+      lastLocalRunAt: new Date().toISOString(),
+      locallyRunSources: written.length ? written : collectWrittenCells(results)
+    };
+    await saveUserTasks(tasks);
+    // Tell the portal a row needs its Sync button, without waiting for a manual refresh.
+    try {
+      chrome.runtime.sendMessage({ type: "localRunPendingSync", taskId: String(taskId) });
+    } catch { /* the portal may not be open; the flag is already persisted */ }
+  } catch { /* a flag that cannot be written must never fail the run it describes */ }
+}
+
+/**
+ * Pull the cells a run actually wrote out of its result rows.
+ *
+ * Results already carry the address of every write (source, row, column, value), because that is
+ * what the HUD shows. Reading them here rather than adding a second bookkeeping path means the sync
+ * payload cannot drift from what the user was shown.
+ */
+function collectWrittenCells(results) {
+  const out = [];
+  for (const r of Array.isArray(results) ? results : []) {
+    if (!r || r.ok !== true) continue;
+    const dsId = Number(r.dataSourceId ?? r.saveDataSourceId);
+    if (!Number.isFinite(dsId) || dsId <= 0) continue;
+    const col = r.columnKey ?? r.saveColumnName;
+    if (!col) continue;
+    out.push({
+      dataSourceId: dsId,
+      rowIndex: Number(r.rowIndex ?? r.targetRow ?? 0) || 0,
+      columnKey: String(col),
+      cellValue: r.cellValue ?? r.value ?? ""
+    });
+  }
+  return out;
 }
 
 function startPlayAbortWatch(taskId) {

@@ -1036,6 +1036,72 @@ html.light-style {
   color: #28c76f;
 }
 
+.da-task-actions .ds-icon-btn.is-sync {
+  color: var(--morobot-primary, var(--morobot-primary-default));
+}
+
+/* The per-row "run on server" switch. Compact so it sits inside the actions cell without pushing the
+   icon buttons onto a second line, and it keeps its label so the state is readable at a glance. */
+.da-runswitch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 0 4px;
+  cursor: pointer;
+  user-select: none;
+  vertical-align: middle;
+}
+
+.da-runswitch-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.da-runswitch-ui {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  background: #d9d6e5;
+  transition: background 0.18s ease;
+  flex: 0 0 auto;
+}
+
+.da-runswitch-ui::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.18s ease;
+}
+
+.da-runswitch-input:checked + .da-runswitch-ui {
+  background: var(--morobot-primary, var(--morobot-primary-default));
+}
+
+.da-runswitch-input:checked + .da-runswitch-ui::after {
+  transform: translateX(16px);
+}
+
+.da-runswitch-input:focus-visible + .da-runswitch-ui {
+  outline: 2px solid var(--morobot-primary, var(--morobot-primary-default));
+  outline-offset: 2px;
+}
+
+.da-runswitch-text {
+  font-size: 11px;
+  color: #8a8699;
+  white-space: nowrap;
+}
+
 .da-task-actions .da-import-btn {
   display: inline-flex;
   align-items: center;

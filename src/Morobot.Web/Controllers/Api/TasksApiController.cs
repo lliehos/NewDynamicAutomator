@@ -29,6 +29,7 @@ public class TasksApiController : ControllerBase
     private readonly IHubContext<PlayDataHub> _playHub;
     private readonly CatalogLiveService _catalog;
     private readonly PlaySessionTracker _plays;
+    private readonly DataSourceService _sources;
 
     public TasksApiController(
         TaskService tasks,
@@ -38,7 +39,8 @@ public class TasksApiController : ControllerBase
         IHubContext<CanvasHub> canvasHub,
         IHubContext<PlayDataHub> playHub,
         CatalogLiveService catalog,
-        PlaySessionTracker plays)
+        PlaySessionTracker plays,
+        DataSourceService sources)
     {
         _tasks = tasks;
         _templates = templates;
@@ -48,6 +50,7 @@ public class TasksApiController : ControllerBase
         _playHub = playHub;
         _catalog = catalog;
         _plays = plays;
+        _sources = sources;
     }
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -258,6 +261,78 @@ public class TasksApiController : ControllerBase
         catch { /* fall through */ }
 
         return Content(json, "application/json");
+    }
+
+    /// <summary>
+    /// Push the results of a run that happened on the user's own machine.
+    /// </summary>
+    /// <remarks>
+    /// A local run is off the server's books by design, so this is the only moment the two copies
+    /// meet. The client has already warned that the server copy may have moved on or that values the
+    /// server never saw may be replaced; the server's job is to apply the write and report what it
+    /// did, not to second-guess the decision. Only the sources the client actually touched are sent,
+    /// and each cell is written through the normal per-cell path so revision/concurrency semantics
+    /// hold here exactly as they do for an online write.
+    /// </remarks>
+    [HttpPost("{id:int}/sync-local-run")]
+    public async Task<IActionResult> SyncLocalRun(int id, [FromBody] SyncLocalRunRequest? body, CancellationToken ct)
+    {
+        var taskKey = id.ToString();
+        // A local run is never registered, so a live session here means someone else is running it
+        // right now and writing into it would race them. Refuse rather than interleave.
+        if (_plays.IsPlaying(taskKey))
+        {
+            var player = _plays.Get(taskKey);
+            return Conflict(new
+            {
+                message = "Process is currently running; sync after it finishes.",
+                code = "playing",
+                playerUserName = player?.UserName
+            });
+        }
+
+        // GetCanvasAsync applies the same ownership/share check every other task read uses, so a
+        // user cannot sync into a process they cannot see.
+        var canvas = await _tasks.GetCanvasAsync(UserId, id, ct);
+        if (canvas is null) return NotFound();
+
+        var cells = body?.Cells ?? new List<SyncLocalRunCellDto>();
+        var applied = 0;
+        var skipped = 0;
+        foreach (var cell in cells)
+        {
+            if (cell.DataSourceId <= 0) { skipped++; continue; }
+            var res = await _sources.PatchCellAsync(UserId, cell.DataSourceId, new Morobot.Contracts.DataSources.PatchDataSourceCellRequest
+            {
+                RowIndex = cell.RowIndex,
+                ColumnKey = cell.ColumnKey,
+                CellValue = cell.CellValue ?? "",
+                // Let the service resolve the current revision itself: the local run's revision is
+                // from another machine and would only produce spurious conflicts.
+                ExpectedCellRevision = null,
+                InsertMode = "auto"
+            }, ct);
+            if (res?.Ok == true) applied++; else skipped++;
+        }
+
+        await _events.LogAsync("Info", "Play", "LocalRunSynced",
+            $"Local run results synced ({applied} cell(s))",
+            UserId, User.Identity?.Name,
+            System.Text.Json.JsonSerializer.Serialize(new { taskId = id, applied, skipped }),
+            path: HttpContext.Request.Path,
+            ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
+            ct: ct);
+
+        await _catalog.BroadcastProcessListItemAsync(id, "data_updated", User.Identity?.Name, ct);
+        await _canvasHub.Clients.Group(CanvasHub.TaskGroup(id)).SendAsync("canvasChanged", new
+        {
+            taskId = id,
+            userId = UserId,
+            userName = User.Identity?.Name,
+            reason = "local_run_synced"
+        }, ct);
+
+        return Ok(new { ok = true, applied, skipped });
     }
 
     [HttpPut("{id:int}/canvas")]

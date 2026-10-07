@@ -306,8 +306,41 @@
     const user = currentUser();
     readTasksDisk(user).then((tasks) => {
       if (!Array.isArray(tasks) || !tasks.length) return;
-      chrome.storage.local.set({ localUser: user, [`localTasks__${user}`]: tasks });
+      // The page's copy may predate flags only the extension knows -- a local run sets
+      // localRunPendingSync in chrome.storage, and a blind overwrite here would erase it before the
+      // user ever sees the Sync button. So merge the extension's current records over the page's,
+      // keeping the page's graph (which is the richer one while editing).
+      chrome.storage.local.get([`localTasks__${user}`]).then((existing) => {
+        const prev = existing?.[`localTasks__${user}`];
+        const merged = Array.isArray(prev) && prev.length
+          ? mergeExtensionOnlyFlags(prev, tasks)
+          : tasks;
+        chrome.storage.local.set({ localUser: user, [`localTasks__${user}`]: merged });
+      }).catch(() => {
+        chrome.storage.local.set({ localUser: user, [`localTasks__${user}`]: tasks });
+      });
     }).catch(() => {});
+  }
+
+  /**
+   * Carry extension-owned flags onto the page's version of each task.
+   *
+   * These are set by a run and read by the processes list; the page has no way to produce them, so
+   * they must survive the page's own writes rather than be re-derived.
+   */
+  function mergeExtensionOnlyFlags(prev, incoming) {
+    const prevById = new Map((prev || []).map((t) => [String(t.id), t]));
+    return (incoming || []).map((t) => {
+      const old = prevById.get(String(t.id));
+      if (!old) return t;
+      const out = { ...t };
+      if (old.localRunPendingSync) out.localRunPendingSync = true;
+      if (old.lastLocalRunAt) out.lastLocalRunAt = old.lastLocalRunAt;
+      if (old.locallyRunSources) out.locallyRunSources = old.locallyRunSources;
+      // The switch is a user decision; the page copy may simply not have been re-read yet.
+      if (old.runOnServer === false && t.runOnServer !== false) out.runOnServer = false;
+      return out;
+    });
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
