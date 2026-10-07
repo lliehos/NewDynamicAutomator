@@ -111,8 +111,9 @@
     that produces the server — is what makes "a publish also ships the latest player" true rather
     than a step someone has to remember.
 
-    It is skippable: pass -p:SkipDesktopPlayer=true for a server-only publish (and in an environment
-    that cannot build a windows-targeted app at all, the target simply does not run).
+    It is skippable: pass -p:SkipDesktopPlayer=true for a server-only publish. It is also skipped
+    automatically on a non-Windows build host, because the player is WPF and cannot be built there —
+    see CanBuildDesktopPlayer below for why that must be a hard skip rather than a failed build.
   -->
   <PropertyGroup>
     <DesktopPlayerProject>$(MSBuildThisFileDirectory)..\Morobot.Player\Morobot.Player.csproj</DesktopPlayerProject>
@@ -131,9 +132,29 @@
     <DesktopPlayerVersion Condition="'$(DesktopPlayerVersion)' == ''">1.0.0</DesktopPlayerVersion>
   </PropertyGroup>
 
+  <!--
+    Whether this build host can produce the player at all.
+
+    The player is a WPF app, so it can only be built on Windows. A publish performed ON a Linux
+    server (or in a Linux build container) therefore cannot build it, and attempting to does not
+    merely skip it — the WPF SDK fails the whole publish with NETSDK1100 ("The target platform must
+    be set to Windows ... when using Windows Forms or WPF"), taking the server's own publish down
+    with it. That is the opposite of what this target is for: shipping the player must never be able
+    to break shipping the server.
+
+    So the target is enabled only when the host is genuinely Windows. Note this keys on the HOST
+    ($(MSBuildRuntimeType)/$(OS)), not on $(RuntimeIdentifier): publishing the server for a win-x64
+    RID from Linux is still a Linux host that has no WPF targeting pack, and still cannot produce
+    the player.
+  -->
+  <PropertyGroup>
+    <CanBuildDesktopPlayer Condition="'$(OS)' == 'Windows_NT'">true</CanBuildDesktopPlayer>
+    <CanBuildDesktopPlayer Condition="'$(CanBuildDesktopPlayer)' == ''">false</CanBuildDesktopPlayer>
+  </PropertyGroup>
+
   <Target Name="PublishDesktopPlayer"
           AfterTargets="Publish"
-          Condition="'$(SkipDesktopPlayer)' != 'true' and Exists('$(DesktopPlayerProject)')">
+          Condition="'$(SkipDesktopPlayer)' != 'true' and '$(CanBuildDesktopPlayer)' == 'true' and Exists('$(DesktopPlayerProject)')">
     <Message Importance="high" Text="Publishing desktop player $(DesktopPlayerVersion) → $(DesktopPlayerPublishDir)" />
 
     <MSBuild Projects="$(DesktopPlayerProject)"
