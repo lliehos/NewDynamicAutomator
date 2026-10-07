@@ -4896,16 +4896,44 @@ async function registerPlayOnServer(taskId) {
   });
 }
 
+/**
+ * The in-flight RegisterPlay request, per task id.
+ *
+ * Register and unregister are separate HTTP calls, and register is deliberately fire-and-forget so
+ * a slow portal cannot delay the run starting. For a fast run — a condition check takes
+ * milliseconds — the two were genuinely racing: unregister could reach the server first and the
+ * register would then land on top, leaving the process marked "playing" with nothing running. Every
+ * later save was refused with a 409 for a run that had already finished. Holding the promise here
+ * lets the unregister wait for the register it is meant to undo.
+ */
+const playRegisterInflight = new Map();
+
+function registerPlayOnServerTracked(taskId) {
+  const key = String(taskId || "").trim();
+  if (!key) return Promise.resolve();
+  const p = registerPlayOnServer(key).catch(() => {});
+  playRegisterInflight.set(key, p);
+  p.finally(() => {
+    // Only clear the slot if it still holds this promise, so a newer register is not clobbered.
+    if (playRegisterInflight.get(key) === p) playRegisterInflight.delete(key);
+  });
+  return p;
+}
+
 async function unregisterPlayOnServer(taskId) {
+  const key = String(taskId || "").trim();
+  // Let the matching register land first, or the two can cross and the server keeps "playing".
+  const pending = playRegisterInflight.get(key);
+  if (pending) await pending.catch(() => {});
   await portalFetch("/Panel/Tasks/UnregisterPlay", {
     method: "POST",
-    body: JSON.stringify({ taskId: String(taskId) })
+    body: JSON.stringify({ taskId: key })
   });
 }
 
 function startPlayAbortWatch(taskId) {
   if (playAbortPoll) clearInterval(playAbortPoll);
-  registerPlayOnServer(taskId).catch(() => {});
+  registerPlayOnServerTracked(taskId);
   playAbortPoll = setInterval(async () => {
     if (!playStatus.playing) return;
     // Refresh liveness on the tick we already pay for. This is what lets detectOrphanedPlay tell a

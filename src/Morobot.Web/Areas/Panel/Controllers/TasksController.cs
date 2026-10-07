@@ -289,6 +289,9 @@ public class TasksController : Controller
     {
         taskId = (taskId ?? "").Trim();
         if (string.IsNullOrEmpty(taskId)) return BadRequest();
+        // The abort poll is the one signal a live run always emits, so it doubles as the session's
+        // liveness refresh: a session that stops polling expires instead of blocking saves forever.
+        _plays.Touch(taskId);
         var abort = _plays.PeekAbort(taskId);
         if (abort) _plays.ConsumeAbort(taskId);
         return Ok(new { abort, playing = _plays.IsPlaying(taskId) });
