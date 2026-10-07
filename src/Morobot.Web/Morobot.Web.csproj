@@ -118,13 +118,6 @@
   <PropertyGroup>
     <DesktopPlayerProject>$(MSBuildThisFileDirectory)..\Morobot.Player\Morobot.Player.csproj</DesktopPlayerProject>
     <!--
-      Built with Path.Combine rather than string concatenation: $(PublishDir) has no trailing
-      separator, so "$(PublishDir)desktop\" collapsed to "...\pubtestdesktop" (MSBuild strips the
-      trailing backslash) and scattered the player beside the app instead of inside it. Path.Combine
-      inserts the separator itself and cannot lose it.
-    -->
-    <DesktopPlayerPublishDir>$([System.IO.Path]::Combine($(PublishDir), 'desktop'))\</DesktopPlayerPublishDir>
-    <!--
       The player's version in the package. Kept as a property rather than read from the project file
       so an operator can ship a specific build with -p:DesktopPlayerVersion=1.2.0 without editing
       anything, which is what a hotfix needs.
@@ -155,11 +148,47 @@
   <Target Name="PublishDesktopPlayer"
           AfterTargets="Publish"
           Condition="'$(SkipDesktopPlayer)' != 'true' and '$(CanBuildDesktopPlayer)' == 'true' and Exists('$(DesktopPlayerProject)')">
+    <!--
+      Resolve the destination NOW (target-execution time), not at property-evaluation time.
+
+      Two things make the evaluated-time value wrong for the FTP/WebDeploy publish methods:
+      * $(PublishDir) is only populated by the time the Publish target has run, and some methods
+        (FTP) leave it EMPTY and carry the destination in their own settings instead. An empty
+        $(PublishDir) made the previous property collapse to a bare "desktop\" — which the nested
+        player Publish then resolved against the Web project directory and dumped 26 files into
+        `src\Morobot.Web\desktop\`, right in the source tree.
+      * A relative $(PublishDir) (e.g. "bin\Release\net9.0\publish\") has the same problem: the
+        nested Publish resolves it against the PLAYER's project directory, so the player landed in
+        `src\Morobot.Player\...\desktop\` — the "Publishing desktop player … → desktop\" symptom.
+
+      $(PublishDir) is authoritative whenever it is set (this is what `-o` and the IDE use). Only
+      when it is empty — i.e. the publish method handles the copy itself and never sets it, as FTP
+      does — do we fall back to $(PublishUrl)/$(publishUrl): WebDeploy/FTP set that to the final
+      destination, and for a local folder it is the output path. GetFullPath then makes whatever we
+      chose ABSOLUTE against the Web project directory, so the nested Publish can never rebase it.
+    -->
+    <PropertyGroup>
+      <_DesktopPublishRoot Condition="'$(PublishDir)' != ''">$(PublishDir)</_DesktopPublishRoot>
+      <_DesktopPublishRoot Condition="'$(_DesktopPublishRoot)' == ''">$(PublishUrl)</_DesktopPublishRoot>
+      <_DesktopPublishRoot Condition="'$(_DesktopPublishRoot)' == ''">$(publishUrl)</_DesktopPublishRoot>
+      <!-- Still nothing (a profile that carries no destination at all): use the default output. -->
+      <_DesktopPublishRoot Condition="'$(_DesktopPublishRoot)' == ''">$(OutputPath)</_DesktopPublishRoot>
+      <DesktopPlayerPublishDir>$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine($(MSBuildProjectDirectory), $(_DesktopPublishRoot), 'desktop'))))\</DesktopPlayerPublishDir>
+    </PropertyGroup>
+
     <Message Importance="high" Text="Publishing desktop player $(DesktopPlayerVersion) → $(DesktopPlayerPublishDir)" />
 
+    <!--
+      PublishProfile is cleared (passed as empty) to the nested build on purpose. Without this the
+      player project inherits PublishProfile=FTPProfile.pubxml from the outer publish, looks for
+      that profile among ITS OWN Properties/PublishProfiles, does not find it, and emits
+      warning NETSDK1198 — and, worse, would try to apply FTP settings to the player. Empty means
+      "no profile", which is exactly right: we drive the player's publish entirely through the
+      Properties below.
+    -->
     <MSBuild Projects="$(DesktopPlayerProject)"
              Targets="Publish"
-             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=false;PublishDir=$(DesktopPlayerPublishDir)" />
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=false;PublishDir=$(DesktopPlayerPublishDir);PublishProfile=" />
 
     <!--
       version.txt is what DesktopSyncService reads to know what it is serving. Written AFTER the
