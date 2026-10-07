@@ -32,7 +32,7 @@ Morobot license tool (vendor-only — never deploy private keys to customers)
 
 Commands:
   genkeypair [--out-dir <path>]
-  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--allow-plan-management true|false] [--allow-bilingual true|false] [--allow-front-package true|false] [--update-url URL] [--max-source-rows N] [--max-source-bytes N] [-o license.morobot]
+  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--allow-plan-management true|false] [--allow-bilingual true|false] [--allow-front-package true|false] [--allow-local-run true|false] [--update-url URL] [--max-source-rows N] [--max-source-bytes N] [-o license.morobot]
   package --project <path-to-Morobot.Web.csproj> --output <folder>
   package-update --version <semver> --source <published-folder> [-o <file.zip>] [--notes "text"] [--channel stable] [--min-current <semver>] [--product-name Morobot]
   verify --license <file.morobot> [--public-key <pem>]
@@ -112,6 +112,9 @@ static int Sign(string[] args)
     // Opt-IN, like migration: the front-end package is a separately sold bundle, so a licence that
     // does not name it must not hand it to a customer who never bought it.
     var allowFrontPackage = string.Equals(GetArg(args, "--allow-front-package"), "true", StringComparison.OrdinalIgnoreCase);
+    // Opt-IN for the same reason: local execution moves work off the server, so it is granted
+    // explicitly rather than acquired by omission.
+    var allowLocalRun = string.Equals(GetArg(args, "--allow-local-run"), "true", StringComparison.OrdinalIgnoreCase);
     var updateUrl = GetArg(args, "--update-url");
     var allowedHostRaw = GetArg(args, "--allowed-host");
     string? allowedHost = null;
@@ -158,6 +161,7 @@ static int Sign(string[] args)
         AllowPlanManagement = allowPlanManagement,
         AllowBilingual = allowBilingual,
         AllowFrontPackage = allowFrontPackage,
+        AllowLocalRun = allowLocalRun,
         UpdateServerUrl = updateUrl,
         AllowedHost = allowedHost,
         ReferralWidgetUrl = referralUrl,

@@ -88,4 +88,17 @@ public sealed class LicensePayload
 
     /// <summary>Hard ceiling in bytes on any single data source's content. Null = no ceiling.</summary>
     public long? MaxSourceBytes { get; set; }
+
+    /// <summary>
+    /// Whether this deployment may run processes locally on a user's own machine.
+    /// </summary>
+    /// <remarks>
+    /// Covers the whole local-execution feature: the desktop runner, the per-process "run on server"
+    /// switch, and the client-side offline cell store. Deliberately <c>false</c> by default — OPT-IN,
+    /// like <see cref="AllowFrontPackage"/> and unlike <see cref="AllowPlanManagement"/>. Local
+    /// execution moves work off the server, so it is a capability a vendor grants rather than one a
+    /// deployment should acquire by omission; and a licence signed before this flag existed must keep
+    /// behaving exactly as it did. A vendor who sells it passes <c>--allow-local-run true</c>.
+    /// </remarks>
+    public bool AllowLocalRun { get; set; }
 }

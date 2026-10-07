@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Morobot.Desktop</RootNamespace>
+    <AssemblyName>Morobot.Desktop</AssemblyName>
+    <ApplicationIcon>Assets\morobot-icon.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <Product>Morobot Local Runner</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\morobot-icon.png" />
+    <Resource Include="Assets\morobot-icon.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The license model is shared with the web app, so a signed license means the same thing in
+         both and the feature gate cannot drift between them. -->
+    <ProjectReference Include="..\Morobot.Licensing\Morobot.Licensing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Selenium drives the user's own Firefox. GeckoDriver is version-match free by design (unlike
+         ChromeDriver), which is why the runner ships against GeckoDriver rather than Chromium. -->
+    <PackageReference Include="Selenium.WebDriver" Version="4.27.0" />
+    <!-- Support carries SelectElement and the Actions builder used by hover/double-click. -->
+    <PackageReference Include="Selenium.Support" Version="4.27.0" />
+  </ItemGroup>
+
+</Project>
