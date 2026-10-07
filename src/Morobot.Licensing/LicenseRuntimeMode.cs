@@ -94,6 +94,17 @@ public sealed class LicenseRuntimeState
     /// </remarks>
     public bool AllowsLocalRun => Mode == LicenseRuntimeMode.Licensed && (Payload?.AllowLocalRun ?? false);
 
+    /// <summary>Whether this deployment may sell plans, packages and licenses (see LicensePayload).</summary>
+    public bool AllowsCommerce => Mode == LicenseRuntimeMode.Licensed && (Payload?.AllowCommerce ?? false);
+
+    /// <summary>Whether the software package itself may be sold, as opposed to only plans.</summary>
+    public bool AllowsSoftwarePurchase =>
+        AllowsCommerce && (Payload?.AllowSoftwarePurchase ?? false);
+
+    /// <summary>Whether the panel may issue its own licenses after payment.</summary>
+    public bool AllowsSelfIssuedLicenses =>
+        AllowsCommerce && (Payload?.AllowSelfIssuedLicenses ?? false);
+
     /// <summary>
     /// Row ceiling implied by the license. A trial or restricted install falls back to the small
     /// trial cap; a licensed install uses the signed value (null = the vendor sold no ceiling).

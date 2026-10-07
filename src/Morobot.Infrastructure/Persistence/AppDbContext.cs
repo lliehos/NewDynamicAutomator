@@ -24,6 +24,10 @@ public class AppDbContext : DbContext
     public DbSet<DeploymentAnchor> DeploymentAnchors => Set<DeploymentAnchor>();
     public DbSet<DeploymentTrialRecord> DeploymentTrialRecords => Set<DeploymentTrialRecord>();
     public DbSet<StoredLicense> StoredLicenses => Set<StoredLicense>();
+    public DbSet<Order> Orders => Set<Order>();
+    public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
+    public DbSet<SoftwarePackageOption> SoftwarePackageOptions => Set<SoftwarePackageOption>();
+    public DbSet<LicensePricing> LicensePricings => Set<LicensePricing>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -134,6 +138,11 @@ public class AppDbContext : DbContext
             e.Property(x => x.AllowPlanManagement).HasDefaultValue(true);
             // Same mirror-and-default reasoning as AllowPlanManagement above.
             e.Property(x => x.AllowBilingual).HasDefaultValue(true);
+            // Commerce flags are opt-in, so their database default is false — matching the CLR
+            // default, for the same reason: a disagreement makes EF emit a spurious AlterColumn.
+            e.Property(x => x.AllowCommerce).HasDefaultValue(false);
+            e.Property(x => x.AllowSoftwarePurchase).HasDefaultValue(false);
+            e.Property(x => x.AllowSelfIssuedLicenses).HasDefaultValue(false);
             e.HasIndex(x => x.ImportedAtUtc);
         });
 
@@ -148,6 +157,70 @@ public class AppDbContext : DbContext
                 .WithMany(x => x.Prices)
                 .HasForeignKey(x => x.PlanId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Order>(e =>
+        {
+            e.ToTable("Orders");
+            e.Property(x => x.ItemRef).HasMaxLength(100).IsRequired();
+            e.Property(x => x.ItemTitle).HasMaxLength(200).IsRequired();
+            e.Property(x => x.BillingCycle).HasMaxLength(20);
+            e.Property(x => x.Currency).HasMaxLength(10).IsRequired();
+            e.Property(x => x.FailureReason).HasMaxLength(500);
+            // Money is decimal, never double: a price computed in binary floating point eventually
+            // disagrees with the price the customer was shown, and this is the number a receipt is
+            // built from. Precision matches Plan's price columns so the two cannot round differently.
+            e.Property(x => x.Amount).HasPrecision(18, 2);
+            e.Property(x => x.PayableAmount).HasPrecision(18, 2);
+            e.Property(x => x.DiscountAmount).HasPrecision(18, 2);
+            // The history page reads "this user's orders, newest first", which is exactly this index.
+            e.HasIndex(x => new { x.UserId, x.CreatedAtUtc });
+            e.HasIndex(x => x.Status);
+            // SetNull, not Cascade: deleting a user must not erase the record of what they were
+            // charged — a financial history that disappears with the account is worse than useless.
+            e.HasOne(x => x.User)
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<PaymentTransaction>(e =>
+        {
+            e.ToTable("PaymentTransactions");
+            e.Property(x => x.Gateway).HasMaxLength(40).IsRequired();
+            e.Property(x => x.Authority).HasMaxLength(120).IsRequired();
+            e.Property(x => x.GatewayReference).HasMaxLength(120);
+            e.Property(x => x.Currency).HasMaxLength(10).IsRequired();
+            e.Property(x => x.Amount).HasPrecision(18, 2);
+            // A gateway callback can arrive twice (a refresh, a retry, a duplicate webhook). This
+            // index is what makes the second arrival find the existing row instead of paying again.
+            e.HasIndex(x => new { x.Gateway, x.Authority }).IsUnique();
+            e.HasOne(x => x.Order)
+                .WithMany(x => x.Transactions)
+                .HasForeignKey(x => x.OrderId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SoftwarePackageOption>(e =>
+        {
+            e.ToTable("SoftwarePackageOptions");
+            e.Property(x => x.Key).HasMaxLength(60).IsRequired();
+            e.Property(x => x.Title).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Description).HasMaxLength(500);
+            e.Property(x => x.UnitLabel).HasMaxLength(40);
+            e.Property(x => x.Amount).HasPrecision(18, 2);
+            e.Property(x => x.UnitAmount).HasPrecision(18, 2);
+            e.HasIndex(x => x.Key).IsUnique();
+        });
+
+        modelBuilder.Entity<LicensePricing>(e =>
+        {
+            e.ToTable("LicensePricings");
+            e.Property(x => x.Currency).HasMaxLength(10).IsRequired();
+            e.Property(x => x.BaseAmount).HasPrecision(18, 2);
+            e.Property(x => x.PerUserAmount).HasPrecision(18, 2);
+            e.Property(x => x.YearlyTermMultiplier).HasPrecision(18, 2);
+            e.Property(x => x.PerpetualMultiplier).HasPrecision(18, 2);
         });
 
         modelBuilder.Entity<AppUser>(e =>

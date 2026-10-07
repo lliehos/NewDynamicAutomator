@@ -15,7 +15,92 @@ public static class DbSeeder
     {
         await EnsurePlansAsync(db);
         await EnsureSystemSettingsAsync(db);
+        // A starter price list so the commerce pages have something to show on a fresh install
+        // instead of a blank wizard. Seeded only when absent, like the plans: an operator's own
+        // pricing must never be overwritten by a later deploy.
+        await EnsureCommerceDefaultsAsync(db);
         await EnsureUsersAsync(db);
+    }
+
+    /// <summary>
+    /// Seed the software-package options and the license price list, once.
+    /// </summary>
+    /// <remarks>
+    /// The values are a sensible starting point, not a recommendation: they mirror the feature set
+    /// the product already knows how to gate, so the purchase wizard works end to end on day one and
+    /// the operator edits numbers rather than inventing a price list from nothing.
+    /// </remarks>
+    private static async Task EnsureCommerceDefaultsAsync(AppDbContext db)
+    {
+        if (!await db.SoftwarePackageOptions.AnyAsync())
+        {
+            db.SoftwarePackageOptions.AddRange(
+                new SoftwarePackageOption
+                {
+                    Key = "base",
+                    Title = "بستهٔ پایه نرم‌افزار",
+                    Description = "نسخهٔ ویندوزی (سروری یا اجرای محلی) با یک کاربر.",
+                    Kind = PackageOptionKind.Limit,
+                    IncludedUnits = 1,
+                    UnitAmount = 2_000_000m,
+                    MaxUnits = 100,
+                    UnitLabel = "کاربر",
+                    IsDefault = true,
+                    SortOrder = 0
+                },
+                new SoftwarePackageOption
+                {
+                    Key = "local_run",
+                    Title = "اجرای محلی",
+                    Description = "اجرای فرآیندها روی سیستم کاربر.",
+                    Kind = PackageOptionKind.Feature,
+                    Amount = 15_000_000m,
+                    SortOrder = 1
+                },
+                new SoftwarePackageOption
+                {
+                    Key = "bilingual",
+                    Title = "دو زبانه",
+                    Description = "رابط فارسی و انگلیسی.",
+                    Kind = PackageOptionKind.Feature,
+                    Amount = 5_000_000m,
+                    SortOrder = 2
+                },
+                new SoftwarePackageOption
+                {
+                    Key = "front_package",
+                    Title = "بستهٔ سایت عمومی",
+                    Description = "سایت عمومی با صفحهٔ قیمت.",
+                    Kind = PackageOptionKind.Feature,
+                    Amount = 20_000_000m,
+                    SortOrder = 3
+                },
+                new SoftwarePackageOption
+                {
+                    Key = "commerce",
+                    Title = "فروش (پلن، بسته، لایسنس)",
+                    Description = "امکان فروش در همین نصب.",
+                    Kind = PackageOptionKind.Feature,
+                    Amount = 30_000_000m,
+                    SortOrder = 4
+                });
+        }
+
+        if (!await db.LicensePricings.AnyAsync())
+        {
+            db.LicensePricings.Add(new LicensePricing
+            {
+                BaseAmount = 10_000_000m,
+                PerUserAmount = 1_500_000m,
+                IncludedUsers = 1,
+                MaxUsers = 100,
+                YearlyTermMultiplier = 10m,
+                PerpetualMultiplier = 30m,
+                Currency = "IRR"
+            });
+        }
+
+        await db.SaveChangesAsync();
     }
 
     private static async Task EnsurePlansAsync(AppDbContext db)

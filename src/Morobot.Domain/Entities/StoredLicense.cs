@@ -23,6 +23,12 @@ public class StoredLicense
     /// before the flag existed — see <c>LicensePayload.AllowBilingual</c>).
     /// </summary>
     public bool AllowBilingual { get; set; } = true;
+    /// <summary>Whether this deployment may sell (plans, package, licenses). Default off.</summary>
+    public bool AllowCommerce { get; set; }
+    /// <summary>Whether the software package itself may be sold, as opposed to only plans.</summary>
+    public bool AllowSoftwarePurchase { get; set; }
+    /// <summary>Whether the panel may issue its own licenses after payment.</summary>
+    public bool AllowSelfIssuedLicenses { get; set; }
     public int TrialDays { get; set; } = 3;
     public string? DatabaseServerHint { get; set; }
     public string? AllowedHost { get; set; }

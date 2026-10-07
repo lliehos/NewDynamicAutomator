@@ -659,6 +659,8 @@ public class TaskService
 
         var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
         var bodyJson = envelope is null ? process.GraphJson : bodyText;
+        // A null/blank body means there is no graph to patch; Parse would throw on null.
+        if (string.IsNullOrWhiteSpace(bodyJson)) return false;
 
         JsonNode? root;
         try { root = JsonNode.Parse(bodyJson); }

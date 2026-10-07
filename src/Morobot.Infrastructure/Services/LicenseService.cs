@@ -384,6 +384,9 @@ public sealed class LicenseService
             AllowLegacyMigration = payload.AllowLegacyMigration,
             AllowPlanManagement = payload.AllowPlanManagement,
             AllowBilingual = payload.AllowBilingual,
+            AllowCommerce = payload.AllowCommerce,
+            AllowSoftwarePurchase = payload.AllowSoftwarePurchase,
+            AllowSelfIssuedLicenses = payload.AllowSelfIssuedLicenses,
             TrialDays = payload.TrialDays > 0 ? payload.TrialDays : 3,
             DatabaseServerHint = ExtractServerHint(payload.DatabaseConnectionString),
             AllowedHost = string.IsNullOrWhiteSpace(payload.AllowedHost)

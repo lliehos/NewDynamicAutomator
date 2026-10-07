@@ -101,4 +101,42 @@ public sealed class LicensePayload
     /// behaving exactly as it did. A vendor who sells it passes <c>--allow-local-run true</c>.
     /// </remarks>
     public bool AllowLocalRun { get; set; }
+
+    /// <summary>
+    /// Whether this deployment may SELL — plans, the software package and licenses.
+    /// </summary>
+    /// <remarks>
+    /// Gates every commerce surface: the public plan page, checkout, the purchase wizard, the
+    /// renewal flow and the financial history. Deliberately <c>false</c> by default and opt-in, like
+    /// <see cref="AllowFrontPackage"/>: an installation that is merely using the software must not
+    /// start taking money because a flag defaulted the wrong way, and a licence signed before
+    /// commerce existed has to keep behaving exactly as it did.
+    ///
+    /// This is what the vendor signs for the deployment they host on the internet — the one that
+    /// earns from selling plans, packages and licenses. A customer's own on-premise install leaves
+    /// it off.
+    /// </remarks>
+    public bool AllowCommerce { get; set; }
+
+    /// <summary>
+    /// Whether this deployment may sell the software package itself (the purchase wizard), as
+    /// opposed to only selling plans.
+    /// </summary>
+    /// <remarks>
+    /// A separate flag because the two are separately sellable: a reseller may be licensed to sell
+    /// plan subscriptions without being allowed to hand out the software outright. Gated
+    /// independently so turning on plan selling cannot silently enable package selling.
+    /// </remarks>
+    public bool AllowSoftwarePurchase { get; set; }
+
+    /// <summary>
+    /// Whether this deployment may issue new licenses to itself through the panel (the renewal
+    /// wizard), rather than the vendor signing each one by hand.
+    /// </summary>
+    /// <remarks>
+    /// The most powerful of the three and therefore the most narrowly granted: it lets a deployment
+    /// mint its own licenses after payment, with no vendor in the loop. A vendor selling through
+    /// this deployment's storefront grants it; anyone else must not have it.
+    /// </remarks>
+    public bool AllowSelfIssuedLicenses { get; set; }
 }

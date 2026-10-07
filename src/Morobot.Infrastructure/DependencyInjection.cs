@@ -3,6 +3,7 @@ using Morobot.Infrastructure.Identity;
 using Morobot.Infrastructure.Options;
 using Morobot.Infrastructure.Persistence;
 using Morobot.Infrastructure.Services;
+using Morobot.Infrastructure.Services.Payments;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -56,6 +57,12 @@ public static class DependencyInjection
         services.AddScoped<RecordingService>();
         services.AddScoped<DataSourceService>();
         services.AddScoped<LegacyImportService>();
+        // Commerce: the pricing rules, the order/payment flow, and the gateways it can use.
+        services.AddScoped<PricingService>();
+        services.AddScoped<CheckoutService>();
+        // The manual gateway is always present: it needs no credentials, so the checkout works on a
+        // fresh install. A real PSP registered later is preferred by key where one is configured.
+        services.AddScoped<IPaymentGateway, ManualPaymentGateway>();
         services.AddSingleton<SmartLearningService>();
         return services;
     }

@@ -32,7 +32,7 @@ Morobot license tool (vendor-only — never deploy private keys to customers)
 
 Commands:
   genkeypair [--out-dir <path>]
-  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--allow-plan-management true|false] [--allow-bilingual true|false] [--allow-front-package true|false] [--allow-local-run true|false] [--update-url URL] [--max-source-rows N] [--max-source-bytes N] [-o license.morobot]
+  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--allow-plan-management true|false] [--allow-bilingual true|false] [--allow-front-package true|false] [--allow-local-run true|false] [--allow-commerce true|false] [--allow-software-purchase true|false] [--allow-self-issued-licenses true|false] [--update-url URL] [--max-source-rows N] [--max-source-bytes N] [-o license.morobot]
   package --project <path-to-Morobot.Web.csproj> --output <folder>
   package-update --version <semver> --source <published-folder> [-o <file.zip>] [--notes "text"] [--channel stable] [--min-current <semver>] [--product-name Morobot]
   verify --license <file.morobot> [--public-key <pem>]
@@ -115,6 +115,11 @@ static int Sign(string[] args)
     // Opt-IN for the same reason: local execution moves work off the server, so it is granted
     // explicitly rather than acquired by omission.
     var allowLocalRun = string.Equals(GetArg(args, "--allow-local-run"), "true", StringComparison.OrdinalIgnoreCase);
+    // Commerce is opt-in and three-layered, so turning on selling plans cannot silently also grant
+    // the right to hand out the software or to mint licenses. Each has to be named.
+    var allowCommerce = string.Equals(GetArg(args, "--allow-commerce"), "true", StringComparison.OrdinalIgnoreCase);
+    var allowSoftwarePurchase = string.Equals(GetArg(args, "--allow-software-purchase"), "true", StringComparison.OrdinalIgnoreCase);
+    var allowSelfIssuedLicenses = string.Equals(GetArg(args, "--allow-self-issued-licenses"), "true", StringComparison.OrdinalIgnoreCase);
     var updateUrl = GetArg(args, "--update-url");
     var allowedHostRaw = GetArg(args, "--allowed-host");
     string? allowedHost = null;
@@ -162,6 +167,9 @@ static int Sign(string[] args)
         AllowBilingual = allowBilingual,
         AllowFrontPackage = allowFrontPackage,
         AllowLocalRun = allowLocalRun,
+        AllowCommerce = allowCommerce,
+        AllowSoftwarePurchase = allowSoftwarePurchase,
+        AllowSelfIssuedLicenses = allowSelfIssuedLicenses,
         UpdateServerUrl = updateUrl,
         AllowedHost = allowedHost,
         ReferralWidgetUrl = referralUrl,
