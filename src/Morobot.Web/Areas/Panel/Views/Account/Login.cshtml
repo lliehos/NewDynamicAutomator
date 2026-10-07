@@ -73,10 +73,6 @@
         <p class="morobot-login-mode-fallback small mb-0" data-i18n="login.adminFallbackNote">@L["login.adminFallbackNote"]</p>
       </div>
     }
-    <div class="alert alert-info small mb-4" role="note">
-      <div class="fw-semibold mb-1" data-i18n="login.guideTitle">@L["login.guideTitle"]</div>
-      <div data-i18n="login.guideGuest">@L["login.guideGuest"]</div>
-    </div>
     <form method="post" asp-area="Panel" asp-controller="Account" asp-action="Login" id="login-form">
       @Html.AntiForgeryToken()
       <input type="hidden" name="returnUrl" value="@ViewBag.ReturnUrl" />

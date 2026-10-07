@@ -1129,9 +1129,9 @@ rect.flow-marquee{pointer-events:none}
   position:absolute;
   top:0;
   left:100%;
-  /* The negative left margin is bridged by .ctx-submenu::before, so the pointer can travel from the
-     parent row into the submenu without crossing dead space and losing the hover. */
-  margin:0 0 0 4px;
+  /* A small negative offset pulls the submenu back under the parent row so the two boxes overlap;
+     the pointer never has to cross empty space to reach the child. */
+  margin:0 0 0 -2px;
   padding:6px;
   list-style:none;
   background:#fff;
@@ -1146,7 +1146,7 @@ rect.flow-marquee{pointer-events:none}
 [dir="rtl"] .ctx-menu .ctx-submenu{
   left:auto;
   right:100%;
-  margin:0 4px 0 0;
+  margin:0 -2px 0 0;
 }
 .ctx-menu .ctx-submenu li{
   white-space:nowrap;
@@ -1155,28 +1155,30 @@ rect.flow-marquee{pointer-events:none}
   max-width:320px;
 }
 /* Submenus open on hover so moving along the parent list feels immediate, but only ONE may be open
-   at a time. The rule below hides every submenu whose parent is not the one being hovered, which is
-   what closes the previous one when the pointer moves to the next entry — a plain `:hover` rule
-   cannot do that, because the entry you just left is no longer hovered but its child stays
-   rendered. `hidden` still wins for menus JS has not populated yet. */
-.ctx-menu li.has-sub:not(:hover):not(:focus-within) > .ctx-submenu:not([hidden]) {
-  display: none;
-}
-.ctx-menu li.has-sub:hover > .ctx-submenu:not([hidden]),
-.ctx-menu li.has-sub:focus-within > .ctx-submenu:not([hidden]) {
+   at a time.
+   The show/hide itself is driven by the `hidden` attribute, which JS toggles: an instant CSS
+   `display:none` on leaving the row gave the pointer no time to reach the child, so the menu felt
+   like it had to be chased. JS now keeps the open submenu visible for a short grace period (see
+   SUBMENU_CLOSE_DELAY_MS in flow.js) and closes every sibling when a new one opens. `hidden` still
+   wins for menus JS has not populated yet. */
+.ctx-menu li.has-sub > .ctx-submenu {
   display: block;
 }
-/* Keep the open submenu reachable while the pointer travels the 4px gap between the two boxes:
-   without this the hover is lost in the gap and the submenu closes under the cursor. */
+.ctx-menu li.has-sub > .ctx-submenu[hidden] {
+  display: none;
+}
+/* Keep the open submenu reachable while the pointer travels the small gap between the two boxes:
+   without this the hover is lost in the gap and the submenu closes under the cursor. The overlap
+   from the negative margin is small, so the bridge is generous. */
 .ctx-menu li.has-sub > .ctx-submenu::before {
   content: "";
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 8px;
-  left: -8px;
+  width: 14px;
+  left: -14px;
 }
-[dir="rtl"] .ctx-menu li.has-sub > .ctx-submenu::before{ left: auto; right: -8px; }
+[dir="rtl"] .ctx-menu li.has-sub > .ctx-submenu::before{ left: auto; right: -14px; }
 
 .flow-mobile-scrim{
   display:none;

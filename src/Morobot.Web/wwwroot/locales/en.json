@@ -315,8 +315,6 @@
     "title": "Sign in",
     "heading": "Sign in to the panel",
     "hint": "Sign in with your account username and password.",
-    "guideTitle": "Guest account (trial)",
-    "guideGuest": "Username: guest — Password: Guest123!",
     "suggest": "",
     "errorRequired": "Username and password are required.",
     "errorInvalid": "Invalid username or password.",
