@@ -198,6 +198,18 @@
               </a>
             </li>
           }
+          @* A Monitor operator lives on the Panel like everyone else but has no other way into the
+             one page their role exists for, so this is their entry point. It points straight at the
+             monitoring dashboard rather than the admin home, which they are not allowed to open. *@
+          @if (User.IsInRole("Monitor"))
+          {
+            <li class="menu-item @(ctrl.Equals("Monitoring", StringComparison.OrdinalIgnoreCase) ? "active" : null)">
+              <a asp-area="Admin" asp-controller="Monitoring" asp-action="Index" class="menu-link">
+                <i class="menu-icon tf-icons ti ti-activity-heartbeat"></i>
+                <div data-i18n="admin.nav.monitoring">@L["admin.nav.monitoring"]</div>
+              </a>
+            </li>
+          }
         </ul>
         <div class="da-menu-foot px-4 pb-3 mt-auto">
           <small class="text-muted d-block" data-i18n="brand.copyright">@L["brand.copyright"]</small>

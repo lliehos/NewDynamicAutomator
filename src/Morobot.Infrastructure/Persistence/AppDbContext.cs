@@ -20,6 +20,7 @@ public class AppDbContext : DbContext
     public DbSet<ProcessDataSource> ProcessDataSources => Set<ProcessDataSource>();
     public DbSet<DeviceSession> DeviceSessions => Set<DeviceSession>();
     public DbSet<AppEventLog> EventLogs => Set<AppEventLog>();
+    public DbSet<ServerMetricsSample> ServerMetricsSamples => Set<ServerMetricsSample>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<DeploymentAnchor> DeploymentAnchors => Set<DeploymentAnchor>();
     public DbSet<DeploymentTrialRecord> DeploymentTrialRecords => Set<DeploymentTrialRecord>();
@@ -68,6 +69,14 @@ public class AppDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ServerMetricsSample>(e =>
+        {
+            e.ToTable("ServerMetricsSamples");
+            // The dashboard always reads a TIME RANGE, newest first, and the pruner deletes by age —
+            // both are served by the same index.
+            e.HasIndex(x => x.CapturedAtUtc);
         });
 
         modelBuilder.Entity<Plan>(e =>

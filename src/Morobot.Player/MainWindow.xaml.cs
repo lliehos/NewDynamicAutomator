@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Input;
 using Morobot.Player.Models;
 using Morobot.Player.Services;
 
@@ -268,6 +269,29 @@ public partial class MainWindow : Window
         });
         await _updateListener.StartAsync();
     }
+
+    /// <summary>
+    /// Drag the borderless window by its own title bar.
+    /// </summary>
+    /// <remarks>
+    /// WindowChrome is configured with CaptionHeight=0 on purpose (a non-zero caption height would
+    /// make WPF treat the bar as system chrome and re-introduce the very hit-testing behaviour we
+    /// are replacing). The cost is that dragging has to be wired up by hand.
+    /// </remarks>
+    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // Double-click the bar to maximise, matching every other Windows app. Restore from maximised
+        // is deliberately not a double-click toggle on the same place only — the standard behaviour
+        // is what users expect, so it is mirrored rather than invented.
+        if (e.ClickCount == 2)
+        {
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+            return;
+        }
+        try { DragMove(); } catch { /* the mouse was released mid-drag; nothing to do */ }
+    }
+
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
     private void Logout_Click(object sender, RoutedEventArgs e)
     {

@@ -49,6 +49,7 @@ public static class DependencyInjection
         services.AddScoped<ILdapAuthenticator, LdapAuthenticator>();
         services.AddScoped<EntitlementService>();
         services.AddScoped<EventLogService>();
+        services.AddScoped<MonitoringService>();
         services.AddScoped<SystemSettingsService>();
         services.AddScoped<DiagramSettingsService>();
         services.AddScoped<TaskService>();

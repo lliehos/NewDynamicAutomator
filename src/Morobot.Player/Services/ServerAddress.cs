@@ -11,8 +11,7 @@ namespace Morobot.Player.Services;
 /// product already knows.
 ///
 /// The fallback order is deliberate: the signed URL first, then the host lock a licence may carry
-/// instead, and only then a same-machine development address, so a developer can still run the pair
-/// locally without signing a licence.
+/// instead. There is NO same-machine guess in a shipped build — see <see cref="Resolve"/>.
 /// </remarks>
 public static class ServerAddress
 {
@@ -21,7 +20,7 @@ public static class ServerAddress
     /// <summary>The resolved base URL, or null when the licence carried none.</summary>
     public static string? BaseUrl => _baseUrl;
 
-    /// <summary>Whether a real address was found (as opposed to the development fallback).</summary>
+    /// <summary>Whether a real address was found (as opposed to no address at all).</summary>
     public static bool IsFromLicense { get; private set; }
 
     public static void Reset()
@@ -53,9 +52,15 @@ public static class ServerAddress
             return;
         }
 
-        // No licence information at all: fall back to the local pair, which is what running the
-        // server and the player on one development machine looks like.
-        _baseUrl = "http://localhost:5000";
+        // Nothing usable in the licence. Do NOT guess http://localhost:5000 here: that did not
+        // "keep the app usable", it made a correctly-installed client silently dial the end user's
+        // own machine, where nothing is listening — so the symptom was an unreachable server with a
+        // plausible-looking address in the box, which reads as a server outage rather than a missing
+        // licence. Leaving it null lets the window say "no server address in this licence" and the
+        // user can act on it. A developer running the pair locally can set Morobot__DevServerUrl in
+        // the environment instead of relying on a shipped default.
+        _baseUrl = Environment.GetEnvironmentVariable("MOROBOT_PLAYER_SERVER_URL")?.Trim().TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(_baseUrl)) _baseUrl = null;
         IsFromLicense = false;
     }
 }

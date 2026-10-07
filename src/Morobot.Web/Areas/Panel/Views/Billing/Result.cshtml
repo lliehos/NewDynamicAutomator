@@ -4,6 +4,8 @@
     var warning = ViewBag.Warning as string;
     var error = ViewBag.Error as string;
     var orderId = ViewBag.OrderId;
+    var canDownload = ViewBag.CanDownloadLicense is true;
+    var isLicenseOrder = ViewBag.IsLicenseOrder is true;
 }
 
 <div class="da-home">
@@ -31,7 +33,7 @@
         }
         <div class="d-flex gap-2 justify-content-center mt-3">
           <a class="btn btn-primary" asp-area="Panel" asp-controller="Billing" asp-action="History">@L["billing.history.heading"]</a>
-          @if (orderId is not null)
+          @if (isLicenseOrder && orderId is not null && canDownload)
           {
             <a class="btn btn-label-secondary"
                asp-area="Panel" asp-controller="Billing" asp-action="DownloadLicense" asp-route-orderId="@orderId">
@@ -39,6 +41,12 @@
             </a>
           }
         </div>
+        @if (isLicenseOrder && !canDownload)
+        {
+          @* The customer paid for a licence the storefront cannot sign yet (no issuing key). Saying so
+             here — and pointing at support — is better than a button that fails on click. *@
+          <div class="alert alert-info small text-start mt-3">@L["billing.result.licenseNotIssuable"]</div>
+        }
       }
     </div>
   </div>

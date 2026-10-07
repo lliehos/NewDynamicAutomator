@@ -157,6 +157,8 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<ExtensionSyncServi
 builder.Services.AddSingleton<DesktopSyncService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DesktopSyncService>());
 builder.Services.AddHostedService<UpdateNotifyBackgroundService>();
+// Writes one server-metrics sample a minute so the monitoring dashboard has a time range to show.
+builder.Services.AddHostedService<MetricsSamplerService>();
 
 var app = builder.Build();
 
@@ -214,6 +216,11 @@ var app = builder.Build();
 // The certificate's presence is the signal, and the log line records which way the decision went —
 // otherwise "no HSTS header" is invisible.
 var https = HasHttpsEndpoint(app.Configuration);
+
+// First in the pipeline on purpose: this counts the bytes of EVERY request and response, including
+// static files and the error path, so the monitoring dashboard's bandwidth figure covers all the load
+// this app puts on the network rather than only the controller half of it.
+app.UseMiddleware<Morobot.Web.Middleware.TrafficMeterMiddleware>();
 
 if (!app.Environment.IsDevelopment())
 {

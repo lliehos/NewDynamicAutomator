@@ -23,5 +23,17 @@ public enum UserRole
     /// </summary>
     ProcessManager = 1,
 
-    Admin = 2
+    Admin = 2,
+
+    /// <summary>
+    /// Read-only oversight of how the server and its users are actually being used: the monitoring
+    /// dashboard, live sessions, and the activity/error feed. It is deliberately ABOVE
+    /// <see cref="Admin"/> in the enum only so that "Admin or higher" checks keep working unchanged;
+    /// it is NOT a permission to change anything. A Monitor operator is the person who watches
+    /// capacity and behaviour, and they need no ability to edit users, plans or processes to do it —
+    /// so every admin surface stays gated on <see cref="Admin"/> exactly, and only the monitoring
+    /// pages accept this role. Stored as an int, so promoting it needs the same care as
+    /// <c>AddProcessManagerRole</c> did.
+    /// </summary>
+    Monitor = 3
 }

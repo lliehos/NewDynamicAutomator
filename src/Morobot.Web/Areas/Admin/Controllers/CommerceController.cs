@@ -27,16 +27,18 @@ public class CommerceController : Controller
     private readonly AppDbContext _db;
     private readonly PricingService _pricing;
     private readonly LicenseService _license;
+    private readonly EventLogService _events;
 
-    public CommerceController(AppDbContext db, PricingService pricing, LicenseService license)
+    public CommerceController(AppDbContext db, PricingService pricing, LicenseService license, EventLogService events)
     {
         _db = db;
         _pricing = pricing;
         _license = license;
+        _events = events;
     }
 
     [HttpGet]
-    public async Task<IActionResult> Index(CancellationToken ct)
+    public async Task<IActionResult> Index(int? edit, CancellationToken ct)
     {
         var runtime = await _license.GetRuntimeStateAsync(ct);
         ViewBag.CommerceAllowed = runtime.AllowsCommerce;
@@ -48,8 +50,14 @@ public class CommerceController : Controller
         // How many rows are still pinned to a different deployment instance, i.e. would be invisible
         // after a move. Surfaced so an operator can see and fix it instead of only reading about it.
         ViewBag.UnboundUsers = await _db.Users.CountAsync(u => u.DeploymentInstanceId == null, ct);
-        ViewBag.Options = await _db.SoftwarePackageOptions.OrderBy(o => o.SortOrder).ToListAsync(ct);
+        // Every option, including the inactive ones: the admin page is where an operator re-enables a
+        // key they retired, so filtering to active-only (as the buyer-facing list does) would hide the
+        // very rows this page exists to manage.
+        ViewBag.Options = await _db.SoftwarePackageOptions
+            .OrderBy(o => o.SortOrder).ThenBy(o => o.Id).ToListAsync(ct);
         ViewBag.LicensePricing = await _pricing.GetLicensePricingAsync(ct);
+        // Which key the inline form should open pre-filled for editing.
+        ViewBag.EditingId = edit;
         return View();
     }
 
@@ -74,6 +82,14 @@ public class CommerceController : Controller
     }
 
     /// <summary>Add or update one package option.</summary>
+    /// <remarks>
+    /// The posted <see cref="SoftwarePackageOption.Id"/> decides insert vs update, NOT the key. Keying
+    /// on the key meant an operator could only ever edit the row whose key they retyped, and renaming
+    /// a key silently created a second row instead of changing the first — which is exactly what the
+    /// per-key edit button must not do. Key stays immutable after creation because past orders carry
+    /// their own terms snapshot, so changing it would decouple history from any future pricing of the
+    /// same feature.
+    /// </remarks>
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SaveOption(SoftwarePackageOption model, CancellationToken ct)
@@ -84,16 +100,14 @@ public class CommerceController : Controller
             return RedirectToAction(nameof(Index));
         }
 
-        var existing = await _db.SoftwarePackageOptions
-            .FirstOrDefaultAsync(o => o.Key == model.Key, ct);
-        if (existing is null)
+        if (model.Id > 0)
         {
-            model.Key = model.Key.Trim();
-            model.UpdatedAtUtc = DateTime.UtcNow;
-            _db.SoftwarePackageOptions.Add(model);
-        }
-        else
-        {
+            var existing = await _db.SoftwarePackageOptions.FirstOrDefaultAsync(o => o.Id == model.Id, ct);
+            if (existing is null)
+            {
+                TempData["CommerceError"] = "این کلید پیدا نشد.";
+                return RedirectToAction(nameof(Index));
+            }
             existing.Title = model.Title;
             existing.Description = model.Description;
             existing.Kind = model.Kind;
@@ -106,12 +120,38 @@ public class CommerceController : Controller
             existing.IsActive = model.IsActive;
             existing.SortOrder = model.SortOrder;
             existing.UpdatedAtUtc = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            TempData["CommerceOk"] = "کلید به‌روزرسانی شد.";
+            return RedirectToAction(nameof(Index));
         }
+
+        var key = model.Key.Trim();
+        if (await _db.SoftwarePackageOptions.AnyAsync(o => o.Key == key, ct))
+        {
+            TempData["CommerceError"] = $"کلید «{key}» از قبل وجود دارد.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        model.Id = 0;
+        model.Key = key;
+        model.UpdatedAtUtc = DateTime.UtcNow;
+        _db.SoftwarePackageOptions.Add(model);
         await _db.SaveChangesAsync(ct);
-        TempData["CommerceOk"] = "گزینه ذخیره شد.";
+        TempData["CommerceOk"] = "کلید اضافه شد.";
         return RedirectToAction(nameof(Index));
     }
 
+    /// <summary>
+    /// Hard-delete a package option.
+    /// </summary>
+    /// <remarks>
+    /// A real delete, not a soft retire: the operator asked to remove the key, and leaving a row
+    /// behind that the buyer never sees only makes the admin list lie about what exists. It is safe
+    /// because an order stores its own terms JSON — the price and feature set a customer paid for are
+    /// snapshotted on the ORDER, not looked up from this table — so removing a key cannot rewrite
+    /// history. (Deactivation is still available and is the right choice for "stop selling this": it
+    /// keeps the row visible here for a later re-enable.)
+    /// </remarks>
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> DeleteOption(int id, CancellationToken ct)
@@ -119,13 +159,12 @@ public class CommerceController : Controller
         var row = await _db.SoftwarePackageOptions.FirstOrDefaultAsync(o => o.Id == id, ct);
         if (row is not null)
         {
-            // Deactivated rather than deleted: an order's terms reference the option key, and a
-            // deleted row would make past orders unreadable in the history.
-            row.IsActive = false;
-            row.UpdatedAtUtc = DateTime.UtcNow;
+            _db.SoftwarePackageOptions.Remove(row);
             await _db.SaveChangesAsync(ct);
+            await _events.LogAsync("Audit", "System", "PackageOptionDeleted",
+                $"Admin deleted package pricing key '{row.Key}'", userName: User.Identity?.Name, ct: ct);
         }
-        TempData["CommerceOk"] = "گزینه غیرفعال شد.";
+        TempData["CommerceOk"] = "کلید حذف شد.";
         return RedirectToAction(nameof(Index));
     }
 

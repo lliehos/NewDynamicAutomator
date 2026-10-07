@@ -24,7 +24,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\morobot-icon.png" />
+    <!-- The source image is a JPEG (it was misnamed .png, which WPF tolerated but the shell icon
+         builder did not). The .ico is a real 4-frame 32bpp icon generated from it. -->
+    <Resource Include="Assets\morobot-icon.jpg" />
     <Resource Include="Assets\morobot-icon.ico" />
   </ItemGroup>
 

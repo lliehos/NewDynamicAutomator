@@ -1,0 +1,452 @@
+@model Morobot.Web.Areas.Admin.Models.MonitoringViewModel
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = L["admin.monitoring.title"];
+  var s = Model.Snapshot;
+
+  // Byte sizes in the unit a person reads at a glance. One helper so every figure on the page
+  // rounds the same way.
+  string Bytes(long value)
+  {
+    if (value <= 0) return "—";
+    string[] units = { "B", "KB", "MB", "GB", "TB" };
+    double v = value; var u = 0;
+    while (v >= 1024 && u < units.Length - 1) { v /= 1024; u++; }
+    return $"{v:0.#} {units[u]}";
+  }
+
+  // A rate reads better with an explicit "/s" and one decimal; "0" only when genuinely idle.
+  string Rate(double perSec) => perSec <= 0 ? "0 B/s" : $"{Bytes((long)perSec)}/s";
+
+  string Uptime(TimeSpan t)
+  {
+    if (t <= TimeSpan.Zero) return "—";
+    if (t.TotalDays >= 1) return $"{(int)t.TotalDays} روز {t.Hours} ساعت";
+    if (t.TotalHours >= 1) return $"{(int)t.TotalHours} ساعت {t.Minutes} دقیقه";
+    return $"{(int)t.TotalMinutes} دقیقه";
+  }
+
+  var hostMemKnown = s.TotalPhysicalBytes > 0 && s.AvailablePhysicalBytes > 0;
+  var hostMemUsedPct = hostMemKnown
+      ? Math.Clamp(100.0 * (s.TotalPhysicalBytes - s.AvailablePhysicalBytes) / s.TotalPhysicalBytes, 0, 100)
+      : 0;
+
+  // The history window the user picked, echoed into the range buttons and the empty-state message.
+  var hours = s.WindowHours;
+  var maxNet = s.History.Count > 0 ? Math.Max(1, s.History.Max(p => p.BytesIn + p.BytesOut)) : 1;
+  var maxDisk = s.History.Count > 0 ? Math.Max(1, s.History.Max(p => p.DiskRead + p.DiskWrite)) : 1;
+
+  var maxUserLoad = s.ByUser.Count > 0 ? Math.Max(1, s.ByUser.Max(u => u.Events + u.Plays)) : 1;
+  var maxIpLoad = s.ByIp.Count > 0 ? Math.Max(1, s.ByIp.Max(u => u.Events + u.Plays)) : 1;
+  var maxProcLoad = s.ByProcess.Count > 0 ? Math.Max(1, s.ByProcess.Max(u => u.Plays)) : 1;
+  var maxSrcRows = s.BySource.Count > 0 ? Math.Max(1, s.BySource.Max(u => u.Rows)) : 1;
+
+  string Pct(double v, double max) => (max <= 0 ? 0 : Math.Clamp(100.0 * v / max, 0, 100)).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+  var isFa = Model.IsRtl;
+}
+
+@* The chosen window is echoed to the page so the poll below reads the same range the user picked. *@
+<script>document.body.setAttribute("data-mon-hours", "@hours");</script>
+
+<p class="admin-dash-intro">@L["admin.monitoring.intro"]</p>
+
+@* ---- The two headline numbers: network first, then disk ---- *@
+<section class="admin-mon-hero">
+  <article class="admin-mon-hero-card is-net">
+    <div class="admin-mon-hero-head">
+      <i class="ti ti-network" aria-hidden="true"></i>
+      <span>@L["admin.monitoring.network"]</span>
+    </div>
+    <div class="admin-mon-hero-main">
+      <b data-mon="netIn">@Rate(s.NetworkInPerSec)</b>
+      <span class="admin-mon-hero-sub">@L["admin.monitoring.inbound"]</span>
+    </div>
+    <div class="admin-mon-hero-main is-alt">
+      <b data-mon="netOut">@Rate(s.NetworkOutPerSec)</b>
+      <span class="admin-mon-hero-sub">@L["admin.monitoring.outbound"]</span>
+    </div>
+    <div class="admin-mon-hero-foot">
+      @L["admin.monitoring.totalSince"]:
+      <b data-mon="netTotal">@Bytes(s.NetworkReceivedBytes + s.NetworkSentBytes)</b>
+    </div>
+  </article>
+
+  <article class="admin-mon-hero-card is-disk">
+    <div class="admin-mon-hero-head">
+      <i class="ti ti-device-desktop-analytics" aria-hidden="true"></i>
+      <span>@L["admin.monitoring.disk"]</span>
+    </div>
+    <div class="admin-mon-hero-main">
+      <b data-mon="diskRead">@Rate(s.DiskReadPerSec)</b>
+      <span class="admin-mon-hero-sub">@L["admin.monitoring.read"]</span>
+    </div>
+    <div class="admin-mon-hero-main is-alt">
+      <b data-mon="diskWrite">@Rate(s.DiskWritePerSec)</b>
+      <span class="admin-mon-hero-sub">@L["admin.monitoring.write"]</span>
+    </div>
+    <div class="admin-mon-hero-foot">
+      @L["admin.monitoring.totalSince"]:
+      <b data-mon="diskTotal">@Bytes(s.DiskReadBytes + s.DiskWriteBytes)</b>
+    </div>
+  </article>
+
+  <article class="admin-mon-hero-card is-load">
+    <div class="admin-mon-hero-head">
+      <i class="ti ti-activity" aria-hidden="true"></i>
+      <span>@L["admin.monitoring.load"]</span>
+    </div>
+    <div class="admin-mon-hero-main">
+      <b data-mon="liveSessions">@s.LiveSessions</b>
+      <span class="admin-mon-hero-sub">@L["admin.monitoring.liveSessions"]</span>
+    </div>
+    <div class="admin-mon-hero-main is-alt">
+      <b data-mon="onlineUsers">@s.OnlineUsers</b>
+      <span class="admin-mon-hero-sub">@L["admin.monitoring.onlineUsers"]</span>
+    </div>
+    <div class="admin-mon-hero-foot">
+      @L["admin.monitoring.ipsSeen"]: <b data-mon="distinctIps">@s.DistinctIpCount</b>
+      · @L["admin.monitoring.plays24hShort"]: <b data-mon="plays24h">@s.Plays24h</b>
+    </div>
+  </article>
+</section>
+
+@* ---- Window selector: drives history AND the breakdown counts ---- *@
+<section class="admin-mon-range">
+  <span class="admin-field-hint">@L["admin.monitoring.window"]</span>
+  <div class="admin-mon-range-btns" role="group" aria-label="@L["admin.monitoring.window"]">
+    @foreach (var h in new[] { 1, 6, 24, 24 * 7, 24 * 14 })
+    {
+      var label = h == 1 ? L["admin.monitoring.h1"]
+                 : h == 6 ? L["admin.monitoring.h6"]
+                 : h == 24 ? L["admin.monitoring.h24"]
+                 : h == 24 * 7 ? L["admin.monitoring.d7"]
+                 : L["admin.monitoring.d14"];
+      <a class="admin-mon-range-btn @(hours == h ? "is-active" : null)"
+         asp-action="Index" asp-route-hours="@h">@label</a>
+    }
+  </div>
+  @if (!s.DatabaseReachable)
+  {
+    <span class="admin-mon-range-state is-bad">@L["admin.monitoring.dbDown"]</span>
+  }
+  else
+  {
+    <span class="admin-mon-range-state">
+      @L["admin.monitoring.dbPingShort"]: <b data-mon="dbPing">@s.DatabasePingMs.ToString("0.#") ms</b>
+    </span>
+  }
+</section>
+
+@* ---- History: network + disk over the chosen window ---- *@
+<section class="admin-dash-section">
+  <div class="admin-dash-section-head">
+    <h2><i class="ti ti-chart-histogram" aria-hidden="true"></i>@L["admin.monitoring.history"]</h2>
+    <span class="admin-field-hint">
+      @L.T("admin.monitoring.historyHint", ("n", hours.ToString()))
+    </span>
+  </div>
+
+  @if (s.History.Count == 0)
+  {
+    @* An empty chart is explained rather than drawn as a flat line, because a flat line reads as
+       "idle" when the truth is "no samples yet". *@
+    <div class="admin-mon-empty">
+      <i class="ti ti-clock-hour-4" aria-hidden="true"></i>
+      <div>@L["admin.monitoring.noHistory"]</div>
+    </div>
+  }
+  else
+  {
+    <div class="admin-mon-legend">
+      <span class="admin-mon-legend-item is-in"><i></i>@L["admin.monitoring.inbound"]</span>
+      <span class="admin-mon-legend-item is-out"><i></i>@L["admin.monitoring.outbound"]</span>
+    </div>
+    <div class="admin-mon-chart" aria-hidden="true">
+      @foreach (var p in s.History)
+      {
+        var netInH = Pct(p.BytesIn, maxNet);
+        var netOutH = Pct(p.BytesOut, maxNet);
+        @* Two stacked bars per sample: inbound over outbound, so the pair reads as one traffic
+           column while keeping the two directions distinguishable. *@
+        <div class="admin-mon-chart-col" title="@p.AtUtc.ToString("MM-dd HH:mm") — ↓@Bytes(p.BytesIn) ↑@Bytes(p.BytesOut)">
+          <span class="admin-mon-chart-in" style="height:@netInH%"></span>
+          <span class="admin-mon-chart-out" style="height:@netOutH%"></span>
+        </div>
+      }
+    </div>
+
+    <div class="admin-mon-legend mt-3">
+      <span class="admin-mon-legend-item is-in">@L["admin.monitoring.read"]</span>
+      <span class="admin-mon-legend-item is-out">@L["admin.monitoring.write"]</span>
+    </div>
+    <div class="admin-mon-chart">
+      @foreach (var p in s.History)
+      {
+        <div class="admin-mon-chart-col" title="@p.AtUtc.ToString("MM-dd HH:mm") — R:@Bytes(p.DiskRead) W:@Bytes(p.DiskWrite)">
+          <span class="admin-mon-chart-in" style="height:@Pct(p.DiskRead, maxDisk)%"></span>
+          <span class="admin-mon-chart-out" style="height:@Pct(p.DiskWrite, maxDisk)%"></span>
+        </div>
+      }
+    </div>
+  }
+</section>
+
+@* ---- Breakdown #1: USER ---- *@
+<section class="admin-dash-section">
+  <div class="admin-dash-section-head">
+    <h2><i class="ti ti-users" aria-hidden="true"></i>@L["admin.monitoring.byUser"]</h2>
+    <span class="admin-field-hint">@L["admin.monitoring.byUserHint"]</span>
+  </div>
+
+  @if (s.ByUser.Count == 0)
+  {
+    <p class="admin-field-hint">@L["admin.monitoring.noUsers"]</p>
+  }
+  else
+  {
+    <div class="admin-mon-table-wrap">
+      <table class="admin-mon-table">
+        <thead>
+          <tr>
+            <th>@L["admin.monitoring.user"]</th>
+            <th>@L["admin.monitoring.ip"]</th>
+            <th>@L["admin.monitoring.load"]</th>
+            <th>@L["admin.monitoring.processes"]</th>
+            <th>@L["admin.monitoring.sources"]</th>
+            <th>@L["admin.monitoring.plays24hShort"]</th>
+            <th>@L["admin.monitoring.lastSeen"]</th>
+          </tr>
+        </thead>
+        <tbody>
+          @foreach (var u in s.ByUser)
+          {
+            <tr class="@(u.IsOnline ? "is-online" : null)">
+              <td>
+                <span class="admin-mon-dot @(u.IsOnline ? "is-on" : null)" aria-hidden="true"></span>
+                <b>@u.Label</b>
+              </td>
+              <td class="admin-mon-ltr">@u.Sub</td>
+              <td class="admin-mon-bar-cell">
+                <span class="admin-mon-mini"><i style="width:@Pct(u.Events + u.Plays, maxUserLoad)%"></i></span>
+                <span class="admin-mon-num">@(u.Events + u.Plays)</span>
+              </td>
+              <td>@u.Processes</td>
+              <td>@u.Sources</td>
+              <td>@u.Plays</td>
+              <td class="admin-mon-nowrap">
+                @(u.LastSeenUtc is null ? "—" : u.LastSeenUtc.Value.ToLocalTime().ToString("MM-dd HH:mm"))
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
+
+@* ---- Breakdown #2: IP (the direct network-load answer) ---- *@
+<section class="admin-dash-section">
+  <div class="admin-dash-section-head">
+    <h2><i class="ti ti-world-www" aria-hidden="true"></i>@L["admin.monitoring.byIp"]</h2>
+    <span class="admin-field-hint">@L["admin.monitoring.byIpHint"]</span>
+  </div>
+
+  @if (s.ByIp.Count == 0)
+  {
+    <p class="admin-field-hint">@L["admin.monitoring.noIps"]</p>
+  }
+  else
+  {
+    <div class="admin-mon-table-wrap">
+      <table class="admin-mon-table">
+        <thead>
+          <tr>
+            <th>@L["admin.monitoring.ip"]</th>
+            <th>@L["admin.monitoring.usedBy"]</th>
+            <th>@L["admin.monitoring.load"]</th>
+            <th>@L["admin.monitoring.plays24hShort"]</th>
+            <th>@L["admin.monitoring.lastSeen"]</th>
+          </tr>
+        </thead>
+        <tbody>
+          @foreach (var ip in s.ByIp)
+          {
+            <tr class="@(ip.IsOnline ? "is-online" : null)">
+              <td class="admin-mon-ltr">
+                <span class="admin-mon-dot @(ip.IsOnline ? "is-on" : null)" aria-hidden="true"></span>
+                <b>@ip.Label</b>
+              </td>
+              <td>@ip.Sub</td>
+              <td class="admin-mon-bar-cell">
+                <span class="admin-mon-mini"><i style="width:@Pct(ip.Events + ip.Plays, maxIpLoad)%"></i></span>
+                <span class="admin-mon-num">@(ip.Events + ip.Plays)</span>
+              </td>
+              <td>@ip.Plays</td>
+              <td class="admin-mon-nowrap">
+                @(ip.LastSeenUtc is null ? "—" : ip.LastSeenUtc.Value.ToLocalTime().ToString("MM-dd HH:mm"))
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
+
+<div class="admin-dash-grid">
+  <div>
+    @* ---- Breakdown #3: process ---- *@
+    <section class="admin-dash-section">
+      <div class="admin-dash-section-head">
+        <h2><i class="ti ti-git-branch" aria-hidden="true"></i>@L["admin.monitoring.byProcess"]</h2>
+      </div>
+      @if (s.ByProcess.Count == 0)
+      {
+        <p class="admin-field-hint">@L["admin.monitoring.noProcesses"]</p>
+      }
+      else
+      {
+        <div class="admin-mon-table-wrap">
+          <table class="admin-mon-table">
+            <thead>
+              <tr>
+                <th>@L["admin.monitoring.process"]</th>
+                <th>@L["admin.monitoring.owner"]</th>
+                <th>@L["admin.monitoring.plays24hShort"]</th>
+                <th>@L["admin.monitoring.sources"]</th>
+              </tr>
+            </thead>
+            <tbody>
+              @foreach (var p in s.ByProcess.Take(15))
+              {
+                <tr>
+                  <td>@p.Label</td>
+                  <td class="admin-mon-ltr">@p.Sub</td>
+                  <td class="admin-mon-bar-cell">
+                    <span class="admin-mon-mini"><i style="width:@Pct(p.Plays, maxProcLoad)%"></i></span>
+                    <span class="admin-mon-num">@p.Plays</span>
+                  </td>
+                  <td>@p.Sources</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+  </div>
+
+  <div>
+    @* ---- Breakdown #4: data source ---- *@
+    <section class="admin-dash-section">
+      <div class="admin-dash-section-head">
+        <h2><i class="ti ti-database" aria-hidden="true"></i>@L["admin.monitoring.bySource"]</h2>
+      </div>
+      @if (s.BySource.Count == 0)
+      {
+        <p class="admin-field-hint">@L["admin.monitoring.noSources"]</p>
+      }
+      else
+      {
+        <div class="admin-mon-table-wrap">
+          <table class="admin-mon-table">
+            <thead>
+              <tr>
+                <th>@L["admin.monitoring.source"]</th>
+                <th>@L["admin.monitoring.rows"]</th>
+                <th>@L["admin.monitoring.cols"]</th>
+                <th>@L["admin.monitoring.usedByProcesses"]</th>
+              </tr>
+            </thead>
+            <tbody>
+              @foreach (var d in s.BySource.Take(15))
+              {
+                <tr>
+                  <td>
+                    @d.Label
+                    <div class="admin-field-hint">@d.Sub</div>
+                  </td>
+                  <td class="admin-mon-bar-cell">
+                    <span class="admin-mon-mini"><i style="width:@Pct(d.Rows, maxSrcRows)%"></i></span>
+                    <span class="admin-mon-num">@d.Rows.ToString("N0")</span>
+                  </td>
+                  <td>@d.Sources</td>
+                  <td>@d.Processes</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+  </div>
+</div>
+
+@* ---- Other resources (deliberately last: the owner asked for them after net + disk) ---- *@
+<section class="admin-dash-section">
+  <div class="admin-dash-section-head">
+    <h2><i class="ti ti-cpu" aria-hidden="true"></i>@L["admin.monitoring.otherResources"]</h2>
+    <span class="admin-field-hint">@L["admin.monitoring.resourcesHint"]</span>
+  </div>
+  <div class="admin-mon-meters">
+    <div class="admin-mon-meter">
+      <div class="admin-mon-meter-top">
+        <span>@L["admin.monitoring.processMemory"]</span>
+        <b data-mon="workingSet">@Bytes(s.ProcessWorkingSetBytes)</b>
+      </div>
+      <div class="admin-mon-meter-bar">
+        <span style="width:@(s.TotalPhysicalBytes > 0 ? Pct(s.ProcessWorkingSetBytes, s.TotalPhysicalBytes) : "0")%"></span>
+      </div>
+      <div class="admin-mon-meter-sub">
+        @L["admin.monitoring.private"]: <b data-mon="privateBytes">@Bytes(s.ProcessPrivateBytes)</b>
+      </div>
+    </div>
+
+    <div class="admin-mon-meter">
+      <div class="admin-mon-meter-top">
+        <span>@L["admin.monitoring.managedHeap"]</span>
+        <b data-mon="managedHeap">@Bytes(s.ManagedHeapBytes)</b>
+      </div>
+      <div class="admin-mon-meter-bar">
+        <span style="width:@(s.ProcessPrivateBytes > 0 ? Pct(s.ManagedHeapBytes, s.ProcessPrivateBytes) : "0")%"></span>
+      </div>
+      <div class="admin-mon-meter-sub">
+        GC2: <b data-mon="gen2">@s.Gen2Collections</b> · @L["admin.monitoring.threads"]: <b data-mon="threads">@s.ThreadCount</b>
+      </div>
+    </div>
+
+    @if (hostMemKnown)
+    {
+      <div class="admin-mon-meter">
+        <div class="admin-mon-meter-top">
+          <span>@L["admin.monitoring.hostMemory"]</span>
+          <b>@hostMemUsedPct.ToString("0.#")%</b>
+        </div>
+        <div class="admin-mon-meter-bar @(hostMemUsedPct >= 90 ? "is-danger" : hostMemUsedPct >= 75 ? "is-warn" : null)">
+          <span style="width:@hostMemUsedPct.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%"></span>
+        </div>
+        <div class="admin-mon-meter-sub">
+          @L["admin.monitoring.free"]: <b data-mon="availMem">@Bytes(s.AvailablePhysicalBytes)</b> / @Bytes(s.TotalPhysicalBytes)
+        </div>
+      </div>
+    }
+
+    <div class="admin-mon-meter">
+      <div class="admin-mon-meter-top">
+        <span>@L["admin.monitoring.uptime"]</span>
+        <b data-mon="uptime">@Uptime(s.ProcessUptime)</b>
+      </div>
+      <div class="admin-mon-meter-sub">
+        @L["admin.monitoring.logicalProcessors"]: <b data-mon="cpus">@s.LogicalProcessors</b>
+        · @L["admin.monitoring.processorSeconds"]: <b data-mon="cpuSeconds">@s.ProcessorSeconds.ToString("0")</b> s
+      </div>
+    </div>
+  </div>
+</section>
+
+<p class="admin-field-hint admin-mon-stamp">
+  @L["admin.monitoring.capturedAt"]: <span data-mon="capturedAt">@s.CapturedAtUtc.ToString("yyyy-MM-dd HH:mm:ss") UTC</span>
+  <span class="admin-mon-refresh">@L["admin.monitoring.autoRefresh"]</span>
+</p>
+
+<script src="~/js/admin-monitoring.js" asp-append-version="true"></script>

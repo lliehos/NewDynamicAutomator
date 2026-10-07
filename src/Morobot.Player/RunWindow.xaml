@@ -6,7 +6,7 @@
         Height="580" Width="800" MinHeight="440" MinWidth="620"
         FlowDirection="RightToLeft"
         WindowStartupLocation="CenterOwner"
-        Icon="pack://application:,,,/Assets/morobot-icon.png">
+        Icon="pack://application:,,,/Assets/morobot-icon.jpg">
   <Grid Margin="14">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>

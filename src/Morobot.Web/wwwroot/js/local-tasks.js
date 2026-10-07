@@ -2061,7 +2061,13 @@ function dataSourceSafeFileName(ds) {
             || Boolean(o.templateBehind) !== Boolean(n.templateBehind)
             // The mother flag drives the chip's badge and hides its detach button, so a row that
             // only gains/loses "source" status must still be re-rendered.
-            || Boolean(o.isTemplateSource) !== Boolean(n.isTemplateSource);
+            || Boolean(o.isTemplateSource) !== Boolean(n.isTemplateSource)
+            // Client-local run mode. It has no server column, so nothing else in this comparison
+            // notices when it changes; omitting it meant the local write was skipped and the next
+            // render rebuilt the row from the API with the default (ON) — the switch that "would
+            // not turn off".
+            || Boolean(o.runOnServer) !== Boolean(n.runOnServer)
+            || Boolean(o.localRunPendingSync) !== Boolean(n.localRunPendingSync);
         });
       // Silent write: avoid writeTasks → da-local-tasks → render → writeTasks loop.
       if (changed) writeTasks(toStore, { silent: true });
@@ -2362,8 +2368,19 @@ function dataSourceSafeFileName(ds) {
 
   /** List API has no canvas body — metadata only; canvas lives on server and in extension cache after explicit sync. */
   function mergeServerTasksWithLocal(serverRows) {
+    // runOnServer (and the pending-sync flag) are CLIENT-LOCAL: the server has no such column and
+    // never sends them. Rebuilding each row from the API response alone therefore dropped them and
+    // normalizeTask's default (runOnServer !== false ⇒ true) put the switch back ON — which is
+    // exactly the bug where turning the switch off showed "از این پس روی سیستم خودتان" and then the
+    // switch snapped back on. Carry the local values across the merge by id.
+    const localById = new Map(readTasks().map((t) => [String(t.id), t]));
     return (serverRows || []).map((row) => {
-      const next = normalizeTask(row);
+      const prev = localById.get(String(row.id));
+      const next = normalizeTask({
+        ...row,
+        runOnServer: prev ? prev.runOnServer : row.runOnServer,
+        localRunPendingSync: prev ? prev.localRunPendingSync : row.localRunPendingSync
+      });
       delete next.graph;
       return next;
     });

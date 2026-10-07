@@ -1894,6 +1894,424 @@ a.admin-chip.is-active {
   border-style: dashed;
 }
 .admin-settings-ro:focus { box-shadow: none; border-color: rgba(226, 232, 240, .9); }
+
+/* ============================================================================
+   Monitoring dashboard
+   Reuses the dashboard's stat tiles and cards so it reads as the same product;
+   only what is genuinely new (meters, hour bars, dense tables) is defined here.
+   ============================================================================ */
+
+/* A tile that warns/critical, matching the .is-live convention the dashboard uses. */
+.admin-dash-stat.is-warn b { color: #d97706; }
+.admin-dash-stat.is-danger b { color: #dc2626; }
+/* "active/total" — the denominator is deliberately quieter than the figure. */
+.admin-mon-of { font-size: .95rem; font-weight: 600; color: #94a3b8; }
+
+.admin-alert.danger {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+.admin-alert.danger .ti { margin-inline-end: .5rem; vertical-align: -2px; }
+
+/* ---- Meters ---- */
+.admin-mon-meters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem 1.5rem;
+}
+@media (max-width: 720px) {
+  .admin-mon-meters { grid-template-columns: minmax(0, 1fr); }
+}
+.admin-mon-meter-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: .75rem;
+  font-size: .9rem;
+  margin-bottom: .35rem;
+}
+.admin-mon-meter-top b { font-weight: 700; color: #1e293b; }
+.admin-mon-meter-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #eef1f6;
+  overflow: hidden;
+}
+.admin-mon-meter-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #7d71f5, #5b4fd6);
+  transition: width .4s ease;
+}
+.admin-mon-meter-bar.is-warn > span { background: linear-gradient(90deg, #fbbf24, #d97706); }
+.admin-mon-meter-bar.is-danger > span { background: linear-gradient(90deg, #f87171, #dc2626); }
+.admin-mon-meter-sub {
+  margin-top: .35rem;
+  font-size: .78rem;
+  color: #64748b;
+}
+.admin-mon-meter-sub b { color: #334155; }
+
+/* ---- Hour bars ---- */
+.admin-mon-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 96px;
+  padding-top: .25rem;
+}
+.admin-mon-bar {
+  flex: 1 1 0;
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  background: #f1f5f9;
+  border-radius: 4px 4px 0 0;
+  overflow: hidden;
+}
+.admin-mon-bar > span {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  background: linear-gradient(180deg, #8b80f7, #5b4fd6);
+  border-radius: 4px 4px 0 0;
+}
+
+/* ---- Dense tables ---- */
+.admin-mon-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .85rem;
+}
+.admin-mon-table th {
+  text-align: start;
+  font-weight: 600;
+  color: #64748b;
+  padding: .45rem .5rem;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+.admin-mon-table td {
+  padding: .5rem;
+  border-bottom: 1px solid #f1f5f9;
+  color: #334155;
+  vertical-align: middle;
+}
+.admin-mon-table tr:last-child td { border-bottom: 0; }
+.admin-mon-table td:not(:first-child) { white-space: nowrap; }
+.admin-mon-nowrap { white-space: nowrap; }
+
+.admin-mon-plan { font-weight: 600; color: #1e293b; }
+.admin-mon-plan-bar {
+  margin-top: .3rem;
+  height: 5px;
+  width: 100%;
+  max-width: 9rem;
+  border-radius: 999px;
+  background: #eef1f6;
+  overflow: hidden;
+}
+.admin-mon-plan-bar > span {
+  display: block;
+  height: 100%;
+  background: #7d71f5;
+  border-radius: 999px;
+}
+.admin-mon-user { font-weight: 600; color: #1e293b; }
+
+.admin-mon-level {
+  display: inline-block;
+  padding: .1rem .5rem;
+  border-radius: 999px;
+  font-size: .75rem;
+  font-weight: 600;
+}
+.admin-mon-level.is-warn { background: #fef3c7; color: #92400e; }
+.admin-mon-level.is-error { background: #fee2e2; color: #991b1b; }
+
+/* ---- Hero cards: network + disk lead the page ---- */
+.admin-mon-hero {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .9rem;
+  margin-bottom: 1.1rem;
+}
+@media (max-width: 900px) { .admin-mon-hero { grid-template-columns: minmax(0, 1fr); } }
+
+.admin-mon-hero-card {
+  border-radius: .9rem;
+  padding: 1rem 1.15rem;
+  color: #fff;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .12);
+  background: linear-gradient(135deg, #64748b, #475569);
+}
+.admin-mon-hero-card.is-net { background: linear-gradient(135deg, #7d71f5, #5b4fd6); }
+.admin-mon-hero-card.is-disk { background: linear-gradient(135deg, #0ea5e9, #0369a1); }
+.admin-mon-hero-card.is-load { background: linear-gradient(135deg, #10b981, #047857); }
+
+.admin-mon-hero-head {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  font-size: .85rem;
+  font-weight: 600;
+  opacity: .95;
+  margin-bottom: .6rem;
+}
+.admin-mon-hero-head .ti { font-size: 1.05rem; }
+
+.admin-mon-hero-main { display: flex; align-items: baseline; gap: .5rem; }
+.admin-mon-hero-main.is-alt { margin-top: .25rem; }
+.admin-mon-hero-main b { font-size: 1.5rem; font-weight: 700; line-height: 1.15; }
+.admin-mon-hero-main.is-alt b { font-size: 1.15rem; opacity: .95; }
+.admin-mon-hero-sub { font-size: .78rem; opacity: .85; }
+.admin-mon-hero-foot {
+  margin-top: .7rem;
+  padding-top: .55rem;
+  border-top: 1px solid rgba(255, 255, 255, .25);
+  font-size: .78rem;
+  opacity: .95;
+}
+
+/* ---- Window selector ---- */
+.admin-mon-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .6rem 1rem;
+  margin-bottom: 1rem;
+}
+.admin-mon-range-btns { display: inline-flex; gap: .3rem; background: #f1f5f9; padding: .25rem; border-radius: .6rem; }
+.admin-mon-range-btn {
+  padding: .3rem .7rem;
+  border-radius: .45rem;
+  font-size: .82rem;
+  color: #475569;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.admin-mon-range-btn:hover { background: #e2e8f0; color: #1e293b; }
+.admin-mon-range-btn.is-active { background: #fff; color: var(--morobot-primary-dark, #5b4fd6); font-weight: 700; box-shadow: 0 2px 6px rgba(15, 23, 42, .1); }
+.admin-mon-range-state { font-size: .82rem; color: #64748b; }
+.admin-mon-range-state.is-bad { color: #b91c1c; font-weight: 600; }
+
+/* ---- History chart ---- */
+.admin-mon-legend { display: flex; gap: 1rem; font-size: .78rem; color: #64748b; margin-bottom: .4rem; }
+.admin-mon-legend-item { display: inline-flex; align-items: center; gap: .3rem; }
+.admin-mon-legend-item.is-in::before { content: ""; width: .7rem; height: .7rem; border-radius: 2px; background: #7d71f5; }
+.admin-mon-legend-item.is-out::before { content: ""; width: .7rem; height: .7rem; border-radius: 2px; background: #a5b4fc; }
+
+.admin-mon-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 120px;
+  padding: .25rem 0;
+  overflow-x: auto;
+}
+.admin-mon-chart-col {
+  flex: 1 0 auto;
+  min-width: 5px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+}
+.admin-mon-chart-in { display: block; width: 100%; background: #7d71f5; border-radius: 3px 3px 0 0; min-height: 1px; }
+.admin-mon-chart-out { display: block; width: 100%; background: #a5b4fc; min-height: 1px; }
+
+.admin-mon-empty {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: 1.5rem;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: .6rem;
+  color: #64748b;
+  font-size: .85rem;
+}
+.admin-mon-empty .ti { font-size: 1.4rem; color: #94a3b8; }
+
+/* ---- Dense tables ---- */
+.admin-mon-table-wrap { overflow-x: auto; }
+.admin-mon-ltr { direction: ltr; text-align: left; unicode-bidi: plaintext; }
+.admin-mon-nowrap { white-space: nowrap; }
+.admin-mon-bar-cell { min-width: 7rem; }
+.admin-mon-mini {
+  display: inline-block;
+  vertical-align: middle;
+  width: 4.5rem;
+  height: 6px;
+  background: #eef1f6;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-inline-end: .4rem;
+}
+.admin-mon-mini > i { display: block; height: 100%; background: #7d71f5; border-radius: 999px; }
+.admin-mon-num { font-variant-numeric: tabular-nums; color: #334155; }
+.admin-mon-dot {
+  display: inline-block;
+  width: .55rem; height: .55rem;
+  border-radius: 50%;
+  background: #cbd5e1;
+  margin-inline-end: .4rem;
+  vertical-align: 1px;
+}
+.admin-mon-dot.is-on { background: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, .18); }
+.admin-mon-table tr.is-online td { background: #f6fdf9; }
+
+/* ---- Footer stamp ---- */
+.admin-mon-stamp {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem 1rem;
+  align-items: center;
+  margin-top: .25rem;
+}
+.admin-mon-refresh::before {
+  content: "";
+  display: inline-block;
+  width: .5rem;
+  height: .5rem;
+  border-radius: 50%;
+  background: #16a34a;
+  margin-inline-end: .4rem;
+  vertical-align: 1px;
+  animation: admin-mon-pulse 2.2s ease-in-out infinite;
+}
+@keyframes admin-mon-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+
+/* ============================================================================
+   Commerce / pricing (Admin → فروش)
+   The old page was a bare table plus one long inline form; this replaces it with
+   a key-card grid and normal admin form cards so prices are readable at a glance.
+   ============================================================================ */
+
+.commerce-page { display: flex; flex-direction: column; gap: 1.1rem; }
+
+.commerce-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem 1.25rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.commerce-badges { display: flex; flex-wrap: wrap; gap: .4rem; }
+.commerce-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .3rem .6rem;
+  border-radius: 999px;
+  font-size: .78rem;
+  font-weight: 600;
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+}
+.commerce-badge.is-ok { background: #e7f9ef; color: #047857; border-color: #bbf7d0; }
+.commerce-badge.is-warn { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+.commerce-badge .ti { font-size: .9rem; }
+
+.commerce-card {
+  background: #fff;
+  border-radius: .85rem;
+  padding: 1rem 1.25rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+  border: 1px solid rgba(226, 232, 240, .85);
+}
+.commerce-card-head { margin-bottom: .85rem; }
+.commerce-card-head h4 {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  font-size: 1rem;
+  margin: 0 0 .35rem;
+  color: #1e293b;
+}
+.commerce-card-head .admin-field-hint { display: block; margin: 0; }
+
+/* ---- Key cards ---- */
+.commerce-key-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: .85rem;
+}
+.commerce-key {
+  border: 1px solid #e2e8f0;
+  border-radius: .75rem;
+  padding: .85rem .9rem;
+  display: flex;
+  flex-direction: column;
+  gap: .55rem;
+  background: #fff;
+  transition: box-shadow .15s ease, border-color .15s ease;
+}
+.commerce-key:hover { box-shadow: 0 6px 18px rgba(15, 23, 42, .07); }
+.commerce-key.is-editing { border-color: #7d71f5; box-shadow: 0 0 0 3px rgba(125, 113, 245, .15); }
+.commerce-key.is-off { background: #f8fafc; opacity: .8; }
+
+.commerce-key-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .5rem;
+}
+.commerce-key-title { font-weight: 700; color: #1e293b; line-height: 1.3; }
+.commerce-key-code {
+  display: inline-block;
+  margin-top: .15rem;
+  font-size: .72rem;
+  color: #7c3aed;
+  background: #f5f3ff;
+  border-radius: .35rem;
+  padding: .05rem .35rem;
+}
+.commerce-key-state {
+  font-size: .72rem;
+  font-weight: 600;
+  padding: .15rem .45rem;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  white-space: nowrap;
+}
+.commerce-key-state.is-ok { background: #e7f9ef; color: #047857; }
+
+.commerce-key-desc { font-size: .78rem; color: #64748b; margin: 0; line-height: 1.6; }
+
+.commerce-key-price { display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap; }
+.commerce-key-amount { font-size: 1.15rem; font-weight: 700; color: var(--morobot-primary-dark, #5b4fd6); }
+.commerce-key-unit { font-size: .75rem; color: #64748b; }
+
+.commerce-key-foot {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  margin-top: auto;
+  padding-top: .5rem;
+  border-top: 1px dashed #eef1f6;
+}
+.commerce-key-kind {
+  font-size: .7rem;
+  color: #64748b;
+  background: #f1f5f9;
+  border-radius: .35rem;
+  padding: .1rem .4rem;
+}
+.commerce-key-spacer { flex: 1 1 auto; }
+.commerce-key-foot .btn { display: inline-flex; align-items: center; gap: .25rem; }
+
+/* ---- Form layout ---- */
+.commerce-page .admin-form-shell { margin: 0; }
+.commerce-page .admin-form-actions { grid-column: 1 / -1; }
+
 /* A system-owned value shown as text rather than a box, so an unset value does not look like an
    empty field inviting input. */
 .admin-settings-ro-value {

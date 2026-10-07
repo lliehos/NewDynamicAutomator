@@ -52,27 +52,38 @@
         <span>@brandHead.AppName</span>
       </div>
       <nav class="admin-nav-links">
-        <a class="@NavClass("Home")" asp-area="Admin" asp-controller="Home" asp-action="Index"><i class="ti ti-dashboard" aria-hidden="true"></i>@L["admin.nav.dashboard"]</a>
-        <a class="@NavClass("Settings")" asp-area="Admin" asp-controller="Settings" asp-action="Index"><i class="ti ti-settings" aria-hidden="true"></i>@L["admin.nav.settings"]</a>
-        <a class="@NavClass("License")" asp-area="Admin" asp-controller="License" asp-action="Index"><i class="ti ti-certificate" aria-hidden="true"></i>@L["admin.nav.license"]</a>
-        @if (allowsUpdates)
-        {
-          <a class="@NavClass("OfflineUpdate")" asp-area="Admin" asp-controller="OfflineUpdate" asp-action="Index"><i class="ti ti-package" aria-hidden="true"></i>@L["admin.nav.offlineUpdate"]</a>
+        @{
+          // A Monitor operator may only reach Monitoring and the read-only Logs lists; every other
+          // entry here is Admin-only and would answer 403 for them. Rendering the links anyway would
+          // hand them a menu of dead ends, so the rail is built from the role that is actually signed
+          // in rather than from the area alone.
+          var isAdminUser = User.IsInRole("Admin");
         }
-        <a class="@NavClass("Branding")" asp-area="Admin" asp-controller="Branding" asp-action="Index"><i class="ti ti-palette" aria-hidden="true"></i>@L["admin.nav.branding"]</a>
-        @if (allowsPlanManagement)
+        @if (isAdminUser)
         {
-          <a class="@NavClass("Plans")" asp-area="Admin" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]</a>
+          <a class="@NavClass("Home")" asp-area="Admin" asp-controller="Home" asp-action="Index"><i class="ti ti-dashboard" aria-hidden="true"></i>@L["admin.nav.dashboard"]</a>
+          <a class="@NavClass("Settings")" asp-area="Admin" asp-controller="Settings" asp-action="Index"><i class="ti ti-settings" aria-hidden="true"></i>@L["admin.nav.settings"]</a>
+          <a class="@NavClass("License")" asp-area="Admin" asp-controller="License" asp-action="Index"><i class="ti ti-certificate" aria-hidden="true"></i>@L["admin.nav.license"]</a>
+          @if (allowsUpdates)
+          {
+            <a class="@NavClass("OfflineUpdate")" asp-area="Admin" asp-controller="OfflineUpdate" asp-action="Index"><i class="ti ti-package" aria-hidden="true"></i>@L["admin.nav.offlineUpdate"]</a>
+          }
+          <a class="@NavClass("Branding")" asp-area="Admin" asp-controller="Branding" asp-action="Index"><i class="ti ti-palette" aria-hidden="true"></i>@L["admin.nav.branding"]</a>
+          @if (allowsPlanManagement)
+          {
+            <a class="@NavClass("Plans")" asp-area="Admin" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]</a>
+          }
+          <a class="@NavClass("Commerce")" asp-area="Admin" asp-controller="Commerce" asp-action="Index"><i class="ti ti-receipt" aria-hidden="true"></i>@L["admin.nav.commerce"]</a>
+          <a class="@NavClass("Processes")" asp-area="Admin" asp-controller="Processes" asp-action="Index"><i class="ti ti-git-branch" aria-hidden="true"></i>@L["admin.nav.processes"]</a>
+          <a class="@NavClass("Templates")" asp-area="Admin" asp-controller="Templates" asp-action="Index"><i class="ti ti-template" aria-hidden="true"></i>@L["admin.nav.templates"]</a>
+          @if (allowsLegacyMigration)
+          {
+            <a class="@NavClass("Migrate")" asp-area="Admin" asp-controller="Migrate" asp-action="Index"><i class="ti ti-database-import" aria-hidden="true"></i>@L["admin.nav.migrate"]</a>
+          }
+          <a class="@NavClass("Sources")" asp-area="Admin" asp-controller="Sources" asp-action="Index"><i class="ti ti-database" aria-hidden="true"></i>@L["admin.nav.sources"]</a>
+          <a class="@NavClass("Users")" asp-area="Admin" asp-controller="Users" asp-action="Index"><i class="ti ti-users" aria-hidden="true"></i>@L["admin.nav.users"]</a>
         }
-        <a class="@NavClass("Commerce")" asp-area="Admin" asp-controller="Commerce" asp-action="Index"><i class="ti ti-receipt" aria-hidden="true"></i>@L["admin.nav.commerce"]</a>
-        <a class="@NavClass("Processes")" asp-area="Admin" asp-controller="Processes" asp-action="Index"><i class="ti ti-git-branch" aria-hidden="true"></i>@L["admin.nav.processes"]</a>
-        <a class="@NavClass("Templates")" asp-area="Admin" asp-controller="Templates" asp-action="Index"><i class="ti ti-template" aria-hidden="true"></i>@L["admin.nav.templates"]</a>
-        @if (allowsLegacyMigration)
-        {
-          <a class="@NavClass("Migrate")" asp-area="Admin" asp-controller="Migrate" asp-action="Index"><i class="ti ti-database-import" aria-hidden="true"></i>@L["admin.nav.migrate"]</a>
-        }
-        <a class="@NavClass("Sources")" asp-area="Admin" asp-controller="Sources" asp-action="Index"><i class="ti ti-database" aria-hidden="true"></i>@L["admin.nav.sources"]</a>
-        <a class="@NavClass("Users")" asp-area="Admin" asp-controller="Users" asp-action="Index"><i class="ti ti-users" aria-hidden="true"></i>@L["admin.nav.users"]</a>
+        <a class="@NavClass("Monitoring")" asp-area="Admin" asp-controller="Monitoring" asp-action="Index"><i class="ti ti-activity-heartbeat" aria-hidden="true"></i>@L["admin.nav.monitoring"]</a>
         <a class="@NavClassFor("Logs", "Index")" asp-area="Admin" asp-controller="Logs" asp-action="Index"><i class="ti ti-history" aria-hidden="true"></i>@L["admin.nav.events"]</a>
         <a class="@NavClassFor("Logs", "Devices")" asp-area="Admin" asp-controller="Logs" asp-action="Devices"><i class="ti ti-device-desktop" aria-hidden="true"></i>@L["admin.nav.devices"]</a>
       </nav>

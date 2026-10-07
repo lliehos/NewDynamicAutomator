@@ -50,6 +50,23 @@ public class BillingController : Controller
     private async Task<bool> CommerceAllowedAsync(CancellationToken ct)
         => (await _license.GetRuntimeStateAsync(ct)).AllowsCommerce;
 
+    /// <summary>
+    /// Whether a purchased licence can actually be handed over on this install.
+    /// </summary>
+    /// <remarks>
+    /// Two independent conditions, and both must hold: the licence must ALLOW self-issued licences,
+    /// and the storefront must hold the private signing key that produces one. A self-issued flag with
+    /// no key is a half-configured storefront — the customer paid and there is nothing to give them —
+    /// so the pages need to say that plainly instead of rendering a button that 400s on click. This is
+    /// the single place the answer is computed, so the download endpoint, the result page and the
+    /// order history can never disagree about whether the file exists.
+    /// </remarks>
+    private async Task<bool> CanDeliverLicenseAsync(CancellationToken ct)
+    {
+        var runtime = await _license.GetRuntimeStateAsync(ct);
+        return runtime.AllowsSelfIssuedLicenses && _license.CanIssueLicenses;
+    }
+
     // ---- Plan selection + checkout -------------------------------------------------------------
 
     /// <summary>
@@ -165,6 +182,9 @@ public class BillingController : Controller
 
         ViewBag.Failed = false;
         ViewBag.OrderId = order.Id;
+        // The result page shows the download button only when the file can actually be produced.
+        ViewBag.CanDownloadLicense = await CanDeliverLicenseAsync(ct);
+        ViewBag.IsLicenseOrder = order.Kind is OrderKind.SoftwarePackage or OrderKind.LicenseRenewal;
         return View("Result");
     }
 
@@ -217,12 +237,23 @@ public class BillingController : Controller
         if (order.Kind == OrderKind.Plan)
             return BadRequest("این سفارش مربوط به پلن است و فایل لایسنس ندارد.");
 
-        var runtime = await _license.GetRuntimeStateAsync(ct);
-        if (!runtime.AllowsSelfIssuedLicenses)
-            return BadRequest("این نصب مجاز به صدور لایسنس نیست.");
+        // Same predicate the pages use to decide whether to offer the button, so "offered" and
+        // "producible" cannot drift. A hand-crafted URL still gets the explicit reason rather than a
+        // bare 400, because the storefront owner is the one who has to fix it.
+        if (!await CanDeliverLicenseAsync(ct))
+        {
+            TempData["BillingError"] = "صدور فایل لایسنس در این نصب فعال نیست؛ کلید امضای فروشگاه تنظیم نشده است.";
+            return RedirectToAction(nameof(History));
+        }
 
         var json = await _license.BuildOrderLicenseJsonAsync(order, ct);
-        if (json is null) return BadRequest("ساخت فایل لایسنس ممکن نشد.");
+        if (json is null)
+        {
+            // Reaching here means the two conditions passed but signing still failed, which is a real
+            // fault worth telling the operator about rather than a silent dead end.
+            TempData["BillingError"] = "ساخت فایل لایسنس ممکن نشد. با پشتیبانی تماس بگیرید.";
+            return RedirectToAction(nameof(History));
+        }
 
         var bytes = System.Text.Encoding.UTF8.GetBytes(json);
         return File(bytes, "application/json", $"morobot-license-order-{order.Id}.morobot");
@@ -236,6 +267,8 @@ public class BillingController : Controller
     {
         if (!await CommerceAllowedAsync(ct)) return CommerceBlocked();
         ViewBag.Orders = await _checkout.ListForUserAsync(UserId, ct);
+        // Drives whether each licence order shows a working download link or an explanation.
+        ViewBag.CanDownloadLicense = await CanDeliverLicenseAsync(ct);
         return View();
     }
 

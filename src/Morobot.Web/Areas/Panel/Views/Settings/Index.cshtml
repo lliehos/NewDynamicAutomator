@@ -122,7 +122,14 @@
           @if (allowsPlanManagement)
           {
             <hr class="my-4" />
-            <a class="btn btn-label-primary" asp-area="Panel" asp-controller="Account" asp-action="Upgrade" data-i18n="plan.upgradeTitle">@L["plan.upgradeTitle"]</a>
+            @* The upgrade entry goes through the server's licence-aware resolver rather than straight
+               to the paid plan page: on an install that cannot sell, the old password-based Upgrade
+               form was the only destination and it is no longer how a plan is bought. The resolver
+               answers with the right URL (or an explanation) for THIS deployment. *@
+            <a class="btn btn-label-primary" id="da-upgrade-plan-btn" href="#"
+               data-upgrade-endpoint="@Url.Action("UpgradeTarget", "Billing", new { area = "Panel" })"
+               data-i18n="plan.upgradeTitle">@L["plan.upgradeTitle"]</a>
+            <script src="~/js/panel-upgrade-link.js" asp-append-version="true"></script>
           }
         </div>
       </div>

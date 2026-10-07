@@ -28,10 +28,83 @@
   <SolidColorBrush x:Key="DsSurfaceBrush" Color="#FFFFFF"/>
   <SolidColorBrush x:Key="DsCanvasBrush" Color="#F5F4FB"/>
 
+  <!--
+    A single window style for every window in the app. The windows are borderless (WindowStyle=None
+    in XAML) because the product draws its own title bar: the stock Windows frame brought the
+    system close/minimise/maximise buttons and a light grey border that no amount of palette
+    matching could make look like the panel, and the vendor studio was already fighting the same
+    two problems separately. WindowChrome is what keeps a borderless window resizable and
+    draggable; without it, WindowStyle=None loses both.
+  -->
   <Style x:Key="DsWindow" TargetType="Window">
     <Setter Property="FontFamily" Value="{StaticResource DsFont}"/>
     <Setter Property="FontSize" Value="13"/>
     <Setter Property="Background" Value="{StaticResource DsCanvasBrush}"/>
+    <Setter Property="SnapsToDevicePixels" Value="True"/>
+    <Setter Property="UseLayoutRounding" Value="True"/>
+    <Setter Property="TextOptions.TextFormattingMode" Value="Display"/>
+  </Style>
+
+  <!--
+    Borderless + resizable. ResizeBorderThickness and GlassFrameThickness must both be set or WPF
+    falls back to a 1-DIP system border on the resize edge, which is the faint line that made the
+    window look like it still had a frame.
+  -->
+  <Style x:Key="DsWindowChrome" TargetType="Window">
+    <Setter Property="WindowStyle" Value="None"/>
+    <Setter Property="ResizeMode" Value="CanResize"/>
+    <Setter Property="WindowChrome.WindowChrome">
+      <Setter.Value>
+        <WindowChrome CaptionHeight="0" CornerRadius="12" GlassFrameThickness="0"
+                      ResizeBorderThickness="6" UseAeroCaptionButtons="False"/>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <!--
+    The close (and, where present, minimise) button that lives inside our own title bar, so the
+    window has no system chrome but still has a way to be closed. Focusable=False keeps it out of
+    the tab order, which is what a title-bar button should be.
+  -->
+  <Style x:Key="DsCaptionButton" TargetType="Button">
+    <Setter Property="Width" Value="34"/>
+    <Setter Property="Height" Value="30"/>
+    <Setter Property="Focusable" Value="False"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="Cursor" Value="Hand"/>
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Shell" Background="{TemplateBinding Background}" CornerRadius="8">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Shell" Property="Background" Value="{StaticResource DsBorderSoftBrush}"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
+  <Style x:Key="DsCaptionCloseButton" TargetType="Button" BasedOn="{StaticResource DsCaptionButton}">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="Button">
+          <Border x:Name="Shell" Background="Transparent" CornerRadius="8">
+            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Shell" Property="Background" Value="{StaticResource DsDangerBrush}"/>
+              <Setter Property="Foreground" Value="White"/>
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
   </Style>
 
   <Style x:Key="DsTitle" TargetType="TextBlock">

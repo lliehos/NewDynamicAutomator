@@ -66,6 +66,7 @@ dotnet run --project src/Morobot.Web --launch-profile https
 - آرشیو V2: [legacy-windows-v2.md](legacy-windows-v2.md)
 - ویرایشگر: [visual-editor.md](visual-editor.md)
 - رکورد/پخش: [record-play.md](record-play.md)
+- نظارت: [monitoring.md](monitoring.md)
 
 ## خارج از اسکوپ این برنچ
 
