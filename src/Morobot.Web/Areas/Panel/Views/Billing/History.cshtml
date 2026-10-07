@@ -1,24 +1,24 @@
 @using Morobot.Domain.Entities
 @using Morobot.Domain.Enums
 @{
-    ViewData["Title"] = "تاریخچهٔ مالی";
+    ViewData["Title"] = L["billing.history.title"];
     var orders = ViewBag.Orders as List<Order> ?? new List<Order>();
 
     // One list for all three revenue paths, because the customer thinks in payments, not in tables.
     string KindLabel(OrderKind kind) => kind switch
     {
-        OrderKind.Plan => "پلن اشتراک",
-        OrderKind.SoftwarePackage => "بستهٔ نرم‌افزار",
-        OrderKind.LicenseRenewal => "تمدید لایسنس",
+        OrderKind.Plan => L["billing.history.kindPlan"],
+        OrderKind.SoftwarePackage => L["billing.history.kindPackage"],
+        OrderKind.LicenseRenewal => L["billing.history.kindRenewal"],
         _ => "—"
     };
     string StatusLabel(OrderStatus status) => status switch
     {
-        OrderStatus.Pending => "در انتظار پرداخت",
-        OrderStatus.Paid => "پرداخت‌شده",
-        OrderStatus.Fulfilled => "فعال‌شده",
-        OrderStatus.Failed => "ناموفق",
-        OrderStatus.Cancelled => "لغو‌شده",
+        OrderStatus.Pending => L["billing.history.stPending"],
+        OrderStatus.Paid => L["billing.history.stPaid"],
+        OrderStatus.Fulfilled => L["billing.history.stFulfilled"],
+        OrderStatus.Failed => L["billing.history.stFailed"],
+        OrderStatus.Cancelled => L["billing.history.stCancelled"],
         _ => "—"
     };
     string StatusClass(OrderStatus status) => status switch
@@ -28,19 +28,26 @@
         OrderStatus.Pending => "billing-st-wait",
         _ => "text-muted"
     };
+    string CycleLabel(string? cycle) => cycle switch
+    {
+        "yearly" => L["billing.common.cycleYearly"],
+        "perpetual" => L["billing.common.cyclePerpetual"],
+        "monthly" => L["billing.common.cycleMonthly"],
+        _ => "—"
+    };
 }
 
 <div class="da-home">
   <header class="da-home-head">
     <div>
-      <h4 class="da-home-title mb-1">تاریخچهٔ مالی</h4>
-      <p class="da-home-sub mb-0">همهٔ خریدهای شما — پلن، بستهٔ نرم‌افزار و لایسنس.</p>
+      <h4 class="da-home-title mb-1">@L["billing.history.heading"]</h4>
+      <p class="da-home-sub mb-0">@L["billing.history.sub"]</p>
     </div>
   </header>
 
   @if (orders.Count == 0)
   {
-    <div class="alert alert-info">هنوز خریدی ثبت نشده است.</div>
+    <div class="alert alert-info">@L["billing.history.empty"]</div>
     return;
   }
 
@@ -50,12 +57,12 @@
         <thead>
           <tr>
             <th>#</th>
-            <th>نوع</th>
-            <th>شرح</th>
-            <th>دوره</th>
-            <th>مبلغ</th>
-            <th>وضعیت</th>
-            <th>تاریخ</th>
+            <th>@L["billing.history.colKind"]</th>
+            <th>@L["billing.history.colDesc"]</th>
+            <th>@L["billing.history.colCycle"]</th>
+            <th>@L["billing.history.colAmount"]</th>
+            <th>@L["billing.history.colStatus"]</th>
+            <th>@L["billing.history.colDate"]</th>
             <th></th>
           </tr>
         </thead>
@@ -67,10 +74,7 @@
               <td>@o.Id</td>
               <td class="text-nowrap">@KindLabel(o.Kind)</td>
               <td>@o.ItemTitle</td>
-              <td class="text-nowrap">
-                @(o.BillingCycle == "yearly" ? "سالانه" : o.BillingCycle == "perpetual" ? "دائمی"
-                    : o.BillingCycle == "monthly" ? "ماهانه" : "—")
-              </td>
+              <td class="text-nowrap">@CycleLabel(o.BillingCycle)</td>
               <td class="text-nowrap">@o.PayableAmount.ToString("N0") @o.Currency</td>
               <td class="text-nowrap"><span class="@StatusClass(o.Status)">@StatusLabel(o.Status)</span></td>
               <td class="text-nowrap">@when.ToString("yyyy/MM/dd HH:mm")</td>
@@ -79,14 +83,14 @@
                 {
                   <a class="btn btn-sm btn-primary"
                      asp-area="Panel" asp-controller="Billing" asp-action="Checkout" asp-route-orderId="@o.Id">
-                    ادامهٔ پرداخت
+                    @L["billing.history.continuePay"]
                   </a>
                 }
                 else if (o.Kind != OrderKind.Plan && o.Status is OrderStatus.Paid or OrderStatus.Fulfilled)
                 {
                   <a class="btn btn-sm btn-label-secondary"
                      asp-area="Panel" asp-controller="Billing" asp-action="DownloadLicense" asp-route-orderId="@o.Id">
-                    دانلود لایسنس
+                    @L["billing.history.downloadLicense"]
                   </a>
                 }
               </td>

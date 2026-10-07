@@ -1,18 +1,17 @@
 @using Morobot.Domain.Entities
 @using Morobot.Domain.Enums
 @{
-    ViewData["Title"] = "خرید بستهٔ نرم‌افزار";
+    ViewData["Title"] = L["billing.pkg.title"];
     var options = ViewBag.Options as List<SoftwarePackageOption> ?? new List<SoftwarePackageOption>();
     var error = TempData["BillingError"] as string;
+    string Unit(SoftwarePackageOption o) => o.UnitLabel ?? L["billing.common.unit"];
 }
 
 <div class="da-home">
   <header class="da-home-head">
     <div>
-      <h4 class="da-home-title mb-1">خرید بستهٔ نرم‌افزار</h4>
-      <p class="da-home-sub mb-0">
-        مشخصات لایسنس خود را انتخاب کنید؛ مبلغ به‌صورت زنده محاسبه می‌شود و سپس به درگاه می‌روید.
-      </p>
+      <h4 class="da-home-title mb-1">@L["billing.pkg.heading"]</h4>
+      <p class="da-home-sub mb-0">@L["billing.pkg.sub"]</p>
     </div>
   </header>
 
@@ -28,7 +27,7 @@
       <div class="card-body">
         <div class="row g-3">
           <div class="col-md-6">
-            <label class="form-label">نام سازمان (اختیاری)</label>
+            <label class="form-label">@L["billing.common.orgOptional"]</label>
             <input name="organization" class="form-control" />
           </div>
         </div>
@@ -37,7 +36,7 @@
 
     <div class="card mb-3">
       <div class="card-body">
-        <div class="fw-semibold mb-3">فیچرها و محدودیت‌ها</div>
+        <div class="fw-semibold mb-3">@L["billing.pkg.optionsTitle"]</div>
 
         @foreach (var o in options)
         {
@@ -62,7 +61,7 @@
                     <span class="fw-semibold">@o.Title</span>
                     @if (o.UnitAmount > 0)
                     {
-                      <span class="text-muted small">— @o.UnitAmount.ToString("N0") به‌ازای هر @(o.UnitLabel ?? "واحد")</span>
+                      <span class="text-muted small">— @o.UnitAmount.ToString("N0") @L.T("billing.pkg.perUnit", ("unit", Unit(o)))</span>
                     }
                   </label>
                 }
@@ -80,10 +79,10 @@
                          name="units[@o.Key]" value="@(o.IsDefault ? Math.Max(1, o.IncludedUnits) : o.IncludedUnits)"
                          data-key="@o.Key" data-included="@o.IncludedUnits" data-unit="@o.UnitAmount" />
                   <span class="text-muted small">
-                    @(o.UnitLabel ?? "واحد")
+                    @Unit(o)
                     @if (o.MaxUnits is int cap)
                     {
-                      <span>· حداکثر @cap</span>
+                      <span>· @L.T("billing.pkg.maxUnits", ("n", cap.ToString()))</span>
                     }
                   </span>
                 </div>
@@ -97,7 +96,7 @@
     <div class="card mb-3">
       <div class="card-body">
         <div class="d-flex justify-content-between align-items-center">
-          <div class="fw-semibold">مبلغ قابل پرداخت</div>
+          <div class="fw-semibold">@L["billing.common.amountPayable"]</div>
           <div class="billing-total" id="pkg-total">—</div>
         </div>
         <div id="pkg-lines" class="small text-muted mt-2"></div>
@@ -105,7 +104,7 @@
       </div>
     </div>
 
-    <button type="submit" class="btn btn-primary btn-lg w-100">ادامه و پرداخت</button>
+    <button type="submit" class="btn btn-primary btn-lg w-100">@L["billing.pkg.continue"]</button>
   </form>
 </div>
 
@@ -121,6 +120,8 @@
   var errEl = document.getElementById("pkg-error");
   var token = form.querySelector('input[name="__RequestVerificationToken"]').value;
   var timer = null;
+  var quoteFailed = @Json.Serialize(L["billing.common.quoteFailed"]);
+  var numLocale = document.documentElement.lang || "fa-IR";
 
   function collect() {
     var body = new FormData();
@@ -138,14 +139,14 @@
     fetch("@Url.Action("QuotePackage", "Billing", new { area = "Panel" })", {
       method: "POST", credentials: "same-origin", body: collect()
     }).then(function (r) { return r.json(); }).then(function (data) {
-      if (data.error) { errEl.textContent = "محاسبهٔ قیمت ممکن نشد."; return; }
+      if (data.error) { errEl.textContent = quoteFailed; return; }
       errEl.textContent = "";
-      totalEl.textContent = Number(data.total).toLocaleString("fa-IR") + " " + (data.currency || "");
+      totalEl.textContent = Number(data.total).toLocaleString(numLocale) + " " + (data.currency || "");
       linesEl.innerHTML = (data.lines || []).map(function (l) {
         var detail = l.detail ? ' <span class="ms-1">(' + l.detail + ")</span>" : "";
-        return "<div>" + l.title + detail + " — " + Number(l.amount).toLocaleString("fa-IR") + "</div>";
+        return "<div>" + l.title + detail + " — " + Number(l.amount).toLocaleString(numLocale) + "</div>";
       }).join("");
-    }).catch(function () { errEl.textContent = "محاسبهٔ قیمت ممکن نشد."; });
+    }).catch(function () { errEl.textContent = quoteFailed; });
   }
 
   function schedule() { clearTimeout(timer); timer = setTimeout(refresh, 250); }

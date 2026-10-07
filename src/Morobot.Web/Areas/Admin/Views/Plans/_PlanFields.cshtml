@@ -1,6 +1,10 @@
 @model Morobot.Domain.Entities.Plan
 @using Morobot.Web.Areas.Admin.Models
-<div class="admin-form-shell is-2col">
+@*
+  Deliberately NOT wrapped in its own .admin-form-shell: the caller (Create/Edit) already owns that
+  grid. An earlier version opened a second shell here, which nested a 1-column grid inside a 1-column
+  grid — every card stacked full width and the price boxes stretched the whole row.
+*@
   <div class="admin-form-card">
     <h4><i class="ti ti-tag" aria-hidden="true"></i>@L["admin.plans.name"]</h4>
     <div class="mb-2">
@@ -132,4 +136,3 @@
       </div>
     </div>
   </div>
-</div>

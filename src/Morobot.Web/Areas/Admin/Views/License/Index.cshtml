@@ -122,8 +122,30 @@
         <dd>@(d.AllowBilingual ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
         <dt>@L["admin.license.fieldAllowFrontPackage"]</dt>
         <dd>@(d.AllowFrontPackage ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
+        <dt>@L["admin.license.fieldAllowLocalRun"]</dt>
+        <dd>@(d.AllowLocalRun ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
+        <dt>@L["admin.license.fieldAllowCommerce"]</dt>
+        <dd>@(d.AllowCommerce ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
+        @if (d.AllowCommerce)
+        {
+          <dt>@L["admin.license.fieldAllowSoftwarePurchase"]</dt>
+          <dd>@(d.AllowSoftwarePurchase ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
+          <dt>@L["admin.license.fieldAllowSelfIssuedLicenses"]</dt>
+          <dd>@(d.AllowSelfIssuedLicenses ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
+        }
         <dt>@L["admin.license.fieldAllowLegacyMigration"]</dt>
         <dd>@(d.AllowLegacyMigration ? L["admin.ui.active"] : L["admin.ui.inactive"])</dd>
+        <dt>@L["admin.license.fieldServerBaseUrl"]</dt>
+        <dd>
+          @if (string.IsNullOrWhiteSpace(d.ServerBaseUrl))
+          {
+            <span class="admin-muted">@L["admin.license.fieldServerBaseUrlEmpty"]</span>
+          }
+          else
+          {
+            <code>@d.ServerBaseUrl</code>
+          }
+        </dd>
         <dt>@L["admin.license.fieldReferralUrl"]</dt>
         <dd>
           @if (string.IsNullOrWhiteSpace(d.ReferralWidgetUrl))

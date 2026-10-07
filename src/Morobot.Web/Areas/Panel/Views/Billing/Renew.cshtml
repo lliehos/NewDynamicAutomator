@@ -1,6 +1,6 @@
 @using Morobot.Domain.Entities
 @{
-    ViewData["Title"] = "تمدید لایسنس";
+    ViewData["Title"] = L["billing.renew.title"];
     var selfIssued = ViewBag.SelfIssued is true;
     var canIssue = ViewBag.CanIssue is true;
     var pricing = ViewBag.Pricing as LicensePricing ?? new LicensePricing();
@@ -10,10 +10,8 @@
 <div class="da-home">
   <header class="da-home-head">
     <div>
-      <h4 class="da-home-title mb-1">تمدید یا خرید لایسنس</h4>
-      <p class="da-home-sub mb-0">
-        لایسنس جدید برای این نصب بگیرید — یا با پرداخت، یا با ارسال درخواست فعال‌سازی.
-      </p>
+      <h4 class="da-home-title mb-1">@L["billing.renew.heading"]</h4>
+      <p class="da-home-sub mb-0">@L["billing.renew.sub"]</p>
     </div>
   </header>
 
@@ -28,48 +26,45 @@
       <div class="col-lg-7">
         <div class="card h-100">
           <div class="card-body">
-            <div class="fw-semibold mb-3">خرید لایسنس</div>
+            <div class="fw-semibold mb-3">@L["billing.renew.buyLicense"]</div>
 
             @if (!canIssue)
             {
               @* The flag is on but no signing key exists, so the last step would fail AFTER taking
                  money. Saying so here prevents a customer paying for something that cannot be issued. *@
-              <div class="alert alert-warning small">
-                کلید امضای لایسنس روی این نصب تنظیم نشده است، بنابراین صدور لایسنس در حال حاضر ممکن
-                نیست. با فروشنده تماس بگیرید.
-              </div>
+              <div class="alert alert-warning small">@L["billing.renew.noKey"]</div>
             }
             else
             {
               <form method="post" asp-action="BuyLicense" id="lic-form">
                 @Html.AntiForgeryToken()
                 <div class="mb-3">
-                  <label class="form-label">تعداد کاربر</label>
+                  <label class="form-label">@L["billing.renew.users"]</label>
                   <input name="users" id="lic-users" type="number" class="form-control" value="@Math.Max(1, pricing.IncludedUsers)"
                          min="1" @(pricing.MaxUsers is int cap ? $"max=\"{cap}\"" : "") />
                   <div class="form-text">
-                    تا @pricing.IncludedUsers کاربر در مبلغ پایه؛ بیشتر از آن به‌ازای هر کاربر محاسبه می‌شود.
+                    @L.T("billing.renew.usersHint", ("n", pricing.IncludedUsers.ToString()))
                   </div>
                 </div>
                 <div class="mb-3">
-                  <label class="form-label">دوره</label>
+                  <label class="form-label">@L["billing.common.period"]</label>
                   <select name="term" id="lic-term" class="form-select">
-                    <option value="monthly">ماهانه</option>
-                    <option value="yearly" selected>سالانه</option>
-                    <option value="perpetual">دائمی</option>
+                    <option value="monthly">@L["billing.common.cycleMonthly"]</option>
+                    <option value="yearly" selected>@L["billing.common.cycleYearly"]</option>
+                    <option value="perpetual">@L["billing.common.cyclePerpetual"]</option>
                   </select>
                 </div>
                 <div class="mb-3">
-                  <label class="form-label">نام سازمان (اختیاری)</label>
+                  <label class="form-label">@L["billing.common.orgOptional"]</label>
                   <input name="organization" class="form-control" />
                 </div>
                 <div class="d-flex justify-content-between align-items-center mb-3">
-                  <span class="fw-semibold">مبلغ</span>
+                  <span class="fw-semibold">@L["billing.common.amount"]</span>
                   <span class="billing-total" id="lic-total">—</span>
                 </div>
                 <div id="lic-lines" class="small text-muted mb-3"></div>
                 <button type="submit" class="btn btn-primary w-100" @(canIssue ? null : "disabled")>
-                  پرداخت و دریافت لایسنس
+                  @L["billing.renew.payAndGet"]
                 </button>
               </form>
             }
@@ -81,14 +76,9 @@
     <div class="col-lg-5">
       <div class="card h-100">
         <div class="card-body">
-          <div class="fw-semibold mb-2">درخواست فعال‌سازی</div>
-          <p class="small text-muted mb-2">
-            اگر لایسنس این نصب تمام شده است، فایل درخواست فعال‌سازی را از بخش مدیریت دانلود کنید و
-            برای صدور لایسنس جدید ارسال نمایید.
-          </p>
-          <p class="small mb-0">
-            مسیر: <span class="fw-semibold">مدیریت → لایسنس → دریافت activation-request</span>
-          </p>
+          <div class="fw-semibold mb-2">@L["billing.renew.requestTitle"]</div>
+          <p class="small text-muted mb-2">@L["billing.renew.requestBody"]</p>
+          <p class="small mb-0">@L["billing.renew.requestPath"]</p>
         </div>
       </div>
     </div>
@@ -109,6 +99,7 @@
     var form = document.getElementById("lic-form");
     var token = form.querySelector('input[name="__RequestVerificationToken"]').value;
     var timer = null;
+    var numLocale = document.documentElement.lang || "fa-IR";
 
     function refresh() {
       var body = new FormData();
@@ -119,10 +110,10 @@
         method: "POST", credentials: "same-origin", body: body
       }).then(function (r) { return r.json(); }).then(function (data) {
         if (data.error) return;
-        totalEl.textContent = Number(data.total).toLocaleString("fa-IR") + " " + (data.currency || "");
+        totalEl.textContent = Number(data.total).toLocaleString(numLocale) + " " + (data.currency || "");
         linesEl.innerHTML = (data.lines || []).map(function (l) {
           var detail = l.detail ? ' <span class="ms-1">(' + l.detail + ")</span>" : "";
-          return "<div>" + l.title + detail + " — " + Number(l.amount).toLocaleString("fa-IR") + "</div>";
+          return "<div>" + l.title + detail + " — " + Number(l.amount).toLocaleString(numLocale) + "</div>";
         }).join("");
       }).catch(function () { /* the total simply stays as it was */ });
     }

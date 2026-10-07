@@ -1,5 +1,5 @@
 @{
-    ViewData["Title"] = "نتیجهٔ پرداخت";
+    ViewData["Title"] = L["billing.result.title"];
     var failed = ViewBag.Failed is true;
     var warning = ViewBag.Warning as string;
     var error = ViewBag.Error as string;
@@ -12,16 +12,16 @@
       @if (failed)
       {
         <div class="display-6 mb-3">✖</div>
-        <h4 class="mb-2">پرداخت انجام نشد</h4>
-        <p class="text-muted mb-4">@(error ?? "پرداخت تأیید نشد.")</p>
-        <a class="btn btn-primary" asp-area="Panel" asp-controller="Billing" asp-action="Plans">بازگشت به پلن‌ها</a>
+        <h4 class="mb-2">@L["billing.result.failedTitle"]</h4>
+        <p class="text-muted mb-4">@(error ?? L["billing.result.failedDefault"])</p>
+        <a class="btn btn-primary" asp-area="Panel" asp-controller="Billing" asp-action="Plans">@L["billing.result.backToPlans"]</a>
       }
       else
       {
         <div class="display-6 mb-3">✔</div>
-        <h4 class="mb-2">پرداخت با موفقیت انجام شد</h4>
+        <h4 class="mb-2">@L["billing.result.okTitle"]</h4>
         <p class="text-muted mb-2">
-          سفارش شمارهٔ <span class="fw-semibold">@orderId</span> پرداخت و فعال شد.
+          @L.T("billing.result.okBody", ("n", orderId?.ToString() ?? "—"))
         </p>
         @if (!string.IsNullOrWhiteSpace(warning))
         {
@@ -30,12 +30,12 @@
           <div class="alert alert-warning small text-start">@warning</div>
         }
         <div class="d-flex gap-2 justify-content-center mt-3">
-          <a class="btn btn-primary" asp-area="Panel" asp-controller="Billing" asp-action="History">تاریخچهٔ مالی</a>
+          <a class="btn btn-primary" asp-area="Panel" asp-controller="Billing" asp-action="History">@L["billing.history.heading"]</a>
           @if (orderId is not null)
           {
             <a class="btn btn-label-secondary"
                asp-area="Panel" asp-controller="Billing" asp-action="DownloadLicense" asp-route-orderId="@orderId">
-              دانلود فایل لایسنس
+              @L["billing.result.downloadLicense"]
             </a>
           }
         </div>

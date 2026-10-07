@@ -209,7 +209,11 @@ public class EntitlementService
             ? await FlattenClaimsAsync(fromClaims, ct)
             : await ResolveForUserAsync(dbUser, ct);
 
-        entitlements.TaskCount = await _db.ProcessShares.CountAsync(a => a.UserId == userId, ct);
+        // TaskCount drives the "N / cap" readouts and, like the cap check, must count the processes
+        // the user OWNS. It used to count ProcessShares rows (processes shared WITH the user), so a
+        // page could show a full quota for someone who owned nothing and an empty one for someone
+        // at the cap.
+        entitlements.TaskCount = await CountOwnedProcessesAsync(userId, ct);
         entitlements.DataSourceCount = await CountCanvasDataSourcesAsync(userId, ct);
         return entitlements;
     }
@@ -318,10 +322,25 @@ public class EntitlementService
     {
         if (entitlements.MaxTasks is null)
             return;
-        var count = await _db.ProcessShares.CountAsync(a => a.UserId == userId, ct);
+        var count = await CountOwnedProcessesAsync(userId, ct);
         if (count >= entitlements.MaxTasks.Value)
             throw new InvalidOperationException($"Task limit reached ({entitlements.MaxTasks}).");
     }
+
+    /// <summary>
+    /// The number of processes a user OWNS — the quantity <see cref="EntitlementsDto.MaxTasks"/>
+    /// caps.
+    /// </summary>
+    /// <remarks>
+    /// This counted <c>ProcessShares</c> rows for the user, i.e. the processes SHARED WITH them,
+    /// which is a different set entirely. On a tier that has sharing on but owns nothing (or the
+    /// reverse) the cap was tested against the wrong number: a user with three shared processes and
+    /// no owned ones was blocked from creating their first, and a user with many owned processes and
+    /// no shares could create past the cap. Ownership is <c>CreatorUserId</c>, the same test every
+    /// other ownership check in this codebase uses.
+    /// </remarks>
+    public async Task<int> CountOwnedProcessesAsync(int userId, CancellationToken ct = default)
+        => await _db.Processes.CountAsync(p => p.CreatorUserId == userId, ct);
 
     public async Task EnsureCanCreateDataSourceAsync(int userId, EntitlementsDto entitlements, CancellationToken ct = default)
     {

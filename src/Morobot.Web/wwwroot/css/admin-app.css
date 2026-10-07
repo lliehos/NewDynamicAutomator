@@ -422,12 +422,19 @@ label { font-size: .9rem; }
 
 /* ── Plan pricing ──   Amount and its discount sit side by side: the discount only means anything next to the price it
    applies to, so stacking them would invite reading one row's percentage against the other's
-   amount. Wraps rather than shrinking, so a long number never squashes the discount box. */
+   amount. Exactly two columns — `repeat(auto-fit, …)` was tried and is wrong here: on a wide card it
+   adds a phantom empty 0-width track (matching a stray whitespace text node between the two child
+   divs), and the halves then no longer line up with the rows above. Wraps on a narrow card instead. */
 .admin-price-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: 1fr 1fr;
   gap: .65rem .85rem;
   align-items: start;
+}
+@media (max-width: 520px) {
+  .admin-price-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Prices in the plans table: one compact chip per cycle, so the column stays readable next to
@@ -461,6 +468,15 @@ label { font-size: .9rem; }
   border-radius: .35rem;
   padding: 0 .3rem;
   font-size: .7rem;
+}
+
+/* Admin → Commerce option table: keep the short numeric headers on one line. Left to Bootstrap's
+   automatic layout they shrink to ~40px and wrap mid-word, which reads as a broken column. */
+.commerce-options-table thead th {
+  white-space: nowrap;
+}
+.commerce-options-table td {
+  vertical-align: middle;
 }
 .admin-price-none {
   color: #cbd5e1;

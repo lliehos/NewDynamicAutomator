@@ -16,6 +16,14 @@ public sealed class LicenseService
 {
     private const string CacheKeyValidation = "license:validation";
     private const string CacheKeyRuntime = "license:runtime";
+    /// <summary>
+    /// Stamp of the cache keys minted under the current licence generation. The runtime state is
+    /// cached PER REQUEST HOST (<see cref="BuildRuntimeCacheKey"/>), so the set of keys in play
+    /// depends on which hosts have been requested. A generation counter lets a single import evict
+    /// every one of them at once instead of guessing; bumping it simply orphans the old keys, which
+    /// then expire on their own TTL.
+    /// </summary>
+    private const string CacheKeyGeneration = "license:generation";
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(1);
 
     private readonly AppDbContext _db;
@@ -129,8 +137,7 @@ public sealed class LicenseService
             if (dirty)
             {
                 await _db.SaveChangesAsync(ct);
-                _cache.Remove(CacheKeyValidation);
-                _cache.Remove(CacheKeyRuntime);
+                InvalidateLicenseCache();
             }
 
             await BackfillUnboundTenantDataAsync(trial.InstanceId, ct);
@@ -168,8 +175,7 @@ public sealed class LicenseService
         trial.LinkedAnchorId = anchor.AnchorId;
         _db.DeploymentAnchors.Add(anchor);
         await _db.SaveChangesAsync(ct);
-        _cache.Remove(CacheKeyValidation);
-        _cache.Remove(CacheKeyRuntime);
+        InvalidateLicenseCache();
         await BackfillUnboundTenantDataAsync(trial.InstanceId, ct);
         return (anchor, trial);
     }
@@ -184,6 +190,31 @@ public sealed class LicenseService
         _cache.Set(cacheKey, state, CacheTtl);
         return state;
     }
+
+    /// <summary>
+    /// Drops every licence-backed cache entry. Called whenever the stored licence, the deployment
+    /// anchor or the trial record changes.
+    /// </summary>
+    /// <remarks>
+    /// Unscoped keys are removed by name, but the runtime state is keyed by request host
+    /// (<see cref="BuildRuntimeCacheKey"/>), so there is no single key to remove. Do NOT "fix" a
+    /// stale runtime state by removing only <see cref="CacheKeyRuntime"/>: that misses every
+    /// host-scoped entry, which is exactly the bug where importing a licence left the admin page
+    /// showing the previous — even restricted — licence for the rest of the minute, and, because
+    /// the licence page is the one screen whose whole job is to reflect an import, it looked like
+    /// the import had silently failed. Bumping the generation (<see cref="CacheKeyGeneration"/>,)
+    /// folds into <see cref="BuildRuntimeCacheKey"/> so all of them become unreachable at once.
+    /// </remarks>
+    private void InvalidateLicenseCache()
+    {
+        _cache.Remove(CacheKeyValidation);
+        _cache.Remove(CacheKeyRuntime);
+        // Old generation is intentionally left to expire; only the counter has to move.
+        _cache.Set(CacheKeyGeneration, CurrentGeneration() + 1);
+    }
+
+    private long CurrentGeneration()
+        => _cache.TryGetValue(CacheKeyGeneration, out long generation) ? generation : 0;
 
     /// <summary>
     /// Whether the signed licence sold this deployment the front-end package — i.e. whether the
@@ -201,10 +232,11 @@ public sealed class LicenseService
 
     private string BuildRuntimeCacheKey()
     {
+        var generation = ":g" + CurrentGeneration();
         var (host, _) = _hostAccessor.GetCurrent();
         if (string.IsNullOrWhiteSpace(host))
-            return CacheKeyRuntime;
-        return CacheKeyRuntime + ":" + host.Trim().ToLowerInvariant();
+            return CacheKeyRuntime + generation;
+        return CacheKeyRuntime + generation + ":" + host.Trim().ToLowerInvariant();
     }
 
     public async Task<LicenseValidationResult> ValidateCurrentAsync(CancellationToken ct = default)
@@ -244,6 +276,10 @@ public sealed class LicenseService
             AllowPlanManagement = runtime.AllowsPlanManagement,
             AllowBilingual = runtime.AllowsBilingual,
             AllowFrontPackage = runtime.AllowsFrontPackage,
+            AllowLocalRun = runtime.AllowsLocalRun,
+            AllowCommerce = runtime.AllowsCommerce,
+            AllowSoftwarePurchase = runtime.AllowsSoftwarePurchase,
+            AllowSelfIssuedLicenses = runtime.AllowsSelfIssuedLicenses,
             ShowCopyright = runtime.ShowCopyright,
             UpdateServerUrl = updateUrl,
             PendingConnectionRestart = string.IsNullOrWhiteSpace(pendingRestart) ? null : pendingRestart
@@ -270,6 +306,7 @@ public sealed class LicenseService
 
         dto.AllowedHost ??= stored?.AllowedHost;
         dto.ReferralWidgetUrl ??= stored?.ReferralWidgetUrl;
+        dto.ServerBaseUrl ??= stored?.ServerBaseUrl;
 
         if (runtime.Reason == LicenseRestrictionReason.HostMismatch)
         {
@@ -491,8 +528,7 @@ public sealed class LicenseService
 
         await _db.SaveChangesAsync(ct);
         await RebindAllTenantDataToCurrentDeploymentAsync(ct);
-        _cache.Remove(CacheKeyValidation);
-        _cache.Remove(CacheKeyRuntime);
+        InvalidateLicenseCache();
         return (true, null);
     }
 

@@ -40,6 +40,22 @@ public sealed class LicenseDisplayDto
     /// public front page. The page itself stays reachable at <c>/Home/Index</c>.
     /// </summary>
     public bool AllowFrontPackage { get; set; }
+    /// <summary>
+    /// Whether processes may run locally on a user's own machine (default OFF). Granted explicitly
+    /// because local execution moves work off the server.
+    /// </summary>
+    public bool AllowLocalRun { get; set; }
+    /// <summary>
+    /// Whether this deployment may SELL — plans, the software package and licenses (default OFF).
+    /// Off for a customer's own on-premise install; on for the deployment the vendor hosts.
+    /// </summary>
+    public bool AllowCommerce { get; set; }
+    /// <summary>Whether the software package itself may be sold (default OFF; needs commerce on).</summary>
+    public bool AllowSoftwarePurchase { get; set; }
+    /// <summary>Whether the panel may issue its own licenses (default OFF; needs commerce on).</summary>
+    public bool AllowSelfIssuedLicenses { get; set; }
+    /// <summary>Signed public base URL of this deployment (null = none named).</summary>
+    public string? ServerBaseUrl { get; set; }
     public bool ShowCopyright { get; set; }
     public string? DatabaseServerHint { get; set; }
     public string? UpdateServerUrl { get; set; }
