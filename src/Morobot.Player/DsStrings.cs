@@ -15,16 +15,13 @@ internal static class DsStrings
 
     // ---- Login ----
     public const string LoginTitle = "ورود به سرور";
-    public const string ServerUrl = "آدرس سرور";
-    public const string ServerUrlHint = "مثلاً https://panel.example.com — همان آدرسی که در مرورگر باز می‌کنید.";
-    public const string UserName = "نام کاربری";
-    public const string Password = "رمز عبور";
     public const string Login = "ورود";
-    public const string LoggingIn = "در حال ورود…";
+    public const string LoginWithBrowser = "ورود با مرورگر";
+    public const string LoggingIn = "منتظر تکمیل ورود در مرورگر…";
     public const string Logout = "خروج";
-    public const string RememberMe = "ذخیرهٔ ورود در این سیستم";
-    public const string ErrServerUrl = "آدرس سرور را وارد کنید.";
-    public const string ErrCredentials = "نام کاربری و رمز را وارد کنید.";
+    public const string LoginFailed = "ورود انجام نشد.";
+    public const string ServerFromLicense = "آدرس سرور (از لایسنس)";
+    public const string ErrServerUrl = "آدرس سرور در لایسنس این نصب مشخص نشده است.";
 
     // ---- Process list ----
     public const string Processes = "فرآیندها";

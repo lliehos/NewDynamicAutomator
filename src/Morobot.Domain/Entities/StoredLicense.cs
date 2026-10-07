@@ -29,6 +29,8 @@ public class StoredLicense
     public bool AllowSoftwarePurchase { get; set; }
     /// <summary>Whether the panel may issue its own licenses after payment.</summary>
     public bool AllowSelfIssuedLicenses { get; set; }
+    /// <summary>The signed public base URL of the server this licence was issued for.</summary>
+    public string? ServerBaseUrl { get; set; }
     public int TrialDays { get; set; } = 3;
     public string? DatabaseServerHint { get; set; }
     public string? AllowedHost { get; set; }

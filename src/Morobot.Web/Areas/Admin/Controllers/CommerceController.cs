@@ -45,9 +45,32 @@ public class CommerceController : Controller
         // Whether a signing key exists is shown but never displayed: the page only needs to say
         // whether self-issued licenses will actually work.
         ViewBag.CanIssueLicenses = _license.CanIssueLicenses;
+        // How many rows are still pinned to a different deployment instance, i.e. would be invisible
+        // after a move. Surfaced so an operator can see and fix it instead of only reading about it.
+        ViewBag.UnboundUsers = await _db.Users.CountAsync(u => u.DeploymentInstanceId == null, ct);
         ViewBag.Options = await _db.SoftwarePackageOptions.OrderBy(o => o.SortOrder).ToListAsync(ct);
         ViewBag.LicensePricing = await _pricing.GetLicensePricingAsync(ct);
         return View();
+    }
+
+    /// <summary>
+    /// Re-attach every tenant row to this server's deployment instance.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes the install movable: every user and process row carries the instance it
+    /// belongs to, and after a backup is restored on a different machine those instance ids no longer
+    /// match, so the rows would be filtered out and the data would appear to have vanished. Importing
+    /// a valid licence already rebinds everything, so this exists for the case where the operator
+    /// restored a backup without re-importing — the data is there, it just needs pointing at the host
+    /// it now lives on.
+    /// </remarks>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RebindHost(CancellationToken ct)
+    {
+        await _license.RebindAllTenantDataToCurrentDeploymentAsync(ct);
+        TempData["CommerceStatus"] = "همهٔ کاربران و فرآیندها به این سرور متصل شدند.";
+        return RedirectToAction(nameof(Index));
     }
 
     /// <summary>Add or update one package option.</summary>

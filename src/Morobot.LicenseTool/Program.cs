@@ -32,7 +32,7 @@ Morobot license tool (vendor-only — never deploy private keys to customers)
 
 Commands:
   genkeypair [--out-dir <path>]
-  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--allow-plan-management true|false] [--allow-bilingual true|false] [--allow-front-package true|false] [--allow-local-run true|false] [--allow-commerce true|false] [--allow-software-purchase true|false] [--allow-self-issued-licenses true|false] [--update-url URL] [--max-source-rows N] [--max-source-bytes N] [-o license.morobot]
+  sign --request <activation.json> --private-key <pem> --valid-until <yyyy-MM-dd> [--max-users N] [--org "Name"] [--sequence N] [--allowed-host "host-or-ip"] [--referral-url URL] [--db-connection "<cs>"] [--trial-days N] [--allow-updates true|false] [--allow-legacy-migration true|false] [--allow-plan-management true|false] [--allow-bilingual true|false] [--allow-front-package true|false] [--allow-local-run true|false] [--allow-commerce true|false] [--allow-software-purchase true|false] [--allow-self-issued-licenses true|false] [--server-base-url URL] [--update-url URL] [--max-source-rows N] [--max-source-bytes N] [-o license.morobot]
   package --project <path-to-Morobot.Web.csproj> --output <folder>
   package-update --version <semver> --source <published-folder> [-o <file.zip>] [--notes "text"] [--channel stable] [--min-current <semver>] [--product-name Morobot]
   verify --license <file.morobot> [--public-key <pem>]
@@ -120,9 +120,10 @@ static int Sign(string[] args)
     var allowCommerce = string.Equals(GetArg(args, "--allow-commerce"), "true", StringComparison.OrdinalIgnoreCase);
     var allowSoftwarePurchase = string.Equals(GetArg(args, "--allow-software-purchase"), "true", StringComparison.OrdinalIgnoreCase);
     var allowSelfIssuedLicenses = string.Equals(GetArg(args, "--allow-self-issued-licenses"), "true", StringComparison.OrdinalIgnoreCase);
+    // Signed so a client never has to be told the address: the desktop player reads it from here.
+    var serverBaseUrl = GetArg(args, "--server-base-url");
     var updateUrl = GetArg(args, "--update-url");
-    var allowedHostRaw = GetArg(args, "--allowed-host");
-    string? allowedHost = null;
+    var allowedHostRaw = GetArg(args, "--allowed-host");    string? allowedHost = null;
     if (!string.IsNullOrWhiteSpace(allowedHostRaw))
     {
         if (!LicenseHostBinding.TryNormalize(allowedHostRaw, out var normalizedHost))
@@ -170,6 +171,7 @@ static int Sign(string[] args)
         AllowCommerce = allowCommerce,
         AllowSoftwarePurchase = allowSoftwarePurchase,
         AllowSelfIssuedLicenses = allowSelfIssuedLicenses,
+        ServerBaseUrl = serverBaseUrl,
         UpdateServerUrl = updateUrl,
         AllowedHost = allowedHost,
         ReferralWidgetUrl = referralUrl,

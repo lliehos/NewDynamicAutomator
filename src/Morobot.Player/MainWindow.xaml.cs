@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     {
         Title = PlayerIdentity.ProductName;
         ProductNameText.Text = PlayerIdentity.ProductName;
+        LoginProductName.Text = PlayerIdentity.ProductName;
     }
 
     // ---- Startup --------------------------------------------------------------------------------
@@ -53,18 +54,21 @@ public partial class MainWindow : Window
     private async Task BootstrapAsync()
     {
         var saved = AppSettings.Load();
-        ServerUrlBox.Text = saved.ServerUrl ?? "https://";
-        UserBox.Text = saved.UserName ?? "";
-        RememberBox.IsChecked = saved.Remember;
+
+        // The server address comes from the licence on disk, never from the user. If no licence has
+        // been imported yet, ServerAddress falls back to the development pair so the app is still
+        // usable while a deployment is being set up.
+        ResolveServerAddress();
+        ServerLabel.Text = ServerAddress.BaseUrl ?? "";
 
         // Check for an update before sign-in. The endpoint is unauthenticated precisely so a client
         // too old to talk to this server is told to update rather than failing at login with an
         // error it cannot interpret.
-        _ = CheckForUpdateAsync(saved.ServerUrl, interactive: false);
+        _ = CheckForUpdateAsync(ServerAddress.BaseUrl, interactive: false);
 
-        if (!string.IsNullOrWhiteSpace(saved.ServerUrl) && !string.IsNullOrWhiteSpace(saved.Token))
+        if (!string.IsNullOrWhiteSpace(ServerAddress.BaseUrl) && !string.IsNullOrWhiteSpace(saved.Token))
         {
-            _client = new PanelClient(saved.ServerUrl);
+            _client = new PanelClient(ServerAddress.BaseUrl);
             var res = await _client.UseTokenAsync(saved.Token!, saved.UserName);
             if (res.Ok)
             {
@@ -75,6 +79,36 @@ public partial class MainWindow : Window
             // reporting an error the user cannot act on.
             saved.Token = null;
             AppSettings.Save(saved);
+        }
+
+        if (!ServerAddress.IsFromLicense)
+            LoginStatus.Text = DsStrings.LicenseMissing;
+    }
+
+    /// <summary>
+    /// Read the signed licence to learn which server this install belongs to.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort: the app must still open when no licence is present, because the licence is also
+    /// what gates local execution and its absence is reported later and more meaningfully than a
+    /// failure to start would be.
+    /// </remarks>
+    private void ResolveServerAddress()
+    {
+        // The panel hands this install its licence on every sign-in, but the address is needed
+        // BEFORE sign-in — that is the whole point of not asking for it. So it is read from the
+        // copy the panel already mirrored locally, and a missing copy simply means the development
+        // fallback.
+        try
+        {
+            var payload = LicenseGate.ReadLocalPayload();
+            ServerAddress.Resolve(payload?.ServerBaseUrl, payload?.AllowedHost);
+        }
+        catch
+        {
+            // A corrupt or unreadable licence falls back to the development address rather than
+            // blocking the window; the licence gate reports the real problem after sign-in.
+            ServerAddress.Resolve(null, null);
         }
     }
 
@@ -131,47 +165,56 @@ public partial class MainWindow : Window
 
     // ---- Login ----------------------------------------------------------------------------------
 
-    private async void Login_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Sign in through the browser.
+    /// </summary>
+    /// <remarks>
+    /// The password is never typed into this app. The user signs in on the server's own page — with
+    /// the address bar they can check and whatever second factor their account has — and the app
+    /// receives a token afterwards. Asking for a panel password on a desktop window would train the
+    /// user to type it into something that is not the panel, which is the habit that makes phishing
+    /// work.
+    /// </remarks>
+    private async void BrowserLogin_Click(object sender, RoutedEventArgs e)
     {
-        var url = ServerUrlBox.Text?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out _))
+        var baseUrl = ServerAddress.BaseUrl;
+        if (string.IsNullOrWhiteSpace(baseUrl))
         {
             LoginStatus.Text = DsStrings.ErrServerUrl;
             return;
         }
-        var user = UserBox.Text?.Trim() ?? "";
-        var pass = PassBox.Password;
-        if (string.IsNullOrWhiteSpace(user) || string.IsNullOrEmpty(pass))
-        {
-            LoginStatus.Text = DsStrings.ErrCredentials;
-            return;
-        }
 
-        LoginButton.IsEnabled = false;
+        BrowserLoginButton.IsEnabled = false;
+        LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsMutedBrush");
         LoginStatus.Text = DsStrings.LoggingIn;
         try
         {
-            _client = new PanelClient(url);
-            var res = await _client.LoginAsync(user, pass);
+            _client = new PanelClient(baseUrl);
+            var res = await _client.LoginWithBrowserAsync(
+                status => Dispatcher.Invoke(() => LoginStatus.Text = status));
+
             if (!res.Ok)
             {
-                LoginStatus.Text = res.Error;
+                LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsDangerBrush");
+                LoginStatus.Text = res.Error ?? DsStrings.LoginFailed;
                 return;
             }
+
             LoginStatus.Text = "";
-            PassBox.Password = "";
-            AppSettings.Save(new AppSettings
-            {
-                ServerUrl = _client.BaseUrl,
-                UserName = res.Value,
-                Remember = RememberBox.IsChecked == true,
-                Token = RememberBox.IsChecked == true ? _client.AccessToken : null
-            });
+            // The token is kept so a restart does not force a browser round-trip; it is the same
+            // kind of token the extension stores, and it expires on the server's own schedule.
+            var saved = AppSettings.Load();
+            saved.ServerUrl = baseUrl;
+            saved.UserName = res.Value;
+            saved.Token = _client.AccessToken;
+            saved.Remember = true;
+            AppSettings.Save(saved);
+
             await AfterLoginAsync();
         }
         finally
         {
-            LoginButton.IsEnabled = true;
+            BrowserLoginButton.IsEnabled = true;
         }
     }
 
@@ -187,7 +230,10 @@ public partial class MainWindow : Window
         PlayerIdentity.SetAppName(await _client.GetAppNameAsync());
         ApplyProductName();
 
-        _license = LicenseGate.FromJson(await _client.GetLicenseJsonAsync());
+        var licenseJson = await _client.GetLicenseJsonAsync();
+        // Mirrored to disk so the next launch knows its server address before it can sign in.
+        LicenseGate.CacheLocal(licenseJson);
+        _license = LicenseGate.FromJson(licenseJson);
         LicenseText.Text = _license.AllowsLocalRun
             ? $"لایسنس: اجرای محلی فعال{(string.IsNullOrWhiteSpace(_license.OrganizationName) ? "" : $" — {_license.OrganizationName}")}"
             : DsStrings.LicenseBlocked;
@@ -236,6 +282,8 @@ public partial class MainWindow : Window
 
         ProcessPanel.Visibility = Visibility.Collapsed;
         LoginPanel.Visibility = Visibility.Visible;
+        LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsDangerBrush");
+        LoginStatus.Text = "";
     }
 
     // ---- Process list ---------------------------------------------------------------------------
@@ -412,7 +460,7 @@ public partial class MainWindow : Window
 
     private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
     {
-        var url = _client?.BaseUrl ?? ServerUrlBox.Text?.Trim();
+        var url = _client?.BaseUrl ?? ServerAddress.BaseUrl;
         if (string.IsNullOrWhiteSpace(url))
         {
             UpdateStatus.Text = "ابتدا آدرس سرور را وارد کنید.";

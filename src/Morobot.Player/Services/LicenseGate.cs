@@ -1,3 +1,4 @@
+using System.IO;
 using Morobot.Licensing;
 
 namespace Morobot.Player.Services;
@@ -22,6 +23,53 @@ public sealed class LicenseGate
     public bool AllowsLocalRun => _document?.Payload.AllowLocalRun == true;
     public string? OrganizationName => _document?.Payload.OrganizationName;
     public DateTime? ValidUntilUtc => _document?.Payload.ValidUntilUtc;
+
+    /// <summary>
+    /// The licence mirrored to disk by a previous sign-in.
+    /// </summary>
+    /// <remarks>
+    /// Needed before sign-in, because the server address lives in the licence and the app no longer
+    /// asks the user for it. Only verified payloads are returned: an unverifiable cached document is
+    /// treated as absent, so editing the cache cannot redirect the app to another server.
+    /// </remarks>
+    public static LicensePayload? ReadLocalPayload()
+    {
+        try
+        {
+            var path = CachedLicensePath;
+            if (!File.Exists(path)) return null;
+            var doc = LicenseJson.TryParseDocument(File.ReadAllText(path));
+            if (doc is null) return null;
+            return LicenseCrypto.VerifyPayload(doc.Payload, doc.Signature, LicensePublicKeys.Active)
+                ? doc.Payload
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Remember the panel's licence so the next launch knows its server address.</summary>
+    public static void CacheLocal(string? licenseJson)
+    {
+        if (string.IsNullOrWhiteSpace(licenseJson)) return;
+        try
+        {
+            var path = CachedLicensePath;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, licenseJson);
+        }
+        catch
+        {
+            // A cache write failure is not worth interrupting a sign-in over; the only cost is that
+            // the next launch falls back to the development address.
+        }
+    }
+
+    private static string CachedLicensePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "MorobotDesktop", "license.json");
 
     private LicenseGate(LicenseDocument? document, bool signatureValid)
     {

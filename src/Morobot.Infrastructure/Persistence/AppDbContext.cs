@@ -143,6 +143,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.AllowCommerce).HasDefaultValue(false);
             e.Property(x => x.AllowSoftwarePurchase).HasDefaultValue(false);
             e.Property(x => x.AllowSelfIssuedLicenses).HasDefaultValue(false);
+            e.Property(x => x.ServerBaseUrl).HasMaxLength(500);
             e.HasIndex(x => x.ImportedAtUtc);
         });
 

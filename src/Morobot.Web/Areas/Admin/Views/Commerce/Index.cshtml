@@ -8,7 +8,9 @@
     var canIssue = ViewBag.CanIssueLicenses is true;
     var options = ViewBag.Options as List<SoftwarePackageOption> ?? new List<SoftwarePackageOption>();
     var lp = ViewBag.LicensePricing as LicensePricing ?? new LicensePricing();
+    var unboundUsers = ViewBag.UnboundUsers is int n ? n : 0;
     var ok = TempData["CommerceOk"] as string;
+    var status = TempData["CommerceStatus"] as string;
     var err = TempData["CommerceError"] as string;
 }
 
@@ -21,6 +23,10 @@
   @if (!string.IsNullOrWhiteSpace(ok))
   {
     <div class="alert alert-success">@ok</div>
+  }
+  @if (!string.IsNullOrWhiteSpace(status))
+  {
+    <div class="alert alert-success">@status</div>
   }
   @if (!string.IsNullOrWhiteSpace(err))
   {
@@ -211,6 +217,41 @@
         <div class="col-12">
           <button type="submit" class="btn btn-primary btn-sm">ذخیرهٔ قیمت لایسنس</button>
         </div>
+      </form>
+    </div>
+  </div>
+
+  @*
+    Portability. This install is the one that holds the sales data, so it is also the one whose
+    data must survive being moved — a backup that restores into an install where every row still
+    points at the old host would look like total data loss.
+  *@
+  <div class="card mt-4">
+    <div class="card-header">
+      <strong>انتقال و پشتیبان‌گیری</strong>
+    </div>
+    <div class="card-body">
+      <p class="small text-muted mb-2">
+        برای جابه‌جایی این نصب به سرور دیگر: از دیتابیس پشتیبان بگیرید، همان دیتابیس را روی سرور جدید
+        بازگردانید، فایل‌های برنامه را منتقل کنید و لایسنس را در نصب جدید وارد کنید. با وارد کردن لایسنس،
+        همهٔ کاربران و فرآیندها به‌طور خودکار به سرور جدید متصل می‌شوند و اطلاعاتی از دست نمی‌رود.
+      </p>
+      <p class="small text-muted mb-3">
+        اگر پشتیبان را بازگردانده‌اید ولی لایسنس را دوباره وارد نکرده‌اید، با دکمهٔ زیر رکوردها را به این
+        سرور متصل کنید.
+      </p>
+
+      @if (unboundUsers > 0)
+      {
+        <div class="alert alert-warning small">
+          @unboundUsers کاربر بدون اتصال به سرور وجود دارد. اگر این نصب تازه منتقل شده است، دکمهٔ زیر را بزنید.
+        </div>
+      }
+
+      <form method="post" asp-action="RebindHost" asp-area="Admin"
+            onsubmit="return confirm('همهٔ کاربران و فرآیندها به این سرور متصل می‌شوند. ادامه می‌دهید؟');">
+        @Html.AntiForgeryToken()
+        <button type="submit" class="btn btn-outline-primary btn-sm">اتصال داده‌های موجود به این سرور</button>
       </form>
     </div>
   </div>

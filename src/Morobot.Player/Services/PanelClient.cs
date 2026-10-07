@@ -87,6 +87,114 @@ public sealed class PanelClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// Begin a browser sign-in and wait for the user to finish it there.
+    /// </summary>
+    /// <remarks>
+    /// The app never sees the password. It registers a random state, opens the user's own browser at
+    /// the server's authorise page, and polls until the browser reports the sign-in is done — the flow
+    /// VS Code and the GitHub CLI use, so the user signs in on a page whose address bar they can check,
+    /// with whatever second factor their account already has.
+    ///
+    /// The browser is opened with <c>UseShellExecute</c> so it is the user's default browser and not a
+    /// window inside this app: an embedded browser would put the credential field back inside a program
+    /// the user has to trust, which is the thing this flow exists to avoid.
+    /// </remarks>
+    public async Task<ApiResult<string>> LoginWithBrowserAsync(
+        Action<string>? onStatus = null,
+        CancellationToken ct = default)
+    {
+        // A random state binds this app instance to the browser tab that answers it. It is not a
+        // secret; it exists so a code minted for one handshake cannot be redeemed in another.
+        var state = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+
+        try
+        {
+            var begin = await _http.PostAsJsonAsync($"{BaseUrl}/Panel/DesktopAuth/Begin", new { state }, JsonOpts, ct);
+            if (!begin.IsSuccessStatusCode)
+                return ApiResult<string>.Fail(await ReadErrorAsync(begin, ct) ?? "شروع ورود ناموفق بود.");
+        }
+        catch (Exception ex)
+        {
+            return ApiResult<string>.Fail($"اتصال به سرور برقرار نشد: {ex.Message}");
+        }
+
+        var authorizeUrl = $"{BaseUrl}/Panel/DesktopAuth/Authorize?state={Uri.EscapeDataString(state)}";
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(authorizeUrl)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            return ApiResult<string>.Fail($"باز کردن مرورگر ناموفق بود: {ex.Message}");
+        }
+
+        onStatus?.Invoke("منتظر تکمیل ورود در مرورگر…");
+
+        // Poll until the browser approves it. The window is generous because it covers the user
+        // typing a password and completing a second factor, but bounded so a tab closed by mistake
+        // does not leave the login button disabled forever.
+        var deadline = DateTime.UtcNow.AddMinutes(3);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (ct.IsCancellationRequested) return ApiResult<string>.Fail("لغو شد.");
+            await Task.Delay(1500, ct);
+
+            string status;
+            try
+            {
+                using var poll = await _http.GetAsync($"{BaseUrl}/Panel/DesktopAuth/Poll?state={Uri.EscapeDataString(state)}", ct);
+                var doc = await poll.Content.ReadFromJsonAsync<JsonElement>(JsonOpts, ct);
+                status = ReadString(doc, "status") ?? "expired";
+                if (status == "ready")
+                {
+                    var code = ReadString(doc, "code");
+                    if (string.IsNullOrWhiteSpace(code)) return ApiResult<string>.Fail("کد ورود دریافت نشد.");
+                    return await RedeemAsync(state, code, onStatus, ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                return ApiResult<string>.Fail($"اتصال به سرور قطع شد: {ex.Message}");
+            }
+
+            // "expired" means the server no longer knows this handshake — a restart, or the user took
+            // far too long. Retrying would need a fresh state, so this is reported instead.
+            if (status == "expired") return ApiResult<string>.Fail("مهلت ورود به پایان رسید. دوباره تلاش کنید.");
+        }
+
+        return ApiResult<string>.Fail("مهلت ورود در مرورگر به پایان رسید.");
+    }
+
+    /// <summary>Exchange the browser's one-time code for an API token.</summary>
+    private async Task<ApiResult<string>> RedeemAsync(
+        string state, string code, Action<string>? onStatus, CancellationToken ct)
+    {
+        try
+        {
+            var res = await _http.PostAsJsonAsync($"{BaseUrl}/Panel/DesktopAuth/Redeem", new { state, code }, JsonOpts, ct);
+            if (!res.IsSuccessStatusCode)
+                return ApiResult<string>.Fail(await ReadErrorAsync(res, ct) ?? "ورود ناموفق بود.");
+
+            var doc = await res.Content.ReadFromJsonAsync<JsonElement>(JsonOpts, ct);
+            var token = ReadString(doc, "token");
+            if (string.IsNullOrWhiteSpace(token)) return ApiResult<string>.Fail("پاسخ سرور توکن نداشت.");
+
+            AccessToken = token;
+            UserName = ReadString(doc, "userName") ?? "کاربر";
+            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            onStatus?.Invoke("");
+            return ApiResult<string>.Success(UserName!);
+        }
+        catch (Exception ex)
+        {
+            return ApiResult<string>.Fail($"تبادل کد ورود ناموفق بود: {ex.Message}");
+        }
+    }
+
     /// <summary>Verify an already-issued token (e.g. minted in the browser) still works.</summary>
     public async Task<ApiResult<string>> UseTokenAsync(string token, string? userName, CancellationToken ct = default)
     {

@@ -111,6 +111,43 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                     ctx.Response.Redirect("/Panel/Account/Login");
                 }
                 return Task.CompletedTask;
+            },
+            OnTokenValidated = async ctx =>
+            {
+                // Single-session enforcement. Each token carries the session version it was minted
+                // at, and a newer sign-in bumps the stored one, so a token that no longer matches is
+                // a token that has been superseded. Rejecting here rather than in a filter means
+                // EVERY entry point — panel pages, the API the extension uses, the SignalR hubs —
+                // is covered by one check, and the check costs one keyed read.
+                var versionClaim = ctx.Principal?.FindFirst("session_version")?.Value;
+                if (!int.TryParse(versionClaim, out var tokenVersion)) return;
+
+                var userIdClaim = ctx.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                if (!int.TryParse(userIdClaim, out var userId)) return;
+
+                var license = ctx.HttpContext.RequestServices
+                    .GetRequiredService<Morobot.Infrastructure.Services.LicenseService>();
+                Morobot.Licensing.LicenseRuntimeState runtime;
+                try { runtime = await license.GetRuntimeStateAsync(ctx.HttpContext.RequestAborted); }
+                catch { return; }
+
+                // A deployment that sells no seats has nothing to protect, so the rule is not applied
+                // there — an install with no commerce must never start signing people out.
+                if (!runtime.EnforcesSingleSession) return;
+
+                var db = ctx.HttpContext.RequestServices
+                    .GetRequiredService<Morobot.Infrastructure.Persistence.AppDbContext>();
+                var stored = await db.Users
+                    .AsNoTracking()
+                    .Where(u => u.Id == userId)
+                    .Select(u => (int?)u.SessionVersion)
+                    .FirstOrDefaultAsync(ctx.HttpContext.RequestAborted);
+                if (stored is null) return;
+
+                if (stored.Value != tokenVersion)
+                {
+                    ctx.Fail("این حساب روی دستگاه دیگری وارد شده است.");
+                }
             }
         };
     });

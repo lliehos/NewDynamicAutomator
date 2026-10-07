@@ -38,6 +38,19 @@ public class AppUser
     /// </summary>
     public bool PasswordChangeRequired { get; set; }
 
+    /// <summary>
+    /// Bumped whenever an older sign-in must stop being accepted.
+    /// </summary>
+    /// <remarks>
+    /// Used to hold one account to one live session on deployments that sell seats (see
+    /// LicenseRuntimeState.EnforcesSingleSession). Bumping the value makes every previously issued
+    /// token stale, because each token carries the version it was minted at — which is what makes a
+    /// new sign-in evict the old one without a session table, a revocation list, or a lookup on every
+    /// request. Zero means "never bumped", so existing accounts are unaffected until a second sign-in
+    /// actually happens on such a deployment.
+    /// </remarks>
+    public int SessionVersion { get; set; }
+
     public Plan? Plan { get; set; }
     public ICollection<Process> CreatedProcesses { get; set; } = new List<Process>();
     public ICollection<ProcessShare> ProcessShares { get; set; } = new List<ProcessShare>();

@@ -454,6 +454,18 @@ public class AuthService
         }
 
         await _events.UpsertDeviceSessionAsync(user.Id, user.UserName, request.Device, ip, ct);
+
+        // Single-session deployments hold each account to one live sign-in, which is what stops a
+        // purchased seat being shared around an office. Bumping the stored version invalidates every
+        // token issued before this moment, so the sign-in that just happened wins and the other
+        // machine is signed out on its next request. Only done here, on a successful password/LDAP
+        // verification — never on a failed attempt, which must not be able to log anyone out.
+        if (await EnforcesSingleSessionAsync(ct))
+        {
+            user.SessionVersion += 1;
+            await _db.SaveChangesAsync(ct);
+        }
+
         var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
         var token = CreateToken(user, entitlements);
         if (mode != AuthMode.Ldap)
@@ -475,6 +487,27 @@ public class AuthService
             Role = user.Role.ToString(),
             Entitlements = entitlements
         }, null);
+    }
+
+    /// <summary>
+    /// Whether this deployment holds each account to a single live session.
+    /// </summary>
+    /// <remarks>
+    /// Read from the licence, not from a setting: it protects the revenue model, so a deployment's
+    /// administrator should not be able to switch it off. A licence read failure resolves to false,
+    /// because failing to read the licence must not start logging people out of a deployment that
+    /// never sold anything.
+    /// </remarks>
+    private async Task<bool> EnforcesSingleSessionAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            return (await _license.GetRuntimeStateAsync(ct)).EnforcesSingleSession;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string? Trunc(string? s, int max)
@@ -596,7 +629,11 @@ public class AuthService
             new("profile_complete", IsProfileComplete(user) ? "1" : "0"),
             // Read by the panel gate: a pending password change must be finished before the rest of
             // the panel opens. Lives in the token so the gate costs no query per request.
-            new("password_change_required", user.PasswordChangeRequired ? "1" : "0")
+            new("password_change_required", user.PasswordChangeRequired ? "1" : "0"),
+            // The single-session check compares this against the user row, so a superseded token is
+            // rejected without an extra table. Carried in the token for the same reason as the
+            // password flag: the check must not cost a query on every request.
+            new("session_version", user.SessionVersion.ToString())
         };
         if (!string.IsNullOrWhiteSpace(user.FirstName))
             claims.Add(new Claim(ClaimTypes.GivenName, user.FirstName));

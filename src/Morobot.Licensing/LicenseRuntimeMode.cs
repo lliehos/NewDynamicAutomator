@@ -106,6 +106,18 @@ public sealed class LicenseRuntimeState
         AllowsCommerce && (Payload?.AllowSelfIssuedLicenses ?? false);
 
     /// <summary>
+    /// Whether one account may hold only one signed-in device at a time.
+    /// </summary>
+    /// <remarks>
+    /// Tied to <see cref="AllowsCommerce"/> rather than being its own flag, because it exists for one
+    /// reason: on a deployment that SELLS seats, a single purchased account shared among an office is
+    /// the whole revenue model defeated. A deployment that sells nothing has no seat to protect, so
+    /// imposing a single-device rule there would be an obstacle with no purpose — which is why this
+    /// is derived rather than separately granted.
+    /// </remarks>
+    public bool EnforcesSingleSession => AllowsCommerce;
+
+    /// <summary>
     /// Row ceiling implied by the license. A trial or restricted install falls back to the small
     /// trial cap; a licensed install uses the signed value (null = the vendor sold no ceiling).
     /// </summary>

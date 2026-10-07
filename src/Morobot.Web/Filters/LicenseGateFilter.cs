@@ -83,10 +83,40 @@ public sealed class LicenseGateFilter : IAsyncActionFilter
                 || string.Equals(action, "Logout", StringComparison.OrdinalIgnoreCase)))
             return true;
 
+        /*
+         * Desktop sign-in handshake.
+         *
+         * The Player has no session before it signs in, so all three of these are anonymous — and
+         * Authorize/Login are how the user GETS a session. Without this exemption the gate answered
+         * them with a redirect to the login page, which the Player read as a malformed response: the
+         * browser would open the login page, redirect straight back to it, and spin forever with no
+         * error a user could act on.
+         *
+         * Exempting them leaks nothing. Begin only records a random state; Poll returns a code only
+         * after Authorize has confirmed a signed-in user; Redeem exchanges that code for a token for
+         * the user it was already issued for. None of them can be used to reach data without a real
+         * sign-in happening first.
+         */
+        if (string.Equals(area, "Panel", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(controller, "DesktopAuth", StringComparison.OrdinalIgnoreCase))
+            return true;
+
         if (path.StartsWith("/api/auth", StringComparison.OrdinalIgnoreCase))
             return true;
 
         if (path.StartsWith("/checkupdate", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        /*
+         * Desktop player delivery and version checks.
+         *
+         * Same reasoning as the extension endpoints below: /desktop/version and /desktop/download
+         * must answer a client that has no session yet — a Player too old for this server has to be
+         * told to update BEFORE it can sign in, which is the only moment the message is useful. Left
+         * unexempted, the gate redirected them to the login page and the Player reported "no update
+         * available" forever, so a broken client could never learn there was a fixed build waiting.
+         */
+        if (path.StartsWith("/desktop/", StringComparison.OrdinalIgnoreCase))
             return true;
 
         /*

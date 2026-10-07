@@ -7,7 +7,7 @@
         FlowDirection="RightToLeft"
         WindowStartupLocation="CenterScreen"
         Icon="pack://application:,,,/Assets/morobot-icon.png">
-  <Grid Margin="18">
+  <Grid Margin="14">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
@@ -16,49 +16,72 @@
 
     <!-- Header. The name is set from branding after sign-in, so it shows the deployment's product
          name rather than the shipped one. -->
-    <StackPanel Grid.Row="0" Margin="0,0,0,14">
+    <StackPanel Grid.Row="0" Margin="0,0,0,12">
       <StackPanel Orientation="Horizontal">
-        <Image Source="pack://application:,,,/Assets/morobot-icon.png" Width="34" Height="34" Margin="0,0,10,0"
+        <Image Source="pack://application:,,,/Assets/morobot-icon.png" Width="30" Height="30" Margin="0,0,9,0"
                RenderOptions.BitmapScalingMode="HighQuality"/>
-        <TextBlock x:Name="ProductNameText" Style="{StaticResource DsTitle}" Text="Morobot Player"
+        <TextBlock x:Name="ProductNameText" Style="{StaticResource DsTitle}" FontSize="18" Text="Morobot Player"
                    VerticalAlignment="Center"/>
       </StackPanel>
-      <TextBlock Style="{StaticResource DsHint}" Margin="44,4,0,0"
-                 Text="اجرای فرآیندها روی همین سیستم با فایرفاکس — نتیجهٔ اجرا مثل افزونه نمایش داده می‌شود."/>
     </StackPanel>
 
     <!-- Login panel -->
-    <Border x:Name="LoginPanel" Grid.Row="1" Style="{StaticResource DsCard}" VerticalAlignment="Top"
-            MaxWidth="560" HorizontalAlignment="Center">
-      <StackPanel>
-        <TextBlock Style="{StaticResource DsSectionTitle}" Text="ورود به سرور"/>
+    <Border x:Name="LoginPanel" Grid.Row="1" Style="{StaticResource DsCard}" VerticalAlignment="Center"
+            MaxWidth="400" HorizontalAlignment="Center" Padding="0">
+      <Grid>
+        <!--
+          Split banner + form rather than one column: the identity block answers "what am I signing
+          into" before the user commits, and the form below stays a single short column, which is
+          what keeps the card compact on a minimised window.
+        -->
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
 
-        <StackPanel Style="{StaticResource DsFieldBlock}">
-          <TextBlock Text="آدرس سرور" FontWeight="SemiBold" Margin="0,0,0,4"/>
-          <TextBox x:Name="ServerUrlBox" Style="{StaticResource DsTextBox}"
-                   Text="https://"/>
-          <TextBlock Style="{StaticResource DsHint}" Margin="0,4,0,0"
-                     Text="مثلاً https://panel.example.com — همان آدرسی که در مرورگر باز می‌کنید."/>
+        <Border Grid.Row="0" CornerRadius="14,14,0,0" Padding="24,22">
+          <Border.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+              <GradientStop Color="#7D71F5" Offset="0"/>
+              <GradientStop Color="#5B4FD6" Offset="1"/>
+            </LinearGradientBrush>
+          </Border.Background>
+          <StackPanel HorizontalAlignment="Center">
+            <Image Source="pack://application:,,,/Assets/morobot-icon.png" Width="52" Height="52"
+                   RenderOptions.BitmapScalingMode="HighQuality" Margin="0,0,0,10"/>
+            <TextBlock x:Name="LoginProductName" FontFamily="{StaticResource DsFontBold}" FontSize="18"
+                       Foreground="White" HorizontalAlignment="Center" Text="Morobot Player"/>
+            <TextBlock Foreground="#E4E1FB" FontSize="12" Margin="0,6,0,0" HorizontalAlignment="Center"
+                       Text="اجرای فرآیندها روی همین سیستم"/>
+          </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="1" Margin="24,22,24,24">
+          <TextBlock Style="{StaticResource DsHint}" TextAlignment="Center" Margin="0,0,0,18"
+                     Text="برای ورود، مرورگر باز می‌شود و پس از احراز هویت به این برنامه بازمی‌گردید."/>
+
+          <Button x:Name="BrowserLoginButton" Style="{StaticResource DsBrandButton}"
+                  Click="BrowserLogin_Click" Margin="0,0,0,12">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="16"
+                         VerticalAlignment="Center" Margin="0,0,8,0"/>
+              <TextBlock Text="ورود با مرورگر" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+
+          <!-- The address is shown, never asked for: it comes from the licence. -->
+          <Border Style="{StaticResource DsSoftPanel}" Margin="0,0,0,0">
+            <StackPanel>
+              <TextBlock Style="{StaticResource DsHint}" FontSize="11" Text="آدرس سرور (از لایسنس)"/>
+              <TextBlock x:Name="ServerLabel" FontSize="12.5" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"
+                         Foreground="{StaticResource DsInkBrush}"/>
+            </StackPanel>
+          </Border>
+
+          <TextBlock x:Name="LoginStatus" Style="{StaticResource DsHint}" Margin="0,14,0,0"
+                     TextAlignment="Center" Foreground="{StaticResource DsDangerBrush}"/>
         </StackPanel>
-
-        <StackPanel Style="{StaticResource DsFieldBlock}">
-          <TextBlock Text="نام کاربری" FontWeight="SemiBold" Margin="0,0,0,4"/>
-          <TextBox x:Name="UserBox" Style="{StaticResource DsTextBox}"/>
-        </StackPanel>
-
-        <StackPanel Style="{StaticResource DsFieldBlock}">
-          <TextBlock Text="رمز عبور" FontWeight="SemiBold" Margin="0,0,0,4"/>
-          <PasswordBox x:Name="PassBox" Style="{StaticResource DsPasswordBox}"/>
-        </StackPanel>
-
-        <CheckBox x:Name="RememberBox" Content="ذخیرهٔ ورود در این سیستم (توکن)" Margin="0,4,0,12"/>
-
-        <Button x:Name="LoginButton" Style="{StaticResource DsButton}" Content="ورود"
-                HorizontalAlignment="Right" MinWidth="120" Click="Login_Click"/>
-
-        <TextBlock x:Name="LoginStatus" Style="{StaticResource DsHint}" Margin="0,10,0,0"
-                   Foreground="{StaticResource DsDangerBrush}"/>
-      </StackPanel>
+      </Grid>
     </Border>
 
     <!-- Process list -->

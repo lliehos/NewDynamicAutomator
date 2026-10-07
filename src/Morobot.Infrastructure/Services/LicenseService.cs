@@ -457,6 +457,9 @@ public sealed class LicenseService
             AllowCommerce = payload.AllowCommerce,
             AllowSoftwarePurchase = payload.AllowSoftwarePurchase,
             AllowSelfIssuedLicenses = payload.AllowSelfIssuedLicenses,
+            ServerBaseUrl = string.IsNullOrWhiteSpace(payload.ServerBaseUrl)
+                ? null
+                : payload.ServerBaseUrl.TrimEnd('/'),
             TrialDays = payload.TrialDays > 0 ? payload.TrialDays : 3,
             DatabaseServerHint = ExtractServerHint(payload.DatabaseConnectionString),
             AllowedHost = string.IsNullOrWhiteSpace(payload.AllowedHost)

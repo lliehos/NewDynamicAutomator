@@ -29,6 +29,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The panel's own Persian face, embedded rather than installed. A desktop app that assumed a
+         system font rendered correct Persian on the developer's machine and broke everywhere else;
+         carrying the same two files the panel ships means the player looks like the panel on any
+         Windows install, with no dependency on what the user happens to have. -->
+    <Resource Include="Assets\Fonts\Vazir-FD-WOL.ttf" />
+    <Resource Include="Assets\Fonts\Vazir-Bold-FD-WOL.ttf" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- The license model is shared with the web app, so a signed license means the same thing in
          both and the feature gate cannot drift between them. -->
     <ProjectReference Include="..\Morobot.Licensing\Morobot.Licensing.csproj" />

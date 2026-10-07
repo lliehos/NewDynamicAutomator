@@ -72,6 +72,18 @@ public sealed class LicensePayload
     public string? UpdateServerUrl { get; set; }
     /// <summary>When set, HTTP Host (or this IP) must match. Empty = no host lock.</summary>
     public string? AllowedHost { get; set; }
+
+    /// <summary>
+    /// The public base URL of the server this licence was issued for, e.g. https://panel.example.com.
+    /// </summary>
+    /// <remarks>
+    /// Signed into the licence so a client never has to be told it. The desktop player reads this to
+    /// know which server to call — asking the user to type an address was both a needless step and a
+    /// wrong one, since the address is already fixed by the licence that authorises the install, and
+    /// typing it by hand could only ever point the app at a different deployment than the one it is
+    /// licensed for. Empty falls back to the host lock, or to a same-machine address in development.
+    /// </remarks>
+    public string? ServerBaseUrl { get; set; }
     /// <summary>
     /// Link the in-panel referral QR widget points at. Vendor-signed rather than a database
     /// setting so a deployment cannot repoint the traffic the widget sends out. Empty falls
