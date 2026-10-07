@@ -28,6 +28,11 @@ public class HomeController : Controller
     public IActionResult DataSources()
     {
         ViewData["Title"] = "منابع";
+        // The "create public source" button is shown only to the roles the API lets create one, so
+        // the page never offers a control that would come back 400. The API re-checks the role — this
+        // only decides whether the button is drawn.
+        ViewBag.CanCreatePublicSource =
+            User.IsInRole(nameof(UserRole.Admin)) || User.IsInRole(nameof(UserRole.ProcessManager));
         return View();
     }
 

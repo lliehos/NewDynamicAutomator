@@ -139,6 +139,32 @@
   const titleEl = document.getElementById("flow-title");
   const originEl = document.getElementById("flow-origin");
   const ctxMenu = document.getElementById("ctx-menu");
+
+  // A graceful close for the context menu's fly-out submenus.
+  //
+  // The submenu opens on hover, and CSS alone closed it the instant the pointer left the parent row.
+  // Crossing the few pixels to the child is not instant, so a slightly diagonal or unhurried move
+  // landed in the gap with the submenu already gone — the menu felt like it had to be "chased".
+  // Reopening cancels the pending close, so travelling between sibling rows stays fluid while the
+  // menu still disappears promptly once the pointer truly leaves.
+  const SUBMENU_CLOSE_DELAY_MS = 260;
+  let submenuCloseTimer = null;
+  function cancelSubmenuClose() {
+    if (submenuCloseTimer !== null) {
+      clearTimeout(submenuCloseTimer);
+      submenuCloseTimer = null;
+    }
+  }
+  function scheduleSubmenuClose(li) {
+    cancelSubmenuClose();
+    submenuCloseTimer = setTimeout(() => {
+      submenuCloseTimer = null;
+      // Only hide it if the pointer has not come back to the row or its child in the meantime.
+      if (li.matches(":hover") || li.querySelector(".ctx-submenu:hover")) return;
+      const sub = li.querySelector(".ctx-submenu");
+      if (sub) sub.hidden = true;
+    }, SUBMENU_CLOSE_DELAY_MS);
+  }
   const paletteRoot = document.getElementById("palette-root");
   const paletteGroup = document.getElementById("palette-group");
   const btnBack = document.getElementById("btn-back-group");
@@ -2861,8 +2887,75 @@
       </div>
       <div id="ds-status" class="ds-status"></div>
       <ul class="ds-list" id="ds-list"></ul>
+      <button type="button" class="btn-flow" id="ds-use-public" style="width:100%;margin-top:8px" ${disabled}>
+        ${t("editor.ds.useShared")}
+      </button>
       </div>
     `;
+  }
+
+  /**
+   * Attach a shared (public) source to this process, so its columns can be picked as a step target
+   * or a condition operand.
+   *
+   * The editor's source list is the PROCESS canvas, not the user's library, so a public source has
+   * to be attached before it can be chosen. The server decides what is attachable; this only offers
+   * the ones the API already returns as public.
+   */
+  async function attachPublicSource() {
+    if (!canModify) return;
+    let list;
+    try {
+      const res = await fetch("/api/datasources", { credentials: "same-origin" });
+      list = await res.json();
+    } catch {
+      setStatus(t("editor.ds.sharedLoadFail"), "error");
+      return;
+    }
+    const already = new Set((graph.dataSources || []).map((d) => Number(d.id)));
+    const shared = (Array.isArray(list) ? list : []).filter((d) => d.isPublic && !already.has(Number(d.id)));
+    if (!shared.length) {
+      setStatus(t("editor.ds.noShared"), "info");
+      return;
+    }
+    const pick = await (window.DaNotify?.select
+      ? DaNotify.select(t("editor.ds.pickShared"), shared.map((d) => ({
+          value: String(d.id),
+          label: `${d.title}${d.ownerUserName ? ` — ${d.ownerUserName}` : ""}`
+        })), { title: t("editor.ds.useShared"), okText: t("common.add"), cancelText: t("common.cancel") })
+      : Promise.resolve(String(shared[0].id)));
+    if (pick == null) return;
+
+    const sid = Number(pick);
+    if (!Number.isFinite(sid) || sid <= 0) return;
+    const meta = shared.find((d) => Number(d.id) === sid);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/datasources/${sid}/attach`, {
+        method: "POST",
+        credentials: "same-origin"
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || t("editor.ds.attachFail"));
+      }
+      graph.dataSources = (graph.dataSources || []).concat([{
+        id: sid,
+        title: meta.title,
+        fileName: meta.fileName,
+        columnCount: meta.columnCount,
+        rowCount: meta.rowCount,
+        columnKeys: meta.columnKeys || [],
+        columns: meta.columns || []
+      }]);
+      // The first source in a process becomes the default, matching the upload path.
+      if (masterDataSourceId() == null) setMasterDataSource(sid);
+      await save();
+      renderInspector();
+      render();
+      setStatus(t("editor.ds.sharedAdded"), "success");
+    } catch (e) {
+      setStatus(e.message || t("editor.ds.attachFail"), "error");
+    }
   }
 
   function processPropsHtml() {
@@ -2969,6 +3062,7 @@
   function bindDataSourcesPanel() {
     const zone = document.getElementById("ds-dropzone");
     const fileInp = document.getElementById("ds-file");
+    document.getElementById("ds-use-public")?.addEventListener("click", () => { attachPublicSource(); });
     if (zone && fileInp && canModify) {
       const openPicker = () => {
         if (zone.classList.contains("is-busy")) return;
@@ -6285,7 +6379,13 @@
     ctxMenu.querySelectorAll("li.has-sub").forEach((li) => {
       const act = li.dataset.act;
       const open = () => {
+        cancelSubmenuClose();
         if (li.classList.contains("disabled")) return;
+        // Only one submenu may be open at a time: opening one closes the rest. (This replaces the
+        // CSS sibling rule that used to do it, which also caused the instant-close problem.)
+        ctxMenu.querySelectorAll("li.has-sub > .ctx-submenu").forEach((other) => {
+          if (!li.contains(other)) other.hidden = true;
+        });
         if (act === "move-to-group") fillMoveToGroupSubmenu(li);
         else {
           // "…next" runs the node then follows the edges, so it needs a real tab the same way a
@@ -6304,6 +6404,7 @@
         }
       };
       li.addEventListener("mouseenter", open);
+      li.addEventListener("mouseleave", () => scheduleSubmenuClose(li));
       li.addEventListener("click", (ev) => {
         ev.stopPropagation();
         open();
@@ -6903,7 +7004,7 @@
     if (!document.hidden) reconcilePlayState();
   });
   setInterval(reconcilePlayState, 5000);
-  window.addEventListener("click", () => { if (ctxMenu) ctxMenu.hidden = true; });
+  window.addEventListener("click", () => { if (ctxMenu) { cancelSubmenuClose(); ctxMenu.hidden = true; } });
 
   document.getElementById("btn-play-pause")?.addEventListener("click", (ev) => {
     ev.preventDefault();

@@ -9,6 +9,15 @@
       <h4 class="da-home-title mb-0" data-i18n="panel.sourcesTitle">@L["panel.sourcesTitle"]</h4>
       <p class="da-home-sub mb-0" id="da-sources-status" data-i18n="panel.sourcesSub">@L["panel.sourcesSub"]</p>
     </div>
+    @if (ViewBag.CanCreatePublicSource == true)
+    {
+      @* A public source is visible to every user, so making one is a team-level action: the button
+         is shown only to the roles the API lets create one. *@
+      <div class="da-home-actions">
+        <button type="button" class="btn btn-primary btn-sm" id="da-create-public-source"
+                data-i18n="sources.createPublic">@L["sources.createPublic"]</button>
+      </div>
+    }
   </header>
 
   <div class="da-tasks-panel" id="da-sources-panel">

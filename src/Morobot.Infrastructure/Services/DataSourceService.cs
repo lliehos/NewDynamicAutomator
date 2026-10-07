@@ -6,6 +6,7 @@ using ClosedXML.Excel;
 using Morobot.Contracts.Auth;
 using Morobot.Contracts.DataSources;
 using Morobot.Domain.Entities;
+using Morobot.Domain.Enums;
 using Morobot.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -141,9 +142,13 @@ public class DataSourceService
 
     public async Task<List<DataSourceListItemDto>> ListForUserAsync(int userId, CancellationToken ct = default)
     {
+        // Own sources plus every public one. A public source is shown inline with the user's own
+        // rather than in a separate page, because it is used the same way — the badge and the hidden
+        // structural buttons are what tell the two apart.
         var rows = await _db.DataSources.AsNoTracking()
-            .Where(d => d.OwnerUserId == userId)
-            .OrderByDescending(d => d.UpdatedAtUtc)
+            .Where(d => d.OwnerUserId == userId || d.IsPublic)
+            .OrderByDescending(d => d.IsPublic)
+            .ThenByDescending(d => d.UpdatedAtUtc)
             .Select(d => new
             {
                 d.Id,
@@ -152,9 +157,15 @@ public class DataSourceService
                 d.ColumnCount,
                 d.RowCount,
                 d.ColumnsJson,
+                d.IsPublic,
+                d.OwnerUserId,
+                OwnerUserName = d.Owner != null ? d.Owner.UserName : null,
                 Links = d.ProcessLinks.Select(l => l.Process!.Title).ToList()
             })
             .ToListAsync(ct);
+
+        // Resolved once: whether this user may reshape shared sources at all.
+        var canReshapePublic = await IsProcessManagerOrAdminAsync(userId, ct);
 
         return rows.Select(d =>
         {
@@ -169,9 +180,21 @@ public class DataSourceService
                 Columns = cols,
                 ColumnKeys = cols.Select(c => c.Key).ToList(),
                 LinkedProcessCount = d.Links.Count,
-                LinkedProcessTitles = d.Links
+                LinkedProcessTitles = d.Links,
+                IsPublic = d.IsPublic,
+                OwnerUserName = d.OwnerUserName,
+                // Mirrors CanReshapeAsync so the list never offers a button the service would refuse.
+                CanEditStructure = d.OwnerUserId == userId || (d.IsPublic && canReshapePublic)
             };
         }).ToList();
+    }
+
+    /// <summary>Whether the user carries the role that may shape shared sources.</summary>
+    public async Task<bool> IsProcessManagerOrAdminAsync(int userId, CancellationToken ct = default)
+    {
+        var role = await _db.Users.Where(u => u.Id == userId)
+            .Select(u => (UserRole?)u.Role).FirstOrDefaultAsync(ct);
+        return role is UserRole.ProcessManager or UserRole.Admin;
     }
 
     public async Task<List<AdminLibrarySourceRow>> ListAllForAdminAsync(CancellationToken ct = default)
@@ -271,6 +294,44 @@ public class DataSourceService
         entity.CellsJson = JsonSerializer.Serialize(cells, JsonOpts);
         await _db.SaveChangesAsync(ct);
         return ToUploadResponse(entity, columns, cells);
+    }
+
+    /// <summary>
+    /// Create a shared source that every signed-in user can read and use as an action target.
+    /// </summary>
+    /// <remarks>
+    /// Restricted to ProcessManager/Admin: a public source is visible to everyone, so creating one
+    /// is a team-level decision, not a personal one. The creator stays the owner, which means the
+    /// row counts against their plan quota exactly like a private source — the point of that choice
+    /// is that "public" must not become a way to hold unlimited data for free.
+    /// </remarks>
+    public async Task<UploadDataSourceResponse> CreatePublicAsync(
+        int userId, CreateDataSourceRequest req, EntitlementsDto? entitlements = null, CancellationToken ct = default)
+    {
+        if (!await IsProcessManagerOrAdminAsync(userId, ct))
+            throw new InvalidOperationException("ساخت منبع عمومی فقط برای نقش مدیر فرآیند یا مدیر سیستم مجاز است.");
+
+        var created = await CreateAsync(userId, req, entitlements, ct);
+        var entity = await _db.DataSources.FirstAsync(d => d.Id == created.Id, ct);
+        // CreateAsync deliberately mirrors the private path; the only difference of a public source
+        // is this flag, so it is set after the fact rather than duplicating the whole creation body.
+        entity.IsPublic = true;
+        await _db.SaveChangesAsync(ct);
+        created.IsPublic = true;
+        return created;
+    }
+
+    /// <summary>Flip an existing source between private and public. Creator only.</summary>
+    public async Task<bool> SetPublicAsync(int userId, int id, bool isPublic, CancellationToken ct = default)
+    {
+        var entity = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (entity is null || entity.OwnerUserId != userId) return false;
+        if (isPublic && !await IsProcessManagerOrAdminAsync(userId, ct))
+            throw new InvalidOperationException("عمومی‌کردن منبع فقط برای نقش مدیر فرآیند یا مدیر سیستم مجاز است.");
+        entity.IsPublic = isPublic;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return true;
     }
 
     public async Task<DataSourceMetaDto?> GetMetaAsync(int userId, int id, CancellationToken ct = default)
@@ -491,7 +552,10 @@ public class DataSourceService
         currentRows = Math.Max(currentRows, d.RowCount);
         if (req.RowIndex >= currentRows)
         {
-            var entitlements = await ResolveEntitlements(userId, ct);
+            // Whoever owns the source carries its ceiling. For a public source that is the creator
+            // (the ProcessManager who shared it), not the writer: charging a user's small plan for
+            // growing a team source would make the shared source unusable the moment anyone used it.
+            var entitlements = await ResolveEntitlements(d.OwnerUserId == userId ? userId : d.OwnerUserId, ct);
             var projectedRows = req.RowIndex + 1;
             var storedBytes = await _db.DataSourceCells.AsNoTracking()
                 .Where(c => c.DataSourceId == id)
@@ -689,6 +753,16 @@ public class DataSourceService
             return ds;
         }
 
+        // A public source is usable by everyone for the things a run does to it — reading cells and
+        // writing values (this `write` flag covers exactly that in every current caller: cell patch,
+        // row add/delete, reload). Reshaping it (add/rename/remove column) never comes through here;
+        // those callers go through EnsureCanReshapePublicSource instead.
+        if (ds.IsPublic)
+        {
+            await EnsureLegacyCellsMaterializedAsync(ds, ct);
+            return ds;
+        }
+
         var can = await (
             from l in _db.ProcessDataSources
             where l.DataSourceId == dataSourceId
@@ -702,6 +776,32 @@ public class DataSourceService
         if (!can) return null;
         await EnsureLegacyCellsMaterializedAsync(ds, ct);
         return ds;
+    }
+
+    /// <summary>
+    /// Whether this user may change the SHAPE of a source: add, rename or remove a column.
+    /// </summary>
+    /// <remarks>
+    /// Public sources are shared, so their structure is deliberately not up for grabs: a column
+    /// removed by one user's debugging would silently break every process bound to it, and the
+    /// editor's column picker has no way to warn about that across owners. Values and rows are
+    /// shared; the shape is owned. The owner of a private source keeps full control of it here.
+    /// </remarks>
+    async Task<bool> CanReshapeAsync(DataSource ds, int userId, CancellationToken ct)
+    {
+        if (ds.OwnerUserId == userId) return true;
+        if (!ds.IsPublic) return false;
+        return await IsProcessManagerOrAdminAsync(userId, ct);
+    }
+
+    /// <summary>Throws when the user may not reshape this source. Returns the entity when they may.</summary>
+    async Task<DataSource> GetReshapableAsync(int userId, int id, CancellationToken ct)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: true, ct)
+            ?? throw new InvalidOperationException("منبع پیدا نشد یا دسترسی ندارید.");
+        if (!await CanReshapeAsync(d, userId, ct))
+            throw new InvalidOperationException("تغییر ساختار منبع عمومی مجاز نیست. فقط مقادیر و ردیف‌ها قابل تغییرند.");
+        return d;
     }
 
     /// <summary>
@@ -1122,6 +1222,8 @@ public class DataSourceService
         var entity = await GetAccessibleAsync(userId, id, write: true, ct);
         if (entity is null)
             return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+        if (!await CanReshapeAsync(entity, userId, ct))
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "تغییر ساختار منبع عمومی مجاز نیست. فقط مقادیر و ردیف‌ها قابل تغییرند." };
 
         var columns = DeserializeColumns(entity.ColumnsJson);
         var existing = new HashSet<string>(columns.Select(c => c.Key), StringComparer.OrdinalIgnoreCase);
@@ -1192,6 +1294,8 @@ public class DataSourceService
         var entity = await GetAccessibleAsync(userId, id, write: true, ct);
         if (entity is null)
             return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+        if (!await CanReshapeAsync(entity, userId, ct))
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "تغییر ساختار منبع عمومی مجاز نیست. فقط مقادیر و ردیف‌ها قابل تغییرند." };
 
         var columns = DeserializeColumns(entity.ColumnsJson);
         var oldKey = (req.OldKey ?? "").Trim();
@@ -1343,6 +1447,8 @@ public class DataSourceService
         var entity = await GetAccessibleAsync(userId, id, write: true, ct);
         if (entity is null)
             return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+        if (!await CanReshapeAsync(entity, userId, ct))
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "تغییر ساختار منبع عمومی مجاز نیست. فقط مقادیر و ردیف‌ها قابل تغییرند." };
 
         var columns = DeserializeColumns(entity.ColumnsJson);
         var key = (columnKey ?? "").Trim();
@@ -1775,8 +1881,11 @@ public class DataSourceService
 
         var ds = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == dataSourceId, ct);
         if (ds is null) return (false, "sourcenotfound");
-        // Owner or already shared via another process of this user — require owner for attach from library
-        if (ds.OwnerUserId != userId && process.CreatorUserId != userId
+        // Owner or already shared via another process of this user — require owner for attach from
+        // library. A public source is the exception: it exists precisely so anyone may attach it to
+        // their own process and use its columns, so the owner check does not apply to it.
+        if (!ds.IsPublic
+            && ds.OwnerUserId != userId && process.CreatorUserId != userId
             && ds.OwnerUserId != process.CreatorUserId)
             return (false, "forbidden");
 

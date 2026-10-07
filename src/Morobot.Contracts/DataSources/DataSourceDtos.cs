@@ -29,6 +29,16 @@ public class DataSourceListItemDto
     /// <summary>Processes currently linked to this library source.</summary>
     public int LinkedProcessCount { get; set; }
     public List<string> LinkedProcessTitles { get; set; } = new();
+
+    /// <summary>Shared source every signed-in user can read and use (see DataSource.IsPublic).</summary>
+    public bool IsPublic { get; set; }
+    /// <summary>Owner's username — shown for public sources; null when the owner row is gone.</summary>
+    public string? OwnerUserName { get; set; }
+    /// <summary>
+    /// Whether the CURRENT user may reshape this source (add/rename/remove column). False for a
+    /// public source they do not own, which is what the list uses to hide the structural buttons.
+    /// </summary>
+    public bool CanEditStructure { get; set; }
 }
 
 public class DataSourceDetailDto
@@ -242,6 +252,13 @@ public class UploadDataSourceResponse
     public List<DataSourceColumnDto> Columns { get; set; } = new();
     public List<string> ColumnKeys { get; set; } = new();
     public List<DataSourceCellDto> Cells { get; set; } = new();
+    public bool IsPublic { get; set; }
+}
+
+/// <summary>Toggle whether an owned source is shared with every user.</summary>
+public class SetPublicSourceRequest
+{
+    public bool IsPublic { get; set; }
 }
 
 /// <summary>Parsed Excel without persisting — for local-first process properties.</summary>

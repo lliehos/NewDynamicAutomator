@@ -869,6 +869,63 @@ public class DataSourcesApiController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Create a shared source every signed-in user can read and use. ProcessManager/Admin only.
+    /// </summary>
+    [HttpPost("public")]
+    public async Task<IActionResult> CreatePublic(
+        [FromBody] Morobot.Contracts.DataSources.CreateDataSourceRequest req, CancellationToken ct)
+    {
+        try
+        {
+            var created = await _sources.CreatePublicAsync(UserId, req, ct: ct);
+            await _catalog.LibrarySourceChangedAsync(new
+            {
+                id = created.Id,
+                title = created.Title,
+                columnCount = created.ColumnCount,
+                rowCount = created.RowCount,
+                fileName = created.FileName,
+                isPublic = true
+            }, "created", User.Identity?.Name, UserId, ct);
+            return Ok(created);
+        }
+        catch (SourceLimitExceededException ex)
+        {
+            return Conflict(new
+            {
+                message = ex.Message,
+                code = SourceLimitExceededException.Code,
+                rowCount = ex.RowCount,
+                byteCount = ex.ByteCount,
+                maxRows = ex.MaxRows,
+                maxBytes = ex.MaxBytes
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Covers both "not allowed to make public sources" and the plan ceiling.
+            return BadRequest(new { message = ex.Message, code = "limit" });
+        }
+    }
+
+    /// <summary>Flip a source this user owns between private and public.</summary>
+    [HttpPatch("{id:int}/public")]
+    public async Task<IActionResult> SetPublic(int id, [FromBody] Morobot.Contracts.DataSources.SetPublicSourceRequest req, CancellationToken ct)
+    {
+        try
+        {
+            var ok = await _sources.SetPublicAsync(UserId, id, req?.IsPublic == true, ct);
+            if (!ok) return NotFound();
+            await _catalog.LibrarySourceChangedAsync(new { id, isPublic = req?.IsPublic == true }, "visibility", User.Identity?.Name, UserId, ct);
+            return Ok(new { ok = true, id, isPublic = req?.IsPublic == true });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message, code = "forbidden" });
+        }
+    }
+
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] Morobot.Contracts.DataSources.UpdateDataSourceRequest req, CancellationToken ct)
     {

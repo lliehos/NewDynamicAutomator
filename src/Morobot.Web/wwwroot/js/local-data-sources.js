@@ -66,6 +66,7 @@
   const ICO_OPEN = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14 3h7v7h-2V6.4l-9.3 9.3-1.4-1.4L17.6 5H14V3zM5 5h6v2H7v10h10v-4h2v6H5V5z"/></svg>`;
   const ICO_RENAME = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 17.5V20h2.5L18 8.5 15.5 6 4 17.5zm16.7-11.2a1 1 0 0 0 0-1.4l-2.1-2.1a1 1 0 0 0-1.4 0l-1.6 1.6 3.5 3.5 1.6-1.6z"/></svg>`;
   const ICO_RELOAD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5a7 7 0 0 1 6.5 4.4l1.9-1.1V13h-4.7l1.8-1A5 5 0 1 0 12 17v2a7 7 0 1 1 0-14z"/></svg>`;
+  const ICO_GLOBE = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.9 6h-3a15 15 0 0 0-1.3-3.4A8 8 0 0 1 18.9 8zM12 4.2c.7 1 1.3 2.3 1.7 3.8h-3.4A14 14 0 0 1 12 4.2zM4.3 14A8 8 0 0 1 4 12c0-.7.1-1.4.3-2h3.4a17 17 0 0 0 0 4H4.3zm.8 2h3a15 15 0 0 0 1.3 3.4A8 8 0 0 1 5.1 16zm3-8h-3A8 8 0 0 1 8.4 4.6 15 15 0 0 0 7.1 8zM12 19.8a14 14 0 0 1-1.7-3.8h3.4a14 14 0 0 1-1.7 3.8zm2.1-5.8H9.9a15 15 0 0 1 0-4h4.2a15 15 0 0 1 0 4zm.5 5.4a15 15 0 0 0 1.3-3.4h3a8 8 0 0 1-4.3 3.4zm1.7-5.4a17 17 0 0 0 0-4h3.4c.2.6.3 1.3.3 2s-.1 1.4-.3 2h-3.4z"/></svg>`;
 
   function iconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
@@ -100,6 +101,92 @@
       await renderAsync();
     } catch (e) {
       notify(e.message || t("sources.renameFail"), "error");
+    }
+  }
+
+  /**
+   * Share an owned source with every user, or take that sharing back.
+   *
+   * Confirmed first because it is not a cosmetic toggle: once public, every user can read and write
+   * this source's cells and use it as a step/condition target, and the change is not something they
+   * would notice until they see someone else's data in it.
+   */
+  async function togglePublic(sourceId, makePublic) {
+    const msg = makePublic
+      ? (t("sources.makePublicConfirm") || "این منبع برای همه کاربران قابل مشاهده و استفاده می‌شود. مطمئنید؟")
+      : (t("sources.makePrivateConfirm") || "این منبع دیگر برای سایر کاربران نمایش داده نمی‌شود. مطمئنید؟");
+    if (window.DaNotify?.confirm) {
+      const ok = await DaNotify.confirm(msg, {
+        title: makePublic ? (t("sources.makePublic") || "عمومی کردن") : (t("sources.makePrivate") || "خصوصی کردن"),
+        okText: t("common.confirm") || "تأیید",
+        cancelText: t("common.cancel"),
+        danger: false
+      });
+      if (!ok) return;
+    }
+    try {
+      const res = await fetch(`/api/datasources/${sourceId}/public`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isPublic: makePublic })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || t("sources.publicFail") || "تغییر وضعیت اشتراک‌گذاری ناموفق بود.");
+      }
+      notify(makePublic
+        ? (t("sources.publicOn") || "منبع عمومی شد.")
+        : (t("sources.publicOff") || "منبع خصوصی شد."), "success");
+      await renderAsync();
+    } catch (e) {
+      notify(e.message || t("sources.publicFail") || "تغییر وضعیت اشتراک‌گذاری ناموفق بود.", "error");
+    }
+  }
+
+  /**
+   * Create an empty shared source from the button above the list.
+   *
+   * Only a ProcessManager/Admin sees the button (the server enforces the same rule), because a
+   * public source is a team-level artefact. The user gives it a title and a first column, and the
+   * grid is then filled from the viewer like any other source.
+   */
+  async function createPublicSource() {
+    const title = window.DaNotify?.prompt
+      ? await DaNotify.prompt(t("sources.publicNewPrompt") || "عنوان منبع عمومی:", {
+          title: t("sources.createPublic") || "ایجاد منبع عمومی",
+          value: "",
+          okText: t("common.create") || "ایجاد",
+          cancelText: t("common.cancel"),
+          maxLength: 200
+        })
+      : window.prompt(t("sources.publicNewPrompt") || "عنوان منبع عمومی:");
+    if (title == null) return;
+    const name = String(title).trim();
+    if (!name) return;
+    try {
+      const res = await fetch("/api/datasources/public", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        // One starter column so the source is immediately usable as a write target; the grid can
+        // add or rename columns afterwards from an account that may reshape it.
+        body: JSON.stringify({
+          title: name,
+          columns: [{ key: "c1", title: "c1" }],
+          columnCount: 1,
+          rowCount: 1,
+          cells: [{ key: "c1", index: 0, cellValue: "" }]
+        })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || t("sources.publicCreateFail") || "ساخت منبع عمومی ناموفق بود.");
+      }
+      notify(t("sources.publicCreated") || "منبع عمومی ساخته شد.", "success");
+      await renderAsync();
+    } catch (e) {
+      notify(e.message || t("sources.publicCreateFail") || "ساخت منبع عمومی ناموفق بود.", "error");
     }
   }
 
@@ -240,7 +327,12 @@
           rowCount: d.rowCount,
           columnKeys: d.columnKeys || [],
           columns: d.columns || [],
-          cells: d.cells || []
+          cells: d.cells || [],
+          // Carried through so the row can badge a shared source and hide the buttons the server
+          // would refuse anyway (a public source's shape is not the reader's to change).
+          isPublic: d.isPublic === true,
+          ownerUserName: d.ownerUserName || null,
+          canEditStructure: d.canEditStructure !== false
         },
         isMaster: false,
         fromLibrary: true,
@@ -1491,13 +1583,28 @@
     const openBtn = row.taskId != null
       ? iconBtn("js-open", t("sources.openProcess"), ICO_OPEN, `data-task="${tid}"`)
       : "";
+    // A public source's shape belongs to whoever owns it (ProcessManager/Admin), so a reader who may
+    // not reshape it gets no rename/reload buttons at all — offering a control the server rejects
+    // reads as a broken button rather than a permission.
+    const canShape = row.ds.canEditStructure !== false;
+    const isPublic = row.ds.isPublic === true;
+    // Only a library row can be made public/private: the toggle needs an owner, and an ad-hoc
+    // in-process source has none.
+    const publicToggle = row.fromLibrary && Number(sid) > 0
+      ? iconBtn(
+          "js-public",
+          isPublic ? (t("sources.makePrivate") || "خصوصی کردن") : (t("sources.makePublic") || "عمومی کردن"),
+          ICO_GLOBE,
+          `data-id="${sid}" data-public="${isPublic ? "0" : "1"}"`)
+      : "";
     return `
-      ${Number(sid) > 0 ? iconBtn("js-rename", t("sources.rename"), ICO_RENAME, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
-      ${Number(sid) > 0 ? iconBtn("js-reload", t("sources.reloadFile"), ICO_RELOAD, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
+      ${Number(sid) > 0 && canShape ? iconBtn("js-rename", t("sources.rename"), ICO_RENAME, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
+      ${Number(sid) > 0 && canShape ? iconBtn("js-reload", t("sources.reloadFile"), ICO_RELOAD, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
       ${Number(sid) > 0 ? iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}"`) : ""}
       ${row.taskId != null ? iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`) : ""}
       ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-id="${sid}"`)}
       ${master}
+      ${publicToggle}
       ${iconBtn("js-del is-danger", delLabel, ICO_DEL, `data-task="${tid}" data-id="${sid}" data-lib="${row.fromLibrary ? "1" : "0"}"`)}
       ${openBtn}
     `;
@@ -1520,6 +1627,9 @@
     });
     root.querySelectorAll(".js-cloud").forEach((btn) => {
       btn.addEventListener("click", () => notify(t("sources.saveServerSoonToast") || t("sources.libraryHint"), "info"));
+    });
+    root.querySelectorAll(".js-public").forEach((btn) => {
+      btn.addEventListener("click", () => togglePublic(btn.dataset.id, btn.dataset.public === "1"));
     });
     root.querySelectorAll(".js-master").forEach((btn) => {
       btn.addEventListener("click", () => setMaster(btn.dataset.task, btn.dataset.id));
@@ -1582,9 +1692,12 @@
           const label = r.ds.title || r.ds.fileName || "منبع";
           const cols = (r.ds.columnCount ?? (r.ds.columnKeys || r.ds.columns || []).length) || 0;
           const rowCount = r.ds.rowCount ?? 0;
+          const pubBadge = r.ds.isPublic
+            ? ` <span class="ds-badge-public" title="${escapeHtml(r.ds.ownerUserName || "")}">${t("sources.publicBadge") || "عمومی"}</span>`
+            : "";
           return `<tr data-da-row="${escapeHtml(String(r.ds.id ?? ""))}">
             <td>
-              <div class="fw-semibold">${escapeHtml(label)}${r.isMaster ? ` <span class="ds-badge-master">پیش‌فرض</span>` : ""}</div>
+              <div class="fw-semibold">${escapeHtml(label)}${r.isMaster ? ` <span class="ds-badge-master">پیش‌فرض</span>` : ""}${pubBadge}</div>
             </td>
             <td>${escapeHtml(r.taskTitle)}</td>
             <td>${cols}</td>
@@ -1666,6 +1779,11 @@
     if (viewerState.page >= totalPages - 1) return;
     viewerState.page += 1;
     renderViewerTable(src);
+  });
+
+  // Create a shared source. The button is only rendered for the roles that may create one.
+  document.getElementById("da-create-public-source")?.addEventListener("click", () => {
+    createPublicSource();
   });
 
   // List paging is pure re-rendering of the rows we already fetched.

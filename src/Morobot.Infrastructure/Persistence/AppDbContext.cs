@@ -247,6 +247,9 @@ public class AppDbContext : DbContext
             e.Property(x => x.ColumnsJson).IsRequired();
             e.Property(x => x.CellsJson).IsRequired();
             e.HasIndex(x => x.OwnerUserId);
+            // Every public-source lookup filters on this, so it is worth its own index rather than
+            // riding along on the owner one.
+            e.HasIndex(x => x.IsPublic);
             e.HasOne(x => x.Owner)
                 .WithMany()
                 .HasForeignKey(x => x.OwnerUserId)
