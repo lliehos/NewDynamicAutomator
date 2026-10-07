@@ -551,6 +551,50 @@ html.light-style {
 
 .da-home-actions { flex: 0 0 auto; }
 
+/* Plan selection: equal-height cards in a row, the way a pricing page is read. */
+.billing-plans {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  align-items: stretch;
+}
+
+.billing-plan { height: 100%; }
+
+.billing-price {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--morobot-primary, var(--morobot-primary-default));
+}
+
+.billing-price-alt {
+  font-size: 1.05rem;
+  color: #8a8699;
+}
+
+.billing-disc {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #28c76f;
+  background: #e8f9f0;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.billing-features li { line-height: 1.9; }
+
+.billing-total {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--morobot-primary, var(--morobot-primary-default));
+}
+
+/* Order status chips, so a paid order is distinguishable from a failed one at a glance. */
+.billing-st-ok { color: #28c76f; font-weight: 600; }
+.billing-st-bad { color: #ea5455; font-weight: 600; }
+.billing-st-wait { color: #ff9f43; font-weight: 600; }
+
 .da-home-title {
   font-weight: 700;
   letter-spacing: -0.02em;

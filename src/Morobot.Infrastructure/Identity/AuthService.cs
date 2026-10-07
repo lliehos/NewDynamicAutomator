@@ -236,9 +236,49 @@ public class AuthService
         }, null);
     }
 
-    public async Task<List<Plan>> ListSelfUpgradePlansAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Put a user on a plan WITHOUT asking for a password, for a plan they have PAID for.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="UpgradePlanAsync"/> on purpose. That flow asks for the current
+    /// password because it is a self-service switch made on the strength of being signed in; here the
+    /// entitlement comes from a completed payment, and demanding a password after taking someone's
+    /// money would be an obstacle invented at the worst moment. The password policy still applies at
+    /// the next password change, so the plan's rules are not bypassed — only the re-entry is.
+    /// </remarks>
+    public async Task AssignPlanAsync(int userId, int planId, string? ip = null, CancellationToken ct = default)
     {
-        // Empty when the licence has no plan management: the page then shows its built-in
+        var user = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == userId, ct)
+            ?? throw new InvalidOperationException("کاربر پیدا نشد.");
+        var plan = await _db.Plans.FirstOrDefaultAsync(p => p.Id == planId, ct)
+            ?? throw new InvalidOperationException("پلن پیدا نشد.");
+
+        var fromPlan = user.Plan;
+        var fromCode = fromPlan?.Code ?? nameof(PlanCode.Local);
+        user.PlanId = plan.Id;
+        user.Plan = plan;
+        // The current password's plaintext is not available here, so we cannot re-validate it against
+        // the new plan's policy. Rather than guess, a move onto a plan with a STRICTER policy asks
+        // for a change at the next sign-in; a same-or-looser policy leaves the flag alone. That is the
+        // honest behaviour: we do not claim the password is fine, and we do not force a change it may
+        // not need.
+        var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
+        var (minLen, complexity) = PasswordPolicy.Resolve(plan, globalMinLen, globalComplexity);
+        var stricter = minLen > (fromPlan?.MinPasswordLength ?? 0)
+                       || (complexity && !(fromPlan?.RequireLetterAndDigit ?? false));
+        if (stricter) user.PasswordChangeRequired = true;
+        await _db.SaveChangesAsync(ct);
+
+        await _events.LogAsync(
+            "Audit", "Auth", "PlanPurchased",
+            $"Activated {plan.Code} for {user.UserName} (was {fromCode}) after payment",
+            user.Id, user.UserName,
+            ipAddress: ip,
+            ct: ct);
+    }
+
+    public async Task<List<Plan>> ListSelfUpgradePlansAsync(CancellationToken ct = default)
+    {        // Empty when the licence has no plan management: the page then shows its built-in
         // "no plans available" note instead of offering levels nobody can define.
         if (!await _entitlements.AllowsPlanManagementAsync(ct))
             return new List<Plan>();

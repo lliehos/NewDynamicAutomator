@@ -1,0 +1,45 @@
+@{
+    ViewData["Title"] = "نتیجهٔ پرداخت";
+    var failed = ViewBag.Failed is true;
+    var warning = ViewBag.Warning as string;
+    var error = ViewBag.Error as string;
+    var orderId = ViewBag.OrderId;
+}
+
+<div class="da-home">
+  <div class="card">
+    <div class="card-body text-center py-6">
+      @if (failed)
+      {
+        <div class="display-6 mb-3">✖</div>
+        <h4 class="mb-2">پرداخت انجام نشد</h4>
+        <p class="text-muted mb-4">@(error ?? "پرداخت تأیید نشد.")</p>
+        <a class="btn btn-primary" asp-area="Panel" asp-controller="Billing" asp-action="Plans">بازگشت به پلن‌ها</a>
+      }
+      else
+      {
+        <div class="display-6 mb-3">✔</div>
+        <h4 class="mb-2">پرداخت با موفقیت انجام شد</h4>
+        <p class="text-muted mb-2">
+          سفارش شمارهٔ <span class="fw-semibold">@orderId</span> پرداخت و فعال شد.
+        </p>
+        @if (!string.IsNullOrWhiteSpace(warning))
+        {
+          @* A paid order whose activation was incomplete is reported separately: the money went
+             through, so the customer must not be told it failed — they need help, not a retry. *@
+          <div class="alert alert-warning small text-start">@warning</div>
+        }
+        <div class="d-flex gap-2 justify-content-center mt-3">
+          <a class="btn btn-primary" asp-area="Panel" asp-controller="Billing" asp-action="History">تاریخچهٔ مالی</a>
+          @if (orderId is not null)
+          {
+            <a class="btn btn-label-secondary"
+               asp-area="Panel" asp-controller="Billing" asp-action="DownloadLicense" asp-route-orderId="@orderId">
+              دانلود فایل لایسنس
+            </a>
+          }
+        </div>
+      }
+    </div>
+  </div>
+</div>

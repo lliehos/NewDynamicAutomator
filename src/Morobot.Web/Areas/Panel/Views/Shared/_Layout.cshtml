@@ -172,6 +172,17 @@
               <div data-i18n="panel.navDownloads">@L["panel.navDownloads"]</div>
             </a>
           </li>
+          @if (Morobot.Web.Filters.TenantBrandingViewDataFilter.AllowsCommerce(ViewData))
+          {
+            @* Only shown when this deployment is licensed to sell; the controller re-checks, so
+               hiding the link is a courtesy rather than the guard. *@
+            <li class="menu-item @(ctrl.Equals("Billing", StringComparison.OrdinalIgnoreCase) ? "active" : null)">
+              <a asp-area="Panel" asp-controller="Billing" asp-action="Plans" class="menu-link">
+                <i class="menu-icon tf-icons ti ti-credit-card"></i>
+                <div data-i18n="panel.navBilling">@L["panel.navBilling"]</div>
+              </a>
+            </li>
+          }
           <li class="menu-item @(isSettings ? "active" : null)">
             <a asp-area="Panel" asp-controller="Settings" asp-action="Index" class="menu-link">
               <i class="menu-icon tf-icons ti ti-settings"></i>

@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
@@ -336,6 +337,75 @@ public sealed class LicenseService
         };
         return LicenseJson.SerializeActivationRequest(request);
     }
+
+    /// <summary>
+    /// Build the signed license document an order bought.
+    /// </summary>
+    /// <remarks>
+    /// Signed with a SEPARATE issuing key, never the vendor's signing key: this deployment verifies
+    /// licenses with a public key and has no business holding the private half of it. The storefront
+    /// operator (the vendor, or a reseller the vendor authorised) supplies an issuing key through
+    /// configuration; without it the method refuses rather than producing an unsigned or
+    /// wrongly-signed document, because a license that fails to verify is worse than none.
+    ///
+    /// Generated from the order's own stored terms, so the document reflects what was actually paid
+    /// for even if the price list or feature set changed since.
+    /// </remarks>
+    public async Task<string?> BuildOrderLicenseJsonAsync(Morobot.Domain.Entities.Order order, CancellationToken ct = default)
+    {
+        var runtime = await GetRuntimeStateAsync(ct);
+        if (!runtime.AllowsSelfIssuedLicenses) return null;
+
+        var issuingKey = _options.OrderIssuingKeyPem;
+        if (string.IsNullOrWhiteSpace(issuingKey)) return null;
+
+        var anchor = await EnsureAnchorAsync(ct);
+        var terms = Morobot.Infrastructure.Services.Payments.CheckoutService.ReadTerms(order);
+
+        var users = terms?["users"]?.GetValue<int?>() ?? 1;
+        var term = terms?["term"]?.GetValue<string>() ?? "monthly";
+        var validUntil = term switch
+        {
+            "yearly" => DateTime.UtcNow.AddYears(1),
+            "perpetual" => DateTime.UtcNow.AddYears(50),
+            _ => DateTime.UtcNow.AddMonths(1)
+        };
+
+        // The purchased feature set becomes the license flags — this is the whole point of the
+        // purchase wizard: what the buyer ticked is what the issued license allows.
+        var payload = new LicensePayload
+        {
+            LicenseId = $"order-{order.Id}-{Guid.NewGuid():N}"[..40],
+            OrganizationName = terms?["organization"]?.GetValue<string>(),
+            DeploymentAnchorId = anchor.AnchorId.ToString("D"),
+            IssuedAtUtc = DateTime.UtcNow,
+            ValidUntilUtc = validUntil,
+            // Sequence must be strictly greater than the stored one or the import refuses it as a
+            // rollback; the order id is monotonic, so basing it there is both unique and increasing.
+            Sequence = Math.Max(DateTime.UtcNow.Ticks, order.Id),
+            MaxUsers = users,
+            AllowPlanManagement = true,
+            AllowBilingual = ReadBool(terms, "bilingual", true),
+            AllowLocalRun = ReadBool(terms, "local_run", false),
+            AllowFrontPackage = ReadBool(terms, "front_package", false),
+            AllowCommerce = ReadBool(terms, "commerce", false),
+            AllowSoftwarePurchase = ReadBool(terms, "commerce", false),
+            AllowSelfIssuedLicenses = ReadBool(terms, "commerce", false),
+            // A license sold through the storefront is a full one for the deployment it was bought
+            // for; the issuing key is what makes it trustworthy.
+            AllowUpdates = true
+        };
+
+        var doc = LicenseCrypto.Sign(payload, issuingKey);
+        return LicenseJson.SerializeDocument(doc);
+    }
+
+    /// <summary>Whether this deployment can issue its own licenses (flag on AND an issuing key set).</summary>
+    public bool CanIssueLicenses =>
+        !string.IsNullOrWhiteSpace(_options.OrderIssuingKeyPem);
+
+    private static bool ReadBool(JsonObject? terms, string key, bool fallback)
+        => terms?[key]?.GetValue<bool?>() ?? fallback;
 
     public async Task<(bool ok, string? errorKey)> ImportAsync(string rawJson, CancellationToken ct = default)
     {

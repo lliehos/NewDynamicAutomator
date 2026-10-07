@@ -1,0 +1,94 @@
+@using Morobot.Domain.Entities
+@{
+    ViewData["Title"] = "انتخاب پلن";
+    var plans = ViewBag.Plans as List<Plan> ?? new List<Plan>();
+    var error = TempData["BillingError"] as string;
+    string Fa(Plan p) => string.IsNullOrWhiteSpace(p.NameFa) ? p.NameEn : p.NameFa;
+    string Money(decimal? amount, string currency) =>
+        amount is null ? "—" : $"{amount.Value:N0} {currency}";
+}
+
+<div class="da-home da-billing">
+  <header class="da-home-head">
+    <div>
+      <h4 class="da-home-title mb-1">انتخاب پلن اشتراک</h4>
+      <p class="da-home-sub mb-0">
+        پلن را انتخاب کنید تا خلاصهٔ سفارش، پوشش داده و بیانیه سلب رسک را ببینید؛ بعد به درگاه می‌روید.
+      </p>
+    </div>
+  </header>
+
+  @if (!string.IsNullOrWhiteSpace(error))
+  {
+    <div class="alert alert-warning">@error</div>
+  }
+
+  @if (plans.Count == 0)
+  {
+    <div class="alert alert-info">در حال حاضر پلنی برای فروش عرضه نشده است.</div>
+    return;
+  }
+
+  <div class="billing-plans">
+    @foreach (var plan in plans)
+    {
+      var monthly = plan.MonthlyPrice;
+      var yearly = plan.YearlyPrice;
+      var yearlyDisc = plan.YearlyDiscountPercent;
+      <div class="billing-plan card">
+        <div class="card-body d-flex flex-column">
+          <div class="fw-bold fs-5 mb-1">@Fa(plan)</div>
+          <div class="text-muted small mb-3">اشتراک پلن @Fa(plan)</div>
+
+          @if (monthly is not null)
+          {
+            <div class="billing-price mb-1">
+              @Money(monthly, plan.PriceCurrency)
+              <span class="text-muted small">/ ماهانه</span>
+            </div>
+            @if (plan.MonthlyDiscountPercent is > 0)
+            {
+              <div class="mb-2"><span class="billing-disc">@plan.MonthlyDiscountPercent.Value.ToString("0.##")% تخفیف</span></div>
+            }
+          }
+          @if (yearly is not null)
+          {
+            <div class="billing-price billing-price-alt mb-1">
+              @Money(yearly, plan.PriceCurrency)
+              <span class="text-muted small">/ سالانه</span>
+            </div>
+            @if (yearlyDisc is > 0)
+            {
+              <div class="mb-2"><span class="billing-disc">@yearlyDisc.Value.ToString("0.##")% تخفیف</span></div>
+            }
+          }
+
+          <ul class="billing-features list-unstyled small my-3">
+            <li>✔ حداکثر @(plan.MaxTasks <= 0 ? "نامحدود" : plan.MaxTasks.ToString()) فرآیند</li>
+            <li>✔ @(plan.MaxDataSources <= 0 ? "نامحدود" : plan.MaxDataSources.ToString()) منبع داده</li>
+            <li>✔ @(plan.MaxSourceRows <= 0 ? "نامحدود" : plan.MaxSourceRows.Value.ToString("N0")) ردیف در منبع</li>
+            <li>@(plan.CanShare ? "✔" : "✖") اشتراک‌گذاری فرآیندها</li>
+            <li>@(plan.CanReceiveShare ? "✔" : "✖") دریافت فرآیند مشترک</li>
+          </ul>
+
+          <div class="mt-auto">
+            @if (monthly is not null)
+            {
+              <a class="btn btn-primary w-100 mb-2"
+                 href="@Url.Action("Checkout", "Billing", new { area = "Panel", plan = plan.Code, cycle = "monthly" })">
+                انتخاب و ادامه (ماهانه)
+              </a>
+            }
+            @if (yearly is not null)
+            {
+              <a class="btn btn-label-secondary w-100"
+                 href="@Url.Action("Checkout", "Billing", new { area = "Panel", plan = plan.Code, cycle = "yearly" })">
+                انتخاب و ادامه (سالانه)
+              </a>
+            }
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+</div>

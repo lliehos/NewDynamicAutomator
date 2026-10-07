@@ -1,0 +1,99 @@
+@using Morobot.Domain.Entities
+@using Morobot.Domain.Enums
+@{
+    ViewData["Title"] = "تاریخچهٔ مالی";
+    var orders = ViewBag.Orders as List<Order> ?? new List<Order>();
+
+    // One list for all three revenue paths, because the customer thinks in payments, not in tables.
+    string KindLabel(OrderKind kind) => kind switch
+    {
+        OrderKind.Plan => "پلن اشتراک",
+        OrderKind.SoftwarePackage => "بستهٔ نرم‌افزار",
+        OrderKind.LicenseRenewal => "تمدید لایسنس",
+        _ => "—"
+    };
+    string StatusLabel(OrderStatus status) => status switch
+    {
+        OrderStatus.Pending => "در انتظار پرداخت",
+        OrderStatus.Paid => "پرداخت‌شده",
+        OrderStatus.Fulfilled => "فعال‌شده",
+        OrderStatus.Failed => "ناموفق",
+        OrderStatus.Cancelled => "لغو‌شده",
+        _ => "—"
+    };
+    string StatusClass(OrderStatus status) => status switch
+    {
+        OrderStatus.Paid or OrderStatus.Fulfilled => "billing-st-ok",
+        OrderStatus.Failed => "billing-st-bad",
+        OrderStatus.Pending => "billing-st-wait",
+        _ => "text-muted"
+    };
+}
+
+<div class="da-home">
+  <header class="da-home-head">
+    <div>
+      <h4 class="da-home-title mb-1">تاریخچهٔ مالی</h4>
+      <p class="da-home-sub mb-0">همهٔ خریدهای شما — پلن، بستهٔ نرم‌افزار و لایسنس.</p>
+    </div>
+  </header>
+
+  @if (orders.Count == 0)
+  {
+    <div class="alert alert-info">هنوز خریدی ثبت نشده است.</div>
+    return;
+  }
+
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table mb-0">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>نوع</th>
+            <th>شرح</th>
+            <th>دوره</th>
+            <th>مبلغ</th>
+            <th>وضعیت</th>
+            <th>تاریخ</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          @foreach (var o in orders)
+          {
+            var when = (o.PaidAtUtc ?? o.CreatedAtUtc).ToLocalTime();
+            <tr>
+              <td>@o.Id</td>
+              <td class="text-nowrap">@KindLabel(o.Kind)</td>
+              <td>@o.ItemTitle</td>
+              <td class="text-nowrap">
+                @(o.BillingCycle == "yearly" ? "سالانه" : o.BillingCycle == "perpetual" ? "دائمی"
+                    : o.BillingCycle == "monthly" ? "ماهانه" : "—")
+              </td>
+              <td class="text-nowrap">@o.PayableAmount.ToString("N0") @o.Currency</td>
+              <td class="text-nowrap"><span class="@StatusClass(o.Status)">@StatusLabel(o.Status)</span></td>
+              <td class="text-nowrap">@when.ToString("yyyy/MM/dd HH:mm")</td>
+              <td class="text-nowrap">
+                @if (o.Status is OrderStatus.Pending)
+                {
+                  <a class="btn btn-sm btn-primary"
+                     asp-area="Panel" asp-controller="Billing" asp-action="Checkout" asp-route-orderId="@o.Id">
+                    ادامهٔ پرداخت
+                  </a>
+                }
+                else if (o.Kind != OrderKind.Plan && o.Status is OrderStatus.Paid or OrderStatus.Fulfilled)
+                {
+                  <a class="btn btn-sm btn-label-secondary"
+                     asp-area="Panel" asp-controller="Billing" asp-action="DownloadLicense" asp-route-orderId="@o.Id">
+                    دانلود لایسنس
+                  </a>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

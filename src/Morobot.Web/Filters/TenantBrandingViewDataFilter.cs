@@ -39,6 +39,18 @@ public sealed class TenantBrandingViewDataFilter : IAsyncActionFilter
     public static bool AllowsPlanManagement(ViewDataDictionary viewData) =>
         (viewData[LicenseStateKey] as LicenseRuntimeState)?.AllowsPlanManagement == true;
 
+    /// <summary>True when this deployment may sell plans, packages and licenses.</summary>
+    public static bool AllowsCommerce(ViewDataDictionary viewData) =>
+        (viewData[LicenseStateKey] as LicenseRuntimeState)?.AllowsCommerce == true;
+
+    /// <summary>True when the software package itself may be sold, as opposed to only plans.</summary>
+    public static bool AllowsSoftwarePurchase(ViewDataDictionary viewData) =>
+        (viewData[LicenseStateKey] as LicenseRuntimeState)?.AllowsSoftwarePurchase == true;
+
+    /// <summary>True when the panel may issue its own licenses after payment.</summary>
+    public static bool AllowsSelfIssuedLicenses(ViewDataDictionary viewData) =>
+        (viewData[LicenseStateKey] as LicenseRuntimeState)?.AllowsSelfIssuedLicenses == true;
+
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
         // While the database is unreachable this filter is the next thing to run, and both services

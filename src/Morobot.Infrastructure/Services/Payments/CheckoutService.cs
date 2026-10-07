@@ -224,4 +224,24 @@ public class CheckoutService
 
     private static string? Truncate(string? s, int max)
         => string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s[..max]);
+
+    /// <summary>
+    /// Read an order's stored price lines back, so the checkout page can show how the price was
+    /// reached without recomputing it (which could differ from what was quoted).
+    /// </summary>
+    public static IReadOnlyList<PriceLine> ReadTermsAsLines(Order order)
+    {
+        var terms = ReadTerms(order);
+        var lines = new List<PriceLine>();
+        if (terms?["lines"] is not JsonArray arr) return lines;
+        foreach (var node in arr.OfType<JsonObject>())
+        {
+            lines.Add(new PriceLine(
+                node["key"]?.GetValue<string>() ?? "",
+                node["title"]?.GetValue<string>() ?? "",
+                node["amount"]?.GetValue<decimal>() ?? 0m,
+                node["detail"]?.GetValue<string>()));
+        }
+        return lines;
+    }
 }

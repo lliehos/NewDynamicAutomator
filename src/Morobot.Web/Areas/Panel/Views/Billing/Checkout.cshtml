@@ -1,0 +1,111 @@
+@using Morobot.Web.Areas.Panel.Controllers
+@{
+    ViewData["Title"] = "تأیید سفارش و پرداخت";
+    var model = Model as BillingController.CheckoutView;
+    var order = model?.Order;
+    var lines = model?.Lines ?? new List<Morobot.Infrastructure.Services.Payments.PriceLine>();
+    var error = TempData["BillingError"] as string;
+}
+
+<div class="da-home da-billing-checkout">
+  <header class="da-home-head">
+    <div>
+      <h4 class="da-home-title mb-1">تأیید سفارش و پرداخت</h4>
+    </div>
+  </header>
+
+  @if (order is null)
+  {
+    <div class="alert alert-danger">سفارش پیدا نشد.</div>
+    return;
+  }
+
+  @if (!string.IsNullOrWhiteSpace(error))
+  {
+    <div class="alert alert-warning">@error</div>
+  }
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+        <div>
+          <div class="fw-semibold mb-1">@order.ItemTitle</div>
+          <div class="text-muted small">
+            @(order.BillingCycle == "yearly" ? "دورهٔ سالانه" : order.BillingCycle == "perpetual" ? "دائمی" : "دورهٔ ماهانه")
+            · شمارهٔ سفارش @order.Id
+          </div>
+        </div>
+        <div class="text-end">
+          <div class="billing-total">@order.PayableAmount.ToString("N0") @order.Currency</div>
+          @if (order.DiscountAmount is > 0)
+          {
+            <div class="text-muted small">تخفیف: @order.DiscountAmount.Value.ToString("N0") @order.Currency</div>
+          }
+        </div>
+      </div>
+
+      @if (lines.Count > 0)
+      {
+        <hr class="my-3" />
+        <table class="table table-sm mb-0">
+          <tbody>
+            @foreach (var line in lines)
+            {
+              <tr>
+                <td>
+                  @line.Title
+                  @if (!string.IsNullOrWhiteSpace(line.Detail))
+                  {
+                    <span class="text-muted small ms-1">(@line.Detail)</span>
+                  }
+                </td>
+                <td class="text-end">@line.Amount.ToString("N0")</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </div>
+  </div>
+
+  @* The risk statement is shown BEFORE the pay button, not after: the customer is being asked to
+     accept that a platform service can fail, and burying that below the button would make the
+     acceptance meaningless. *@
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="fw-semibold mb-2">بیانیه سلب ریسک</div>
+      <ul class="small mb-0">
+        <li class="mb-1">
+          دیتاگرام کارکردگر، سایر کاربران با سرویس پردازش داده نمی‌کند. داده‌ها روی سرور شما نگهداری
+          می‌شوند و استفاده از سرویس‌های شخص ثالث خارج از کنترل این سرویس است.
+        </li>
+        <li class="mb-1">
+          دسترسی به اینترنت ممکن است با اختلال مواجه شود و این امر میتواند بر عملکرد سرویس تأثیر بگذارد.
+        </li>
+        <li class="mb-1">
+          با ثبت‌نام، بیانیه سلب ریسک و قوانین و مقررات این سرویس را می‌پذیرید و مسئولیت هرگونه
+          نقض قوانین بر عهدهٔ شماست.
+        </li>
+        <li class="mb-0">
+          از ارائه کنندگان خدمات این سرویس، هرگونه خسارت ناشی از قطع یا اختلال سرویس، هزینهٔ
+          غیرمتعارف و مالیات تعلق می‌گیرد.
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <form method="post" asp-area="Panel" asp-controller="Billing" asp-action="Pay">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="orderId" value="@order.Id" />
+    <button type="submit" class="btn btn-primary btn-lg w-100">💳 پرداخت و فعال‌سازی</button>
+  </form>
+
+  <p class="text-center text-muted small mt-3 mb-0">
+    پس از پرداخت، دسترسی بلافاصله فعال می‌شود. اگر خارج از دستور شوید، مبلغ پرداخت‌شده از این سرویس
+    بوده و قابل استرداد نیست.
+  </p>
+
+  <div class="text-center mt-2">
+    <a class="small" asp-area="Panel" asp-controller="Billing" asp-action="Plans">تغییر پلن</a>
+  </div>
+</div>

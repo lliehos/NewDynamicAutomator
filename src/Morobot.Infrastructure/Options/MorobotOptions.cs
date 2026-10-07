@@ -35,6 +35,19 @@ public sealed class MorobotOptions
 
     public string? LicensePublicKeyPem { get; set; }
 
+    /// <summary>
+    /// PRIVATE key used to sign licenses this deployment issues after a sale (see
+    /// <c>LicenseService.BuildOrderLicenseJsonAsync</c>).
+    /// </summary>
+    /// <remarks>
+    /// Only the STOREFRONT operator sets this — the vendor, or a reseller the vendor authorised. A
+    /// normal install verifies licenses with <see cref="LicensePublicKeyPem"/> and must never hold
+    /// the private half, because holding it would let that install mint licenses for itself with no
+    /// vendor in the loop. The separate <c>AllowSelfIssuedLicenses</c> licence flag gates whether this
+    /// key may be used at all, so possession alone is not enough.
+    /// </remarks>
+    public string? OrderIssuingKeyPem { get; set; }
+
     public UpdateFeedOptions UpdateFeed { get; set; } = new();
 
     public string EffectiveAppInstanceKey => DeriveAppInstanceKey(AppInstanceKey);
