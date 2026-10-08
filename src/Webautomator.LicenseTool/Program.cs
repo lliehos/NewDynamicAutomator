@@ -98,7 +98,7 @@ static int Sign(string[] args)
     var sequence = ParseLong(GetArg(args, "--sequence")) ?? 1;
     var org = GetArg(args, "--org");
     var dbConnection = GetArg(args, "--db-connection");
-    var trialDays = ParseNullableInt(GetArg(args, "--trial-days")) ?? 3;
+    var trialDays = ParseNullableInt(GetArg(args, "--trial-days")) ?? 10;
     var allowUpdatesRaw = GetArg(args, "--allow-updates");
     var allowUpdates = !string.Equals(allowUpdatesRaw, "false", StringComparison.OrdinalIgnoreCase);
     // Opt-in only: absence of the flag must keep migration disabled.

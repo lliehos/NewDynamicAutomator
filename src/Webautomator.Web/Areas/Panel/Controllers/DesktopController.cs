@@ -1,4 +1,6 @@
 using System.IO;
+using System.IO.Compression;
+using System.Text.Json;
 using Webautomator.Infrastructure.Services;
 using Webautomator.Web.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -25,17 +27,29 @@ public class DesktopController : Controller
 {
     private const string Role = "desktop";
 
+    /// <summary>The file the player reads to learn the server it was downloaded from.</summary>
+    /// <remarks>
+    /// Named and shaped like the extension's binding file on purpose: one machine can carry several
+    /// players, each pointing at a different server, and each has to prove which server it belongs
+    /// to rather than guessing. The player treats this as authority only when the licence carries no
+    /// address.
+    /// </remarks>
+    public const string BindingFileName = "player-binding.json";
+
     private readonly DesktopSyncService _sync;
     private readonly LicenseService _license;
+    private readonly DeploymentFingerprintService _fingerprints;
     private readonly IDataProtector _tickets;
 
     public DesktopController(
         DesktopSyncService sync,
         LicenseService license,
+        DeploymentFingerprintService fingerprints,
         IDataProtectionProvider protection)
     {
         _sync = sync;
         _license = license;
+        _fingerprints = fingerprints;
         _tickets = protection.CreateProtector("Webautomator.DesktopInstallTicket.v1");
     }
 
@@ -85,7 +99,57 @@ public class DesktopController : Controller
         // otherwise a new release could not replace it while a download is in flight.
         var bytes = System.IO.File.ReadAllBytes(_sync.PackagePath);
         var version = _sync.StagedVersion ?? "0.0.0";
+
+        // Stamp the download with the server it came from, exactly like the extension's binding
+        // file. This is what lets a player downloaded from one server reach THAT server on first
+        // launch, and what keeps two players from two servers apart on one machine. It is injected
+        // here rather than baked into the staged package because the staged package is shared by
+        // every caller, while the origin is per request.
+        var origin = $"{Request.Scheme}://{Request.Host}";
+        var fingerprint = _fingerprints.TryGet()?.Fingerprint;
+        bytes = InjectBinding(bytes, origin, fingerprint);
+
         return File(bytes, "application/zip", $"webautomator-player-{version}.zip");
+    }
+
+    /// <summary>
+    /// Add (or replace) the <c>player-binding.json</c> entry in the player zip.
+    /// </summary>
+    /// <remarks>
+    /// Rewrites the archive entry by entry rather than appending, so a package that already carries
+    /// a stale binding cannot end up with two entries of the same name — a duplicate would make the
+    /// player's behaviour depend on which entry the extractor happened to keep.
+    /// </remarks>
+    private static byte[] InjectBinding(byte[] zipBytes, string origin, string? fingerprint)
+    {
+        var binding = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            v = 1,
+            serverBase = origin,
+            fingerprint,
+            issuedUtc = DateTime.UtcNow.ToString("O")
+        });
+
+        using var input = new MemoryStream(zipBytes, writable: false);
+        using var source = new ZipArchive(input, ZipArchiveMode.Read);
+        using var output = new MemoryStream();
+        using (var target = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var entry in source.Entries)
+            {
+                if (string.Equals(entry.FullName, BindingFileName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var copy = target.CreateEntry(entry.FullName, CompressionLevel.Optimal);
+                using var src = entry.Open();
+                using var dst = copy.Open();
+                src.CopyTo(dst);
+            }
+
+            var bindEntry = target.CreateEntry(BindingFileName, CompressionLevel.Optimal);
+            using var bindStream = bindEntry.Open();
+            bindStream.Write(binding, 0, binding.Length);
+        }
+        return output.ToArray();
     }
 
     /// <summary>Mint a short-lived download ticket, for a copy-paste install command.</summary>

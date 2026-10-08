@@ -85,7 +85,7 @@ public partial class MainWindow : Window
                 Sequence = long.TryParse(Sequence.Text, out var seq) ? seq : 1,
                 MaxUsers = int.TryParse(MaxUsers.Text, out var max) ? max : null,
                 DatabaseConnectionString = string.IsNullOrWhiteSpace(DbConnection.Text) ? null : DbConnection.Text.Trim(),
-                TrialDays = int.TryParse(TrialDays.Text, out var trial) ? trial : 3,
+                TrialDays = int.TryParse(TrialDays.Text, out var trial) ? trial : 10,
                 AllowUpdates = AllowUpdates.IsChecked == true,
                 AllowLegacyMigration = AllowLegacyMigration.IsChecked == true,
                 AllowPlanManagement = AllowPlanManagement.IsChecked == true,

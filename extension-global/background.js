@@ -1279,6 +1279,16 @@ async function getState() {
     : (data.recordPhase || (count ? "review" : "idle"));
   const play = typeof getPlayStatus === "function" ? getPlayStatus() : null;
   const playing = !!(play?.playing || data.playing);
+  // The server this extension is talking to, so the popup can show it. One machine can carry
+  // several copies of the extension bound to different servers, so "which server is this?" has to be
+  // answerable from the toolbar, not inferred from whatever page happens to be open. Best-effort:
+  // a probe failure leaves it null and the popup simply omits the line.
+  let serverBase = null;
+  let serverFingerprint = null;
+  try {
+    serverBase = await portalBase();
+    serverFingerprint = (await ensureDeploymentBinding())?.fingerprint || null;
+  } catch { /* no binding / not signed in yet */ }
   return {
     ok: true,
     recording: !!data.recording,
@@ -1293,6 +1303,8 @@ async function getState() {
     recordTabId: data.recordTabId || null,
     targetTaskId: data.recordTargetTaskId ?? null,
     targetTitle: data.recordTargetTitle || null,
+    serverBase: serverBase || null,
+    serverFingerprint: serverFingerprint || null,
     play: play || { playing: !!data.playing }
   };
 }

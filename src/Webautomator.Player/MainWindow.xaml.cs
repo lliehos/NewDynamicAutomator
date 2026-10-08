@@ -54,13 +54,20 @@ public partial class MainWindow : Window
 
     private async Task BootstrapAsync()
     {
-        var saved = AppSettings.Load();
-
-        // The server address comes from the licence on disk, never from the user. If no licence has
-        // been imported yet, ServerAddress falls back to the development pair so the app is still
-        // usable while a deployment is being set up.
+        // The server address comes from the licence on disk, the download binding, or the
+        // development fallback, in that order — never from the user. Resolved first, because the
+        // per-server folder itself is keyed off the resolved server.
         ResolveServerAddress();
         ServerLabel.Text = ServerAddress.BaseUrl ?? "";
+        ApplyServerFooter();
+
+        // Now that the key is known, adopt any pre-per-server state so an upgrade keeps the cached
+        // licence and remembered user instead of appearing to log out.
+        PlayerStorage.MigrateLegacyFiles();
+
+        // Read settings AFTER the per-server folder is in effect: a remembered token must come from
+        // this server's own file, not another player's on the same machine.
+        var saved = AppSettings.Load();
 
         // Check for an update before sign-in. The endpoint is unauthenticated precisely so a client
         // too old to talk to this server is told to update rather than failing at login with an
@@ -82,8 +89,38 @@ public partial class MainWindow : Window
             AppSettings.Save(saved);
         }
 
-        if (!ServerAddress.IsFromLicense)
+        if (ServerAddress.Origin == ServerAddress.Source.None)
             LoginStatus.Text = DsStrings.LicenseMissing;
+    }
+
+    /// <summary>
+    /// Show, in the footer, the server this copy is bound to.
+    /// </summary>
+    /// <remarks>
+    /// The address is shown with a short form of its deployment fingerprint, so a user looking at two
+    /// players on one machine can tell them apart at a glance — the same value Admin → Licence shows,
+    /// which is what makes "is this the server I think it is?" answerable without signing in. When no
+    /// server could be resolved the line says so plainly rather than staying blank, because a silent
+    /// empty footer reads as a rendering bug rather than a missing licence.
+    /// </remarks>
+    private void ApplyServerFooter()
+    {
+        var url = ServerAddress.BaseUrl;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            ServerFooterText.Text = DsStrings.NoServerAddress;
+            ServerFooterText.ToolTip = null;
+            return;
+        }
+
+        var fp = ServerAddress.Fingerprint ?? ServerAddress.FingerprintFromBaseUrl;
+        var shortFp = string.IsNullOrWhiteSpace(fp)
+            ? ""
+            : fp!.Length <= 12 ? fp : fp[..12];
+        ServerFooterText.Text = string.IsNullOrEmpty(shortFp)
+            ? $"سرور: {url}"
+            : $"سرور: {url}  ·  اثر انگشت: {shortFp}";
+        ServerFooterText.ToolTip = ServerAddress.Fingerprint ?? url;
     }
 
     /// <summary>
@@ -103,13 +140,18 @@ public partial class MainWindow : Window
         try
         {
             var payload = LicenseGate.ReadLocalPayload();
-            ServerAddress.Resolve(payload?.ServerBaseUrl, payload?.AllowedHost);
+            // The binding the panel stamped into the download is the second source: a fresh copy
+            // with no licence yet still reaches the server it came from, so the address never has
+            // to be typed back in by the person who just downloaded the app.
+            var binding = PlayerBinding.Load();
+            ServerAddress.Resolve(payload?.ServerBaseUrl, payload?.AllowedHost, binding);
         }
         catch
         {
-            // A corrupt or unreadable licence falls back to the development address rather than
-            // blocking the window; the licence gate reports the real problem after sign-in.
-            ServerAddress.Resolve(null, null);
+            // A corrupt or unreadable licence falls back to the binding, then the development
+            // address, rather than blocking the window; the licence gate reports the real problem
+            // after sign-in.
+            ServerAddress.Resolve(null, null, PlayerBinding.Load());
         }
     }
 
@@ -521,11 +563,9 @@ internal sealed class AppSettings
     {
         get
         {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "WebautomatorDesktop");
-            Directory.CreateDirectory(dir);
-            return Path.Combine(dir, "settings.json");
+            // Per server, so a machine carrying two players keeps two remembered users rather than
+            // letting the last sign-in overwrite the other's token and name.
+            return PlayerStorage.FilePath("settings.json");
         }
     }
 

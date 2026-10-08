@@ -41,7 +41,7 @@ public sealed class DeploymentBindingService
 
     public async Task<bool> IsUserUsableAsync(AppUser user, CancellationToken ct = default)
     {
-        if (user.Role == UserRole.Admin)
+        if (user.Role.IsAdmin())
             return true;
         return await IsRecordBoundAsync(user.DeploymentInstanceId, ct);
     }

@@ -31,7 +31,7 @@ public class StoredLicense
     public bool AllowSelfIssuedLicenses { get; set; }
     /// <summary>The signed public base URL of the server this licence was issued for.</summary>
     public string? ServerBaseUrl { get; set; }
-    public int TrialDays { get; set; } = 3;
+    public int TrialDays { get; set; } = 10;
     public string? DatabaseServerHint { get; set; }
     public string? AllowedHost { get; set; }
     /// <summary>Signed referral-widget link; null = use the page compiled into the app.</summary>

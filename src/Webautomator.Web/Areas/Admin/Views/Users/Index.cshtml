@@ -100,7 +100,7 @@
           Tooltip = tip
         }' />
       </td>
-      <td>@L["admin.users.roles." + u.Role]</td>
+      <td>@string.Join(" · ", u.Role.Names().Select(n => L["admin.users.roles." + n]))</td>
       @if (allowsPlanManagement)
       {
         <td>@((isFa ? u.Plan?.NameFa : u.Plan?.NameEn) ?? "—")</td>

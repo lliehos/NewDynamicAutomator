@@ -17,6 +17,7 @@
       "popup.thinking": "در حال فکر کردن · جلسه {sid} · فرآیند #{id}",
       "popup.learningComplete": "یادگیری کامل شد · آماده ذخیره",
       "popup.refresh": "تازه‌سازی",
+      "popup.noServer": "سرور: مشخص نشده",
       "popup.stop": "توقف فکر کردن",
       "popup.hint": "از لیست فرآیندها شروع کنید. لوگوی روی صفحه، فکر کردن را متوقف می‌کند. لاگی ثبت نمی‌شود.",
       // in-page FAB
@@ -53,6 +54,7 @@
       "popup.thinking": "Thinking · session {sid} · process #{id}",
       "popup.learningComplete": "Learning complete · ready to save",
       "popup.refresh": "Refresh",
+      "popup.noServer": "Server: not set",
       "popup.stop": "Stop thinking",
       "popup.hint": "Start from the process list. The mark on the page stops thinking. No logs.",
       "fab.stopThinking": "Stop thinking",

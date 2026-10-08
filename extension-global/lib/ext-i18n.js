@@ -6,6 +6,7 @@
     fa: {
       "rec.title": "ضبط",
       "rec.panel": "پنل ضبط",
+      "rec.noServer": "سرور: مشخص نشده",
       "rec.resize": "تغییر اندازه",
       "rec.dragHint": "برای جابجایی از نوار بالا بکشید",
       "rec.stop": "توقف",
@@ -87,6 +88,7 @@
     en: {
       "rec.title": "Record",
       "rec.panel": "Record panel",
+      "rec.noServer": "Server: not set",
       "rec.resize": "Resize",
       "rec.dragHint": "Drag the header to move",
       "rec.stop": "Stop",

@@ -125,7 +125,7 @@ public class AppDbContext : DbContext
             e.ToTable("DeploymentTrialRecords");
             e.HasIndex(x => x.ServerFingerprintHash).IsUnique();
             e.Property(x => x.ServerFingerprintHash).HasMaxLength(128).IsRequired();
-            e.Property(x => x.TrialDays).HasDefaultValue(3);
+            e.Property(x => x.TrialDays).HasDefaultValue(10);
             e.Property(x => x.InstanceId).IsRequired();
             e.HasIndex(x => x.InstanceId).IsUnique();
         });
@@ -139,7 +139,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.DatabaseServerHint).HasMaxLength(200);
             e.Property(x => x.AllowedHost).HasMaxLength(253);
             e.Property(x => x.ReferralWidgetUrl).HasMaxLength(500);
-            e.Property(x => x.TrialDays).HasDefaultValue(3);
+            e.Property(x => x.TrialDays).HasDefaultValue(10);
             e.Property(x => x.AllowUpdates).HasDefaultValue(true);
             // Mirror of LicensePayload.AllowPlanManagement. Defaulted to true here as well as on the
             // CLR property so the database default and the model default agree — when they disagree

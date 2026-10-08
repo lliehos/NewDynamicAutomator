@@ -115,7 +115,7 @@ public sealed class LicenseService
                 {
                     ServerFingerprintHash = fp,
                     TrialStartedUtc = anchor.CreatedAtUtc,
-                    TrialDays = 3,
+                    TrialDays = 10,
                     CreatedAtUtc = DateTime.UtcNow,
                     LinkedAnchorId = anchor.AnchorId,
                     InstanceId = Guid.NewGuid()
@@ -151,7 +151,7 @@ public sealed class LicenseService
             {
                 ServerFingerprintHash = fp,
                 TrialStartedUtc = utcNow,
-                TrialDays = 3,
+                TrialDays = 10,
                 CreatedAtUtc = utcNow,
                 InstanceId = Guid.NewGuid()
             };
@@ -327,7 +327,7 @@ public sealed class LicenseService
     {
         var trialDays = stored?.TrialDays ?? trial.TrialDays;
         if (trialDays <= 0)
-            trialDays = 3;
+            trialDays = 10;
         var trialStart = trial.TrialStartedUtc;
         var trialEndUtc = trialStart.Date.AddDays(trialDays);
 
@@ -497,7 +497,7 @@ public sealed class LicenseService
             ServerBaseUrl = string.IsNullOrWhiteSpace(payload.ServerBaseUrl)
                 ? null
                 : payload.ServerBaseUrl.TrimEnd('/'),
-            TrialDays = payload.TrialDays > 0 ? payload.TrialDays : 3,
+            TrialDays = payload.TrialDays > 0 ? payload.TrialDays : 10,
             DatabaseServerHint = ExtractServerHint(payload.DatabaseConnectionString),
             AllowedHost = string.IsNullOrWhiteSpace(payload.AllowedHost)
                 ? null
@@ -592,7 +592,7 @@ public sealed class LicenseService
 
         var trialDays = stored?.TrialDays ?? trial.TrialDays;
         if (trialDays <= 0)
-            trialDays = 3;
+            trialDays = 10;
 
         if (stored is null)
         {

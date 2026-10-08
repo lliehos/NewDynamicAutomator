@@ -5,6 +5,16 @@ async function refresh() {
   const stop = document.getElementById("stop");
   const ver = session?.version || chrome.runtime.getManifest().version;
   const i18n = window.DaRecI18n;
+
+  // Which server this copy is bound to, shown so the user can confirm the deployment at a glance.
+  const serverLine = document.getElementById("server-line");
+  if (serverLine) {
+    serverLine.textContent = state.serverBase
+      ? String(state.serverBase)
+      : (i18n ? i18n.t("popup.noServer") : "Server: not set");
+    serverLine.title = state.serverBase ? String(state.serverBase) : "";
+  }
+
   if (state.active) {
     el.textContent = i18n.t("popup.thinking", {
       sid: String(state.sessionId || "").slice(0, 8),

@@ -98,9 +98,12 @@ public class UsersController : Controller
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Create(string userName, string password, string? firstName, string? lastName,
-        string? email, string? nationalId, int? planId, UserRole role = UserRole.User, bool isActive = true,
+        string? email, string? nationalId, int? planId, string[]? roles = null, bool isActive = true,
         CancellationToken ct = default)
     {
+        // The form posts one entry per checked switch; an empty selection falls back to the base User
+        // role, so an account is never left role-less.
+        var roleSet = UserRoleExtensions.ParseSet(roles);
         userName = (userName ?? "").Trim();
         if (string.IsNullOrWhiteSpace(userName) || string.IsNullOrWhiteSpace(password))
         {
@@ -109,7 +112,7 @@ public class UsersController : Controller
             return View(new AppUser
             {
                 UserName = userName, FirstName = firstName, LastName = lastName,
-                Email = email, NationalId = nationalId, PlanId = planId, Role = role, IsActive = isActive
+                Email = email, NationalId = nationalId, PlanId = planId, Role = roleSet, IsActive = isActive
             });
         }
 
@@ -120,7 +123,7 @@ public class UsersController : Controller
             return View(new AppUser
             {
                 UserName = userName, FirstName = firstName, LastName = lastName,
-                Email = email, NationalId = nationalId, PlanId = planId, Role = role, IsActive = isActive
+                Email = email, NationalId = nationalId, PlanId = planId, Role = roleSet, IsActive = isActive
             });
         }
 
@@ -131,7 +134,7 @@ public class UsersController : Controller
             return View(new AppUser
             {
                 UserName = userName, FirstName = firstName, LastName = lastName,
-                Email = email, NationalId = nationalId, PlanId = planId, Role = role, IsActive = isActive
+                Email = email, NationalId = nationalId, PlanId = planId, Role = roleSet, IsActive = isActive
             });
         }
 
@@ -141,12 +144,14 @@ public class UsersController : Controller
         // starts on the deployment's top plan, which is exactly what the resolver would report.
         if (allowsPlans && planId is int pid)
             plan = await _db.Plans.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pid, ct);
-        // Without plan management the account starts on the deployment's top plan, which is what the
-        // entitlement resolver would report for it anyway; with it, an unset plan falls back to Free.
+        // Without plan management the account starts on the deployment's top plan, so the plan
+        // argument would change nothing; with it, an unset plan falls back to the lowest active plan
+        // (what "default level" means once the admin defines their own ladder), never to a plan code
+        // that a fresh install may not have seeded.
         plan ??= allowsPlans
-            ? await _db.Plans.AsNoTracking().FirstOrDefaultAsync(p => p.Code == nameof(PlanCode.Free), ct)
+            ? await _settings.GetDefaultRegisterPlanAsync(ct)
             : await _entitlements.FindTopPlanAsync(ct);
-        plan ??= await _db.Plans.AsNoTracking().FirstAsync(p => p.Code == nameof(PlanCode.Free), ct);
+        plan ??= await _settings.GetDefaultRegisterPlanAsync(ct);
 
         var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
         var (pwdOk, pwdErr) = PasswordPolicy.Validate(
@@ -158,7 +163,7 @@ public class UsersController : Controller
             return View(new AppUser
             {
                 UserName = userName, FirstName = firstName, LastName = lastName,
-                Email = email, NationalId = nationalId, PlanId = planId, Role = role, IsActive = isActive
+                Email = email, NationalId = nationalId, PlanId = planId, Role = roleSet, IsActive = isActive
             });
         }
 
@@ -175,7 +180,7 @@ public class UsersController : Controller
                 return View(new AppUser
                 {
                     UserName = userName, FirstName = firstName, LastName = lastName,
-                    Email = email, NationalId = nationalId, PlanId = planId, Role = role, IsActive = isActive
+                    Email = email, NationalId = nationalId, PlanId = planId, Role = roleSet, IsActive = isActive
                 });
             }
         }
@@ -188,7 +193,7 @@ public class UsersController : Controller
             Email = string.IsNullOrWhiteSpace(email) ? null : email.Trim(),
             NationalId = string.IsNullOrWhiteSpace(nationalId) ? null : nationalId.Trim(),
             PlanId = plan.Id,
-            Role = role,
+            Role = roleSet,
             IsActive = isActive,
             CreatedAtUtc = DateTime.UtcNow
         };
@@ -211,10 +216,11 @@ public class UsersController : Controller
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Edit(int id, int? planId, UserRole role, bool isActive = false,
+    public async Task<IActionResult> Edit(int id, int? planId, string[]? roles = null, bool isActive = false,
         string? firstName = null, string? lastName = null, string? email = null, string? nationalId = null,
         string? newPassword = null, CancellationToken ct = default)
     {
+        var roleSet = UserRoleExtensions.ParseSet(roles);
         var user = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == id, ct);
         if (user is null) return NotFound();
 
@@ -224,7 +230,7 @@ public class UsersController : Controller
         if (allowsPlans && planId is int pid)
             targetPlan = await _db.Plans.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pid, ct)
                          ?? targetPlan;
-        targetPlan ??= await _db.Plans.AsNoTracking().FirstAsync(p => p.Code == nameof(PlanCode.Free), ct);
+        targetPlan ??= await _settings.GetDefaultRegisterPlanAsync(ct);
 
         var (globalMinLen, globalComplexity) = await _settings.GetGlobalPasswordPolicyAsync(ct);
         // A plan move only exists when plans are managed; without them the password rule is the
@@ -254,7 +260,7 @@ public class UsersController : Controller
                 user.Email = email;
                 user.NationalId = nationalId;
                 user.PlanId = planId;
-                user.Role = role;
+                user.Role = roleSet;
                 user.IsActive = isActive;
                 return View(user);
             }
@@ -288,7 +294,7 @@ public class UsersController : Controller
         if (!string.IsNullOrWhiteSpace(newPassword)) user.PasswordChangeRequired = false;
         else if (moveNeedsPasswordChange) user.PasswordChangeRequired = true;
         else if (allowsPlans && !needsStrict) user.PasswordChangeRequired = false;
-        user.Role = role;
+        user.Role = roleSet;
         user.IsActive = isActive;
         await _db.SaveChangesAsync(ct);
         // Say which of the two happened: the edit is saved either way, but a plan move without a
@@ -378,10 +384,10 @@ public class UsersController : Controller
     {
         if (user.Id == CurrentUserId) return "admin.users.deleteSelfBlocked";
 
-        if (user.Role == UserRole.Admin && user.IsActive)
+        if (user.Role.IsAdmin() && user.IsActive)
         {
             var otherActiveAdmins = await _db.Users
-                .CountAsync(u => u.Id != user.Id && u.Role == UserRole.Admin && u.IsActive, ct);
+                .CountAsync(u => u.Id != user.Id && (u.Role & UserRole.Admin) == UserRole.Admin && u.IsActive, ct);
             if (otherActiveAdmins == 0) return "admin.users.deleteLastAdminBlocked";
         }
 

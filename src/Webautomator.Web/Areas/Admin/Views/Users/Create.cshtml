@@ -39,13 +39,19 @@
     }
     <div class="mb-2">
       <label>@L["admin.users.role"]</label>
-      @* Enumerated rather than hard-coded, so adding a role to the enum is enough to offer it. *@
-      <select name="role" class="form-select">
-        @foreach (var r in Enum.GetValues<Webautomator.Domain.Enums.UserRole>())
+      @*
+        One switch per role, not a drop-down: an account may carry several roles at once (a process
+        manager who also monitors, an admin who also owns templates), and a single-select control
+        cannot express that. The Switches share the name "roles", so the POST arrives as one value
+        per checked box and binds to string[] on the controller. Enum.GetValues drives the list, so
+        adding a role to the enum is enough to offer it; None is skipped because it is not a grant.
+      *@
+      <div class="d-flex flex-column gap-2 mt-1">
+        @foreach (var r in Enum.GetValues<Webautomator.Domain.Enums.UserRole>().Where(x => x != Webautomator.Domain.Enums.UserRole.None))
         {
-          <option value="@r" selected="@(r == Webautomator.Domain.Enums.UserRole.User)">@L["admin.users.roles." + r]</option>
+          <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "roles", Value = r.ToString(), Label = L["admin.users.roles." + r], Checked = r == Webautomator.Domain.Enums.UserRole.User, Id = "roleCreate" + r }' />
         }
-      </select>
+      </div>
     </div>
     <partial name="_AdminSwitch" model='new AdminSwitchModel { Name = "isActive", Label = L["admin.users.active"], Checked = true, Id = "isActiveCreate", Hint = L["admin.hints.userActive"] }' />
   </div>

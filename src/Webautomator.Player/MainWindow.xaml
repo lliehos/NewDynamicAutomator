@@ -110,10 +110,10 @@
             </StackPanel>
           </Button>
 
-          <!-- The address is shown, never asked for: it comes from the licence. -->
+          <!-- The address is shown, never asked for: it comes from the licence or the download. -->
           <Border Style="{StaticResource DsSoftPanel}" Margin="0,0,0,0">
             <StackPanel>
-              <TextBlock Style="{StaticResource DsHint}" FontSize="11" Text="آدرس سرور (از لایسنس)"/>
+              <TextBlock Style="{StaticResource DsHint}" FontSize="11" Text="آدرس سرور"/>
               <TextBlock x:Name="ServerLabel" FontSize="12.5" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"
                          Foreground="{StaticResource DsInkBrush}"/>
             </StackPanel>
@@ -191,6 +191,13 @@
         <Button x:Name="UpdateButton" Style="{StaticResource DsButtonGhost}" Content="بررسی به‌روزرسانی"
                 Margin="8,0,0,0" Click="CheckUpdate_Click"/>
       </StackPanel>
+      <!--
+        The server this copy talks to, always visible in the footer. One machine can carry several
+        players bound to different servers, so "which server is this one?" has to be answerable at a
+        glance rather than inferred from the window title — which carries the brand, not the host.
+      -->
+      <TextBlock x:Name="ServerFooterText" Style="{StaticResource DsHint}" Margin="0,6,0,0"
+                 TextTrimming="CharacterEllipsis" ToolTipService.ShowDuration="30000"/>
       <TextBlock x:Name="UpdateStatus" Style="{StaticResource DsHint}" Margin="0,6,0,0"/>
     </StackPanel>
     </Grid>

@@ -7,7 +7,7 @@ public class DeploymentTrialRecord
     public int Id { get; set; }
     public string ServerFingerprintHash { get; set; } = string.Empty;
     public DateTime TrialStartedUtc { get; set; }
-    public int TrialDays { get; set; } = 3;
+    public int TrialDays { get; set; } = 10;
     public DateTime CreatedAtUtc { get; set; }
     public Guid? LinkedAnchorId { get; set; }
     /// <summary>Stable tenant epoch for this trial entitlement; new row = orphaned prior user/process data.</summary>

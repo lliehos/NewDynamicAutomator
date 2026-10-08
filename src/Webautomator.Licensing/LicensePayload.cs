@@ -18,7 +18,7 @@ public sealed class LicensePayload
     /// <summary>SQL Server connection string for this deployment (vendor-signed).</summary>
     public string? DatabaseConnectionString { get; set; }
     /// <summary>Initial trial days when no license yet. Default 3.</summary>
-    public int TrialDays { get; set; } = 3;
+    public int TrialDays { get; set; } = 10;
     /// <summary>Whether admin may check/apply online updates.</summary>
     public bool AllowUpdates { get; set; } = true;
     /// <summary>

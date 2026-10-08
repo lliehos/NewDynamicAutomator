@@ -29,10 +29,16 @@ public class SystemSettingsService
 
     public async Task<Plan> GetDefaultRegisterPlanAsync(CancellationToken ct = default)
     {
-        var code = await GetAsync(SystemSettingKeys.DefaultRegisterPlan, nameof(PlanCode.Free), ct);
-        var plan = await _db.Plans.FirstOrDefaultAsync(p => p.Code == code && p.IsActive, ct)
-                   ?? await _db.Plans.FirstAsync(p => p.Code == nameof(PlanCode.Free), ct);
-        return plan;
+        var code = await GetAsync(SystemSettingKeys.DefaultRegisterPlan, nameof(PlanCode.Pro), ct);
+        // The configured code first; then the lowest active plan, which is what "the default level for
+        // new registrations" means once an admin has defined their own ladder and left the code
+        // pointing at a plan that no longer exists. The very last resort is any active plan, so
+        // registration never fails on an install whose plan list was emptied by hand.
+        var plan = await _db.Plans.FirstOrDefaultAsync(p => p.Code == code && p.IsActive, ct);
+        plan ??= await _db.Plans.Where(p => p.IsActive)
+            .OrderBy(p => p.SortOrder).ThenBy(p => p.Id).FirstOrDefaultAsync(ct);
+        plan ??= await _db.Plans.OrderBy(p => p.SortOrder).ThenBy(p => p.Id).FirstOrDefaultAsync(ct);
+        return plan ?? throw new InvalidOperationException("هیچ پلنی تعریف نشده است.");
     }
 
     /// <summary>

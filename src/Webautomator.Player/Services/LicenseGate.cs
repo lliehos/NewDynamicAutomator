@@ -67,9 +67,7 @@ public sealed class LicenseGate
         }
     }
 
-    private static string CachedLicensePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "WebautomatorDesktop", "license.json");
+    private static string CachedLicensePath => PlayerStorage.FilePath("license.json");
 
     private LicenseGate(LicenseDocument? document, bool signatureValid)
     {

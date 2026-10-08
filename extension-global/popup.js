@@ -115,6 +115,22 @@ async function refresh() {
   const phase = state.recordPhase || "idle";
   const steps = Array.isArray(state.steps) ? state.steps : [];
 
+  // Which server this copy is bound to. Shown always, including before a recording starts, because
+  // that is exactly when the user needs to confirm they are pointed at the right deployment.
+  const serverLine = document.getElementById("server-line");
+  if (serverLine) {
+    if (state.serverBase) {
+      const fp = state.serverFingerprint ? String(state.serverFingerprint).slice(0, 12) : "";
+      serverLine.textContent = fp
+        ? `${state.serverBase} · ${fp}`
+        : String(state.serverBase);
+      serverLine.title = state.serverFingerprint || state.serverBase;
+    } else {
+      serverLine.textContent = t("rec.noServer");
+      serverLine.title = "";
+    }
+  }
+
   idleBox.hidden = phase !== "idle";
   recBox.hidden = phase !== "recording";
   reviewBox.hidden = phase !== "review";

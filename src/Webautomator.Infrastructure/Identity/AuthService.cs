@@ -373,7 +373,7 @@ public class AuthService
         var providers = await _authMode.GetProvidersAsync(ct);
         var mode = providers.ResolveFor(request.UserName);
         var password = request.Password ?? "";
-        if (mode == AuthMode.Ldap && user is { IsActive: true, Role: UserRole.Admin }
+        if (mode == AuthMode.Ldap && user is { IsActive: true } && user.Role.IsAdmin()
             && !string.IsNullOrEmpty(password)
             && _hasher.VerifyHashedPassword(user, user.PasswordHash, password)
                != PasswordVerificationResult.Failed)
@@ -610,8 +610,7 @@ public class AuthService
             new(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new(ClaimTypes.Name, user.UserName),
             new(JwtRegisteredClaimNames.UniqueName, user.UserName),
-            new(ClaimTypes.Role, user.Role.ToString()),
-            new(EntitlementService.ClaimRole, user.Role.ToString()),
+            new(EntitlementService.ClaimRole, string.Join(", ", user.Role.Names())),
             new(EntitlementService.ClaimPlan, entitlements.PlanCode),
             new(EntitlementService.ClaimIsLocal, entitlements.IsLocal ? "1" : "0"),
             new(EntitlementService.ClaimCanPlay, entitlements.CanPlay ? "1" : "0"),
@@ -635,6 +634,11 @@ public class AuthService
             // password flag: the check must not cost a query on every request.
             new("session_version", user.SessionVersion.ToString())
         };
+        // One ClaimTypes.Role claim per flag: IsInRole("Admin") has to answer for a single privilege,
+        // and a combined value like "Admin, Monitor" would never match a role name. The custom
+        // ClaimRole above keeps the combined form for display and API payloads.
+        foreach (var roleName in user.Role.Names())
+            claims.Add(new Claim(ClaimTypes.Role, roleName));
         if (!string.IsNullOrWhiteSpace(user.FirstName))
             claims.Add(new Claim(ClaimTypes.GivenName, user.FirstName));
         if (!string.IsNullOrWhiteSpace(user.LastName))
@@ -806,7 +810,7 @@ public class AuthService
     /// </summary>
     public async Task<bool> IsDirectoryManagedAsync(AppUser user, CancellationToken ct = default)
     {
-        if (user.Role == UserRole.Admin) return false;
+        if (user.Role.IsAdmin()) return false;
         var providers = await _authMode.GetProvidersAsync(ct);
         return providers.ResolveFor(user.UserName) == AuthMode.Ldap;
     }

@@ -20,8 +20,9 @@ internal static class DsStrings
     public const string LoggingIn = "منتظر تکمیل ورود در مرورگر…";
     public const string Logout = "خروج";
     public const string LoginFailed = "ورود انجام نشد.";
-    public const string ServerFromLicense = "آدرس سرور (از لایسنس)";
+    public const string ServerFromLicense = "آدرس سرور";
     public const string ErrServerUrl = "آدرس سرور در لایسنس این نصب مشخص نشده است.";
+    public const string NoServerAddress = "سرور: مشخص نشده — لایسنس یا بستهٔ نصب آدرس سرور را نداشت.";
 
     // ---- Process list ----
     public const string Processes = "فرآیندها";

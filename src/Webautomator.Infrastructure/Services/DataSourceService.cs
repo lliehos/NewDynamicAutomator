@@ -194,7 +194,7 @@ public class DataSourceService
     {
         var role = await _db.Users.Where(u => u.Id == userId)
             .Select(u => (UserRole?)u.Role).FirstOrDefaultAsync(ct);
-        return role is UserRole.ProcessManager or UserRole.Admin;
+        return role is { } r && (r.Has(UserRole.ProcessManager) || r.Has(UserRole.Admin));
     }
 
     public async Task<List<AdminLibrarySourceRow>> ListAllForAdminAsync(CancellationToken ct = default)

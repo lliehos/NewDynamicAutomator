@@ -155,16 +155,12 @@ public static class DbSeeder
             }
         }
 
-        // Local/guest: no share. Free can share (actor); Pro+ can receive (admin-tunable).
-        // Local and Free have no price: one is a sign-in placeholder and the other is free.
-        await UpsertPlan(nameof(PlanCode.Local), "محلی / تست", "Local / Test", 1, 1, 30, false, false, false, false, 1, 3, false, false,
-            false, false, null, false, false, false, false, false, null, null);
-        await UpsertPlan(nameof(PlanCode.Free), "رایگان", "Free", 3, 3, 80, true, true, false, false, 2, 3, false, false,
-            true, false, 3, true, true, false, true, false, null, null);
+        // The initial seed carries ONE plan, and it is the professional one: a fresh install has a
+        // single usable level so the app works end to end, while every other plan is the admin's to
+        // define (Admin → Plans). Shipping a ladder of guesses would put levels on the pricing page
+        // that the operator never chose.
         await UpsertPlan(nameof(PlanCode.Pro), "حرفه‌ای", "Pro", null, null, null, true, true, true, false, 3, 8, true, true,
             true, true, null, true, true, true, true, true, 990000m, 9900000m);
-        await UpsertPlan(nameof(PlanCode.Gold), "طلایی", "Gold", null, null, null, true, true, true, true, 4, 8, true, true,
-            true, true, null, true, true, true, true, true, 1990000m, 19900000m);
         await db.SaveChangesAsync();
     }
 
@@ -199,12 +195,12 @@ public static class DbSeeder
 
         await Upsert(
             SystemSettingKeys.DefaultRegisterPlan,
-            nameof(PlanCode.Free),
+            nameof(PlanCode.Pro),
             "Auth",
             "پلن پیش‌فرض ثبت‌نام",
             "Default registration plan",
-            "کد پلن فعال برای کاربران جدید (مثلاً Free)",
-            "Active plan code assigned to new registrations (e.g. Free)");
+            "کد پلن فعال برای کاربران جدید؛ خالی یا ناموجود باشد، پایین‌ترین پلن فعال استفاده می‌شود.",
+            "Active plan code assigned to new registrations; when blank or unknown, the lowest active plan is used.");
 
         // The two independent provider switches. Seeded so a fresh install has them, and so the
         // back-compat path (which looks for their presence) takes the modern branch straight away.
@@ -490,14 +486,13 @@ public static class DbSeeder
         // have them by setting Webautomator:SeedDemoUsers=true.
         if (SeedDemoUsers())
         {
-            var localPlan = await db.Plans.FirstAsync(p => p.Code == nameof(PlanCode.Local));
-            var freePlan = await db.Plans.FirstAsync(p => p.Code == nameof(PlanCode.Free));
-            await EnsureUser("guest", "Guest123!", "کاربر", "مهمان", UserRole.User, localPlan);
-            await EnsureUser("free", "Free123!", "کاربر", "رایگان", UserRole.User, freePlan);
+            // Every demo account sits on the seeded plan: the initial seed defines exactly one level,
+            // so a demo login must not assume a Local or Free row exists.
+            await EnsureUser("guest", "Guest123!", "کاربر", "مهمان", UserRole.User, proPlan);
+            await EnsureUser("free", "Free123!", "کاربر", "رایگان", UserRole.User, proPlan);
             await EnsureUser("pro", "Pro123!", "کاربر", "حرفه‌ای", UserRole.User, proPlan);
             // A demo process manager. The role exists to own the shared templates without being a full
             // administrator, and without an account that carries it there is no way to try that path.
-            // Given the Pro plan because template work is part of the Pro feature set.
             await EnsureUser("pm", "Pm123!", "کاربر", "مدیر فرآیند", UserRole.ProcessManager, proPlan);
         }
 

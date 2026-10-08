@@ -227,6 +227,10 @@ async function getSmartState() {
     "smartActive", "smartSessionId", "smartTabId", "smartTaskId",
     "smartTaskTitle", "smartLearningComplete", "smartStatus"
   ]);
+  // The server this copy talks to, for the popup. One machine can carry several copies pointed at
+  // different servers, so which one this is must be visible rather than guessed. Best-effort.
+  let serverBase = null;
+  try { serverBase = await portalBase(); } catch { /* not bound yet */ }
   return {
     ok: true,
     active: !!data.smartActive,
@@ -235,7 +239,8 @@ async function getSmartState() {
     taskId: data.smartTaskId ?? null,
     taskTitle: data.smartTaskTitle || null,
     learningComplete: !!data.smartLearningComplete,
-    status: data.smartStatus || "idle"
+    status: data.smartStatus || "idle",
+    serverBase: serverBase || null
   };
 }
 
