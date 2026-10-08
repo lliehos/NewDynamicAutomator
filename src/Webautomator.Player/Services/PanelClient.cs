@@ -286,6 +286,24 @@ public sealed class PanelClient : IDisposable
     }
 
     /// <summary>
+    /// Tell the server which sources a local run changed, so the panel can flag them for sync.
+    /// </summary>
+    /// <remarks>
+    /// Fire-and-forget by design: the run has already finished and its results are safe on this
+    /// machine, so a failed report must not surface as a run error — the worst case is a missing
+    /// badge, and the sync that follows clears the flag anyway.
+    /// </remarks>
+    public async Task ReportLocalChangesAsync(int taskId, IEnumerable<int> dataSourceIds, CancellationToken ct = default)
+    {
+        try
+        {
+            await _http.PostAsJsonAsync($"{BaseUrl}/api/tasks/{taskId}/local-run-changes",
+                new { dataSourceIds = dataSourceIds.Distinct().ToList() }, JsonOpts, ct);
+        }
+        catch { /* best effort */ }
+    }
+
+    /// <summary>
     /// The deployment's app name, for naming this app "&lt;AppName&gt; Player".
     /// </summary>
     /// <remarks>

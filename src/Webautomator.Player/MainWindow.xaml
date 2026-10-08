@@ -4,7 +4,8 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Style="{StaticResource DsWindow}"
         Title="Webautomator Player"
-        Height="720" Width="1120" MinHeight="560" MinWidth="900"
+        SizeToContent="WidthAndHeight"
+        MinHeight="260" MinWidth="380"
         FlowDirection="RightToLeft"
         WindowStartupLocation="CenterScreen"
         Icon="pack://application:,,,/Assets/webautomator-icon.jpg">
@@ -180,6 +181,24 @@
         </DataGrid>
       </Grid>
     </Border>
+
+      <!--
+        The update notification. Shown when the server announces a newer build (push or launch
+        check), it is the "click here" the user acts on: the button opens the update page, which
+        downloads, applies and restarts. Hidden otherwise, and placed last so it overlays the panel
+        beneath it while leaving the login/list layout untouched.
+      -->
+      <Border x:Name="UpdateBanner" Visibility="Collapsed" VerticalAlignment="Top"
+              Background="#FFF7E6" BorderBrush="#F0C36D" BorderThickness="1" CornerRadius="10"
+              Padding="12,10" Margin="0,0,0,0">
+        <DockPanel LastChildFill="True">
+          <Button x:Name="UpdateBannerButton" DockPanel.Dock="Left" Content="به‌روزرسانی"
+                  Style="{StaticResource DsBrandButton}" Padding="12,5" Margin="10,0,0,0"
+                  Click="UpdateBanner_Click"/>
+          <TextBlock x:Name="UpdateBannerText" VerticalAlignment="Center" TextWrapping="Wrap"
+                     Foreground="#7A5B10"/>
+        </DockPanel>
+      </Border>
       </Grid>
 
     <!-- Footer: licence state + updates -->

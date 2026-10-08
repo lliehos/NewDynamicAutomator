@@ -169,41 +169,41 @@ public partial class MainWindow : Window
         if (info is null || !info.Available) return;
         if (!UpdateService.IsNewer(info.Version, UpdateService.CurrentVersion)) return;
 
-        var ask = MessageBox.Show(this,
-            $"نسخهٔ جدید {info.Version} روی سرور موجود است (نسخهٔ فعلی {UpdateService.CurrentVersion}).\n\n" +
-            "اکنون دانلود و نصب شود؟ برنامه پس از نصب دوباره باز می‌شود.",
-            "به‌روزرسانی",
-            MessageBoxButton.YesNo, MessageBoxImage.Information);
-        if (ask != MessageBoxResult.Yes) return;
+        // A newer build exists. The user gets an in-app notification with one action — the update
+        // page, which downloads, applies the swap and restarts. Nothing replaces the running app
+        // without that choice, and the notification stays visible until it is taken.
+        ShowUpdateBanner(info.Version);
+        if (interactive) await OpenUpdateAsync(serverUrl);
+    }
 
-        UpdateStatus.Text = "در حال دانلود به‌روزرسانی…";
-        var progress = new Progress<int>(p => UpdateStatus.Text = $"در حال دانلود به‌روزرسانی… {p}%");
-        var (ok, newExe, error) = await UpdateService.DownloadAndStageAsync(
-            serverUrl, info.DownloadUrl ?? "/desktop/download", progress);
+    /// <summary>Put the update notification on screen.</summary>
+    private void ShowUpdateBanner(string version)
+    {
+        UpdateBannerText.Text = $"نسخهٔ جدید {version} روی سرور موجود است — برای نصب روی «به‌روزرسانی» بزنید.";
+        UpdateBanner.Visibility = Visibility.Visible;
+    }
 
-        if (!ok || newExe is null)
+    private async void UpdateBanner_Click(object sender, RoutedEventArgs e)
+    {
+        var baseUrl = _client?.BaseUrl ?? ServerAddress.BaseUrl;
+        await OpenUpdateAsync(baseUrl);
+    }
+
+    /// <summary>
+    /// Open the update page, re-checking first so a stale banner cannot start a download that has
+    /// nothing to install.
+    /// </summary>
+    private async Task OpenUpdateAsync(string? serverBase)
+    {
+        if (string.IsNullOrWhiteSpace(serverBase)) return;
+        var info = await UpdateService.CheckAsync(serverBase);
+        if (info is null || !info.Available || !UpdateService.IsNewer(info.Version, UpdateService.CurrentVersion))
         {
-            UpdateStatus.Text = error ?? "به‌روزرسانی ناموفق بود.";
+            UpdateBanner.Visibility = Visibility.Collapsed;
+            UpdateStatus.Text = "نسخهٔ جدیدی روی سرور نیست.";
             return;
         }
-
-        UpdateStatus.Text = "به‌روزرسانی آماده است؛ برنامه در حال راه‌اندازی مجدد…";
-        // Start the new build, then close this one so the file lock on the old exe is released. The
-        // new build runs from its staging folder, which is the only way Windows allows this.
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(newExe)
-            {
-                UseShellExecute = true,
-                WorkingDirectory = System.IO.Path.GetDirectoryName(newExe)
-            });
-        }
-        catch (Exception ex)
-        {
-            UpdateStatus.Text = $"اجرای نسخهٔ جدید ناموفق بود: {ex.Message}";
-            return;
-        }
-        Application.Current.Shutdown();
+        new UpdateWindow(serverBase, info) { Owner = this }.ShowDialog();
     }
 
     // ---- Login ----------------------------------------------------------------------------------
@@ -266,6 +266,14 @@ public partial class MainWindow : Window
         if (_client is null) return;
         LoginPanel.Visibility = Visibility.Collapsed;
         ProcessPanel.Visibility = Visibility.Visible;
+        // The window was sized to the login card; the process list needs the full canvas. Manual
+        // sizing plus the wider minimums is what stops the list from being squashed into a form's
+        // footprint once the user is in.
+        SizeToContent = SizeToContent.Manual;
+        MinWidth = 900;
+        MinHeight = 560;
+        if (double.IsNaN(Width) || Width < 900) Width = 1120;
+        if (double.IsNaN(Height) || Height < 560) Height = 720;
         WhoamiText.Text = $"کاربر: {_client.UserName} — {_client.BaseUrl}";
 
         // Branding first, so the window and every later prompt carry the deployment's own product
@@ -307,7 +315,8 @@ public partial class MainWindow : Window
         _updateListener = new UpdateListener(serverBase);
         _updateListener.UpdateAvailable += info => Dispatcher.Invoke(() =>
         {
-            UpdateStatus.Text = $"نسخهٔ جدید {info.Version} روی سرور موجود است. برای نصب از دکمهٔ به‌روزرسانی استفاده کنید.";
+            // The server pushed a release; surface the same notification the launch check shows.
+            ShowUpdateBanner(info.Version);
         });
         await _updateListener.StartAsync();
     }
@@ -348,6 +357,11 @@ public partial class MainWindow : Window
 
         ProcessPanel.Visibility = Visibility.Collapsed;
         LoginPanel.Visibility = Visibility.Visible;
+        // Back to a form-sized window: the login card is small, and leaving the process list's
+        // canvas around it would show exactly the empty space the compact form exists to avoid.
+        MinWidth = 380;
+        MinHeight = 260;
+        SizeToContent = SizeToContent.WidthAndHeight;
         LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsDangerBrush");
         LoginStatus.Text = "";
     }
@@ -422,9 +436,15 @@ public partial class MainWindow : Window
         runWindow.Closed += (_, _) =>
         {
             _runs.Remove(runWindow);
-            // A local run that wrote anything needs a sync before its results reach the server.
+            // A local run that wrote anything needs a sync before its results reach the server; the
+            // sync chip appears on the row, and the touched sources are reported so the panel's
+            // source list carries the matching "needs sync" badge for whoever looks there instead.
             if (!row.RunOnServer && runWindow.Engine?.State.Writes.Count > 0 && runWindow.Engine.State.LastError is null)
+            {
                 row.LocalRunPendingSync = true;
+                var touchedSources = runWindow.Engine.State.Writes.Select(w => w.DataSourceId);
+                _ = _client?.ReportLocalChangesAsync(row.Id, touchedSources);
+            }
         };
         _runs.Add(runWindow);
         runWindow.Show();
