@@ -38,6 +38,22 @@ public class DataSource
     /// </remarks>
     public bool IsPublic { get; set; }
 
+    /// <summary>
+    /// Set when a LOCAL run changed this source and the server has not received the new values yet.
+    /// </summary>
+    /// <remarks>
+    /// Local runs write into the client's own copy (the whole point is staying off the server), so
+    /// the server cannot see the divergence — the client reports it. The flag is what turns "somewhere
+    /// on this machine there is a newer version of this source" into a visible sync icon with a
+    /// single action, and it is cleared when the run's results are synced back (or when the client
+    /// reports nothing changed). The source itself is never "local" or "server": only the RUN is,
+    /// and this flag is the bookkeeping that follows from having run locally.
+    /// </remarks>
+    public bool NeedsSync { get; set; }
+
+    /// <summary>When the local change was reported; diagnostics only.</summary>
+    public DateTime? NeedsSyncAtUtc { get; set; }
+
     public ICollection<DataSourceCell> Cells { get; set; } = new List<DataSourceCell>();
 
     public AppUser? Owner { get; set; }

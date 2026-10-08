@@ -26,6 +26,20 @@ public class SyncLocalRunCellDto
 }
 
 /// <summary>
+/// The sources a local run changed, reported when the run ends — before the values are synced.
+/// </summary>
+/// <remarks>
+/// Sent by the client as soon as the local run finishes so the panel can show the sync icon; the
+/// values themselves travel later with <see cref="SyncLocalRunRequest"/>. An empty list is a valid
+/// report and means "nothing diverged", which is why this is separate from the value push.
+/// </remarks>
+public class LocalRunChangesRequest
+{
+    /// <summary>The ids of the sources the run wrote to.</summary>
+    public List<int> DataSourceIds { get; set; } = new();
+}
+
+/// <summary>
 /// The two run settings the desktop player can edit, both of which live on the process's start node.
 /// </summary>
 public class RunSettingsRequest

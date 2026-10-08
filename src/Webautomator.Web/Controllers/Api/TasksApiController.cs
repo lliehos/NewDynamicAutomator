@@ -315,6 +315,12 @@ public class TasksApiController : ControllerBase
             if (res?.Ok == true) applied++; else skipped++;
         }
 
+        // The server now holds this run's values for these sources, so the "there is a newer copy on
+        // the client" flag has served its purpose and is cleared — even for cells that were skipped,
+        // because the user has made the sync decision and a badge that never clears would train them
+        // to ignore it.
+        await _sources.ClearNeedsSyncAsync(cells.Select(c => c.DataSourceId), ct);
+
         await _events.LogAsync("Info", "Play", "LocalRunSynced",
             $"Local run results synced ({applied} cell(s))",
             UserId, User.Identity?.Name,
@@ -333,6 +339,28 @@ public class TasksApiController : ControllerBase
         }, ct);
 
         return Ok(new { ok = true, applied, skipped });
+    }
+
+    /// <summary>
+    /// Report which sources a local run changed, before the values are synced.
+    /// </summary>
+    /// <remarks>
+    /// The server never sees a local run while it happens, so the client is the only one that knows
+    /// a source diverged. This is how that knowledge reaches the panel: the flagged source then wears
+    /// the sync icon, and <see cref="SyncLocalRun"/> clears it when the values actually arrive.
+    /// </remarks>
+    [HttpPost("{id:int}/local-run-changes")]
+    public async Task<IActionResult> ReportLocalRunChanges(int id, [FromBody] LocalRunChangesRequest? body, CancellationToken ct)
+    {
+        // Same visibility rule as every other task action: only someone who can see the process may
+        // report against it.
+        var canvas = await _tasks.GetCanvasAsync(UserId, id, ct);
+        if (canvas is null) return NotFound();
+
+        var marked = await _sources.MarkNeedsSyncAsync(UserId, body?.DataSourceIds ?? new List<int>(), ct);
+        if (marked > 0)
+            await _catalog.BroadcastProcessListItemAsync(id, "data_updated", User.Identity?.Name, ct);
+        return Ok(new { ok = true, marked });
     }
 
     /// <summary>

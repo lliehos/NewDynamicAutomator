@@ -158,6 +158,7 @@ public class DataSourceService
                 d.RowCount,
                 d.ColumnsJson,
                 d.IsPublic,
+                d.NeedsSync,
                 d.OwnerUserId,
                 OwnerUserName = d.Owner != null ? d.Owner.UserName : null,
                 Links = d.ProcessLinks.Select(l => l.Process!.Title).ToList()
@@ -182,6 +183,7 @@ public class DataSourceService
                 LinkedProcessCount = d.Links.Count,
                 LinkedProcessTitles = d.Links,
                 IsPublic = d.IsPublic,
+                NeedsSync = d.NeedsSync,
                 OwnerUserName = d.OwnerUserName,
                 // Mirrors CanReshapeAsync so the list never offers a button the service would refuse.
                 CanEditStructure = d.OwnerUserId == userId || (d.IsPublic && canReshapePublic)
@@ -195,6 +197,46 @@ public class DataSourceService
         var role = await _db.Users.Where(u => u.Id == userId)
             .Select(u => (UserRole?)u.Role).FirstOrDefaultAsync(ct);
         return role is { } r && (r.Has(UserRole.ProcessManager) || r.Has(UserRole.Admin));
+    }
+
+    /// <summary>
+    /// Flag sources as changed by a local run that the server has not received yet.
+    /// </summary>
+    /// <remarks>
+    /// Called by the clients (the Windows player, the browser extension) when a local run touched a
+    /// source. Only sources the caller owns are flagged: a public source is shared, so a local run
+    /// against it is not that user's divergence to advertise — and the report must not be able to
+    /// stamp flags on somebody else's library. Unknown or foreign ids are ignored rather than
+    /// refused, because a client that ran against a source that has since been deleted should not
+    /// fail its whole report.
+    /// </remarks>
+    public async Task<int> MarkNeedsSyncAsync(int userId, IEnumerable<int> sourceIds, CancellationToken ct = default)
+    {
+        var ids = (sourceIds ?? []).Distinct().ToList();
+        if (ids.Count == 0) return 0;
+        var rows = await _db.DataSources
+            .Where(d => ids.Contains(d.Id) && d.OwnerUserId == userId)
+            .ToListAsync(ct);
+        var now = DateTime.UtcNow;
+        foreach (var row in rows)
+        {
+            row.NeedsSync = true;
+            row.NeedsSyncAtUtc = now;
+        }
+        if (rows.Count > 0) await _db.SaveChangesAsync(ct);
+        return rows.Count;
+    }
+
+    /// <summary>Clear the flag once a sync has written the local run's values back.</summary>
+    public async Task ClearNeedsSyncAsync(IEnumerable<int> sourceIds, CancellationToken ct = default)
+    {
+        var ids = (sourceIds ?? []).Distinct().ToList();
+        if (ids.Count == 0) return;
+        var rows = await _db.DataSources
+            .Where(d => ids.Contains(d.Id) && d.NeedsSync)
+            .ToListAsync(ct);
+        foreach (var row in rows) row.NeedsSync = false;
+        if (rows.Count > 0) await _db.SaveChangesAsync(ct);
     }
 
     public async Task<List<AdminLibrarySourceRow>> ListAllForAdminAsync(CancellationToken ct = default)

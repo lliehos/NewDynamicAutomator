@@ -332,6 +332,9 @@
           // would refuse anyway (a public source's shape is not the reader's to change).
           isPublic: d.isPublic === true,
           ownerUserName: d.ownerUserName || null,
+          // True while a local run's changes for this source have not been synced; the row shows the
+          // sync badge so "somewhere there is a newer copy" is visible instead of remembered.
+          needsSync: d.needsSync === true,
           canEditStructure: d.canEditStructure !== false
         },
         isMaster: false,
@@ -1695,9 +1698,12 @@
           const pubBadge = r.ds.isPublic
             ? ` <span class="ds-badge-public" title="${escapeHtml(r.ds.ownerUserName || "")}">${t("sources.publicBadge") || "عمومی"}</span>`
             : "";
+          const syncBadge = r.ds.needsSync
+            ? ` <span class="ds-badge-sync" style="background:#fff7e6;border:1px solid #f0c36d;border-radius:6px;padding:1px 6px;font-size:11px;color:#7a5b10" title="${t("sources.needsSyncHint") || "اجرای محلی این منبع را تغییر داده و هنوز با سرور همگام نشده است."}">◌ ${t("sources.needsSync") || "نیاز به همگام‌سازی"}</span>`
+            : "";
           return `<tr data-da-row="${escapeHtml(String(r.ds.id ?? ""))}">
             <td>
-              <div class="fw-semibold">${escapeHtml(label)}${r.isMaster ? ` <span class="ds-badge-master">پیش‌فرض</span>` : ""}${pubBadge}</div>
+              <div class="fw-semibold">${escapeHtml(label)}${r.isMaster ? ` <span class="ds-badge-master">پیش‌فرض</span>` : ""}${pubBadge}${syncBadge}</div>
             </td>
             <td>${escapeHtml(r.taskTitle)}</td>
             <td>${cols}</td>

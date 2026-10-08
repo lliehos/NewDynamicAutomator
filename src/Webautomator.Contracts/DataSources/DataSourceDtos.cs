@@ -32,6 +32,8 @@ public class DataSourceListItemDto
 
     /// <summary>Shared source every signed-in user can read and use (see DataSource.IsPublic).</summary>
     public bool IsPublic { get; set; }
+    /// <summary>True while a local run's changes for this source have not been synced to the server.</summary>
+    public bool NeedsSync { get; set; }
     /// <summary>Owner's username — shown for public sources; null when the owner row is gone.</summary>
     public string? OwnerUserName { get; set; }
     /// <summary>
