@@ -1,6 +1,6 @@
 /** Portal handshake — Smart Recorder role. */
 (function () {
-  if (window.DaPortalDetect && !DaPortalDetect.isMorobotPortalPage()) return;
+  if (window.DaPortalDetect && !DaPortalDetect.isWebautomatorPortalPage()) return;
 
   const ROLE = "smart";
 
@@ -87,7 +87,7 @@
 
   function pushTenantBranding() {
     try {
-      const b = window.__MOROBOT_BRANDING;
+      const b = window.__WEBAUTOMATOR_BRANDING;
       if (!b || !b.appName) return;
       chrome.runtime.sendMessage({ type: "applyTenantBranding", payload: b }).catch(() => {});
     } catch { /* ignore */ }

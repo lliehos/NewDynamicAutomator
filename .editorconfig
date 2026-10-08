@@ -1,4 +1,4 @@
-# Morobot — shared editor/encoding conventions
+# Webautomator — shared editor/encoding conventions
 #
 # Why this file exists: parts of this project carry Persian (فارسی) text. That text is only
 # safe when files are written as UTF-8 WITHOUT a byte-order mark. A BOM at the start of a

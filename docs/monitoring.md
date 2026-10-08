@@ -17,7 +17,7 @@
 
 ## نقش کاربری `Monitor`
 
-`UserRole` در `src/Morobot.Domain/Enums/UserRole.cs`:
+`UserRole` در `src/Webautomator.Domain/Enums/UserRole.cs`:
 
 ```
 User = 0 · ProcessManager = 1 · Admin = 2 · Monitor = 3
@@ -84,13 +84,13 @@ User = 0 · ProcessManager = 1 · Admin = 2 · Monitor = 3
 
 | فایل | نقش |
 |---|---|
-| `src/Morobot.Domain/Entities/ServerMetricsSample.cs` | ردیف نمونه (شبکه، دیسک، حافظه، بار) |
-| `src/Morobot.Infrastructure/Services/MonitoringService.cs` | خواندن شمارنده‌ها، تاریخچه، تفکیک‌ها |
-| `src/Morobot.Infrastructure/Services/TrafficMeter.cs` | شمارندهٔ بایت شبکهٔ خود اپ |
-| `src/Morobot.Web/Middleware/TrafficMeterMiddleware.cs` | پرکردن `TrafficMeter` از هر درخواست |
-| `src/Morobot.Web/Services/MetricsSamplerService.cs` | نمونه‌گیر + هرس ۱۴ روزه |
-| `src/Morobot.Web/Areas/Admin/Controllers/MonitoringController.cs` | `Index` + `Snapshot` |
-| `src/Morobot.Web/Areas/Admin/Views/Monitoring/Index.cshtml` | داشبورد |
+| `src/Webautomator.Domain/Entities/ServerMetricsSample.cs` | ردیف نمونه (شبکه، دیسک، حافظه، بار) |
+| `src/Webautomator.Infrastructure/Services/MonitoringService.cs` | خواندن شمارنده‌ها، تاریخچه، تفکیک‌ها |
+| `src/Webautomator.Infrastructure/Services/TrafficMeter.cs` | شمارندهٔ بایت شبکهٔ خود اپ |
+| `src/Webautomator.Web/Middleware/TrafficMeterMiddleware.cs` | پرکردن `TrafficMeter` از هر درخواست |
+| `src/Webautomator.Web/Services/MetricsSamplerService.cs` | نمونه‌گیر + هرس ۱۴ روزه |
+| `src/Webautomator.Web/Areas/Admin/Controllers/MonitoringController.cs` | `Index` + `Snapshot` |
+| `src/Webautomator.Web/Areas/Admin/Views/Monitoring/Index.cshtml` | داشبورد |
 | `wwwroot/js/admin-monitoring.js` | تازه‌سازی زنده |
 | `wwwroot/css/admin-app.css` (بخش `admin-mon-*`) | ظاهر |
 
@@ -108,10 +108,10 @@ User = 0 · ProcessManager = 1 · Admin = 2 · Monitor = 3
 
 ## نکات فنی که وقت گرفتند
 
-- **`Process` دو معنا دارد:** `System.Diagnostics.Process` و `Morobot.Domain.Entities.Process`. در
+- **`Process` دو معنا دارد:** `System.Diagnostics.Process` و `Webautomator.Domain.Entities.Process`. در
   `MonitoringService` نوع تشخیصی با `using SysProcess = ...` نام‌گذاری شده تا مبهم نماند.
 - **مهاجرت خالی:** `dotnet ef migrations add --no-build` روی اسنپ‌شات کهنه، مهاجرت **خالی** می‌سازد.
-  اول `dotnet build Morobot.sln`، بعد `migrations add` **بدون** `--no-build` تا جدول ساخته شود.
+  اول `dotnet build Webautomator.sln`، بعد `migrations add` **بدون** `--no-build` تا جدول ساخته شود.
 - **`L["key"]` رشته برمی‌گرداند، نه شیء** — `.Value` روی `L[...]` کامپایل نمی‌شود.
 - **Razor متن فارسی را به entity عددی می‌نویسد** (`&#x628;...`)، پس تست محتوا باید HTML را decode کند
   وگرنه «رشته پیدا نشد» می‌دهد در حالی که صفحه درست است.

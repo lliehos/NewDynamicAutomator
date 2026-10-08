@@ -1,13 +1,13 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Trust the Morobot server's internal root CA on THIS client machine.
+    Trust the Webautomator server's internal root CA on THIS client machine.
 
 .DESCRIPTION
     Why this file exists.
 
     A server certificate is only "valid" on a machine whose Trusted Root store contains the CA that
-    issued it. Chrome/Edge read the Windows store. The Morobot extension's handshake is a background
+    issued it. Chrome/Edge read the Windows store. The Webautomator extension's handshake is a background
     fetch of GET /extension/fingerprint, and a background fetch is NOT covered by the browser's
     "Proceed" interstitial - so on a client without the root the page loads with a warning, the probe
     fails silently, and the panel reports "the extension is not installed". Reinstalling the
@@ -18,7 +18,7 @@
 
     How to use (the intended, double-click path):
       1. Put this file, Run-InstallRootCA.cmd and the exported <host>-root.cer in one folder
-         (copy them from the server's C:\certs\morobot, or from a share).
+         (copy them from the server's C:\certs\webautomator, or from a share).
       2. Double-click Run-InstallRootCA.cmd and accept the UAC prompt.
       3. Fully close and reopen the browser.
 
@@ -81,7 +81,7 @@
     .\Install-ClientRootCA.ps1 -CerPath \\fs01\share\automator.krtax.ir-root.cer
     .\Install-ClientRootCA.ps1 -Url https://automator.krtax.ir/certs/root.cer -Thumbprint 1F2E3D...
     .\Install-ClientRootCA.ps1 -Uninstall
-    .\Install-ClientRootCA.ps1 -DryRun -LogPath C:\Windows\Temp\morobot-rootca.log
+    .\Install-ClientRootCA.ps1 -DryRun -LogPath C:\Windows\Temp\webautomator-rootca.log
 
 .OUTPUTS
     Exit codes: 0 = trusted and verified; 2 = admin rights missing; 1 = anything else.
@@ -188,7 +188,7 @@ function Resolve-RootFile {
         } finally {
             [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $previous
         }
-        $tmp = Join-Path $env:TEMP ("morobot-root-" + [Guid]::NewGuid().ToString("N") + ".cer")
+        $tmp = Join-Path $env:TEMP ("webautomator-root-" + [Guid]::NewGuid().ToString("N") + ".cer")
         [System.IO.File]::WriteAllBytes($tmp, $bytes)
         $script:DownloadedTemp = $tmp
         Write-Ok ("Downloaded " + $bytes.Length + " bytes (pinned by thumbprint).")
@@ -312,7 +312,7 @@ $isAdmin = Test-IsAdmin
 
 Write-Host ""
 Write-Host "===================================================" -ForegroundColor DarkCyan
-Write-Host " Morobot - client root certificate installer" -ForegroundColor White
+Write-Host " Webautomator - client root certificate installer" -ForegroundColor White
 Write-Host "===================================================" -ForegroundColor DarkCyan
 Write-Info ("Scope      : " + $Scope)
 Write-Info ("Server     : " + $Server)

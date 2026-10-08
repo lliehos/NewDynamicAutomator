@@ -18,12 +18,12 @@
 - **کاتالوگ زنده:** نوتیف به مالک/share؛ ادمین با `JoinAdminCatalog` همهٔ `taskChanged` / `sourceChanged` / `playState` را می‌بیند (نوع تغییر + چشمک اجرا)
 - **ادمین منابع:** مشاهده دیتا + دانلود اکسل از `/Admin/Sources`
 - **افزونه‌ها:** `extension-global` + `extension-smart-recorder`؛ مسیر: `%LocalAppData%\webautomator\extension-*`
-- **پیوند افزونه↔سرور (۲.۵.۰):** اثر انگشت سرور (`/extension/fingerprint`) + `morobot-binding.json`؛ هر افزونه فقط با پنل خودش کار می‌کند.
+- **پیوند افزونه↔سرور (۲.۵.۰):** اثر انگشت سرور (`/extension/fingerprint`) + `webautomator-binding.json`؛ هر افزونه فقط با پنل خودش کار می‌کند.
 - **آیکون برند افزونه:** `icons/icon16|32|48|128.png` از آیکون برند ساخته می‌شود و منبع باید **PNG واقعی** باشد. اگر فایل JPEG با پسوند `.png` داده شود، آنتی‌ویروس سازمانی نوشتن را بلاک می‌کند و آیکون خراب (پرِ صفر) می‌ماند؛ حالا منبع غیر-PNG رد می‌شود و آیکون‌های خود افزونه دست‌نخورده می‌مانند.
 - **گواهی داخلی و اتصال افزونه (۲.۵.۱۲):** افزونه برای تأیید هویت سرور `/extension/fingerprint` را `fetch` می‌کند و کلیک روی «Proceed» هشدار گواهی مرورگر فقط روی بارگذاری خود صفحه اثر دارد، نه روی درخواست افزونه — پس با CA داخلی، گواهی **ریشه** باید در Trusted Root کلاینت‌ها نصب باشد (جزئیات: `docs/setup-guide.md` بخش ۷.۷).
   پیش از این، این حالت **بی‌صدا** بود و پنل می‌گفت «افزونه نصب نیست» (و نصب دوباره هیچ اثری نداشت، چون بایندینگ از اول درست بود)؛ حالا ورکر `probeFailed` را برمی‌گرداند، پل `daExtensionUnreachable` را می‌گذارد و پنل پیام درست را نشان می‌دهد: «نصب است ولی نمی‌تواند به سرور وصل شود — گواهی ریشه/شبکه».
 - **ابزار کلاینت برای اعتماد گواهی:** `tools/Install-ClientRootCA.ps1` + `tools/Run-InstallRootCA.cmd` — کاربر دابل‌کلیک می‌کند: ریشه اعتبارسنجی می‌شود (self-signed/CA=True/Subject/thumbprint)، در Trusted Root نصب می‌شود (سراسری، یا `-Scope User` برای کاربر بدون ادمین) و در پایان با یک handshake واقعی + درخواست به `/extension/fingerprint` تأیید می‌شود. `-Uninstall` و `-DryRun` هم دارد؛ کدهای خروجی ۰/۱/۲ برای توزیع با SCCM/Intune/RMM.
-- **بستهٔ MSI برای توزیع گروهی اعتماد گواهی:** `tools/installer/MorobotRootCA.wxs` + `tools/installer/Build-RootCaMsi.ps1` — `MorobotRootCA-<ver>.msi` (per-machine، x64) می‌سازد: گواهی ریشه را در Trusted Root ماشین نصب می‌کند (`certutil -addstore -f root`)، `ImportEnterpriseRoots` را برای Firefox فعال می‌کند، و با `msiexec /i … /qn /norestart` روی همهٔ کلاینت‌ها از SCCM/Intune/GPO/RMM توزیع می‌شود؛ حذف با `/x` همان ریشه را با thumbprint برمی‌دارد و اگر نصب نصفه بماند rollback می‌شود. اسکریپت ساخت، بسته را قبل از تحویل تأیید می‌کند (اعتبار ریشه، سه Custom Action و ترتیب‌شان، پالیسی Registry، payload گواهی و extraction تستی).
+- **بستهٔ MSI برای توزیع گروهی اعتماد گواهی:** `tools/installer/WebautomatorRootCA.wxs` + `tools/installer/Build-RootCaMsi.ps1` — `WebautomatorRootCA-<ver>.msi` (per-machine، x64) می‌سازد: گواهی ریشه را در Trusted Root ماشین نصب می‌کند (`certutil -addstore -f root`)، `ImportEnterpriseRoots` را برای Firefox فعال می‌کند، و با `msiexec /i … /qn /norestart` روی همهٔ کلاینت‌ها از SCCM/Intune/GPO/RMM توزیع می‌شود؛ حذف با `/x` همان ریشه را با thumbprint برمی‌دارد و اگر نصب نصفه بماند rollback می‌شود. اسکریپت ساخت، بسته را قبل از تحویل تأیید می‌کند (اعتبار ریشه، سه Custom Action و ترتیب‌شان، پالیسی Registry، payload گواهی و extraction تستی).
 - **افزونهٔ گلوبال (۲.۳.۹):** رکوردر دو دکمهٔ ذخیره دارد — فلاپی = «ذخیره و ادامه»، چرخ‌دنده = «ذخیره و پایان ضبط»
 - **اشاره‌گر ردیف روی خود نود (۲.۵.۶+):** سوئیچ «ردیف اختصاصی» از نود شروع گروه به نودهای اکشن/شرط منتقل شد؛ هر جا جفت «منبع + ستون» هست، سوئیچ بلافاصله بعد از آن است.
   **قاعدهٔ پیش‌فرض:** سوئیچ خاموش = مبنای ردیف «اندیس حلقهٔ فرآیند» در **هر عمقی** (اکشن، شرط و سلکتور تکرار گروه) — قبلاً داخل گروه ردیفِ سطح همان گروه مبنا بود.
@@ -52,14 +52,14 @@
 پرتال: `https://localhost:7201`
 
 ```bash
-dotnet run --project src/Morobot.Web --launch-profile https
+dotnet run --project src/Webautomator.Web --launch-profile https
 ```
 
 ## مستندات
 
 - **راه‌اندازی / استقرار:** [setup-guide.md](setup-guide.md)
 - **عملیات داخلی (لایسنس / kit):** [vendor-ops-guide.md](vendor-ops-guide.md)
-- **بروشور فروش (HTML→PDF):** [marketing/morobot-brochure.html](marketing/morobot-brochure.html)
+- **بروشور فروش (HTML→PDF):** [marketing/webautomator-brochure.html](marketing/webautomator-brochure.html)
 - دامنه: [domain.md](domain.md)
 - پلن‌ها: [plans-and-tiers.md](plans-and-tiers.md)
 - معماری: [architecture.md](architecture.md)

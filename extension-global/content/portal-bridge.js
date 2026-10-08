@@ -1,6 +1,6 @@
 /** Portal handshake + encrypted local task sync — Recorder role. */
 (function () {
-  // This script runs at document_start, when the DOM is empty. isMorobotPortalPage() inspects the
+  // This script runs at document_start, when the DOM is empty. isWebautomatorPortalPage() inspects the
   // DOM (title / meta / [data-i18n]) as one of its signals, so calling it here and bailing out on a
   // false answer kills the whole file on a fresh navigation — no listeners, no mark(), and the page
   // then reports "the extension did not respond" until a manual refresh (by which time the DOM
@@ -15,7 +15,7 @@
       if (!window.DaPortalDetect) return true; // no detector loaded -> never block the bridge
       const path = location.pathname || "/";
       if (/^\/(Panel|Admin)(\/|$)/i.test(path)) return true;
-      return !!window.DaPortalDetect.isMorobotPortalPage();
+      return !!window.DaPortalDetect.isWebautomatorPortalPage();
     } catch {
       return true;
     }
@@ -177,7 +177,7 @@
       document.documentElement.dataset.daSelectorVersion = version;
       // The identity this bundle was built for: the panel compares it with its own server
       // fingerprint, so "connected" always means "THIS server's extension", never just "some
-      // Morobot extension is installed". Legacy bundles (no binding) leave it unset.
+      // Webautomator extension is installed". Legacy bundles (no binding) leave it unset.
       if (fingerprint) {
         document.documentElement.dataset.daExtensionFingerprint = String(fingerprint);
       }
@@ -386,7 +386,7 @@
 
   function pushTenantBranding() {
     try {
-      const b = window.__MOROBOT_BRANDING;
+      const b = window.__WEBAUTOMATOR_BRANDING;
       if (!b || !b.appName) return;
       chrome.runtime.sendMessage({ type: "applyTenantBranding", payload: b }).catch(() => {});
     } catch { /* ignore */ }

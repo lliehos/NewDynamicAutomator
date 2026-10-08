@@ -1,0 +1,132 @@
+@model IEnumerable<Webautomator.Domain.Entities.AppUser>
+@using Webautomator.Infrastructure.Services
+@using Webautomator.Web.Areas.Admin.Models
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = L["admin.users.title"];
+  var list = Model.ToList();
+  var isFa = L.IsRtl;
+  var lastSeen = ViewBag.LastSeenByUserId as Dictionary<int, DateTime> ?? new Dictionary<int, DateTime>();
+  var playingIds = ViewBag.PlayingUserIds as HashSet<int> ?? new HashSet<int>();
+  var processCounts = ViewBag.ProcessCountByUserId as Dictionary<int, int> ?? new Dictionary<int, int>();
+  var sourceCounts = ViewBag.SourceCountByUserId as Dictionary<int, int> ?? new Dictionary<int, int>();
+  // No licence plan management means every user sits on the top level, so the column would repeat
+  // one value and imply a choice the admin cannot make.
+  var allowsPlanManagement = TenantBrandingViewDataFilter.AllowsPlanManagement(ViewData);
+  var now = DateTime.UtcNow;
+  var onlineCount = list.Count(u =>
+  {
+    lastSeen.TryGetValue(u.Id, out var seen);
+    var playing = playingIds.Contains(u.Id);
+    return EventLogService.IsOnline(seen, playing, now);
+  });
+}
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L.T("admin.users.summaryOnline", ("count", list.Count.ToString()), ("active", list.Count(u => u.IsActive).ToString()), ("online", onlineCount.ToString())),
+  ActionText = L["admin.users.create"],
+  ActionUrl = Url.Action("Create"),
+  ActionIcon = "ti-user-plus"
+}' />
+
+@* Selection toolbar. Ticked rows post to DeleteMany, which reuses the single delete so the
+   "not yourself / not the last administrator" refusals still hold and are reported back. *@
+<div class="admin-bulk-bar" data-bulk-for="#admin-user-rows">
+  <span class="admin-bulk-count" data-bulk-count></span>
+  <form method="post" asp-action="DeleteMany" data-bulk-form>
+    @Html.AntiForgeryToken()
+    <button type="submit" class="btn-admin danger" data-bulk-delete disabled>@L["admin.common.deleteSelected"]</button>
+  </form>
+</div>
+
+<div class="admin-table-wrap" data-page-size="20">
+<table class="admin-table">
+  <thead>
+    <tr>
+      <th class="admin-bulk-col"><input type="checkbox" class="admin-bulk-all" aria-label="@L["admin.common.selectAll"]" /></th>
+      <th>Id</th>
+      <th>@L["admin.users.userName"]</th>
+      <th>@L["admin.users.presence"]</th>
+      <th>@L["admin.users.role"]</th>
+      @if (allowsPlanManagement)
+      {
+        <th>@L["admin.users.plan"]</th>
+      }
+      <th class="text-center">@L["admin.users.processCount"]</th>
+      <th class="text-center">@L["admin.users.sourceCount"]</th>
+      <th>@L["admin.users.active"]</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody id="admin-user-rows">
+  @foreach (var u in list)
+  {
+    DateTime? seenUtc = lastSeen.TryGetValue(u.Id, out var seen) ? seen : null;
+    var playing = playingIds.Contains(u.Id);
+    var online = EventLogService.IsOnline(seenUtc, playing, now);
+    var presenceLabel = playing ? L["admin.users.playing"] : online ? L["admin.users.online"] : L["admin.users.offline"];
+    string? tip = null;
+    if (seenUtc is DateTime seenAt)
+    {
+      tip = L.T("admin.users.lastSeen", ("time", Webautomator.Web.Services.DateDisplay.DateTimeLocal(seenAt)));
+      if (playing) tip = L["admin.users.playingNow"] + " · " + tip;
+    }
+    else if (playing)
+    {
+      tip = L["admin.users.playingNow"];
+    }
+    <tr>
+      <td class="admin-bulk-col"><input type="checkbox" class="admin-bulk-check" value="@u.Id" aria-label="@u.UserName" /></td>
+      <td>@u.Id</td>
+      <td>
+        <span class="admin-user-cell">
+          @{
+            var avatarName = string.IsNullOrWhiteSpace($"{u.FirstName} {u.LastName}".Trim())
+              ? u.UserName
+              : $"{u.FirstName} {u.LastName}".Trim();
+            ViewData["Path"] = u.AvatarPath ?? "";
+            ViewData["Name"] = avatarName;
+            ViewData["Size"] = 26;
+          }
+          <partial name="_Avatar" />
+          <span>@u.UserName</span>
+        </span>
+      </td>
+      <td>
+        <partial name="_AdminPresence" model='new AdminPresenceModel {
+          Online = online,
+          Playing = playing,
+          LastSeenUtc = seenUtc,
+          Label = presenceLabel,
+          Tooltip = tip
+        }' />
+      </td>
+      <td>@L["admin.users.roles." + u.Role]</td>
+      @if (allowsPlanManagement)
+      {
+        <td>@((isFa ? u.Plan?.NameFa : u.Plan?.NameEn) ?? "—")</td>
+      }
+      <td class="text-center"><span class="admin-count-badge">@(processCounts.TryGetValue(u.Id, out var pc) ? pc : 0)</span></td>
+      <td class="text-center"><span class="admin-count-badge">@(sourceCounts.TryGetValue(u.Id, out var sc) ? sc : 0)</span></td>
+      <td><partial name="_AdminStatus" model="u.IsActive" /></td>
+      <td>
+        <div class="admin-row-actions">
+          <a class="btn-admin secondary icon-only" asp-action="Edit" asp-route-id="@u.Id" title="@L["admin.common.edit"]">
+            <i class="ti ti-pencil" aria-hidden="true"></i>
+          </a>
+          @* Deleting a user takes their processes and data sources with them, so the confirmation
+             is typed out rather than a generic "are you sure" — the counts below are the very rows
+             the admin already sees in this table. *@
+          <form method="post" asp-action="Delete" asp-route-id="@u.Id"
+                onsubmit="return confirm('@L.T("admin.users.deleteConfirm", ("userName", u.UserName), ("processes", (processCounts.TryGetValue(u.Id, out var dc) ? dc : 0).ToString()), ("sources", (sourceCounts.TryGetValue(u.Id, out var dsc) ? dsc : 0).ToString()))');">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn-admin danger icon-only" title="@L["admin.common.delete"]">
+              <i class="ti ti-trash" aria-hidden="true"></i>
+            </button>
+          </form>
+        </div>
+      </td>
+    </tr>
+  }
+  </tbody>
+</table>
+</div>

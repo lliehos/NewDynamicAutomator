@@ -1,0 +1,154 @@
+@{
+  Layout = null;
+  var culture = L.Culture;
+  var dir = L.Dir;
+  var nextLang = L.IsRtl ? "en" : "fa";
+  var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
+  var ctrl = ViewContext.RouteData.Values["controller"]?.ToString() ?? "";
+  var act = ViewContext.RouteData.Values["action"]?.ToString() ?? "";
+
+  // Matches on controller only, for entries where the controller has a single page (its Index).
+  string NavClass(string c) => ctrl.Equals(c, StringComparison.OrdinalIgnoreCase) ? "active" : null!;
+
+  // Matches controller AND action. Needed where one controller owns more than one menu entry —
+  // Logs holds both "Events" (Index) and "Devices" — because a controller-only match would light
+  // up both entries at once and the sidebar would not say which page you are on.
+  string NavClassFor(string c, string a) =>
+      ctrl.Equals(c, StringComparison.OrdinalIgnoreCase)
+      && act.Equals(a, StringComparison.OrdinalIgnoreCase) ? "active" : null!;
+  var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+  var pageTitle = ViewData["Title"] as string;
+  // Legacy-DB migration is vendor-granted; hide the entry point entirely when absent.
+  var allowsLegacyMigration = (ViewData[Webautomator.Web.Filters.TenantBrandingViewDataFilter.LicenseStateKey]
+      as Webautomator.Licensing.LicenseRuntimeState)?.AllowsLegacyMigration == true;
+  // Offline update likewise only means something when the licence includes updates at all.
+  var allowsUpdates = (ViewData[Webautomator.Web.Filters.TenantBrandingViewDataFilter.LicenseStateKey]
+      as Webautomator.Licensing.LicenseRuntimeState)?.AllowsUpdates == true;
+  // Plan levels are a licensed capability. Without it the deployment has no levels to manage —
+  // every user sits at the top one — so the page would be a list of switches that change nothing.
+  var allowsPlanManagement = Webautomator.Web.Filters.TenantBrandingViewDataFilter.AllowsPlanManagement(ViewData);
+}
+<!doctype html>
+<html lang="@culture" dir="@dir" data-admin-catalog="1">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>@brandHead.ComposeTitle(pageTitle, L["brand.tagline"])</title>
+  <partial name="_BrandHead" model="brandHead" />
+  <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
+  <link rel="stylesheet" href="~/css/admin-app.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-switch.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-cropper.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-avatar.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-update-banner.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/webautomator-copyright.css?v=@V.AssetVersion" />
+</head>
+<body data-admin-catalog="1">
+  <div class="admin-shell">
+    <aside class="admin-nav">
+      <div class="admin-brand">
+        @{ ViewData["BrandImgClass"] = ""; ViewData["BrandImgWidth"] = 28; ViewData["BrandImgHeight"] = 28; }
+        <partial name="_BrandMark" model="brandHead" />
+        <span>@brandHead.AppName</span>
+      </div>
+      <nav class="admin-nav-links">
+        @{
+          // A Monitor operator may only reach Monitoring and the read-only Logs lists; every other
+          // entry here is Admin-only and would answer 403 for them. Rendering the links anyway would
+          // hand them a menu of dead ends, so the rail is built from the role that is actually signed
+          // in rather than from the area alone.
+          var isAdminUser = User.IsInRole("Admin");
+        }
+        @if (isAdminUser)
+        {
+          <a class="@NavClass("Home")" asp-area="Admin" asp-controller="Home" asp-action="Index"><i class="ti ti-dashboard" aria-hidden="true"></i>@L["admin.nav.dashboard"]</a>
+          <a class="@NavClass("Settings")" asp-area="Admin" asp-controller="Settings" asp-action="Index"><i class="ti ti-settings" aria-hidden="true"></i>@L["admin.nav.settings"]</a>
+          <a class="@NavClass("License")" asp-area="Admin" asp-controller="License" asp-action="Index"><i class="ti ti-certificate" aria-hidden="true"></i>@L["admin.nav.license"]</a>
+          @if (allowsUpdates)
+          {
+            <a class="@NavClass("OfflineUpdate")" asp-area="Admin" asp-controller="OfflineUpdate" asp-action="Index"><i class="ti ti-package" aria-hidden="true"></i>@L["admin.nav.offlineUpdate"]</a>
+          }
+          <a class="@NavClass("Branding")" asp-area="Admin" asp-controller="Branding" asp-action="Index"><i class="ti ti-palette" aria-hidden="true"></i>@L["admin.nav.branding"]</a>
+          @if (allowsPlanManagement)
+          {
+            <a class="@NavClass("Plans")" asp-area="Admin" asp-controller="Plans" asp-action="Index"><i class="ti ti-layers-intersect" aria-hidden="true"></i>@L["admin.nav.plans"]</a>
+          }
+          <a class="@NavClass("Commerce")" asp-area="Admin" asp-controller="Commerce" asp-action="Index"><i class="ti ti-receipt" aria-hidden="true"></i>@L["admin.nav.commerce"]</a>
+          <a class="@NavClass("Processes")" asp-area="Admin" asp-controller="Processes" asp-action="Index"><i class="ti ti-git-branch" aria-hidden="true"></i>@L["admin.nav.processes"]</a>
+          <a class="@NavClass("Templates")" asp-area="Admin" asp-controller="Templates" asp-action="Index"><i class="ti ti-template" aria-hidden="true"></i>@L["admin.nav.templates"]</a>
+          @if (allowsLegacyMigration)
+          {
+            <a class="@NavClass("Migrate")" asp-area="Admin" asp-controller="Migrate" asp-action="Index"><i class="ti ti-database-import" aria-hidden="true"></i>@L["admin.nav.migrate"]</a>
+          }
+          <a class="@NavClass("Sources")" asp-area="Admin" asp-controller="Sources" asp-action="Index"><i class="ti ti-database" aria-hidden="true"></i>@L["admin.nav.sources"]</a>
+          <a class="@NavClass("Users")" asp-area="Admin" asp-controller="Users" asp-action="Index"><i class="ti ti-users" aria-hidden="true"></i>@L["admin.nav.users"]</a>
+        }
+        <a class="@NavClass("Monitoring")" asp-area="Admin" asp-controller="Monitoring" asp-action="Index"><i class="ti ti-activity-heartbeat" aria-hidden="true"></i>@L["admin.nav.monitoring"]</a>
+        <a class="@NavClassFor("Logs", "Index")" asp-area="Admin" asp-controller="Logs" asp-action="Index"><i class="ti ti-history" aria-hidden="true"></i>@L["admin.nav.events"]</a>
+        <a class="@NavClassFor("Logs", "Devices")" asp-area="Admin" asp-controller="Logs" asp-action="Devices"><i class="ti ti-device-desktop" aria-hidden="true"></i>@L["admin.nav.devices"]</a>
+      </nav>
+    </aside>
+    <main class="admin-main">
+      <div class="admin-top">
+        <h1>@ViewData["Title"]</h1>
+        <div class="admin-top-actions">
+          @* Panel entry and logout live here rather than at the bottom of the sidebar, so
+             they sit with the other account-level controls instead of being buried under
+             the whole navigation list.
+             The switcher is hidden for the built-in owner account only: that account is barred
+             from the Panel (see BlockAdminFromPanelFilter), so offering the link would bounce it
+             straight back here. Any OTHER admin-role user has a Panel of their own and switches
+             between the two surfaces with this button. *@
+          @if (!Webautomator.Web.Filters.BlockAdminFromPanelFilter.IsOwnerAccount(User))
+          {
+            <a class="btn-admin secondary admin-top-link" asp-area="Panel" asp-controller="Home" asp-action="Index">
+              <i class="ti ti-layout-dashboard" aria-hidden="true"></i><span>@L["common.panel"]</span>
+            </a>
+          }
+          <a class="btn-admin secondary admin-top-link" asp-area="Panel" asp-controller="Account" asp-action="Logout">
+            <i class="ti ti-logout" aria-hidden="true"></i><span>@L["common.logout"]</span>
+          </a>
+          @* The switch is hidden when the licence excludes the second language: offering it would
+             either do nothing or, worse, leave the admin in a language the install does not serve. *@
+          @if (L.Bilingual)
+          {
+            <form method="post" asp-area="Admin" asp-controller="Settings" asp-action="SetLanguage" class="admin-lang">
+              @Html.AntiForgeryToken()
+              <input type="hidden" name="lang" value="@nextLang" />
+              <input type="hidden" name="returnUrl" value="@(Context.Request.Path + Context.Request.QueryString)" />
+              <button type="submit" class="btn-admin secondary">@langLabel</button>
+            </form>
+          }
+        </div>
+      </div>
+      @await Component.InvokeAsync("AdminLicenseStrip")
+      @if (TempData["Danger"] != null)
+      {
+        <div class="admin-alert is-error" role="alert"><i class="ti ti-alert-circle" aria-hidden="true"></i> @TempData["Danger"]</div>
+      }
+      @if (TempData["Warn"] != null)
+      {
+        <div class="admin-alert is-warn" role="alert"><i class="ti ti-alert-triangle" aria-hidden="true"></i> @TempData["Warn"]</div>
+      }
+      @if (TempData["Ok"] != null)
+      {
+        <div class="card-admin is-ok">@TempData["Ok"]</div>
+      }
+      @RenderBody()
+    </main>
+  </div>
+  <script src="~/lib/signalr/signalr.min.js"></script>
+  <script src="~/assets/vendor/libs/apex-charts/apexcharts.js"></script>
+  <script src="~/js/da-catalog.js?v=@V.AssetVersion"></script>
+  <script src="~/js/admin-ui.js?v=@V.AssetVersion"></script>
+  <script src="~/js/admin-charts.js?v=@V.AssetVersion"></script>
+  <script>window.AdminI18n = { strings: { pager: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.label"])), page: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.page"])), perPage: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.perPage"])), first: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.first"])), prev: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.prev"])), next: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.next"])), last: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.pager.last"])), bulk: { selected: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.common.selectedCount"])), noneSelected: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.common.noneSelected"])), confirm: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.common.deleteSelectedConfirm"])) }, update: { title: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.availableTitle"])), available: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.availableBody"])), notes: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.notesLabel"])), open: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.openDownload"])), later: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(L["admin.updates.later"])) } } };</script>
+  <script src="~/js/admin-pager.js?v=@V.AssetVersion"></script>
+  <script src="~/js/admin-bulk.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-switch.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-cropper.js?v=@V.AssetVersion"></script>
+  <script src="~/js/admin-update-notify.js?v=@V.AssetVersion"></script>
+  @await RenderSectionAsync("Scripts", required: false)
+  @await Component.InvokeAsync("SiteChrome")
+</body>
+</html>

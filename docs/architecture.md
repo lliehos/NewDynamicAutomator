@@ -5,7 +5,7 @@
 1. **Web / پرتال** `https://localhost:7201` — لاگین، ویرایشگر، `/api/*`, Area ادمین
 2. **Chrome MV3** — ضبط + پخش + سلکتور؛ origin پرتال
 
-پروژهٔ `Morobot.Api` حذف شده است؛ همهٔ API روی Web است. مسیرهای `/api/*` فقط روی Morobot.Web هستند.
+پروژهٔ `Webautomator.Api` حذف شده است؛ همهٔ API روی Web است. مسیرهای `/api/*` فقط روی Webautomator.Web هستند.
 
 ```
 ورود → JWT (plan + role + max_tasks/sources/steps) → EF/SQL

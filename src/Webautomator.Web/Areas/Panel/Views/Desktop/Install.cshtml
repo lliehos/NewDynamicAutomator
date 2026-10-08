@@ -1,0 +1,156 @@
+@{
+    ViewData["Title"] = "دانلود اجراکننده محلی";
+    var version = ViewBag.Version as string;
+    var hasPackage = ViewBag.HasPackage is true;
+    var allowed = ViewBag.LocalRunAllowed is true;
+    var notes = ViewBag.Notes as string;
+    var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+    var playerName = $"{brandHead.AppName} Player";
+    var brandName = brandHead.AppName;
+}
+
+<div class="da-home">
+  <header class="da-home-head">
+    <div>
+      <div class="da-home-brand" data-i18n="brand.name">@L["brand.name"]</div>
+      <h4 class="da-home-title mb-0">دانلود @playerName</h4>
+      <p class="da-home-sub mb-0">
+        اجرای فرآیندها روی همین سیستم — بدون وابستگی به سرور و با صرفه‌جویی در ترافیک.
+      </p>
+    </div>
+  </header>
+
+  @if (!allowed)
+  {
+    @* The player refuses to run local processes without the licence flag, so offering the download
+       would hand the user an app that cannot do the one thing it is for. *@
+    <div class="alert alert-warning">
+      <div class="fw-semibold mb-1">قابلیت اجرای محلی در لایسنس این نصب فعال نیست</div>
+      <div class="small">
+        دانلود و اجرای @playerName نیازمند فعال‌سازی این قابلیت در لایسنس است.
+        برای فعال‌سازی با فروشنده تماس بگیرید.
+      </div>
+    </div>
+    return;
+  }
+
+  @* What "local run" actually means, stated up front because it changes what the user must do with
+     their data sources afterwards — that is the part people are surprised by, not the download. *@
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="fw-semibold mb-2">اجرای محلی یعنی چه؟</div>
+      <ul class="small mb-0 ps-3">
+        <li class="mb-1">
+          فرآیند و <strong>همهٔ منابع آن</strong> روی همین سیستم اجرا و به‌روزرسانی می‌شوند، نه روی سرور —
+          پس در حین اجرا ترافیکی بین سیستم شما و سرور رد و بدل نمی‌شود.
+        </li>
+        <li class="mb-1">
+          تنها استثنا <strong>منابع عمومی/اشتراکی</strong> است: اگر فرآیند از یک منبع عمومی استفاده کند،
+          آن منبع همچنان از سرور خوانده می‌شود (چون متعلق به شما نیست).
+        </li>
+        <li class="mb-1">
+          نسخهٔ روی سرور باقی می‌ماند و پاک نمی‌شود، اما دیگر خودکار به‌روز نیست. برای برگرداندن نتیجهٔ
+          اجرای محلی، از دکمهٔ <strong>«سینک»</strong> در فهرست فرآیندها استفاده کنید.
+        </li>
+        <li class="mb-1">
+          همگام‌سازی <strong>دستی</strong> است: اگر روی سرور یا سیستم محلی تغییر کرده باشد، ممکن است
+          اطلاعات یکی از دو طرف جایگزین شود. این طبیعی است و باید با آگاهی انجام شود.
+        </li>
+        <li>
+          همین رفتار در <strong>پنل وب</strong> (سوئیچ «روی سرور» خاموش) و در <strong>@playerName</strong>
+          یکسان است.
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <div>
+          <div class="fw-semibold">@playerName — Windows</div>
+          <div class="text-muted small mt-1">
+            نسخه: <span class="fw-semibold">@(string.IsNullOrWhiteSpace(version) ? "—" : version)</span>
+          </div>
+        </div>
+        @if (hasPackage)
+        {
+          <a class="btn btn-primary" href="/desktop/download" download>⬇ دانلود نسخهٔ ویندوزی</a>
+        }
+        else
+        {
+          <button class="btn btn-secondary" disabled>بسته‌ای آماده نیست</button>
+        }
+      </div>
+
+      @if (!string.IsNullOrWhiteSpace(notes))
+      {
+        <div class="alert alert-info small mb-3" style="white-space:pre-wrap">@notes</div>
+      }
+
+      @if (!hasPackage)
+      {
+        <div class="alert alert-info small mb-0">
+          بستهٔ اجراکننده روی این سرور قرار نگرفته است. با هر بار publish سرور، نسخهٔ دسکتاپ در پوشهٔ
+          <code>desktop</code> خروجی publish قرار می‌گیرد و به‌صورت خودکار آماده می‌شود.
+        </div>
+      }
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="fw-semibold mb-2">افزونهٔ مرورگر</div>
+      <p class="small text-muted mb-3">
+        برای اجرای فرآیندها از روی مرورگر، افزونهٔ @brandName را نصب کنید. این دو بسته در کنار
+        @playerName قرار می‌گیرند و یکدیگر را کامل می‌کنند: افزونه در مرورگر اجرا می‌کند، و
+        @playerName همان کار را بدون مرورگر انجام می‌دهد.
+      </p>
+      <div class="d-flex flex-wrap gap-2">
+        @* No ticket is minted here: this page is only reachable by a signed-in panel user, and the
+           download endpoint accepts the auth cookie directly. A ticket exists for the remote-install
+           page, where the command has to work without a browser session. *@
+        <a class="btn btn-outline-primary" href="/extension/download/global" download>
+          ⬇ دانلود افزونهٔ @brandName (Global)
+        </a>
+        <a class="btn btn-outline-secondary" href="/extension/download/smart" download>
+          ⬇ دانلود افزونهٔ Smart Recorder
+        </a>
+      </div>
+      <div class="small text-muted mt-3">
+        پس از دانلود، فایل زیپ را در یک پوشهٔ ثابت استخراج کنید و از
+        <code>chrome://extensions</code> با فعال‌کردن حالت توسعه‌دهنده، گزینهٔ
+        «Load unpacked» را روی همان پوشه اجرا کنید.
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <div class="fw-semibold mb-2">پیش‌نیازها</div>
+      <ul class="small mb-3">
+        <li class="mb-1"><strong>Firefox</strong> باید روی سیستم نصب باشد.</li>
+        <li class="mb-1">
+          <strong>geckodriver</strong> برای روش پیش‌فرض لازم است. برخلاف ChromeDriver نیازی به تطابق نسخه با
+          فایرفاکس ندارد، پس به‌روزرسانی فایرفاکس آن را بی‌استفاده نمی‌کند.
+        </li>
+        <li class="mb-1">ویندوز ۱۰ یا بالاتر با .NET Desktop Runtime.</li>
+      </ul>
+
+      <div class="fw-semibold mb-2">روش نصب</div>
+      <ol class="small mb-0">
+        <li class="mb-1">بسته را دانلود و در یک پوشهٔ ثابت استخراج کنید.</li>
+        <li class="mb-1">فایل <code>Webautomator.Player.exe</code> را اجرا کنید.</li>
+        <li class="mb-1">
+          روی دکمهٔ <strong>«ورود با مرورگر»</strong> بزنید و در همان صفحه، با حساب پنل خود وارد شوید.
+          @* The address is taken from the licence, so it is deliberately NOT asked for. The old copy
+             told the user to type a server URL that the app no longer has a field for. *@
+          نیازی به وارد کردن آدرس سرور نیست؛ آدرس از لایسنس این نصب خوانده می‌شود.
+        </li>
+        <li class="mb-1">
+          برنامه هنگام ورود، نسخهٔ جدید را از همین سرور بررسی می‌کند و تغییرات را زنده دریافت می‌کند.
+        </li>
+      </ol>
+    </div>
+  </div>
+</div>

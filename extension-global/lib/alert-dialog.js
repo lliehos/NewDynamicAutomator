@@ -180,7 +180,7 @@ function clearAllAlertArming() {
   alertArming.clear();
 }
 
-globalThis.MorobotAlerts = {
+globalThis.WebautomatorAlerts = {
   armAlertDialog,
   setAlertAnswer,
   readAlertResult,

@@ -1,4 +1,4 @@
-# راهنمای جامع راه‌اندازی Morobot
+# راهنمای جامع راه‌اندازی Webautomator
 
 > **نسخه سند:** 1.13 · **آخرین‌به‌روزرسانی:** 2026-10-05  
 > این راهنما برای مدیران فناوری اطلاعات و مسئول استقرار سازمان تهیه شده است.
@@ -28,22 +28,22 @@
 
 ## 1. معرفی و لایسنس
 
-Morobot یک سامانه اتوماسیون فرآیندهای وب است که روی SQL Server اجرا می‌شود و با افزونه مرورگر Chrome کار می‌کند.
+Webautomator یک سامانه اتوماسیون فرآیندهای وب است که روی SQL Server اجرا می‌شود و با افزونه مرورگر Chrome کار می‌کند.
 
-**لایسنس:** روی **هر** نصب (SaaS، on-prem، محیط dev) اعمال می‌شود — ابتدا **دوره آزمایشی**، سپس لایسنس امضاشده از vendor. تغییر `Morobot:DeploymentMode` در `appsettings.json` لایسنس را **خاموش نمی‌کند**.
+**لایسنس:** روی **هر** نصب (SaaS، on-prem، محیط dev) اعمال می‌شود — ابتدا **دوره آزمایشی**، سپس لایسنس امضاشده از vendor. تغییر `Webautomator:DeploymentMode` در `appsettings.json` لایسنس را **خاموش نمی‌کند**.
 
 | برچسب `DeploymentMode` | کاربرد (اختیاری) |
 |------------------------|------------------|
 | **Cloud** | برچسب پیش‌فرض؛ تفاوتی در الزام لایسنس ندارد |
 | **Enterprise** | برچسب سازمانی؛ تفاوتی در الزام لایسنس ندارد |
 
-برای هر استقرار جدا (چند دامنه، چند سرور، dev) **`Morobot:AppInstanceKey`** یکتا تعریف کنید.
+برای هر استقرار جدا (چند دامنه، چند سرور، dev) **`Webautomator:AppInstanceKey`** یکتا تعریف کنید.
 
 ---
 
 ## 2. محیط‌های پشتیبانی‌شده برای هاست وب
 
-Morobot یک برنامه **ASP.NET Core 9** است و روی سیستم‌عامل‌های مختلف قابل اجراست. **دیتابیس** باید **SQL Server** باشد (روی همان سرور یا سرور جدا — Windows، Linux یا سرویس ابری).
+Webautomator یک برنامه **ASP.NET Core 9** است و روی سیستم‌عامل‌های مختلف قابل اجراست. **دیتابیس** باید **SQL Server** باشد (روی همان سرور یا سرور جدا — Windows، Linux یا سرویس ابری).
 
 ### جدول محیط‌های هاست
 
@@ -58,8 +58,8 @@ Morobot یک برنامه **ASP.NET Core 9** است و روی سیستم‌عا�
 ### نکات مهم
 
 - **سیستم‌عامل سرور وب** مستقل از **سیستم‌عامل SQL Server** است — مثلاً برنامه روی **Linux** و دیتابیس روی **Windows** کاملاً ممکن است.
-- **افزونه Chrome** روی **رایانه کاربر** نصب می‌شود؛ کاربران Windows، macOS یا Linux می‌توانند از Morobot استفاده کنند.
-- بسته نصب پیش‌فرض ممکن است برای **Windows** (`Morobot.Web.exe`) یا **Linux** (`Morobot.Web.dll`) باشد — هنگام دریافت بسته، **پلتفرم مقصد** را به پشتیبانی اعلام کنید.
+- **افزونه Chrome** روی **رایانه کاربر** نصب می‌شود؛ کاربران Windows، macOS یا Linux می‌توانند از Webautomator استفاده کنند.
+- بسته نصب پیش‌فرض ممکن است برای **Windows** (`Webautomator.Web.exe`) یا **Linux** (`Webautomator.Web.dll`) باشد — هنگام دریافت بسته، **پلتفرم مقصد** را به پشتیبانی اعلام کنید.
 - برای **HTTPS** در production از گواهی معتبر (Let's Encrypt، گواهی سازمان، Azure/AWS) استفاده کنید.
 
 ---
@@ -86,7 +86,7 @@ Morobot یک برنامه **ASP.NET Core 9** است و روی سیستم‌عا�
 ### کلاینت کاربران
 
 - مرورگر Chrome یا Edge (Chromium)
-- افزونه **Morobot Global** (+ Smart Recorder اختیاری) — یک بار Load unpacked
+- افزونه **Webautomator Global** (+ Smart Recorder اختیاری) — یک بار Load unpacked
 - اگر گواهی سرور از **CA داخلی** صادر شده: گواهی **ریشه** در مخزن Trusted Root هر کلاینت (بخش ۷.۷).
   بدون این گام، پنل باز می‌شود ولی افزونه نمی‌تواند به سرور وصل شود و پنل می‌گوید افزونه نصب نیست.
 
@@ -99,14 +99,14 @@ Morobot یک برنامه **ASP.NET Core 9** است و روی سیستم‌عا�
 
 ## 4. دریافت و محتوای بسته نصب
 
-بسته نصب Enterprise معمولاً به‌صورت فایل فشرده (`morobot-server.zip`) در اختیار سازمان قرار می‌گیرد.
+بسته نصب Enterprise معمولاً به‌صورت فایل فشرده (`webautomator-server.zip`) در اختیار سازمان قرار می‌گیرد.
 
 پس از استخراج، ساختار کلی به این شکل است:
 
 **Windows:**
 ```
-morobot-server/
-├── Morobot.Web.exe          ← برنامه اصلی
+webautomator-server/
+├── Webautomator.Web.exe          ← برنامه اصلی
 ├── appsettings.json
 ├── docs/setup-guide.md
 ├── wwwroot/
@@ -115,21 +115,21 @@ morobot-server/
 
 **Linux:**
 ```
-morobot-server/
-├── Morobot.Web.dll          ← برنامه اصلی
+webautomator-server/
+├── Webautomator.Web.dll          ← برنامه اصلی
 ├── appsettings.json
 ├── docs/setup-guide.md
 ├── wwwroot/
 └── ...
 ```
 
-**مرحله بعد:** پوشه را روی سرور مقصد کپی کنید (مثلاً `C:\Apps\Morobot` در Windows یا `/opt/morobot` در Linux).
+**مرحله بعد:** پوشه را روی سرور مقصد کپی کنید (مثلاً `C:\Apps\Webautomator` در Windows یا `/opt/webautomator` در Linux).
 
 ---
 
 ## 5. پیکربندی دیتابیس
 
-Morobot از **SQL Server** به‌عنوان موتور دیتابیس استفاده می‌کند. **سرور، نام دیتابیس، کاربر و رمز** همگی در زمان نصب از طریق `appsettings.json` (یا متغیر محیطی `ConnectionStrings__Default`) مشخص می‌شوند — نیازی به تنظیم جدا در کد نیست.
+Webautomator از **SQL Server** به‌عنوان موتور دیتابیس استفاده می‌کند. **سرور، نام دیتابیس، کاربر و رمز** همگی در زمان نصب از طریق `appsettings.json` (یا متغیر محیطی `ConnectionStrings__Default`) مشخص می‌شوند — نیازی به تنظیم جدا در کد نیست.
 
 > **PostgreSQL / MySQL:** در نسخه فعلی پشتیبانی نمی‌شود. فقط SQL Server (Windows، Linux یا Azure SQL).
 
@@ -154,7 +154,7 @@ Morobot از **SQL Server** به‌عنوان موتور دیتابیس استف
 
 ```json
 "ConnectionStrings": {
-  "Default": "Server=SQLHOST\\INSTANCE;Database=MorobotDb;User Id=morobot;Password=***;TrustServerCertificate=True;MultipleActiveResultSets=true"
+  "Default": "Server=SQLHOST\\INSTANCE;Database=WebautomatorDb;User Id=webautomator;Password=***;TrustServerCertificate=True;MultipleActiveResultSets=true"
 }
 ```
 
@@ -162,7 +162,7 @@ Morobot از **SQL Server** به‌عنوان موتور دیتابیس استف
 
 ### 5.2 دسترسی دیتابیس — خودکار حل می‌شود
 
-Morobot در اولین اجرا خودش دیتابیس را می‌سازد، ولی برای این کار **هویتِ پروسهٔ در حال اجرا** باید در SQL Server دسترسی داشته باشد. این نکتهٔ کلیدی است که معمولاً نادیده گرفته می‌شود:
+Webautomator در اولین اجرا خودش دیتابیس را می‌سازد، ولی برای این کار **هویتِ پروسهٔ در حال اجرا** باید در SQL Server دسترسی داشته باشد. این نکتهٔ کلیدی است که معمولاً نادیده گرفته می‌شود:
 
 > `Trusted_Connection=True` یعنی «با هویت ویندوزیِ **پروسه** احراز هویت کن». پشت IIS، این هویت **Application Pool Identity** است (`IIS APPPOOL\<نام pool>`)، و برای Windows Service معمولاً **machine account** (`DOMAIN\HOST$`). **هیچ‌کدام هویت کاربری که با آن وارد ویندوز شده‌اید نیست.**
 
@@ -180,7 +180,7 @@ http://localhost:<port>/setup/database
 
 | مورد | نمونه |
 |------|-------|
-| سرور و دیتابیس | `.` / `MorobotDb` |
+| سرور و دیتابیس | `.` / `WebautomatorDb` |
 | هویتی که برنامه با آن اجرا می‌شود | `IIS APPPOOL\Automator` |
 | کد خطای SQL Server | `18456` |
 
@@ -196,13 +196,13 @@ IF IS_SRVROLEMEMBER(N'dbcreator', N'IIS APPPOOL\Automator') = 0
 
 **ب) دیتابیس وجود ندارد** (`4060`):
 ```sql
-IF DB_ID(N'MorobotDb') IS NULL
-    CREATE DATABASE [MorobotDb];
+IF DB_ID(N'WebautomatorDb') IS NULL
+    CREATE DATABASE [WebautomatorDb];
 ```
 
 **ج) user داخل دیتابیس نیست** (`4060` با دیتابیس موجود):
 ```sql
-USE [MorobotDb];
+USE [WebautomatorDb];
 IF USER_ID(N'IIS APPPOOL\Automator') IS NULL
     CREATE USER [IIS APPPOOL\Automator] FOR LOGIN [IIS APPPOOL\Automator];
 ALTER ROLE [db_owner] ADD MEMBER [IIS APPPOOL\Automator];
@@ -226,7 +226,7 @@ ALTER ROLE [db_owner] ADD MEMBER [IIS APPPOOL\Automator];
 
 ## 6. اولین اجرا و ساخت خودکار دیتابیس
 
-در اولین اجرا، Morobot به‌صورت خودکار این کارها را انجام می‌دهد:
+در اولین اجرا، Webautomator به‌صورت خودکار این کارها را انجام می‌دهد:
 
 1. اگر دیتابیس روی SQL Server وجود نداشته باشد → **ایجاد دیتابیس**
 2. **ساخت و به‌روزرسانی جداول** مورد نیاز
@@ -239,14 +239,14 @@ ALTER ROLE [db_owner] ADD MEMBER [IIS APPPOOL\Automator];
 
 **Windows:**
 ```powershell
-cd C:\Apps\Morobot
-.\Morobot.Web.exe
+cd C:\Apps\Webautomator
+.\Webautomator.Web.exe
 ```
 
 **Linux:**
 ```bash
-cd /opt/morobot
-dotnet Morobot.Web.dll
+cd /opt/webautomator
+dotnet Webautomator.Web.dll
 ```
 
 برای تعیین آدرس و پورت:
@@ -254,13 +254,13 @@ dotnet Morobot.Web.dll
 **Windows:**
 ```powershell
 $env:ASPNETCORE_URLS = "http://0.0.0.0:5000"
-.\Morobot.Web.exe
+.\Webautomator.Web.exe
 ```
 
 **Linux:**
 ```bash
 export ASPNETCORE_URLS="http://127.0.0.1:5000"
-dotnet Morobot.Web.dll
+dotnet Webautomator.Web.dll
 ```
 
 > در production معمولاً برنامه پشت reverse proxy (IIS یا nginx) با HTTPS اجرا می‌شود — بخش ۷.
@@ -282,7 +282,7 @@ dotnet Morobot.Web.dll
 
 1. نصب **ASP.NET Core Hosting Bundle 9**
 2. ایجاد **Application Pool** با گزینه **No Managed Code**
-3. ایجاد **Site** — مسیر فیزیکی = پوشه نصب Morobot
+3. ایجاد **Site** — مسیر فیزیکی = پوشه نصب Webautomator
 4. تنظیم **Binding** با HTTPS
 5. فایل `web.config` همراه بسته نصب است
 
@@ -290,20 +290,20 @@ dotnet Morobot.Web.dll
 
 ### 7.2 Windows — اجرای مستقیم
 
-مناسب برای محیط آزمایشی یا سرورهای کوچک. برنامه را با `Morobot.Web.exe` اجرا کنید. برای اجرای دائم می‌توانید از **Windows Service** (مثلاً با NSSM) استفاده کنید.
+مناسب برای محیط آزمایشی یا سرورهای کوچک. برنامه را با `Webautomator.Web.exe` اجرا کنید. برای اجرای دائم می‌توانید از **Windows Service** (مثلاً با NSSM) استفاده کنید.
 
 ### 7.3 Linux — nginx + systemd (پیشنهادی)
 
-**۱. سرویس systemd** (فایل `/etc/systemd/system/morobot.service`):
+**۱. سرویس systemd** (فایل `/etc/systemd/system/webautomator.service`):
 
 ```ini
 [Unit]
-Description=Morobot Web
+Description=Webautomator Web
 After=network.target
 
 [Service]
-WorkingDirectory=/opt/morobot
-ExecStart=/usr/bin/dotnet /opt/morobot/Morobot.Web.dll
+WorkingDirectory=/opt/webautomator
+ExecStart=/usr/bin/dotnet /opt/webautomator/Webautomator.Web.dll
 Restart=always
 RestartSec=10
 Environment=ASPNETCORE_URLS=http://127.0.0.1:5000
@@ -315,19 +315,19 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable morobot
-sudo systemctl start morobot
+sudo systemctl enable webautomator
+sudo systemctl start webautomator
 ```
 
-**۲. nginx** (نمونه `/etc/nginx/sites-available/morobot`):
+**۲. nginx** (نمونه `/etc/nginx/sites-available/webautomator`):
 
 ```nginx
 server {
     listen 443 ssl;
-    server_name morobot.example.com;
+    server_name webautomator.example.com;
 
-    ssl_certificate     /etc/ssl/certs/morobot.crt;
-    ssl_certificate_key /etc/ssl/private/morobot.key;
+    ssl_certificate     /etc/ssl/certs/webautomator.crt;
+    ssl_certificate_key /etc/ssl/private/webautomator.key;
 
     location / {
         proxy_pass         http://127.0.0.1:5000;
@@ -355,7 +355,7 @@ server {
 
 - Runtime stack: **.NET 9**
 - Connection string را در **Configuration → Connection strings** تنظیم کنید
-- برای Linux plan همان بسته `Morobot.Web.dll` را deploy کنید
+- برای Linux plan همان بسته `Webautomator.Web.dll` را deploy کنید
 
 ### 7.6 پشت Reverse Proxy (عمومی)
 
@@ -395,18 +395,18 @@ export ASPNETCORE_HTTPS_PORT=443     # یا HTTPS_PORT=443
 کنسول صفحه یا کنسول افزونه**. نتیجه: افزونه صفحه را علامت‌دار نمی‌کند و پنل فکر می‌کند افزونه نصب نیست.
 
 **۱. فایل گواهی ریشه.** اسکریپت `tools/Install-HttpsCertificate.ps1` آن را کنار گواهی سرور export می‌کند
-(پیش‌فرض `C:\certs\morobot`):
+(پیش‌فرض `C:\certs\webautomator`):
 
 ```
-C:\certs\morobot\<host>-root.cer
+C:\certs\webautomator\<host>-root.cer
 ```
 
 **۲. نصب روی هر کلاینت** (با دسترسی ادمین):
 
 ```powershell
-Import-Certificate -FilePath 'C:\certs\morobot\automator.krtax.ir-root.cer' -CertStoreLocation Cert:\LocalMachine\Root
+Import-Certificate -FilePath 'C:\certs\webautomator\automator.krtax.ir-root.cer' -CertStoreLocation Cert:\LocalMachine\Root
 # یا
-certutil -addstore -f Root "C:\certs\morobot\automator.krtax.ir-root.cer"
+certutil -addstore -f Root "C:\certs\webautomator\automator.krtax.ir-root.cer"
 ```
 
 سپس مرورگر را **کامل ببندید و باز کنید** (نه فقط تب) تا فرآیند شبکه گواهی تازه را ببیند.
@@ -441,8 +441,8 @@ certutil -addstore -f Root "C:\certs\morobot\automator.krtax.ir-root.cer"
 ساخت بسته (یک‌بار، روی ماشین خودتان — نیاز به .NET SDK؛ اسکریپت اگر WiX نباشد دستور نصبش را چاپ می‌کند):
 
 ```powershell
-tools\installer\Build-RootCaMsi.ps1 -CerPath C:\certs\morobot\automator.krtax.ir-root.cer -OutDir C:\certs\morobot
-# خروجی: MorobotRootCA-1.0.0.msi + MorobotRootCA-1.0.0.msi.sha256
+tools\installer\Build-RootCaMsi.ps1 -CerPath C:\certs\webautomator\automator.krtax.ir-root.cer -OutDir C:\certs\webautomator
+# خروجی: WebautomatorRootCA-1.0.0.msi + WebautomatorRootCA-1.0.0.msi.sha256
 ```
 
 اسکریپت ساخت، بسته را قبل از تحویل **خودش تأیید می‌کند**: اعتبار ریشه، وجود سه Custom Action
@@ -451,15 +451,15 @@ tools\installer\Build-RootCaMsi.ps1 -CerPath C:\certs\morobot\automator.krtax.ir
 
 | نیاز | دستور |
 |---|---|
-| نصب بی‌سروصدا (SYSTEM یا ادمین) | `msiexec /i MorobotRootCA-1.0.0.msi /qn /norestart` |
-| نصب با لاگ برای عیب‌یابی | `msiexec /i MorobotRootCA-1.0.0.msi /l*v %TEMP%\MorobotRootCA.log` |
-| از مسیر شبکه | `msiexec /i \\fs01\share\MorobotRootCA-1.0.0.msi /qn /norestart` |
-| حذف بسته و برداشتن ریشه | `msiexec /x MorobotRootCA-1.0.0.msi /qn /norestart` |
+| نصب بی‌سروصدا (SYSTEM یا ادمین) | `msiexec /i WebautomatorRootCA-1.0.0.msi /qn /norestart` |
+| نصب با لاگ برای عیب‌یابی | `msiexec /i WebautomatorRootCA-1.0.0.msi /l*v %TEMP%\WebautomatorRootCA.log` |
+| از مسیر شبکه | `msiexec /i \\fs01\share\WebautomatorRootCA-1.0.0.msi /qn /norestart` |
+| حذف بسته و برداشتن ریشه | `msiexec /x WebautomatorRootCA-1.0.0.msi /qn /norestart` |
 
 نکته‌ها:
 
 - بسته **per-machine** و **x64** است (بستهٔ 32 بیتی مقدار رجیستری Firefox را در `WOW6432Node` می‌نویسد و ۶۴ بیتی‌ها آن را نمی‌بینند) و برای اجرای بی‌سروصدا به دسترسی ادمین/SYSTEM نیاز دارد — که با SCCM/Intune/GPO/RMM فراهم است.
-- گواهی زیر `%ProgramFiles%\Morobot Root CA\` کپی می‌شود و با **thumbprint** همان ریشه دوباره حذف می‌شود؛ پس اگر روزی ریشه را عوض کردید، بستهٔ جدید نسخهٔ دیگری است و باید توزیع شود.
+- گواهی زیر `%ProgramFiles%\Webautomator Root CA\` کپی می‌شود و با **thumbprint** همان ریشه دوباره حذف می‌شود؛ پس اگر روزی ریشه را عوض کردید، بستهٔ جدید نسخهٔ دیگری است و باید توزیع شود.
 - تست: روی **یک کلاینت** با ادمین نصب کنید و در لاگ دنبال `Return value 3` و `CustomAction AddRootCert returned actual error code` بگردید (نباید باشد)، سپس گام ۴ همین بخش را برای تأیید اجرا کنید.
 - اگر بعداً ریشه را در `-CerPath` به گواهی دیگری تغییر دهید، باید `-Version` را هم بالا ببرید، وگرنه MSI آن را upgrade نمی‌شناسد.
 
@@ -500,13 +500,13 @@ curl.exe -sS --ssl-no-revoke https://<host>/extension/fingerprint
 
 ```
 نصب → دوره آزمایشی (در صورت فعال بودن) → Admin/License → دریافت فایل activation-request
-     → ارسال به پشتیبانی/فروشنده → دریافت license.morobot → Import در Admin/License
+     → ارسال به پشتیبانی/فروشنده → دریافت license.webautomator → Import در Admin/License
 ```
 
 ### 8.2 وارد کردن لایسنس
 
 1. ورود به `/Admin/License`
-2. بارگذاری فایل `.morobot` یا وارد کردن محتوای JSON
+2. بارگذاری فایل `.webautomator` یا وارد کردن محتوای JSON
 3. **داده‌های موجود (کاربر، فرآیند، منبع) حذف نمی‌شوند** — فقط اطلاعات لایسنس به‌روز می‌شود؛ import موفق همه ردیف‌ها را به «نمونه نصب» فعلی وصل می‌کند؛ import موفق همه ردیف‌ها را به «نمونه نصب» فعلی وصل می‌کند
 4. برای ارتقا (مثلاً افزایش سقف کاربر): فایل لایسنس جدید با شماره نسخه بالاتر دریافت کنید
 
@@ -577,21 +577,21 @@ curl.exe -sS --ssl-no-revoke https://<host>/extension/fingerprint
 ## 12. به‌روزرسانی نرم‌افزار
 
 - امکان بررسی به‌روزرسانی بسته به تنظیمات لایسنس
-- آدرس پیش‌فرض بررسی: `https://morobot.ir/checkupdate`
+- آدرس پیش‌فرض بررسی: `https://webautomator.ir/checkupdate`
 - **قرارداد API (GET):** `?current={نسخه_نصب}` → JSON:
 
 ```json
 {
   "version": "3.0.0",
   "notes": "یادداشت انتشار",
-  "downloadUrl": "https://morobot.ir/download",
+  "downloadUrl": "https://webautomator.ir/download",
   "updateAvailable": true,
   "current": "2.9.0",
   "publishedUtc": "2026-09-24T00:00:00Z"
 }
 ```
 
-فیلدهای `version`، `notes` و `downloadUrl` برای سازگاری با نصب‌های قدیمی کافی است. روی سرور محصول (`morobot.ir`) یا در dev: `GET https://localhost:7201/checkupdate?current=2.0.0`
+فیلدهای `version`، `notes` و `downloadUrl` برای سازگاری با نصب‌های قدیمی کافی است. روی سرور محصول (`webautomator.ir`) یا در dev: `GET https://localhost:7201/checkupdate?current=2.0.0`
 
 - **API ادمین (نیاز به نقش Admin):** `GET /api/updates/status` — وضعیت کش‌شده؛ `POST /api/updates/check` — بررسی آنلاین و به‌روزرسانی کش
 - مدیر می‌تواند آدرس را در **Settings → بخش «به‌روزرسانی»** تغییر دهد
@@ -604,7 +604,7 @@ curl.exe -sS --ssl-no-revoke https://<host>/extension/fingerprint
 > اعمال به‌روزرسانی آنلاین (جایگزینی فایل‌های برنامه) دستی است: دریافت بسته جدید از پشتیبانی،
 > پشتیبان‌گیری، استخراج، راه‌اندازی مجدد — یا از مسیر آپدیت آفلاین برای بستهٔ آماده استفاده کنید.
 
-**دیتابیس:** در **اولین اجرا بعد از آپدیت**، Morobot خودکار migrationهای EF Core را روی SQL Server اعمال می‌کند — نیازی به دستور جدا نیست (فقط سرویس را restart کنید). تعداد migrationهای در انتظار اعمال در لاگ راه‌اندازی ثبت می‌شود و در صورت شکست، پیام خطا نام migration مشکل‌دار را نشان می‌دهد.
+**دیتابیس:** در **اولین اجرا بعد از آپدیت**، Webautomator خودکار migrationهای EF Core را روی SQL Server اعمال می‌کند — نیازی به دستور جدا نیست (فقط سرویس را restart کنید). تعداد migrationهای در انتظار اعمال در لاگ راه‌اندازی ثبت می‌شود و در صورت شکست، پیام خطا نام migration مشکل‌دار را نشان می‌دهد.
 
 ---
 
@@ -618,9 +618,9 @@ curl.exe -sS --ssl-no-revoke https://<host>/extension/fingerprint
 یک فایل `zip` که پشتیبانی/فروشنده برای شما می‌سازد. داخل آن:
 
 ```
-morobot-update.json     ← مانیفست (نسخه، یادداشت، فهرست فایل‌ها با SHA-256)
+webautomator-update.json     ← مانیفست (نسخه، یادداشت، فهرست فایل‌ها با SHA-256)
 update.ps1              ← اسکریپت اعمال آپدیت (فقط Windows)
-Morobot.Web.dll|exe     ← فایل‌های برنامه
+Webautomator.Web.dll|exe     ← فایل‌های برنامه
 wwwroot/ …              ← سایر فایل‌ها
 ```
 
@@ -639,7 +639,7 @@ wwwroot/ …              ← سایر فایل‌ها
 > (کارت «اعمال دستی» در همین صفحه دستور کامل را نشان می‌دهد):
 >
 > ```powershell
-> powershell -ExecutionPolicy Bypass -File .\update.ps1 -TargetDir "C:\Apps\Morobot" -Restart
+> powershell -ExecutionPolicy Bypass -File .\update.ps1 -TargetDir "C:\Apps\Webautomator" -Restart
 > ```
 
 ### 13.3 نکات
@@ -653,7 +653,7 @@ wwwroot/ …              ← سایر فایل‌ها
 ### 13.4 تنظیمات (appsettings.json)
 
 ```json
-"Morobot": {
+"Webautomator": {
   "OfflineUpdate": {
     "UploadDirectory": "updates/uploaded",
     "StagingDirectory": "updates/staged",
@@ -682,17 +682,17 @@ wwwroot/ …              ← سایر فایل‌ها
 
 ## 15. کار با پنل و افزونه
 
-### 15.1 افزونه Morobot Global (ضبط + اجرا + سلکتور)
+### 15.1 افزونه Webautomator Global (ضبط + اجرا + سلکتور)
 
-**یک افزونه** به نام **Morobot Global** (`extension-global`) جایگزین سه افزونه جداگانه Recorder/Player/Selector شده است.
+**یک افزونه** به نام **Webautomator Global** (`extension-global`) جایگزین سه افزونه جداگانه Recorder/Player/Selector شده است.
 
 | افزونه | کاربرد |
 |--------|--------|
-| **Morobot Global** | ضبط، اجرا (Play) و کپی سلکتور |
+| **Webautomator Global** | ضبط، اجرا (Play) و کپی سلکتور |
 | **Smart Recorder** | هوشمندسازی — **جدا** و اختیاری |
 
-- **Cloud و Enterprise:** همان Morobot Global — آدرس سرور از پنلی که باز می‌کنید گرفته می‌شود
-- **آیکون:** از برند Morobot (در Enterprise با برندینگ سفارشی، vendor می‌تواند آیکون‌ها را در بسته جایگزین کند — فایل‌های `icon16/32/48/128.png` باید PNG **واقعی** باشند، نه JPEG با پسوند png)
+- **Cloud و Enterprise:** همان Webautomator Global — آدرس سرور از پنلی که باز می‌کنید گرفته می‌شود
+- **آیکون:** از برند Webautomator (در Enterprise با برندینگ سفارشی، vendor می‌تواند آیکون‌ها را در بسته جایگزین کند — فایل‌های `icon16/32/48/128.png` باید PNG **واقعی** باشند، نه JPEG با پسوند png)
 - افزونه‌های قدیمی Recorder/Player/Selector را **حذف** کنید و فقط Global + Smart (در صورت نیاز) نصب کنید
 
 ### 15.2 جریان کار پیشنهادی
@@ -737,7 +737,7 @@ wwwroot/ …              ← سایر فایل‌ها
 در `appsettings.json`:
 
 ```json
-"Morobot": {
+"Webautomator": {
   "AppInstanceKey": "cloud-prod-ir"
 }
 ```
@@ -748,7 +748,7 @@ wwwroot/ …              ← سایر فایل‌ها
 
 (اگر برای چند استقرار روی یک PC مقدار `AppInstanceKey` ست شده باشد: `%LOCALAPPDATA%\webautomator\{AppInstanceKey}\extension-global`)
 
-هر Morobot با **دامنه + AppInstanceKey** یکتا باشد تا روی یک PC تداخل نداشته باشد.
+هر Webautomator با **دامنه + AppInstanceKey** یکتا باشد تا روی یک PC تداخل نداشته باشد.
 
 ---
 
@@ -763,10 +763,10 @@ wwwroot/ …              ← سایر فایل‌ها
 | سقف کاربر | دریافت لایسنس با سقف کاربر بالاتر |
 | تغییر اتصال دیتابیس بعد از لایسنس | appsettings.json را هماهنگ کنید و سرویس را restart کنید |
 | برنامه روی Linux بالا نمی‌آید | نصب ASP.NET Core 9 Runtime برای Linux؛ مسیر `dotnet` در systemd |
-| 502 از nginx | بررسی `systemctl status morobot`؛ پورت `ASPNETCORE_URLS` با `proxy_pass` یکی باشد |
+| 502 از nginx | بررسی `systemctl status webautomator`؛ پورت `ASPNETCORE_URLS` با `proxy_pass` یکی باشد |
 | افزونه به سرور اشتباه وصل است | پنل سرور درست را باز کنید؛ refresh؛ دوباره Record/Play |
 | افزونه روی دامنه سازمانی کار نمی‌کند | یک بار `/Panel` را روی همان دامنه باز کنید تا آدرس سرور ثبت شود |
-| آپلود بستهٔ آپدیت رد می‌شود | فایل zip باید ساختهٔ پشتیبانی باشد (`morobot-update.json` دارد)؛ نسخهٔ بسته باید جدیدتر از نصب فعلی باشد؛ پیام دقیق روی همان صفحه نمایش داده می‌شود |
+| آپلود بستهٔ آپدیت رد می‌شود | فایل zip باید ساختهٔ پشتیبانی باشد (`webautomator-update.json` دارد)؛ نسخهٔ بسته باید جدیدتر از نصب فعلی باشد؛ پیام دقیق روی همان صفحه نمایش داده می‌شود |
 | اعمال آپدیت آفلاین انجام نمی‌شود | سرویس را متوقف کنید (فایل‌های برنامه قفل‌اند)؛ تیک تأیید را بزنید؛ `update.log` در پوشهٔ آماده‌سازی را ببینید |
 | «انتقال از قدیمی» در منو نیست | مجوز آن در لایسنس شما صادر نشده است؛ با پشتیبانی تماس بگیرید |
 | مقدار فیلدهای «سیستمی» در تنظیمات سامانه قابل ویرایش نیست | این‌ها را سامانه مدیریت می‌کند (نسخهٔ آپدیت، وضعیت و …) — فقط نمایشی‌اند |
@@ -775,4 +775,4 @@ wwwroot/ …              ← سایر فایل‌ها
 
 ## تماس با پشتیبانی
 
-برای دریافت لایسنس، بسته به‌روزرسانی یا پشتیبانی استقرار با **پشتیبانی Morobot / فروشنده** تماس بگیرید.
+برای دریافت لایسنس، بسته به‌روزرسانی یا پشتیبانی استقرار با **پشتیبانی Webautomator / فروشنده** تماس بگیرید.

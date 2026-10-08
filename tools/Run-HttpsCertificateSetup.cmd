@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title Morobot HTTPS certificate setup
+title Webautomator HTTPS certificate setup
 
 set "PS1=%~dp0Install-HttpsCertificate.ps1"
 if not exist "%PS1%" (

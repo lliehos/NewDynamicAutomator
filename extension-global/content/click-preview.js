@@ -32,7 +32,7 @@
   let isRecording = false;
 
   /**
-   * Are we on the Morobot panel itself?
+   * Are we on the Webautomator panel itself?
    *
    * The outline must NOT run there: on our own pages the user is clicking the application, not a
    * target element, so an outline on every click is noise over the UI they are trying to use

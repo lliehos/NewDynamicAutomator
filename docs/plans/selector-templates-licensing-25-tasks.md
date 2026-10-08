@@ -61,7 +61,7 @@
 | 21 | اکشن‌های جدید: حذف ردیف منبع، ویرایش متغیر حافظه + ویژگی‌های متناسب هر اکشن + پورت از دیتابیس قدیم | done | `c94ea36` |
 | 22 | دو نوع شرط اضافه (پیدا/پنهان بودن المان با انتخاب المان) + شرط «مقدار متغیر حافظه» | done | `03f28ec` |
 | 23 | لودر/صفحه‌بندی/لیزی‌لود برای لیست منبع + لودر روی عملیات افزودن ردیف/ستون | done | `511195c` |
-| 24 | تغییر نام دیتابیس پروژه به `MorobotDb` | done | `a1b2fb8` |
+| 24 | تغییر نام دیتابیس پروژه به `WebautomatorDb` | done | `a1b2fb8` |
 | 25 | وابسته‌کردن همهٔ تاریخ‌ها به زبان (مخصوصاً داشبورد ادمین) | done | `5d99642` |
 ---
 
@@ -69,17 +69,17 @@
 
 ### قواعد عمومی این پروژه (از حافظهٔ قبلی)
 
-- **UI دوزبانه:** کلیدها در `src/Morobot.Web/wwwroot/locales/{fa,en}.json`. کلید تکراری در
+- **UI دوزبانه:** کلیدها در `src/Webautomator.Web/wwwroot/locales/{fa,en}.json`. کلید تکراری در
   یک سطح، کلید قبلی را سایه می‌اندازد.
-- **دیتابیس:** `Server=.;Database=MorobotDb;Trusted_Connection=True;TrustServerCertificate=True`.
-  کوئری: `sqlcmd -S . -d MorobotDb -E -C -Q "..." -W -s "|"`. (نام قبلی `MorobotV3` بود؛ در کار #24
+- **دیتابیس:** `Server=.;Database=WebautomatorDb;Trusted_Connection=True;TrustServerCertificate=True`.
+  کوئری: `sqlcmd -S . -d WebautomatorDb -E -C -Q "..." -W -s "|"`. (نام قبلی `WebautomatorV3` بود؛ در کار #24
   تغییر کرد.)
 - **پورت dev:** `http://localhost:7200`. ورود: `pro`/`Pro123!` (پنل)، `admin`/`Admin123!` (ادمین).
   ورود یک‌کلیکی dev: `/Panel/Account/DevLogin?userName=pro|admin|free|guest`
   (فقط کاربران seed‌شده؛ **باید اول خروج کرد** چون کوکی ادمین قدیمی ریدایرکت می‌کند).
-- **ساخت (build):** قبل از build باید `Stop-Process -Name "Morobot.Web"` اجرا شود (قفل DLL).
+- **ساخت (build):** قبل از build باید `Stop-Process -Name "Webautomator.Web"` اجرا شود (قفل DLL).
   اجرا:
-  `Set-Location "src\Morobot.Web"; $env:ASPNETCORE_ENVIRONMENT="Development"; Start-Process -FilePath "dotnet" -ArgumentList 'run','--no-build','--urls','http://localhost:7200' -WindowStyle Hidden`
+  `Set-Location "src\Webautomator.Web"; $env:ASPNETCORE_ENVIRONMENT="Development"; Start-Process -FilePath "dotnet" -ArgumentList 'run','--no-build','--urls','http://localhost:7200' -WindowStyle Hidden`
 - **برای تغییر JS/CSS حتماً `?v=` عوض شود** و build مجدد گرفته شود.
 - **الگوی کامیت:** پیام در `_run/msg-N.txt`، سپس
   `git add -A; git commit -q -F "_run\msg-N.txt"; git push -q`.
@@ -120,9 +120,9 @@
 
 **نتیجه:** «انتقال دیتا از نرم‌افزار قدیم» در کار #1 به `KRasmiMVC` اشاره **نمی‌کند**. منبع
 واقعی، دیتابیس/دیتای خود محصول اتوماسیون است (بکاپ‌های موجود در ورک‌اسپیس:
-`_morobotv3.bak` و `_backup_MorobotV3_pre_canvas.bak`). پس در کار #1 ابتدا باید مشخص شود دیتای
+`_webautomatorv3.bak` و `_backup_WebautomatorV3_pre_canvas.bak`). پس در کار #1 ابتدا باید مشخص شود دیتای
 قدیمی از کدام دیتابیس/جدول خوانده می‌شود، **بدون پرسیدن سؤال** (طبق قاعدهٔ ۵): محتمل‌ترین تفسیر
-این است که دیتای قدیمی در همان دیتابیس SQL (`MorobotV3`) در جدولی با سلکتور خام/فول‌ایکس‌پس
+این است که دیتای قدیمی در همان دیتابیس SQL (`WebautomatorV3`) در جدولی با سلکتور خام/فول‌ایکس‌پس
 ذخیره شده و باید به فرمت فعلی نگاشت شود. اگر چنین جدولی یافت نشد، کار #1 روی **نرمال‌سازِ
 سلکتور** (تبدیل سلکتورهای خام/قدیمی به فرمت فعلی) متمرکز می‌شود که همان هدف قابل‌اجرای کار است.
 
@@ -130,10 +130,10 @@
 
 - سلکتور یک **شیء تایپ‌دار** است: `{ By: string, Value: string }` به‌همراه `SrcHint` و
   `IndexInParent` (کلاس `FrameSelector`). یعنی نه رشتهٔ خام CSS و نه XPath خام.
-- `SelectorBy` (`src/Morobot.Domain/Enums/SelectorBy.cs`): `None`=۰، `CssSelector`=۱، `XPath`=۲،
+- `SelectorBy` (`src/Webautomator.Domain/Enums/SelectorBy.cs`): `None`=۰، `CssSelector`=۱، `XPath`=۲،
   `Id`=۳، `Name`=۴، `ClassName`=۵، `TagName`=۶، `LinkText`=۷، `PartialLinkText`=۸.
   **مقادیر عددی و نام اعضا قفل هستند** (قرارداد ذخیره‌سازی در `GraphJson`).
-- `ConditionType` (`src/Morobot.Domain/Enums/ConditionType.cs`): `None`=۰، `Url`=۱،
+- `ConditionType` (`src/Webautomator.Domain/Enums/ConditionType.cs`): `None`=۰، `Url`=۱،
   `ElementValue`=۲، `SourceValue`=۳، `FindElement`=۴، `NotFindElement`=۵، `FindElements`=۶،
   `DriverTabs`=۷.
 - **گروه شرط به‌صورت جدول وجود ندارد.** در اپ جدید: **AND = شرط‌های پشت سر هم** در توالی و

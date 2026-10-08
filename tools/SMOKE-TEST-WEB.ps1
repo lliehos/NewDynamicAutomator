@@ -1,4 +1,4 @@
-# Morobot web smoke test (HTTPS dev cert). Run while Morobot.Web is up.
+# Webautomator web smoke test (HTTPS dev cert). Run while Webautomator.Web is up.
 param(
   [string]$BaseUrl = "https://localhost:7201",
   [string]$AdminUser = "admin",

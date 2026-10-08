@@ -1,0 +1,7 @@
+@model Webautomator.Web.ViewComponents.SiteChromeModel
+@if (Model.ShowCopyright)
+{
+  <div class="webautomator-copyright-bar" role="note" aria-live="polite">
+    <span class="webautomator-copyright-watermark">@Model.CopyrightText</span>
+  </div>
+}

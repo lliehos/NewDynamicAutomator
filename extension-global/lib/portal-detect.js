@@ -1,4 +1,4 @@
-/** Detect Morobot portal pages (Cloud or Enterprise) on any host. */
+/** Detect Webautomator portal pages (Cloud or Enterprise) on any host. */
 (function (global) {
   function readCookie(name) {
     const m = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/([.$?*|{}()[\]\\/+^])/g, "\\$1") + "=([^;]*)"));
@@ -6,7 +6,7 @@
   }
 
   global.DaPortalDetect = {
-    isMorobotPortalPage() {
+    isWebautomatorPortalPage() {
       try {
         const path = location.pathname || "/";
         if (/^\/(Panel|Admin)(\/|$)/i.test(path)) return true;

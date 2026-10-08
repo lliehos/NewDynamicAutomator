@@ -1,11 +1,11 @@
 {
   "extName": {
-    "message": "ضبط هوشمند مروبات"
+    "message": "ضبط هوشمند وباتومیتور"
   },
   "extDesc": {
     "message": "هوشمندسازی فرآیند — تب ضبط هوشمند + soft API (Microsoft LM بعداً)"
   },
   "actionTitle": {
-    "message": "ضبط هوشمند — مروبات"
+    "message": "ضبط هوشمند — وباتومیتور"
   }
 }

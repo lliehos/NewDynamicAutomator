@@ -1,4 +1,4 @@
-/** Tenant branding from morobot-branding.json, portal page, or chrome.storage. */
+/** Tenant branding from webautomator-branding.json, portal page, or chrome.storage. */
 const DaTenantBranding = (() => {
   const STORAGE_KEY = "tenantBranding";
   let cached = null;
@@ -21,7 +21,7 @@ const DaTenantBranding = (() => {
 
   async function loadFromDisk() {
     try {
-      const url = chrome.runtime.getURL("morobot-branding.json");
+      const url = chrome.runtime.getURL("webautomator-branding.json");
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) return null;
       return normalize(await res.json());

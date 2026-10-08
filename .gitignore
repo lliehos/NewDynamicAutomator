@@ -213,8 +213,8 @@ publish/
 # rule above still swallow everything else. The SETTINGS (server path, user) are shared on purpose;
 # the PASSWORD is not — it lives in the sibling *.pubxml.user file, which stays ignored by the
 # existing *.user rule, so nothing secret is committed.
-!src/Morobot.Web/Properties/PublishProfiles/FTPProfile.pubxml
-!src/Morobot.Web/Properties/PublishProfiles/FolderProfile.pubxml
+!src/Webautomator.Web/Properties/PublishProfiles/FTPProfile.pubxml
+!src/Webautomator.Web/Properties/PublishProfiles/FolderProfile.pubxml
 
 # Microsoft Azure Web App publish settings. Comment the next line if you want to
 # checkin your Azure Web App publish settings, but sensitive information contained
@@ -519,7 +519,7 @@ updates/
 
 # Local DB / canvas backups (do not commit)
 _backup_*.bak
-_morobot*.bak
+_webautomator*.bak
 _webautomator*.bak
 *.bak
 /.vscode

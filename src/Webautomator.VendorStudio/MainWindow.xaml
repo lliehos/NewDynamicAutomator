@@ -1,0 +1,496 @@
+<Window x:Class="Webautomator.VendorStudio.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Style="{StaticResource VsWindow}"
+        Title="استودیو فروشنده وباتومیتور"
+        Height="780" Width="1020" MinHeight="640" MinWidth="880"
+        FlowDirection="RightToLeft"
+        WindowStartupLocation="CenterScreen"
+        Icon="pack://application:,,,/Assets/webautomator-icon.png">
+  <Grid Margin="20">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <StackPanel Grid.Row="0" Margin="0,0,0,16">
+      <StackPanel Orientation="Horizontal">
+        <Image Source="pack://application:,,,/Assets/webautomator-icon.png" Width="32" Height="32" Margin="0,0,10,0"
+               RenderOptions.BitmapScalingMode="HighQuality"/>
+        <TextBlock Style="{StaticResource VsTitle}" Text="استودیو فروشنده (Vendor Studio)" VerticalAlignment="Center"/>
+      </StackPanel>
+      <TextBlock Foreground="{StaticResource VsMutedBrush}" Margin="30,4,0,0" TextWrapping="Wrap"
+                 Text="امضای لایسنس Enterprise و ساخت بسته publish + zip برای مشتری — کلید خصوصی هرگز روی سرور مشتری نرود."/>
+    </StackPanel>
+
+    <TabControl Grid.Row="1">
+      <TabItem Header="لایسنس">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="4">
+          <StackPanel Margin="8,12,8,16" MaxWidth="920">
+
+            <TextBlock Style="{StaticResource VsSectionTitle}" Text="امضای لایسنس مشتری (.webautomator)"/>
+
+            <!-- Activation request -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE8A5;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="فایل درخواست فعال‌سازی"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="JSON که مشتری از Admin/License → درخواست فعال‌سازی دانلود کرده. شامل DeploymentAnchorId سرور همان مشتری است."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="از پنل مشتری: مدیریت → لایسنس → دریافت activation-request. بدون این فایل لایسنس به سرور دیگر وصل نمی‌شود."/>
+              <DockPanel LastChildFill="True">
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowseRequest_Click"/>
+                <TextBox x:Name="RequestPath" Style="{StaticResource VsTextBox}"
+                         ToolTip="مسیر فایل .json یا .webautomator درخواست فعال‌سازی"/>
+              </DockPanel>
+            </StackPanel>
+
+            <!-- Private key -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE192;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="کلید خصوصی امضا (.pem)"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="فقط روی PC vendor — معمولاً tools/license-keys/webautomator-private.pem در repo (commit نشود)."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="کلید خصوصی RSA برای امضای لایسنس. هرگز در بسته مشتری یا git عمومی قرار نگیرد."/>
+              <DockPanel LastChildFill="True">
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowsePrivateKey_Click"/>
+                <TextBox x:Name="PrivateKeyPath" Style="{StaticResource VsTextBox}"/>
+              </DockPanel>
+            </StackPanel>
+
+            <!-- Valid until -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE787;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="اعتبار تا تاریخ"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="آخرین روز معتبر بودن لایسنس (شامل همان روز)."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="پس از این تاریخ، بدون لایسنس جدید سامانه وارد حالت محدود می‌شود."/>
+              <DatePicker x:Name="ValidUntil" Margin="28,0,0,0"/>
+            </StackPanel>
+
+            <!-- Organization -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE731;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="نام سازمان"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="در پنل Admin/License و گزارش‌ها نمایش داده می‌شود."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="مثلاً «شرکت نمونه» — برای شناسایی قرارداد در پشتیبانی."/>
+              <TextBox x:Name="Organization" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"/>
+            </StackPanel>
+
+            <!-- Server base URL -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE774;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="آدرس پایهٔ سرور (برای اجرای محلی)"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="آدرس عمومی همین سرور مشتری. اجراکنندهٔ دسکتاپ از این مقدار می‌خواند تا کاربر آدرس را دستی وارد نکند."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="مثلاً https://panel.customer.ir — امضا می‌شود و از سمت مشتری قابل تغییر نیست. خالی = استفاده از قفل دامنه یا آدرس لوکال."/>
+              <TextBox x:Name="ServerBaseUrl" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"
+                       ToolTip="مثال: https://panel.customer.ir"/>
+            </StackPanel>
+
+            <!-- Allowed host -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE774;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="دامنه یا IP مجاز"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="خالی = بدون قفل آدرس. مثال: webautomator.customer.ir یا 192.168.1.10"/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="اگر پر شود، فقط از همان Host یا IP (در header درخواست) سامانه در حالت لایسنس کامل کار می‌کند."/>
+              <TextBox x:Name="AllowedHost" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"
+                       ToolTip="دامنه (با یا بدون https) یا آدرس IPv4/IPv6"/>
+            </StackPanel>
+
+            <!-- Referral widget link -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE71B;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="لینک ویجت معرفی"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="آدرسی که QR ویجت معرفی در پنل کاربری به آن اشاره می‌کند. خالی = صفحهٔ پیش‌فرض محصول."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="فقط http یا https. این مقدار امضا می‌شود و از سمت مشتری قابل تغییر نیست؛ مثلاً https://webautomator.ir/customer"/>
+              <TextBox x:Name="ReferralUrl" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"
+                       ToolTip="مثال: https://webautomator.ir"/>
+            </StackPanel>
+
+            <!-- Max users -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE716;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="سقف کاربر"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="خالی = بدون سقف سخت در لایسنس (طبق منطق سامانه)."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="حداکثر کاربر فعال مجاز؛ عدد صحیح. برای ارتقا، لایسنس با Sequence بالاتر صادر کنید."/>
+              <TextBox x:Name="MaxUsers" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"/>
+            </StackPanel>
+
+            <!-- Sequence -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE8FD;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="شماره نسخه لایسنس (Sequence)"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="هر لایسنس جدید باید از قبلی بزرگ‌تر باشد تا جایگزین شود. پیش‌فرض: 1"/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="برای تمدید یا افزایش سقف، Sequence را افزایش دهید."/>
+              <TextBox x:Name="Sequence" Style="{StaticResource VsTextBox}" Margin="28,0,0,0" Text="1"/>
+            </StackPanel>
+
+            <!-- Trial days -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE823;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="روزهای آزمایشی (بدون لایسنس)"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="مدت trial Enterprise قبل از الزام لایسنس؛ پیش‌فرض 3"/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="از اولین اجرای Enterprise؛ معمولاً ۳ روز."/>
+              <TextBox x:Name="TrialDays" Style="{StaticResource VsTextBox}" Margin="28,0,0,0" Text="3"/>
+            </StackPanel>
+
+            <!-- Per-source row cap -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE9D5;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="سقف ردیف هر منبع داده"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="سقف سخت امضاشده برای تعداد ردیف یک منبع. ادمین فقط می‌تواند سقف پلن را کمتر از این کند، نه بیشتر."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="خالی = بدون سقف امضاشده. در نسخهٔ آزمایشی (trial) اگر خالی بماند، ۱۰ ردیف اعمال می‌شود."/>
+              <TextBox x:Name="MaxSourceRows" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"/>
+            </StackPanel>
+
+            <!-- Per-source byte cap -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE9D5;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="سقف حجم هر منبع داده (بایت)"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="سقف سخت امضاشده برای حجم محتوای یک منبع (UTF-8). ادمین فقط می‌تواند سقف پلن را کمتر کند."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="خالی = بدون سقف امضاشده. در trial اگر خالی بماند، ۵۰۰ کیلوبایت اعمال می‌شود."/>
+              <TextBox x:Name="MaxSourceBytes" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"/>
+            </StackPanel>
+
+            <!-- DB connection -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE968;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="رشته اتصال SQL Server"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="اگر خالی باشد مشتری فقط از appsettings استفاده می‌کند. در لایسنس ذخیره و پس از import اعمال می‌شود."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="Connection string کامل؛ فقط روی سرور مشتری مصرف می‌شود. در UI فقط نام سرور نمایش داده می‌شود."/>
+              <TextBox x:Name="DbConnection" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"
+                       AcceptsReturn="True" Height="52" TextWrapping="Wrap"/>
+            </StackPanel>
+
+            <!-- Update URL -->
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE774;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="آدرس بررسی به‌روزرسانی"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsOptionalBrush}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="Endpoint که Admin/License برای check update صدا می‌زند."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}" Text="پیش‌فرض: https://webautomator.ir/checkupdate — برای مشتری air-gap می‌توان غیرفعال کرد."/>
+              <TextBox x:Name="UpdateUrl" Style="{StaticResource VsTextBox}" Margin="28,0,0,0"
+                       Text="https://webautomator.ir/checkupdate"/>
+            </StackPanel>
+
+            <CheckBox x:Name="AllowUpdates" Margin="28,0,0,8" IsChecked="True"
+                      ToolTip="اگر خاموش باشد سامانه به‌روزرسانی آنلاین را از لایسنس نمی‌گیرد.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازه بررسی به‌روزرسانی آنلاین"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (اختیاری — پیش‌فرض: فعال)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowLegacyMigration" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="تا وقتی روشن نشود، صفحهٔ «انتقال از دیتابیس قدیمی» در پنل ادمین وجود ندارد و درخواست‌های آن رد می‌شود.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازه انتقال از دیتابیس قدیمی"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — فقط برای مشتری مجاز)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowPlanManagement" Margin="28,0,0,8" IsChecked="True"
+                      ToolTip="اگر خاموش باشد، مشتری سطوح پلن کاربران را مدیریت نمی‌کند و همهٔ کاربران در بالاترین سطح (نامحدود) قرار می‌گیرند. برای لایسنس‌های قدیمی روشن در نظر گرفته می‌شود.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازه مدیریت پلن‌های کاربر"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: فعال — خاموش یعنی همهٔ کاربران در بالاترین سطح)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowBilingual" Margin="28,0,0,8" IsChecked="True"
+                      ToolTip="اگر خاموش باشد، سامانه فقط به زبان پیش‌فرض نمایش داده می‌شود و کلید تغییر زبان پنهان می‌شود. برای لایسنس‌های قدیمی روشن در نظر گرفته می‌شود.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="دو زبانه (فارسی و انگلیسی)"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: فعال — خاموش یعنی فقط زبان پیش‌فرض)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowFrontPackage" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="بستهٔ نرم‌افزاری فرانت (سایت عمومی) یک بستهٔ جداگانهٔ فروش است. اگر روشن باشد، بازدیدکنندهٔ وارد‌نشده به صفحهٔ فرانت می‌رود؛ اگر خاموش باشد، مستقیم به پنل می‌رود. برای لایسنس‌های قدیمی خاموش در نظر گرفته می‌شود.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="بستهٔ فرانت (سایت عمومی) فعال باشد"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — روشن یعنی صفحهٔ پیش‌فرض، فرانت است)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowLocalRun" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="اگر روشن باشد، اجرای فرآیندها روی ماشین خود کاربر (اجراکنندهٔ دسکتاپ و خاموش‌بودن سوئیچ «اجرا روی سرور») مجاز است. برای لایسنس‌های قدیمی غیرفعال در نظر گرفته می‌شود.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجرای محلی روی ماشین کاربر"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — قابلیت جداانهٔ فروش)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowCommerce" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="دروازهٔ همهٔ سطوح فروش: صفحهٔ عمومی پلن‌ها، پرداخت، ویزارد خرید، فرآیند تمدید و تاریخچهٔ مالی. برای نصب مشتری (on-premise) خاموش بماند.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازهٔ فروش (پلن، بستهٔ نرم‌افزار، لایسنس)"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — فقط برای سرور فروشنده)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowSoftwarePurchase" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="فروش خود بستهٔ نرم‌افزار (ویزارد خرید) جدا از فروش پلن. فقط وقتی «اجازهٔ فروش» روشن باشد اثر دارد.">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازهٔ فروش بستهٔ نرم‌افزار (ویزارد خرید)"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — نیازمند روشن‌بودن «اجازهٔ فروش»)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <CheckBox x:Name="AllowSelfIssuedLicenses" Margin="28,0,0,8" IsChecked="False"
+                      ToolTip="اجازهٔ صدور لایسنس توسط خود پنل (ویزارد تمدید) بدون دخالت فروشنده. فقط برای سرور فروشندهٔ خودی. نیازمند روشن‌بودن «اجازهٔ فروش».">
+              <TextBlock TextWrapping="Wrap">
+                <Run FontWeight="SemiBold" Text="اجازهٔ صدور لایسنس توسط خود پنل"/>
+                <Run Foreground="{StaticResource VsMutedBrush}" Text=" (پیش‌فرض: غیرفعال — نیازمند روشن‌بودن «اجازهٔ فروش»)"/>
+              </TextBlock>
+            </CheckBox>
+
+            <StackPanel Orientation="Horizontal" Margin="28,8,0,12">
+              <Button Content="امضای لایسنس" Width="130" Style="{StaticResource VsButton}" Click="SignLicense_Click"/>
+              <Button Content="ذخیره .webautomator" Width="130" Margin="10,0,0,0"
+                      Style="{StaticResource VsButtonSecondary}" Click="SaveLicense_Click"/>
+            </StackPanel>
+
+            <TextBlock Style="{StaticResource VsHint}" Margin="28,0,0,4"
+                       Text="خروجی JSON امضاشده — پس از امضا می‌توانید کپی یا با «ذخیره» فایل بدهید به مشتری."/>
+            <TextBox x:Name="LicenseOutput" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"
+                     AcceptsReturn="True" TextWrapping="Wrap" Height="200" VerticalScrollBarVisibility="Auto"
+                     FontFamily="Consolas, Courier New"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="بسته نصب">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="4">
+          <StackPanel Margin="8,12,8,16" MaxWidth="920">
+            <TextBlock Style="{StaticResource VsSectionTitle}" Text="ساخت بسته سرور مشتری (dotnet publish + zip)"/>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE943;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="پروژه Webautomator.Web.csproj"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="فایل csproj وب‌اپ — publish Release در پوشه خروجی."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="معمولاً src/Webautomator.Web/Webautomator.Web.csproj — پلتفرم هدف (win-x64 / linux-x64) را در صورت نیاز دستی در CLI تنظیم کنید."/>
+              <DockPanel LastChildFill="True">
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowseProject_Click"/>
+                <TextBox x:Name="ProjectPath" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"/>
+              </DockPanel>
+            </StackPanel>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE838;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="پوشه خروجی publish"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="پوشه خالی یا موجود؛ zip هم‌نام در کنار پوشه ساخته می‌شود."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="مثلاً dist/webautomator-server — appsettings به Enterprise تغییر می‌کند و setup-guide.md کپی می‌شود."/>
+              <DockPanel LastChildFill="True">
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowseOutput_Click"/>
+                <TextBox x:Name="OutputPath" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"/>
+              </DockPanel>
+            </StackPanel>
+
+            <Button Content="ساخت بسته (zip)" Width="150" HorizontalAlignment="Right"
+                    Style="{StaticResource VsButton}" Margin="0,8,0,0" Click="BuildPackage_Click"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="بسته آپدیت">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="4">
+          <StackPanel Margin="8,12,8,16" MaxWidth="920">
+            <TextBlock Style="{StaticResource VsSectionTitle}" Text="ساخت بسته آپدیت آفلاین (webautomator-update.json + update.ps1)"/>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE838;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="پوشه فایل‌های publish"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="همان پوشه‌ای که در تب «بسته نصب» ساخته شد. می‌توانید با دکمه زیر از تب نصب پر شود."/>
+              </StackPanel>
+              <TextBlock Style="{StaticResource VsHint}"
+                         Text="همه فایل‌های این پوشه در بسته قرار می‌گیرند و SHA-256 هرکدام در مانیفست ثبت می‌شود."/>
+              <DockPanel LastChildFill="True">
+                <Button Content="از تب نصب" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="UseInstallTabSource_Click"/>
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowseUpdateSource_Click"/>
+                <TextBox x:Name="UpdateSourcePath" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"/>
+              </DockPanel>
+            </StackPanel>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE8F1;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="نسخه بسته"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}"
+                           ToolTip="باید از نسخه نصب‌شدهٔ مشتری بزرگ‌تر باشد وگرنه سرور بسته را رد می‌کند."/>
+              </StackPanel>
+              <TextBox x:Name="UpdateVersion" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"
+                       Text="1.0.1" ToolTip="مثال: 1.2.0"/>
+              <TextBlock Style="{StaticResource VsHint}" Text="معادل &lt;Version&gt; اسمبلی سرور."/>
+            </StackPanel>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE7BA;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="یادداشت نسخه"/>
+                <Border Style="{StaticResource VsBadgeOptional}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Text="اختیاری"/>
+                </Border>
+                <TextBlock Style="{StaticResource VsHelpIcon}" ToolTip="در صفحه Admin → License → آپدیت آفلاین نمایش داده می‌شود."/>
+              </StackPanel>
+              <TextBox x:Name="UpdateNotes" Style="{StaticResource VsTextBox}" AcceptsReturn="True" MinHeight="64"
+                       TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
+            </StackPanel>
+
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <StackPanel Grid.Column="0" Style="{StaticResource VsFieldBlock}">
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="حداقل نسخه فعلی"/>
+                <TextBlock Style="{StaticResource VsHint}" Text="اگر پر باشد، بسته فقط روی نسخه‌های مساوی یا جدیدتر اعمال می‌شود."/>
+                <TextBox x:Name="UpdateMinVersion" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"/>
+              </StackPanel>
+              <StackPanel Grid.Column="2" Style="{StaticResource VsFieldBlock}">
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="کانال"/>
+                <TextBlock Style="{StaticResource VsHint}" Text="برچسب اطلاعاتی؛ مثلاً stable یا beta."/>
+                <TextBox x:Name="UpdateChannel" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight" Text="stable"/>
+              </StackPanel>
+            </Grid>
+
+            <StackPanel Style="{StaticResource VsFieldBlock}">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE838;"/>
+                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="فایل خروجی zip"/>
+                <Border Style="{StaticResource VsBadgeRequired}">
+                  <TextBlock Style="{StaticResource VsBadgeText}" Foreground="{StaticResource VsRequiredBrush}" Text="اجباری"/>
+                </Border>
+              </StackPanel>
+              <DockPanel LastChildFill="True">
+                <Button Content="انتخاب…" Width="88" Margin="8,0,0,0" DockPanel.Dock="Left"
+                        Style="{StaticResource VsButtonSecondary}" Click="BrowseUpdateZip_Click"/>
+                <TextBox x:Name="UpdateZipPath" Style="{StaticResource VsTextBox}" FlowDirection="LeftToRight"/>
+              </DockPanel>
+            </StackPanel>
+
+            <Button Content="ساخت بسته آپدیت" Width="170" HorizontalAlignment="Right"
+                    Style="{StaticResource VsButton}" Margin="0,8,0,0" Click="BuildUpdatePackage_Click"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
+
+    <Border Grid.Row="2" Margin="0,14,0,0" Padding="10,8" Background="{StaticResource VsPrimarySoftBrush}"
+            BorderBrush="{StaticResource VsBorderBrush}" BorderThickness="1" CornerRadius="8">
+      <StackPanel Orientation="Horizontal">
+        <TextBlock Style="{StaticResource VsFieldIcon}" Text="&#xE946;" Margin="0,0,8,0"/>
+        <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="{StaticResource VsInkBrush}" Text="آماده"/>
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>

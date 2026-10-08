@@ -2,7 +2,7 @@
 (async function initFab() {
   if (window !== window.top) return;
   // Don't mount Player HUD while Recorder owns the page (or already mounted its FAB).
-  if (document.documentElement.dataset.daMorobotMode === "record") return;
+  if (document.documentElement.dataset.daWebautomatorMode === "record") return;
   if (document.getElementById("da-recorder-fab")) return;
   if (window.__daFabInit || document.getElementById("da-player-fab")) return;
 
@@ -739,16 +739,16 @@
     const canRestart = !!(lastPlayRequest?.taskId || play.taskId);
 
     // Shared DOM flag — recorder sets "record"; never show player HUD over an active record session.
-    const pageMode = document.documentElement.dataset.daMorobotMode || "";
-    if (playing) document.documentElement.dataset.daMorobotMode = "play";
-    else if (pageMode === "play") delete document.documentElement.dataset.daMorobotMode;
+    const pageMode = document.documentElement.dataset.daWebautomatorMode || "";
+    if (playing) document.documentElement.dataset.daWebautomatorMode = "play";
+    else if (pageMode === "play") delete document.documentElement.dataset.daWebautomatorMode;
 
     // Keep HUD after finish so user can re-run (Play). Hide only when no session context is left —
     // a session SEEN on this page (lastPlaySnapshot) counts too, so a flaky or restarted worker
     // can never make the HUD vanish right when a run ends.
     const hasIdleSession = !playing && (canRestart || hasHistory(play) || !!lastPlaySnapshot);
     const showHud = (playing || hasIdleSession)
-      && (document.documentElement.dataset.daMorobotMode !== "record");
+      && (document.documentElement.dataset.daWebautomatorMode !== "record");
 
     if (!showHud) {
       panel.hidden = true;
@@ -829,7 +829,7 @@
   try {
     new MutationObserver(() => { refresh().catch(() => {}); }).observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["data-da-morobot-mode"]
+      attributeFilter: ["data-da-webautomator-mode"]
     });
   } catch { /* ignore */ }
   refresh();

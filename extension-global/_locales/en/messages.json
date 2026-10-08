@@ -1,11 +1,11 @@
 {
   "extName": {
-    "message": "Morobot Global"
+    "message": "Webautomator Global"
   },
   "extDesc": {
-    "message": "Morobot — record, play and selector in a single extension"
+    "message": "Webautomator — record, play and selector in a single extension"
   },
   "actionTitle": {
-    "message": "Morobot Global — Morobot"
+    "message": "Webautomator Global — Webautomator"
   }
 }

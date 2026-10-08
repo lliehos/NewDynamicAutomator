@@ -1,0 +1,2626 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using ClosedXML.Excel;
+using Webautomator.Contracts.Auth;
+using Webautomator.Contracts.DataSources;
+using Webautomator.Domain.Entities;
+using Webautomator.Domain.Enums;
+using Webautomator.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+
+namespace Webautomator.Infrastructure.Services;
+
+/// <summary>User library of Excel data sources + Excel parse/export. Process links are independent of library lifetime.</summary>
+public class DataSourceService
+{
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true
+    };
+
+    private readonly AppDbContext _db;
+    private readonly EntitlementService _entitlements;
+    private readonly ILogger<DataSourceService> _log;
+
+    public DataSourceService(AppDbContext db, EntitlementService entitlements, ILogger<DataSourceService> log)
+    {
+        _db = db;
+        _entitlements = entitlements;
+        _log = log;
+    }
+
+    public Task<List<int>> GetLinkedProcessIdsAsync(int dataSourceId, CancellationToken ct = default)
+        => _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.DataSourceId == dataSourceId)
+            .Select(l => l.ProcessId)
+            .Distinct()
+            .ToListAsync(ct);
+
+    static void StampDataEditor(DataSource entity, int userId)
+    {
+        if (userId > 0)
+            entity.LastEditorUserId = userId;
+    }
+
+    /// <summary>
+    /// Refuse content that breaks the effective row/byte ceiling. Throws
+    /// <see cref="SourceLimitExceededException"/> so callers can return a specific, translatable
+    /// message instead of a generic failure.
+    /// </summary>
+    static void EnsureWithinSourceLimits(EntitlementsDto entitlements, IReadOnlyList<DataSourceCellDto> cells)
+    {
+        var rowCount = cells.Count == 0 ? 0 : cells.Max(c => c.Index) + 1;
+        var bytes = cells.Sum(c => (long)Encoding.UTF8.GetByteCount(c.CellValue ?? ""));
+        var error = EntitlementService.CheckSourceLimits(entitlements, rowCount, bytes);
+        if (error is not null)
+            throw new SourceLimitExceededException(error, rowCount, bytes,
+                entitlements.MaxSourceRows, entitlements.MaxSourceBytes);
+    }
+
+    /// <summary>Display name for an editor id, falling back to the login name then null.</summary>
+    async Task<string?> ResolveEditorNameAsync(int? userId, CancellationToken ct)
+    {
+        if (userId is not int uid || uid <= 0) return null;
+        var u = await _db.Users.AsNoTracking()
+            .Where(x => x.Id == uid)
+            .Select(x => new { x.UserName, x.FirstName, x.LastName })
+            .FirstOrDefaultAsync(ct);
+        if (u is null) return null;
+        var full = string.Join(" ", new[] { u.FirstName, u.LastName }.Where(p => !string.IsNullOrWhiteSpace(p)));
+        return string.IsNullOrWhiteSpace(full) ? u.UserName : full.Trim();
+    }
+
+    public ParsedExcelDto ParseExcelOnly(Stream excelStream, string? suggestedTitle = null)
+    {
+        var (columns, cells) = ParseExcel(excelStream);
+        if (columns.Count == 0)
+            throw new InvalidOperationException("فایل اکسل ستون معتبری ندارد (ردیف اول باید هدر باشد).");
+
+        var rowCount = cells.Count == 0 ? 0 : cells.Max(c => c.Index) + 1;
+        return new ParsedExcelDto
+        {
+            SuggestedTitle = string.IsNullOrWhiteSpace(suggestedTitle)
+                ? $"منبع {DateTime.Now:yyyy-MM-dd HH:mm}"
+                : suggestedTitle.Trim(),
+            ColumnCount = columns.Count,
+            RowCount = rowCount,
+            Columns = columns,
+            Cells = cells,
+            ColumnKeys = columns.Select(c => c.Key).ToList()
+        };
+    }
+
+    public byte[] BuildExcel(IReadOnlyList<DataSourceColumnDto> columns, IReadOnlyList<DataSourceCellDto> cells)
+    {
+        if (columns is null || columns.Count == 0)
+            throw new InvalidOperationException("منبع ستون معتبری برای خروجی ندارد.");
+
+        using var book = new XLWorkbook();
+        var sheet = book.Worksheets.Add("Data");
+
+        for (var c = 0; c < columns.Count; c++)
+        {
+            var col = columns[c];
+            var header = string.IsNullOrWhiteSpace(col.Title) ? col.Key : col.Title;
+            sheet.Cell(1, c + 1).Value = header ?? "";
+            sheet.Cell(1, c + 1).Style.Font.Bold = true;
+        }
+
+        var byRow = new Dictionary<int, Dictionary<string, string>>();
+        foreach (var cell in cells ?? Array.Empty<DataSourceCellDto>())
+        {
+            var idx = cell.Index;
+            if (!byRow.TryGetValue(idx, out var row))
+            {
+                row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                byRow[idx] = row;
+            }
+            row[cell.Key ?? ""] = cell.CellValue ?? "";
+        }
+
+        var rowIndexes = byRow.Keys.OrderBy(i => i).ToList();
+        for (var r = 0; r < rowIndexes.Count; r++)
+        {
+            var map = byRow[rowIndexes[r]];
+            for (var c = 0; c < columns.Count; c++)
+            {
+                var key = columns[c].Key ?? "";
+                map.TryGetValue(key, out var val);
+                sheet.Cell(r + 2, c + 1).Value = val ?? "";
+            }
+        }
+
+        sheet.Columns().AdjustToContents(1, 40);
+        using var ms = new MemoryStream();
+        book.SaveAs(ms);
+        return ms.ToArray();
+    }
+
+    public async Task<List<DataSourceListItemDto>> ListForUserAsync(int userId, CancellationToken ct = default)
+    {
+        // Own sources plus every public one. A public source is shown inline with the user's own
+        // rather than in a separate page, because it is used the same way — the badge and the hidden
+        // structural buttons are what tell the two apart.
+        var rows = await _db.DataSources.AsNoTracking()
+            .Where(d => d.OwnerUserId == userId || d.IsPublic)
+            .OrderByDescending(d => d.IsPublic)
+            .ThenByDescending(d => d.UpdatedAtUtc)
+            .Select(d => new
+            {
+                d.Id,
+                d.Title,
+                d.FileName,
+                d.ColumnCount,
+                d.RowCount,
+                d.ColumnsJson,
+                d.IsPublic,
+                d.OwnerUserId,
+                OwnerUserName = d.Owner != null ? d.Owner.UserName : null,
+                Links = d.ProcessLinks.Select(l => l.Process!.Title).ToList()
+            })
+            .ToListAsync(ct);
+
+        // Resolved once: whether this user may reshape shared sources at all.
+        var canReshapePublic = await IsProcessManagerOrAdminAsync(userId, ct);
+
+        return rows.Select(d =>
+        {
+            var cols = DeserializeColumns(d.ColumnsJson);
+            return new DataSourceListItemDto
+            {
+                Id = d.Id,
+                Title = d.Title,
+                FileName = d.FileName,
+                ColumnCount = d.ColumnCount,
+                RowCount = d.RowCount,
+                Columns = cols,
+                ColumnKeys = cols.Select(c => c.Key).ToList(),
+                LinkedProcessCount = d.Links.Count,
+                LinkedProcessTitles = d.Links,
+                IsPublic = d.IsPublic,
+                OwnerUserName = d.OwnerUserName,
+                // Mirrors CanReshapeAsync so the list never offers a button the service would refuse.
+                CanEditStructure = d.OwnerUserId == userId || (d.IsPublic && canReshapePublic)
+            };
+        }).ToList();
+    }
+
+    /// <summary>Whether the user carries the role that may shape shared sources.</summary>
+    public async Task<bool> IsProcessManagerOrAdminAsync(int userId, CancellationToken ct = default)
+    {
+        var role = await _db.Users.Where(u => u.Id == userId)
+            .Select(u => (UserRole?)u.Role).FirstOrDefaultAsync(ct);
+        return role is UserRole.ProcessManager or UserRole.Admin;
+    }
+
+    public async Task<List<AdminLibrarySourceRow>> ListAllForAdminAsync(CancellationToken ct = default)
+    {
+        var rows = await _db.DataSources.AsNoTracking()
+            .OrderByDescending(d => d.UpdatedAtUtc)
+            .Select(d => new
+            {
+                d.Id,
+                d.Title,
+                OwnerUserName = d.Owner != null ? d.Owner.UserName : "—",
+                LastEditorUserName = d.LastEditor != null ? d.LastEditor.UserName : null,
+                d.ColumnCount,
+                d.RowCount,
+                d.FileName,
+                d.CreatedAtUtc,
+                d.UpdatedAtUtc,
+                LinkedProcessCount = d.ProcessLinks.Count,
+                Titles = d.ProcessLinks.Select(l => l.Process != null ? l.Process.Title : "?").ToList()
+            })
+            .ToListAsync(ct);
+
+        return rows.Select(d => new AdminLibrarySourceRow
+        {
+            Id = d.Id,
+            Title = d.Title,
+            OwnerUserName = d.OwnerUserName,
+            LastEditorUserName = d.LastEditorUserName,
+            ColumnCount = d.ColumnCount,
+            RowCount = d.RowCount,
+            FileName = d.FileName,
+            CreatedAtUtc = d.CreatedAtUtc,
+            UpdatedAtUtc = d.UpdatedAtUtc,
+            LinkedProcessCount = d.LinkedProcessCount,
+            LinkedProcessTitles = string.Join("، ", d.Titles)
+        }).ToList();
+    }
+
+    public async Task<DataSourceDetailDto?> GetAsync(int userId, int id, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (d is null) return null;
+        var cells = await LoadCellsFromDbAsync(id, ct);
+        if (cells.Count == 0)
+            cells = DeserializeCells(d.CellsJson);
+        return ToDetail(d, cells);
+    }
+
+    /// <summary>Admin-only: load any library source by id (no owner check).</summary>
+    public async Task<DataSourceDetailDto?> GetForAdminAsync(int id, CancellationToken ct = default)
+    {
+        var d = await _db.DataSources.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (d is null) return null;
+        var cells = await LoadCellsFromDbAsync(id, ct);
+        if (cells.Count == 0)
+            cells = DeserializeCells(d.CellsJson);
+        return ToDetail(d, cells);
+    }
+
+    public async Task<UploadDataSourceResponse> CreateAsync(
+        int userId, CreateDataSourceRequest req, EntitlementsDto? entitlements = null, CancellationToken ct = default)
+    {
+        entitlements ??= await ResolveEntitlements(userId, ct);
+        await _entitlements.EnsureCanCreateDataSourceAsync(userId, entitlements, ct);
+
+        var columns = NormalizeColumns(req.Columns, req.ColumnKeys);
+        if (columns.Count == 0)
+            throw new InvalidOperationException("منبع ستون معتبری ندارد.");
+        var cells = req.Cells ?? new List<DataSourceCellDto>();
+        var rowCount = req.RowCount ?? (cells.Count == 0 ? 0 : cells.Max(c => c.Index) + 1);
+        // The row/byte ceiling is checked here as well as on reload: creating a source from a big
+        // file is the other way to grow past what was licensed.
+        EnsureWithinSourceLimits(entitlements, cells);
+        var title = string.IsNullOrWhiteSpace(req.Title)
+            ? $"منبع {DateTime.UtcNow:yyyy-MM-dd HH:mm}"
+            : req.Title.Trim();
+        if (title.Length > 200) title = title[..200];
+
+        var entity = new DataSource
+        {
+            OwnerUserId = userId,
+            Title = title,
+            FileName = Trunc(req.FileName, 260),
+            ColumnCount = req.ColumnCount ?? columns.Count,
+            RowCount = rowCount,
+            ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts),
+            CellsJson = JsonSerializer.Serialize(cells, JsonOpts),
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+            LastEditorUserId = userId > 0 ? userId : null
+        };
+        _db.DataSources.Add(entity);
+        await _db.SaveChangesAsync(ct);
+        await ReplaceAllCellsAsync(entity.Id, cells, ct);
+        entity.DataRevision = 1;
+        entity.CellsJson = JsonSerializer.Serialize(cells, JsonOpts);
+        await _db.SaveChangesAsync(ct);
+        return ToUploadResponse(entity, columns, cells);
+    }
+
+    /// <summary>
+    /// Create a shared source that every signed-in user can read and use as an action target.
+    /// </summary>
+    /// <remarks>
+    /// Restricted to ProcessManager/Admin: a public source is visible to everyone, so creating one
+    /// is a team-level decision, not a personal one. The creator stays the owner, which means the
+    /// row counts against their plan quota exactly like a private source — the point of that choice
+    /// is that "public" must not become a way to hold unlimited data for free.
+    /// </remarks>
+    public async Task<UploadDataSourceResponse> CreatePublicAsync(
+        int userId, CreateDataSourceRequest req, EntitlementsDto? entitlements = null, CancellationToken ct = default)
+    {
+        if (!await IsProcessManagerOrAdminAsync(userId, ct))
+            throw new InvalidOperationException("ساخت منبع عمومی فقط برای نقش مدیر فرآیند یا مدیر سیستم مجاز است.");
+
+        var created = await CreateAsync(userId, req, entitlements, ct);
+        var entity = await _db.DataSources.FirstAsync(d => d.Id == created.Id, ct);
+        // CreateAsync deliberately mirrors the private path; the only difference of a public source
+        // is this flag, so it is set after the fact rather than duplicating the whole creation body.
+        entity.IsPublic = true;
+        await _db.SaveChangesAsync(ct);
+        created.IsPublic = true;
+        return created;
+    }
+
+    /// <summary>Flip an existing source between private and public. Creator only.</summary>
+    public async Task<bool> SetPublicAsync(int userId, int id, bool isPublic, CancellationToken ct = default)
+    {
+        var entity = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (entity is null || entity.OwnerUserId != userId) return false;
+        if (isPublic && !await IsProcessManagerOrAdminAsync(userId, ct))
+            throw new InvalidOperationException("عمومی‌کردن منبع فقط برای نقش مدیر فرآیند یا مدیر سیستم مجاز است.");
+        entity.IsPublic = isPublic;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    public async Task<DataSourceMetaDto?> GetMetaAsync(int userId, int id, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        return d is null ? null : ToMeta(d);
+    }
+
+    public async Task<DataSourceCellValueDto?> GetCellAsync(
+        int userId, int id, int rowIndex, string columnKey, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (d is null) return null;
+        var key = (columnKey ?? "").Trim();
+        if (string.IsNullOrEmpty(key)) return null;
+        var cell = await _db.DataSourceCells.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.DataSourceId == id && c.RowIndex == rowIndex && c.ColumnKey == key, ct);
+        return new DataSourceCellValueDto
+        {
+            DataSourceId = id,
+            RowIndex = rowIndex,
+            ColumnKey = key,
+            CellValue = cell?.CellValue ?? "",
+            DataRevision = d.DataRevision,
+            CellRevision = cell?.CellRevision ?? 0
+        };
+    }
+
+    public async Task<DataSourceRowDto?> GetRowAsync(
+        int userId, int id, int rowIndex, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (d is null) return null;
+        var cells = await _db.DataSourceCells.AsNoTracking()
+            .Where(c => c.DataSourceId == id && c.RowIndex == rowIndex)
+            .ToListAsync(ct);
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in cells)
+            map[c.ColumnKey] = c.CellValue ?? "";
+        return new DataSourceRowDto
+        {
+            RowIndex = rowIndex,
+            Values = map,
+            DataRevision = Math.Max(d.DataRevision, cells.Count == 0 ? 0 : cells.Max(c => c.CellRevision))
+        };
+    }
+
+    /// <summary>
+    /// Bulk row page for "view all rows" screens: one round trip instead of one request per row.
+    /// Optionally filtered to a column-key set so callers only pull what they render.
+    /// </summary>
+    public async Task<DataSourcePageDto?> GetRowsPageAsync(
+        int userId, int id, int fromRow, int count, IReadOnlyList<string>? columnKeys, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (d is null) return null;
+        if (fromRow < 0) fromRow = 0;
+        count = Math.Clamp(count, 1, 5000);
+
+        var q = _db.DataSourceCells.AsNoTracking()
+            .Where(c => c.DataSourceId == id && c.RowIndex >= fromRow && c.RowIndex < fromRow + count);
+
+        if (columnKeys is { Count: > 0 })
+        {
+            var keys = columnKeys.Where(k => !string.IsNullOrWhiteSpace(k)).Select(k => k.Trim()).Distinct().ToList();
+            if (keys.Count > 0)
+                q = q.Where(c => keys.Contains(c.ColumnKey));
+        }
+
+        var rows = await q
+            .OrderBy(c => c.RowIndex)
+            .ThenBy(c => c.ColumnKey)
+            .Select(c => new
+            {
+                c.RowIndex,
+                c.ColumnKey,
+                c.CellValue,
+                c.CellRevision,
+                c.LastEditorUserId,
+                c.UpdatedAtUtc
+            })
+            .ToListAsync(ct);
+
+        var byRow = new Dictionary<int, DataSourceRowDto>();
+        var revisions = new Dictionary<int, Dictionary<string, long>>();
+        // Only cells a person actually touched carry an editor stamp, so resolve those names in one
+        // extra query rather than joining the user table into the hot row query.
+        var meta = new Dictionary<int, Dictionary<string, DataSourceCellMetaDto>>();
+        var editorIds = rows.Where(r => r.LastEditorUserId is > 0)
+            .Select(r => r.LastEditorUserId!.Value)
+            .Distinct()
+            .ToList();
+        var editorNames = editorIds.Count == 0
+            ? new Dictionary<int, string>()
+            : (await _db.Users.AsNoTracking()
+                .Where(u => editorIds.Contains(u.Id))
+                .Select(u => new { u.Id, u.UserName, u.FirstName, u.LastName })
+                .ToListAsync(ct))
+                .ToDictionary(
+                    u => u.Id,
+                    u =>
+                    {
+                        var full = string.Join(" ",
+                            new[] { u.FirstName, u.LastName }.Where(p => !string.IsNullOrWhiteSpace(p)));
+                        return string.IsNullOrWhiteSpace(full) ? u.UserName : full.Trim();
+                    });
+
+        long maxCellRevision = 0;
+        foreach (var c in rows)
+        {
+            if (!byRow.TryGetValue(c.RowIndex, out var row))
+            {
+                row = new DataSourceRowDto { RowIndex = c.RowIndex };
+                byRow[c.RowIndex] = row;
+                revisions[c.RowIndex] = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+                meta[c.RowIndex] = new Dictionary<string, DataSourceCellMetaDto>(StringComparer.OrdinalIgnoreCase);
+            }
+            row.Values[c.ColumnKey] = c.CellValue ?? "";
+            revisions[c.RowIndex][c.ColumnKey] = c.CellRevision;
+            meta[c.RowIndex][c.ColumnKey] = new DataSourceCellMetaDto
+            {
+                UserId = c.LastEditorUserId,
+                UserName = c.LastEditorUserId is int uid && editorNames.TryGetValue(uid, out var name) ? name : null,
+                UpdatedAtUtc = c.UpdatedAtUtc
+            };
+            if (c.CellRevision > maxCellRevision) maxCellRevision = c.CellRevision;
+        }
+
+        var cols = DeserializeColumns(d.ColumnsJson);
+        return new DataSourcePageDto
+        {
+            Id = d.Id,
+            Title = d.Title,
+            Columns = cols,
+            ColumnKeys = cols.Select(c => c.Key).ToList(),
+            FromRow = fromRow,
+            Count = count,
+            ColumnCount = d.ColumnCount,
+            RowCount = Math.Max(d.RowCount, byRow.Count == 0 ? 0 : byRow.Keys.Max() + 1),
+            DataRevision = d.DataRevision == 0 ? maxCellRevision : d.DataRevision,
+            HexRevision = BuildRevisionToken(rows.Select(r => (r.RowIndex, r.ColumnKey, r.CellRevision))),
+            Rows = byRow.Values.OrderBy(r => r.RowIndex).ToList(),
+            CellRevisions = revisions,
+            CellMeta = meta
+        };
+    }
+
+    /// <summary>Stable token over the returned cell revisions — lets callers skip re-rendering unchanged pages.</summary>
+    public static string BuildRevisionToken(IEnumerable<(int row, string col, long rev)> cells)
+    {
+        var sb = new StringBuilder();
+        foreach (var (row, col, rev) in cells.OrderBy(c => c.row).ThenBy(c => c.col, StringComparer.Ordinal))
+            sb.Append(row).Append(':').Append(col).Append(':').Append(rev).Append(';');
+        if (sb.Length == 0) return "0";
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(bytes, 0, 8).ToLowerInvariant();
+    }
+
+    private const string InsertModeReplace = "replace";
+    private const string InsertModePrepend = "prepend";
+    private const string InsertModeAppend = "append";
+
+    /// <summary>Normalise an insert mode — anything missing or unknown means a plain overwrite.</summary>
+    static string NormalizeInsertMode(string? mode) => (mode ?? "").Trim().ToLowerInvariant() switch
+    {
+        "prepend" => InsertModePrepend,
+        "append" => InsertModeAppend,
+        _ => InsertModeReplace
+    };
+
+    /// <summary>
+    /// Join an incoming value with the one already in the cell, for Prepend/Append.
+    ///
+    /// An empty previous value has nothing to join with, so the incoming value is stored as-is — a
+    /// lone separator would be noise the author never asked for.
+    /// </summary>
+    internal static string ComposeInsertValue(string? previous, string? incoming, string? mode, string? separator)
+    {
+        var prev = previous ?? "";
+        var text = incoming ?? "";
+        if (prev.Length == 0) return text;
+        var sep = separator ?? "";
+        return NormalizeInsertMode(mode) switch
+        {
+            InsertModeAppend => prev + sep + text,
+            InsertModePrepend => text + sep + prev,
+            _ => text
+        };
+    }
+
+    public async Task<PatchDataSourceCellResponse> PatchCellAsync(
+        int userId, int id, PatchDataSourceCellRequest req, CancellationToken ct = default)
+    {
+        var key = (req.ColumnKey ?? "").Trim();
+        if (string.IsNullOrEmpty(key) || req.RowIndex < 0)
+        {
+            return new PatchDataSourceCellResponse
+            {
+                Ok = false,
+                Message = "ردیف یا ستون نامعتبر است."
+            };
+        }
+
+        var d = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (d is null)
+        {
+            return new PatchDataSourceCellResponse { Ok = false, Message = "forbidden" };
+        }
+
+        var value = req.CellValue ?? "";
+        var expectedRev = req.ExpectedCellRevision;
+        var insertMode = NormalizeInsertMode(req.InsertMode);
+
+        // A cell write that lands on a NEW row is exactly how "insert into the source" grows the
+        // table, so the row/byte ceiling has to be checked here too — otherwise the action could
+        // add rows one cell at a time past the cap the create/reload/add-rows paths enforce.
+        var (_, currentRows) = await GetDerivedCountersAsync(id, ct);
+        currentRows = Math.Max(currentRows, d.RowCount);
+        if (req.RowIndex >= currentRows)
+        {
+            // Whoever owns the source carries its ceiling. For a public source that is the creator
+            // (the ProcessManager who shared it), not the writer: charging a user's small plan for
+            // growing a team source would make the shared source unusable the moment anyone used it.
+            var entitlements = await ResolveEntitlements(d.OwnerUserId == userId ? userId : d.OwnerUserId, ct);
+            var projectedRows = req.RowIndex + 1;
+            var storedBytes = await _db.DataSourceCells.AsNoTracking()
+                .Where(c => c.DataSourceId == id)
+                .SumAsync(c => (long?)c.CellValue.Length) ?? 0L;
+            // Values are stored as text; measuring the UTF-8 size is what the ceiling is stated in.
+            var projectedBytes = storedBytes + Encoding.UTF8.GetByteCount(value);
+            var error = EntitlementService.CheckSourceLimits(entitlements, projectedRows, projectedBytes);
+            if (error is not null)
+            {
+                return new PatchDataSourceCellResponse
+                {
+                    Ok = false,
+                    Code = SourceLimitExceededException.Code,
+                    Message = error,
+                    DataRevision = d.DataRevision
+                };
+            }
+        }
+
+        // One shot, no server-side retry loop: the caller (player/editor) owns retry policy.
+        // Retrying here while holding a transaction would keep a row lock alive and make
+        // concurrent writers on *different* cells of the same source queue up.
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var ds = await _db.DataSources.FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (ds is null)
+            {
+                await tx.RollbackAsync(ct);
+                return new PatchDataSourceCellResponse { Ok = false, Message = "forbidden" };
+            }
+
+            var locked = await _db.DataSourceCells
+                .FromSqlInterpolated(
+                    $"SELECT * FROM DataSourceCells WITH (UPDLOCK, ROWLOCK) WHERE DataSourceId = {id} AND RowIndex = {req.RowIndex} AND ColumnKey = {key}")
+                .AsTracking()
+                .FirstOrDefaultAsync(ct);
+
+            if (locked is not null
+                && expectedRev is long exp
+                && locked.CellRevision != exp)
+            {
+                await tx.RollbackAsync(ct);
+                var conflictingEditor = await ResolveEditorNameAsync(locked.LastEditorUserId, ct);
+                return new PatchDataSourceCellResponse
+                {
+                    Ok = false,
+                    Conflict = true,
+                    Message = "سلول توسط کاربر دیگری تغییر کرده است.",
+                    DataRevision = ds.DataRevision,
+                    CurrentDataRevision = ds.DataRevision,
+                    CurrentCellRevision = locked.CellRevision,
+                    CurrentCellValue = locked.CellValue,
+                    CurrentCellUserId = locked.LastEditorUserId,
+                    CurrentCellUserName = conflictingEditor,
+                    CurrentCellUpdatedAtUtc = locked.UpdatedAtUtc
+                };
+            }
+
+            // Prepend/Append compose the incoming value with the one already in the cell — inside the
+            // same row lock the write takes. Reading it outside the transaction would let two writers
+            // both start from the same old value and lose one another's addition.
+            if (insertMode != InsertModeReplace)
+                value = ComposeInsertValue(locked?.CellValue, value, insertMode, req.InsertSeparator);
+
+            if (locked is null)
+            {
+                // A concurrent writer may have inserted the same cell between our lock attempt and now.
+                var exists = await _db.DataSourceCells.AsNoTracking()
+                    .AnyAsync(c => c.DataSourceId == id && c.RowIndex == req.RowIndex && c.ColumnKey == key, ct);
+                if (exists)
+                {
+                    await tx.RollbackAsync(ct);
+                    return new PatchDataSourceCellResponse
+                    {
+                        Ok = false,
+                        Conflict = true,
+                        Message = "سلول همزمان توسط نویسنده دیگری ایجاد شد."
+                    };
+                }
+
+                locked = new DataSourceCell
+                {
+                    DataSourceId = id,
+                    RowIndex = req.RowIndex,
+                    ColumnKey = key,
+                    CellValue = value,
+                    CellRevision = 1,
+                    LastEditorUserId = userId > 0 ? userId : null,
+                    UpdatedAtUtc = DateTime.UtcNow
+                };
+                _db.DataSourceCells.Add(locked);
+            }
+            else
+            {
+                locked.CellValue = value;
+                locked.CellRevision++;
+                // Provenance travels with the value: the tooltip must name whoever wrote the number
+                // the user is looking at, not the source's owner.
+                locked.LastEditorUserId = userId > 0 ? userId : null;
+                locked.UpdatedAtUtc = DateTime.UtcNow;
+            }
+
+            // Do NOT touch the DataSources row on the hot path: writing DataRevision/RowCount/
+            // UpdatedAtUtc here would take a second lock on the parent row and serialise every
+            // writer of this source, even when they edit entirely different cells.
+            // DataRevision is derived from MAX(CellRevision) and RowCount from MAX(RowIndex).
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            // Parent row is untouched on purpose, so report the derived source revision.
+            var (derivedRevision, _) = await GetDerivedCountersAsync(id, ct);
+            var editorName = await ResolveEditorNameAsync(locked.LastEditorUserId, ct);
+
+            return new PatchDataSourceCellResponse
+            {
+                Ok = true,
+                DataRevision = Math.Max(derivedRevision, locked.CellRevision),
+                CellRevision = locked.CellRevision,
+                CellValue = value,
+                LastEditorUserId = locked.LastEditorUserId,
+                LastEditorUserName = editorName,
+                UpdatedAtUtc = locked.UpdatedAtUtc
+            };
+        }
+        catch (Exception ex)
+        {
+            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+            _log.LogDebug(ex, "PatchCell failed ds={Ds} r={Row} c={Col}", id, req.RowIndex, key);
+            return new PatchDataSourceCellResponse
+            {
+                Ok = false,
+                Message = "نوشتن سلول انجام نشد — دوباره تلاش کنید."
+            };
+        }
+    }
+
+    /// <summary>Derived counters — avoids writing the parent row on every cell write.</summary>
+    public async Task<(long dataRevision, int rowCount)> GetDerivedCountersAsync(int id, CancellationToken ct = default)
+    {
+        var agg = await _db.DataSourceCells.AsNoTracking()
+            .Where(c => c.DataSourceId == id)
+            .GroupBy(c => 1)
+            .Select(g => new
+            {
+                MaxCellRevision = g.Max(c => (long?)c.CellRevision) ?? 0L,
+                MaxRowIndex = g.Max(c => (int?)c.RowIndex) ?? -1
+            })
+            .FirstOrDefaultAsync(ct);
+        return (agg?.MaxCellRevision ?? 0L, (agg?.MaxRowIndex ?? -1) + 1);
+    }
+
+    async Task ReplaceAllCellsAsync(int dataSourceId, IReadOnlyList<DataSourceCellDto> cells, CancellationToken ct)
+    {
+        var existing = await _db.DataSourceCells.Where(c => c.DataSourceId == dataSourceId).ToListAsync(ct);
+        if (existing.Count > 0)
+            _db.DataSourceCells.RemoveRange(existing);
+        foreach (var c in cells ?? Array.Empty<DataSourceCellDto>())
+        {
+            var key = (c.Key ?? "").Trim();
+            if (string.IsNullOrEmpty(key)) continue;
+            _db.DataSourceCells.Add(new DataSourceCell
+            {
+                DataSourceId = dataSourceId,
+                RowIndex = c.Index,
+                ColumnKey = key,
+                CellValue = c.CellValue ?? ""
+            });
+        }
+        await _db.SaveChangesAsync(ct);
+    }
+
+    async Task<List<DataSourceCellDto>> LoadCellsFromDbAsync(int dataSourceId, CancellationToken ct)
+    {
+        return await _db.DataSourceCells.AsNoTracking()
+            .Where(c => c.DataSourceId == dataSourceId)
+            .OrderBy(c => c.RowIndex)
+            .ThenBy(c => c.ColumnKey)
+            .Select(c => new DataSourceCellDto
+            {
+                Key = c.ColumnKey,
+                Index = c.RowIndex,
+                CellValue = c.CellValue
+            })
+            .ToListAsync(ct);
+    }
+
+    async Task<DataSource?> GetAccessibleAsync(int userId, int dataSourceId, bool write, CancellationToken ct)
+    {
+        var ds = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == dataSourceId, ct);
+        if (ds is null) return null;
+        if (ds.OwnerUserId == userId)
+        {
+            await EnsureLegacyCellsMaterializedAsync(ds, ct);
+            return ds;
+        }
+
+        // A public source is usable by everyone for the things a run does to it — reading cells and
+        // writing values (this `write` flag covers exactly that in every current caller: cell patch,
+        // row add/delete, reload). Reshaping it (add/rename/remove column) never comes through here;
+        // those callers go through EnsureCanReshapePublicSource instead.
+        if (ds.IsPublic)
+        {
+            await EnsureLegacyCellsMaterializedAsync(ds, ct);
+            return ds;
+        }
+
+        var can = await (
+            from l in _db.ProcessDataSources
+            where l.DataSourceId == dataSourceId
+            join p in _db.Processes on l.ProcessId equals p.Id
+            where p.CreatorUserId == userId
+                  || _db.ProcessShares.Any(s =>
+                      s.ProcessId == p.Id && s.UserId == userId
+                      && (!write || s.CanChangeDataSource || s.CanEdit))
+            select l.ProcessId
+        ).AnyAsync(ct);
+        if (!can) return null;
+        await EnsureLegacyCellsMaterializedAsync(ds, ct);
+        return ds;
+    }
+
+    /// <summary>
+    /// Whether this user may change the SHAPE of a source: add, rename or remove a column.
+    /// </summary>
+    /// <remarks>
+    /// Public sources are shared, so their structure is deliberately not up for grabs: a column
+    /// removed by one user's debugging would silently break every process bound to it, and the
+    /// editor's column picker has no way to warn about that across owners. Values and rows are
+    /// shared; the shape is owned. The owner of a private source keeps full control of it here.
+    /// </remarks>
+    async Task<bool> CanReshapeAsync(DataSource ds, int userId, CancellationToken ct)
+    {
+        if (ds.OwnerUserId == userId) return true;
+        if (!ds.IsPublic) return false;
+        return await IsProcessManagerOrAdminAsync(userId, ct);
+    }
+
+    /// <summary>Throws when the user may not reshape this source. Returns the entity when they may.</summary>
+    async Task<DataSource> GetReshapableAsync(int userId, int id, CancellationToken ct)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: true, ct)
+            ?? throw new InvalidOperationException("منبع پیدا نشد یا دسترسی ندارید.");
+        if (!await CanReshapeAsync(d, userId, ct))
+            throw new InvalidOperationException("تغییر ساختار منبع عمومی مجاز نیست. فقط مقادیر و ردیف‌ها قابل تغییرند.");
+        return d;
+    }
+
+    /// <summary>
+    /// Guard for the legacy CellsJson materialisation. Cached per service instance so the common
+    /// read path does not pay an extra EXISTS query on every single cell access.
+    /// </summary>
+    private readonly HashSet<int> _materializedChecked = new();
+
+    async Task EnsureLegacyCellsMaterializedAsync(DataSource d, CancellationToken ct)
+    {
+        if (!_materializedChecked.Add(d.Id)) return;
+        if (await _db.DataSourceCells.AnyAsync(c => c.DataSourceId == d.Id, ct))
+            return;
+        var legacy = DeserializeCells(d.CellsJson);
+        if (legacy.Count == 0) return;
+        await ReplaceAllCellsAsync(d.Id, legacy, ct);
+        if (d.DataRevision == 0)
+        {
+            d.DataRevision = 1;
+            d.UpdatedAtUtc = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
+    }
+
+    /// <summary>Rename library source and mirror title into linked process GraphJson snapshots.</summary>
+    public async Task<(bool ok, string? error, List<int> linkedProcessIds)> UpdateTitleAsync(
+        int userId, int id, string? title, CancellationToken ct = default)
+    {
+        var trimmed = (title ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return (false, "عنوان منبع لازم است.", new List<int>());
+        if (trimmed.Length > 200) trimmed = trimmed[..200];
+
+        var entity = await _db.DataSources
+            .Include(d => d.ProcessLinks)
+            .FirstOrDefaultAsync(d => d.Id == id && d.OwnerUserId == userId, ct);
+        if (entity is null) return (false, "notfound", new List<int>());
+
+        entity.Title = trimmed;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        StampDataEditor(entity, userId);
+        var processIds = entity.ProcessLinks.Select(l => l.ProcessId).Distinct().ToList();
+        await _db.SaveChangesAsync(ct);
+
+        foreach (var pid in processIds)
+        {
+            try { await PatchSourceTitleInProcessGraphAsync(pid, id, trimmed, ct); }
+            catch (Exception ex) { _log.LogWarning(ex, "Patch source title {Ds} on process {P}", id, pid); }
+        }
+        return (true, null, processIds);
+    }
+
+    /// <summary>
+    /// Column→node bindings a process node can use to read a library source. The JSON property for
+    /// the bound column always sits next to the property holding the source id, so the pair is
+    /// declared once here and reused by the dependency scan.
+    /// </summary>
+    private static readonly (string IdProp, string ColumnProp, string Binding)[] ColumnBindings =
+    {
+        ("dataSourceId", "dynamicSourceColumnName", "value"),
+        ("sourceId", "dynamicSourceColumnName", "value"),
+        ("selectorDataSourceId", "selectorDynamicColumn", "selector"),
+        ("equalSelectorDataSourceId", "equalSelectorDynamicColumn", "equalSelector"),
+        ("attributeDataSourceId", "attributeDynamicColumn", "attribute"),
+        ("equalAttributeDataSourceId", "equalAttributeDynamicColumn", "equalAttribute"),
+        ("saveDataSourceId", "saveColumnName", "save")
+    };
+
+    /// <summary>
+    /// Re-bind nodes that kept a column name but lost the source id when their source was detached.
+    /// </summary>
+    /// <remarks>
+    /// Detaching a source deliberately keeps the column name on each node (only the numeric id is
+    /// cleared). That is what makes this repair possible: when a source is attached whose columns
+    /// carry those same names, the node is wired back up automatically instead of the operator having
+    /// to re-pick every column by hand. Names are compared case-insensitively because the legacy
+    /// data and the hand-written graphs both vary in casing.
+    ///
+    /// Only nodes with NO source id are touched — a node already bound to another source keeps its
+    /// binding, so attaching a second source can never silently steal an existing one.
+    /// </remarks>
+    private async Task<int> RebindOrphanedColumnsAsync(int processId, DataSource ds, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return 0;
+
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+
+        JsonObject? body;
+        try { body = JsonNode.Parse(bodyJson) as JsonObject; }
+        catch { return 0; }
+        if (body?["nodes"] is not JsonArray nodes) return 0;
+
+        var available = DeserializeColumns(ds.ColumnsJson)
+            .Select(c => c.Key?.Trim())
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (available.Count == 0) return 0;
+
+        var repaired = 0;
+        foreach (var n in nodes)
+        {
+            if (n is not JsonObject no) continue;
+            foreach (var (idProp, columnProp, _) in ColumnBindings)
+            {
+                // A node that still points at some source is not orphaned — leave it alone.
+                if (no[idProp]?.GetValue<int?>() is not null) continue;
+                var bound = ReadString(no, columnProp);
+                if (string.IsNullOrWhiteSpace(bound)) continue;
+                if (!available.Contains(bound.Trim())) continue;
+
+                no[idProp] = ds.Id;
+                repaired++;
+            }
+        }
+        if (repaired == 0) return 0;
+
+        process.GraphJson = envelope is null
+            ? body.ToJsonString(JsonOpts)
+            : EnvelopeWithBody(envelope, body).ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        _log.LogInformation("Re-bound {Count} orphaned column(s) on process {P} to source {Ds}",
+            repaired, processId, ds.Id);
+        return repaired;
+    }
+
+    /// <summary>
+    /// Compare an incoming column set against the columns live process nodes currently read.
+    ///
+    /// Replacing a source's file used to be an all-or-nothing overwrite: dropping a column silently
+    /// broke every step bound to it, and the failure only showed up mid-play. This returns the exact
+    /// process / node list so the operator can be told before anything is written.
+    /// </summary>
+    public async Task<ColumnCompatibilityDto?> AnalyzeColumnCompatibilityAsync(
+        int userId, int dataSourceId, IReadOnlyList<string> incomingColumnKeys, CancellationToken ct = default)
+    {
+        var ds = await GetAccessibleAsync(userId, dataSourceId, write: true, ct);
+        if (ds is null) return null;
+
+        var current = DeserializeColumns(ds.ColumnsJson);
+        return await BuildCompatibilityAsync(ds, current, incomingColumnKeys, ct);
+    }
+
+    private async Task<ColumnCompatibilityDto> BuildCompatibilityAsync(
+        DataSource ds, List<DataSourceColumnDto> current, IReadOnlyList<string> incomingColumnKeys, CancellationToken ct)
+    {
+        var incoming = (incomingColumnKeys ?? Array.Empty<string>())
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Select(k => k.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var incomingSet = new HashSet<string>(incoming, StringComparer.OrdinalIgnoreCase);
+        var currentKeys = current.Where(c => !string.IsNullOrWhiteSpace(c.Key)).Select(c => c.Key.Trim()).ToList();
+
+        var dto = new ColumnCompatibilityDto
+        {
+            DataSourceId = ds.Id,
+            DataSourceTitle = ds.Title,
+            CurrentColumnKeys = currentKeys,
+            IncomingColumnKeys = incoming,
+            AddedColumnKeys = incoming.Where(k => !currentKeys.Contains(k, StringComparer.OrdinalIgnoreCase)).ToList()
+        };
+
+        // Columns present today but absent from the new file — only these can break a node.
+        var dropped = current
+            .Where(c => !string.IsNullOrWhiteSpace(c.Key) && !incomingSet.Contains(c.Key.Trim()))
+            .ToList();
+
+        var processIds = await _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.DataSourceId == ds.Id)
+            .Select(l => l.ProcessId)
+            .Distinct()
+            .ToListAsync(ct);
+        if (processIds.Count == 0) return dto;
+
+        var processes = await _db.Processes.AsNoTracking()
+            .Where(p => processIds.Contains(p.Id))
+            .Select(p => new { p.Id, p.Title, p.GraphJson })
+            .ToListAsync(ct);
+
+        var affectedNodes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var droppedCol in dropped)
+        {
+            var missing = new MissingColumnDto
+            {
+                ColumnKey = droppedCol.Key.Trim(),
+                ColumnTitle = string.IsNullOrWhiteSpace(droppedCol.Title) ? droppedCol.Key.Trim() : droppedCol.Title.Trim()
+            };
+            foreach (var p in processes)
+            {
+                foreach (var hit in FindColumnUsages(p.GraphJson, ds.Id, droppedCol.Key))
+                {
+                    hit.ProcessId = p.Id;
+                    hit.ProcessTitle = p.Title;
+                    missing.Nodes.Add(hit);
+                    affectedNodes.Add($"{p.Id}:{hit.NodeId}:{hit.Binding}");
+                }
+            }
+            if (missing.Nodes.Count > 0) dto.MissingColumns.Add(missing);
+        }
+        dto.AffectedNodeCount = affectedNodes.Count;
+        return dto;
+    }
+
+    /// <summary>
+    /// Walk a process graph for nodes bound to <paramref name="dataSourceId"/> whose bound column
+    /// equals <paramref name="columnKey"/>. Handles the plain graph and the envelope wrapper.
+    /// </summary>
+    private static List<ColumnDependencyNodeDto> FindColumnUsages(string? graphJson, int dataSourceId, string columnKey)
+    {
+        var hits = new List<ColumnDependencyNodeDto>();
+        graphJson = GraphJsonHelper.UnwrapEnvelope(graphJson);
+        if (string.IsNullOrWhiteSpace(graphJson)) return hits;
+
+        JsonObject? root;
+        try { root = JsonNode.Parse(graphJson) as JsonObject; }
+        catch { return hits; }
+        if (root is null) return hits;
+
+        if (root["nodes"] is not JsonArray nodes) return hits;
+
+        foreach (var n in nodes)
+        {
+            if (n is not JsonObject no) continue;
+
+            var nodeId = ReadString(no, "id") ?? ReadString(no, "Id") ?? "";
+            var kind = ReadString(no, "kind") ?? ReadString(no, "Kind") ?? "";
+            var nodeTitle = ReadString(no, "title") ?? ReadString(no, "Title") ?? "";
+
+            foreach (var (idProp, columnProp, binding) in ColumnBindings)
+            {
+                if (no[idProp]?.GetValue<int?>() != dataSourceId) continue;
+                var bound = ReadString(no, columnProp);
+                if (string.IsNullOrWhiteSpace(bound)) continue;
+                if (!string.Equals(bound.Trim(), columnKey.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+                if (hits.Any(h => h.NodeId == nodeId && h.Binding == binding)) continue;
+
+                hits.Add(new ColumnDependencyNodeDto
+                {
+                    NodeId = nodeId,
+                    Kind = kind,
+                    NodeTitle = string.IsNullOrWhiteSpace(nodeTitle) ? nodeId : nodeTitle,
+                    Binding = binding
+                });
+            }
+        }
+        return hits;
+    }
+
+    private static string? ReadString(JsonObject obj, string prop)
+    {
+        var node = obj[prop];
+        if (node is null) return null;
+        try { return node.GetValue<string>(); }
+        catch { return node.ToJsonString()?.Trim('"'); }
+    }
+
+    /// <summary>
+    /// Push a new file's content over an existing library source, keeping its id, title and links.
+    ///
+    /// A column that live nodes still read is refused unless <paramref name="req"/>.Force is set, so
+    /// an accidental column rename in Excel cannot quietly break a working process.
+    /// </summary>
+    public async Task<ReloadDataSourceResponse> ReloadContentAsync(
+        int userId, int id, ReloadDataSourceRequest req, CancellationToken ct = default)
+    {
+        var entity = await _db.DataSources
+            .Include(d => d.ProcessLinks)
+            .FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (entity is null)
+            return new ReloadDataSourceResponse { Ok = false, Code = "notfound", Message = "منبع پیدا نشد." };
+        if (await GetAccessibleAsync(userId, id, write: true, ct) is null)
+            return new ReloadDataSourceResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = NormalizeColumns(req.Columns, req.ColumnKeys);
+        if (columns.Count == 0)
+            return new ReloadDataSourceResponse
+            {
+                Ok = false,
+                Code = "invalid",
+                Message = "فایل اکسل ستون معتبری ندارد (ردیف اول باید هدر باشد)."
+            };
+
+        var current = DeserializeColumns(entity.ColumnsJson);
+        var compatibility = await BuildCompatibilityAsync(
+            entity, current, columns.Select(c => c.Key).ToList(), ct);
+        if (compatibility.HasBlockingMissingColumns && !req.Force)
+        {
+            return new ReloadDataSourceResponse
+            {
+                Ok = false,
+                Code = "blocked-missing-columns",
+                Message = "برخی ستون‌ها حذف شده‌اند ولی گره‌هایی از فرآیند به آن‌ها وابسته‌اند.",
+                DataSourceId = entity.Id,
+                DataSourceTitle = entity.Title,
+                Compatibility = compatibility
+            };
+        }
+
+        var cells = req.Cells ?? new List<DataSourceCellDto>();
+        // Cells for columns that no longer exist would be invisible but still counted, so drop them.
+        var columnSet = new HashSet<string>(columns.Select(c => c.Key.Trim()), StringComparer.OrdinalIgnoreCase);
+        cells = cells
+            .Where(c => !string.IsNullOrWhiteSpace(c.Key) && columnSet.Contains(c.Key.Trim()))
+            .ToList();
+        var rowCount = req.RowCount ?? (cells.Count == 0 ? 0 : cells.Max(c => c.Index) + 1);
+
+        // A reload replaces the whole content, so it is a first-class way to break the ceiling.
+        var entitlements = await ResolveEntitlements(userId, ct);
+        try
+        {
+            EnsureWithinSourceLimits(entitlements, cells);
+        }
+        catch (SourceLimitExceededException ex)
+        {
+            return new ReloadDataSourceResponse
+            {
+                Ok = false,
+                Code = SourceLimitExceededException.Code,
+                Message = ex.Message,
+                DataSourceId = entity.Id,
+                DataSourceTitle = entity.Title
+            };
+        }
+
+        entity.FileName = Trunc(req.FileName, 260) ?? entity.FileName;
+        entity.ColumnCount = req.ColumnCount ?? columns.Count;
+        entity.RowCount = rowCount;
+        entity.ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts);
+        entity.CellsJson = JsonSerializer.Serialize(cells, JsonOpts);
+        entity.DataRevision += 1;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        StampDataEditor(entity, userId);
+        await _db.SaveChangesAsync(ct);
+
+        await ReplaceAllCellsAsync(entity.Id, cells, ct);
+
+        var processIds = entity.ProcessLinks.Select(l => l.ProcessId).Distinct().ToList();
+        foreach (var pid in processIds)
+        {
+            try { await RefreshSourceSnapshotInProcessGraphAsync(pid, entity, ct); }
+            catch (Exception ex) { _log.LogWarning(ex, "Refresh source {Ds} snapshot on process {P}", id, pid); }
+        }
+
+        return new ReloadDataSourceResponse
+        {
+            Ok = true,
+            DataSourceId = entity.Id,
+            DataSourceTitle = entity.Title,
+            ColumnCount = entity.ColumnCount,
+            RowCount = entity.RowCount,
+            ColumnKeys = columns.Select(c => c.Key).ToList(),
+            DataRevision = entity.DataRevision,
+            Compatibility = compatibility
+        };
+    }
+
+    /// <summary>
+    /// Re-stamp the linked process graphs with this source's new shape (columnKeys/columns/rowCount)
+    /// so an open editor does not keep offering columns the source no longer has.
+    /// </summary>
+    private async Task RefreshSourceSnapshotInProcessGraphAsync(int processId, DataSource ds, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return;
+
+        // Stored graphs come in two shapes: a plain graph, or an envelope whose real body lives in a
+        // "graphJson" string. Unwrap first — reading dataSources off the envelope root finds an empty
+        // array and silently patches nothing.
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+
+        JsonObject? body;
+        try { body = JsonNode.Parse(bodyJson) as JsonObject; }
+        catch { return; }
+        if (body is null) return;
+        if (body["dataSources"] is not JsonArray arr) return;
+
+        var changed = false;
+        for (var i = 0; i < arr.Count; i++)
+        {
+            if (arr[i] is not JsonObject o) continue;
+            var sid = o["id"]?.GetValue<int?>() ?? o["Id"]?.GetValue<int?>();
+            if (sid != ds.Id) continue;
+            arr[i] = ToGraphNode(ds);
+            changed = true;
+        }
+        if (!changed) return;
+
+        process.GraphJson = envelope is null
+            ? body.ToJsonString(JsonOpts)
+            : EnvelopeWithBody(envelope, body).ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    private static JsonObject EnvelopeWithBody(JsonObject envelope, JsonObject body)
+    {
+        envelope["graphJson"] = body.ToJsonString(JsonOpts);
+        // The envelope mirrors the body's source list for list views; keep the two in step.
+        if (body["dataSources"] is JsonArray sources)
+            envelope["dataSources"] = JsonNode.Parse(sources.ToJsonString())!.AsArray();
+        return envelope;
+    }
+
+    /// <summary>
+    /// Append (or insert) a column on a library source.
+    ///
+    /// Adding a column is harmless to running processes — nothing binds to it yet — so unlike a
+    /// reload this needs no compatibility check. The key must stay unique inside the source because
+    /// nodes bind to it by name.
+    /// </summary>
+    public async Task<DataSourceStructureResponse> AddColumnAsync(
+        int userId, int id, AddDataSourceColumnRequest req, CancellationToken ct = default)
+    {
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+        if (!await CanReshapeAsync(entity, userId, ct))
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "تغییر ساختار منبع عمومی مجاز نیست. فقط مقادیر و ردیف‌ها قابل تغییرند." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+        var existing = new HashSet<string>(columns.Select(c => c.Key), StringComparer.OrdinalIgnoreCase);
+
+        var key = (req.Key ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            // Generate c1, c2, … skipping any key already in use.
+            var n = columns.Count + 1;
+            do { key = $"c{n++}"; } while (existing.Contains(key));
+        }
+        if (existing.Contains(key))
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "duplicate-key",
+                Message = $"ستونی با کلید «{key}» از قبل وجود دارد.",
+                DataSourceId = id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+
+        var title = string.IsNullOrWhiteSpace(req.Title) ? key : req.Title.Trim();
+        var column = new DataSourceColumnDto { Key = key, Title = title };
+        var at = req.BeforeIndex ?? columns.Count;
+        if (at < 0) at = 0;
+        if (at > columns.Count) at = columns.Count;
+        columns.Insert(at, column);
+
+        entity.ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts);
+        entity.ColumnCount = columns.Count;
+        // A new column has no cells yet, so the row count is unchanged; keep it truthful.
+        entity.DataRevision += 1;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        StampDataEditor(entity, userId);
+        await _db.SaveChangesAsync(ct);
+
+        var (_, rc) = await GetDerivedCountersAsync(id, ct);
+        var rowCount = Math.Max(entity.RowCount, rc);
+        await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+        return new DataSourceStructureResponse
+        {
+            Ok = true,
+            DataSourceId = entity.Id,
+            Columns = columns,
+            ColumnKeys = columns.Select(c => c.Key).ToList(),
+            ColumnCount = columns.Count,
+            RowCount = rowCount,
+            DataRevision = entity.DataRevision,
+            AddedColumnKey = key
+        };
+    }
+
+    /// <summary>
+    /// Rename one column of a library source — the grid's header edit.
+    /// </summary>
+    /// <remarks>
+    /// A column's KEY is the identifier process nodes bind to (`dynamicSourceColumnName` and its
+    /// siblings), so a rename that stopped at the column would leave every bound node reading a
+    /// name that no longer exists. One operation therefore applies it everywhere it matters: the
+    /// column itself (key + title), its cells (values keep their rows — only the key they hang off
+    /// moves), and every linked process whose nodes bind the old key. Refuses to overwrite a name
+    /// that is already taken.
+    /// </remarks>
+    public async Task<DataSourceStructureResponse> RenameColumnAsync(
+        int userId, int id, RenameDataSourceColumnRequest req, CancellationToken ct = default)
+    {
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+        if (!await CanReshapeAsync(entity, userId, ct))
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "تغییر ساختار منبع عمومی مجاز نیست. فقط مقادیر و ردیف‌ها قابل تغییرند." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+        var oldKey = (req.OldKey ?? "").Trim();
+        var newName = (req.NewName ?? "").Trim();
+
+        var target = columns.FirstOrDefault(c => string.Equals(c.Key, oldKey, StringComparison.OrdinalIgnoreCase));
+        if (target is null)
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "column-not-found",
+                Message = $"ستونی با نام «{oldKey}» پیدا نشد.",
+                DataSourceId = id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+        if (string.IsNullOrWhiteSpace(newName))
+            return new DataSourceStructureResponse
+            {
+                Ok = false, Code = "empty-name", Message = "نام جدید ستون خالی است.",
+                DataSourceId = id, Columns = columns, ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+        if (columns.Any(c => !ReferenceEquals(c, target) && string.Equals(c.Key, newName, StringComparison.OrdinalIgnoreCase)))
+            return new DataSourceStructureResponse
+            {
+                Ok = false, Code = "duplicate-key", Message = $"ستونی با نام «{newName}» از قبل وجود دارد.",
+                DataSourceId = id, Columns = columns, ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+
+        var storedOldKey = target.Key;
+        var affected = 0;
+        if (!string.Equals(storedOldKey, newName, StringComparison.Ordinal))
+        {
+            target.Key = newName;
+            target.Title = newName;
+            entity.ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts);
+            entity.DataRevision += 1;
+            entity.UpdatedAtUtc = DateTime.UtcNow;
+            StampDataEditor(entity, userId);
+
+            var cells = await _db.DataSourceCells
+                .Where(c => c.DataSourceId == id && c.ColumnKey == storedOldKey)
+                .ToListAsync(ct);
+            foreach (var cell in cells) cell.ColumnKey = newName;
+
+            await _db.SaveChangesAsync(ct);
+
+            var processIds = await _db.ProcessDataSources.AsNoTracking()
+                .Where(l => l.DataSourceId == id)
+                .Select(l => l.ProcessId)
+                .Distinct()
+                .ToListAsync(ct);
+            foreach (var pid in processIds)
+            {
+                try
+                {
+                    if (await PatchColumnInProcessGraphAsync(pid, id, storedOldKey, newName, ct)) affected++;
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Patch column {Old}->{New} of source {Ds} on process {P}",
+                        storedOldKey, newName, id, pid);
+                }
+            }
+        }
+
+        // Re-stamp the embedded source snapshots — their column lists carry the same keys.
+        await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+
+        var (_, rc) = await GetDerivedCountersAsync(id, ct);
+        return new DataSourceStructureResponse
+        {
+            Ok = true,
+            DataSourceId = entity.Id,
+            Columns = columns,
+            ColumnKeys = columns.Select(c => c.Key).ToList(),
+            ColumnCount = columns.Count,
+            RowCount = Math.Max(entity.RowCount, rc),
+            DataRevision = entity.DataRevision,
+            RenamedFromKey = storedOldKey,
+            RenamedColumnKey = newName,
+            AffectedProcessCount = affected
+        };
+    }
+
+    /// <summary>
+    /// Re-point one process's node bindings from an old column key to its new name.
+    /// </summary>
+    /// <remarks>
+    /// Only nodes bound to THIS source are touched — a name that happens to match on a node bound
+    /// elsewhere is a different column. The binding pairs are declared once in
+    /// <see cref="ColumnBindings"/> and reused, so this cannot drift from the dependency scan.
+    /// Returns true when at least one binding changed (the caller counts affected processes).
+    /// </remarks>
+    private async Task<bool> PatchColumnInProcessGraphAsync(
+        int processId, int dataSourceId, string oldKey, string newKey, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return false;
+
+        // Stored graphs come in two shapes (plain, or an envelope whose body is a string) — unwrap
+        // first so the node list is actually found.
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+        JsonObject? body;
+        try { body = JsonNode.Parse(bodyJson) as JsonObject; }
+        catch { return false; }
+        if (body is null || body["nodes"] is not JsonArray nodes) return false;
+
+        var changed = false;
+        foreach (var n in nodes)
+        {
+            if (n is not JsonObject no) continue;
+            foreach (var (idProp, columnProp, _) in ColumnBindings)
+            {
+                if (no[idProp]?.GetValue<int?>() != dataSourceId) continue;
+                var bound = ReadString(no, columnProp);
+                if (string.IsNullOrWhiteSpace(bound)
+                    || !bound.Trim().Equals(oldKey, StringComparison.OrdinalIgnoreCase)) continue;
+                no[columnProp] = newKey;
+                changed = true;
+            }
+        }
+        if (!changed) return false;
+
+        process.GraphJson = envelope is null
+            ? body.ToJsonString(JsonOpts)
+            : EnvelopeWithBody(envelope, body).ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Delete one column of a library source — the grid's context menu.
+    /// </summary>
+    /// <remarks>
+    /// The column's cells go with it (a value cannot outlive its column) and the embedded source
+    /// snapshots of linked processes are re-stamped. Node bindings are deliberately NOT rewritten:
+    /// a node that still names the deleted column is a real configuration problem the author has
+    /// to see and fix, and it is reported by the editor's validation instead of silently reading
+    /// nothing. The count of linked processes the column was used in is returned so the caller can
+    /// warn. The last remaining column cannot be deleted — a source without columns breaks every
+    /// consumer (grid, export, node bindings) for no benefit.
+    /// </remarks>
+    public async Task<DataSourceStructureResponse> DeleteColumnAsync(
+        int userId, int id, string columnKey, CancellationToken ct = default)
+    {
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+        if (!await CanReshapeAsync(entity, userId, ct))
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "تغییر ساختار منبع عمومی مجاز نیست. فقط مقادیر و ردیف‌ها قابل تغییرند." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+        var key = (columnKey ?? "").Trim();
+        var target = columns.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase));
+        if (target is null)
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "column-not-found",
+                Message = $"ستونی با نام «{key}» پیدا نشد.",
+                DataSourceId = id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+        if (columns.Count <= 1)
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "last-column",
+                Message = "آخرین ستون منبع قابل حذف نیست؛ ابتدا ستون دیگری اضافه کنید.",
+                DataSourceId = id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList()
+            };
+
+        var storedKey = target.Key;
+        columns.Remove(target);
+        entity.ColumnsJson = JsonSerializer.Serialize(columns, JsonOpts);
+        entity.ColumnCount = columns.Count;
+        entity.DataRevision += 1;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        StampDataEditor(entity, userId);
+
+        var cells = await _db.DataSourceCells
+            .Where(c => c.DataSourceId == id && c.ColumnKey == storedKey)
+            .ToListAsync(ct);
+        if (cells.Count > 0) _db.DataSourceCells.RemoveRange(cells);
+        await _db.SaveChangesAsync(ct);
+
+        // Count — not migrate — the linked processes that still bind this column, so the caller can
+        // tell the author how many processes point at a column that no longer exists.
+        var affected = 0;
+        var processIds = await _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.DataSourceId == id)
+            .Select(l => l.ProcessId)
+            .Distinct()
+            .ToListAsync(ct);
+        foreach (var pid in processIds)
+        {
+            try { if (await ProcessGraphBindsColumnAsync(pid, id, storedKey, ct)) affected++; }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Scan deleted column {Key} of source {Ds} on process {P}", storedKey, id, pid);
+            }
+        }
+
+        // Re-stamp the embedded source snapshots — their column lists still carry the deleted key.
+        await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+
+        var (_, rc) = await GetDerivedCountersAsync(id, ct);
+        return new DataSourceStructureResponse
+        {
+            Ok = true,
+            DataSourceId = entity.Id,
+            Columns = columns,
+            ColumnKeys = columns.Select(c => c.Key).ToList(),
+            ColumnCount = columns.Count,
+            RowCount = Math.Max(entity.RowCount, rc),
+            DataRevision = entity.DataRevision,
+            DeletedColumnKey = storedKey,
+            AffectedProcessCount = affected
+        };
+    }
+
+    /// <summary>Whether any node of a process still binds one column of a source (read-only scan).</summary>
+    private async Task<bool> ProcessGraphBindsColumnAsync(
+        int processId, int dataSourceId, string columnKey, CancellationToken ct)
+    {
+        var process = await _db.Processes.AsNoTracking().FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return false;
+
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+        JsonObject? body;
+        try { body = JsonNode.Parse(bodyJson) as JsonObject; }
+        catch { return false; }
+        if (body is null || body["nodes"] is not JsonArray nodes) return false;
+
+        foreach (var n in nodes)
+        {
+            if (n is not JsonObject no) continue;
+            foreach (var (idProp, columnProp, _) in ColumnBindings)
+            {
+                if (no[idProp]?.GetValue<int?>() != dataSourceId) continue;
+                var bound = ReadString(no, columnProp);
+                if (!string.IsNullOrWhiteSpace(bound)
+                    && bound.Trim().Equals(columnKey, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Insert blank rows into a library source. Blank rows are materialised as empty cells so the
+    /// normal row-page query returns them (it drives row count from the cell table, not the parent).
+    /// </summary>
+    public async Task<DataSourceStructureResponse> AddRowsAsync(
+        int userId, int id, AddDataSourceRowRequest req, CancellationToken ct = default)
+    {
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+        if (columns.Count == 0)
+            return new DataSourceStructureResponse
+            {
+                Ok = false, Code = "no-columns", Message = "منبع ستونی ندارد؛ اول یک ستون اضافه کنید."
+            };
+
+        var add = Math.Clamp(req.Count ?? 1, 1, 500);
+        var (_, rowCount) = await GetDerivedCountersAsync(id, ct);
+        rowCount = Math.Max(rowCount, entity.RowCount);
+
+        // Adding rows is the third way to grow a source, so it is capped too — otherwise a user at
+        // the ceiling could simply type more rows in one at a time.
+        var entitlements = await ResolveEntitlements(userId, ct);
+        if (entitlements.MaxSourceRows is int maxRows && rowCount + add > maxRows)
+        {
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = SourceLimitExceededException.Code,
+                DataSourceId = id,
+                Message = entitlements.SourceLimitFromLicense
+                    ? $"با افزودن {add} ردیف، تعداد ردیف‌ها ({rowCount + add}) از سقف لایسنس ({maxRows}) بیشتر می‌شود."
+                    : $"با افزودن {add} ردیف، تعداد ردیف‌ها ({rowCount + add}) از سقف سطح کاربری ({maxRows}) بیشتر می‌شود."
+            };
+        }
+
+        // Build the cell rows first, then shift existing rows down when inserting in the middle.
+        var at = req.BeforeIndex ?? rowCount;
+        if (at < 0) at = 0;
+        if (at > rowCount) at = rowCount;
+
+        var existing = await _db.DataSourceCells.Where(c => c.DataSourceId == id).ToListAsync(ct);
+        if (at < rowCount)
+        {
+            // Shift down from the end so no two rows collide on the (DataSourceId, RowIndex, ColumnKey) key.
+            foreach (var cell in existing.OrderByDescending(c => c.RowIndex))
+            {
+                if (cell.RowIndex >= at) cell.RowIndex += add;
+            }
+        }
+        for (var r = 0; r < add; r++)
+        {
+            foreach (var col in columns)
+            {
+                _db.DataSourceCells.Add(new DataSourceCell
+                {
+                    DataSourceId = id,
+                    RowIndex = at + r,
+                    ColumnKey = col.Key,
+                    CellValue = "",
+                    // An explicitly added row is a user action, so its (empty) cells are stamped too —
+                    // otherwise the tooltip would call a row the user just created an "import".
+                    LastEditorUserId = userId > 0 ? userId : null,
+                    UpdatedAtUtc = DateTime.UtcNow
+                });
+            }
+        }
+
+        entity.RowCount = rowCount + add;
+        entity.DataRevision += 1;
+        entity.UpdatedAtUtc = DateTime.UtcNow;
+        StampDataEditor(entity, userId);
+        await _db.SaveChangesAsync(ct);
+
+        await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+        return new DataSourceStructureResponse
+        {
+            Ok = true,
+            DataSourceId = entity.Id,
+            Columns = columns,
+            ColumnKeys = columns.Select(c => c.Key).ToList(),
+            ColumnCount = columns.Count,
+            RowCount = entity.RowCount,
+            DataRevision = entity.DataRevision
+        };
+    }
+
+    /// <summary>
+    /// Remove one row from a library source and close the gap so no row index is left missing.
+    ///
+    /// Shifting the following rows up is deliberate: the row-page query drives the row count from the
+    /// highest index present, so leaving a hole would keep reporting rows past the real end and make
+    /// the grid show blanks. Blank rows are materialised as empty cells, so "remove the row" means
+    /// removing every cell of that row, not just one value.
+    /// </summary>
+    public async Task<DataSourceStructureResponse> DeleteRowAsync(
+        int userId, int id, int rowIndex, CancellationToken ct = default)
+    {
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+        var (_, rowCount) = await GetDerivedCountersAsync(id, ct);
+        rowCount = Math.Max(rowCount, entity.RowCount);
+        if (rowIndex < 0 || rowIndex >= rowCount)
+        {
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "row-not-found",
+                DataSourceId = id,
+                Message = $"ردیف {rowIndex} در این منبع وجود ندارد (تعداد ردیف‌ها: {rowCount})."
+            };
+        }
+
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var toRemove = await _db.DataSourceCells
+                .Where(c => c.DataSourceId == id && c.RowIndex == rowIndex)
+                .ToListAsync(ct);
+            if (toRemove.Count > 0) _db.DataSourceCells.RemoveRange(toRemove);
+
+            // Shift the rows after it up by one, from the gap upward so no two rows collide on the
+            // (DataSourceId, RowIndex, ColumnKey) key.
+            var after = await _db.DataSourceCells
+                .Where(c => c.DataSourceId == id && c.RowIndex > rowIndex)
+                .OrderBy(c => c.RowIndex)
+                .ToListAsync(ct);
+            foreach (var cell in after) cell.RowIndex -= 1;
+
+            var newRowCount = rowCount - 1;
+            entity.RowCount = newRowCount;
+            entity.DataRevision += 1;
+            entity.UpdatedAtUtc = DateTime.UtcNow;
+            StampDataEditor(entity, userId);
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+            return new DataSourceStructureResponse
+            {
+                Ok = true,
+                DataSourceId = entity.Id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList(),
+                ColumnCount = columns.Count,
+                RowCount = newRowCount,
+                DataRevision = entity.DataRevision
+            };
+        }
+        catch (Exception ex)
+        {
+            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+            _log.LogWarning(ex, "Delete row {Row} from source {Ds} failed", rowIndex, id);
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "error",
+                DataSourceId = id,
+                Message = "حذف ردیف انجام نشد — دوباره تلاش کنید."
+            };
+        }
+    }
+
+    /// <summary>
+    /// Empty a source's grid: every row goes, every column stays.
+    ///
+    /// This is the "clear data" button on the source viewer — a starting-over that keeps the table's
+    /// shape, so node bindings (which name columns) keep working and the source simply has no data
+    /// yet. The legacy CellsJson blob is blanked too: it is only re-materialised while the
+    /// DataSourceCells table is empty, so leaving it would resurrect the cleared rows on the next read.
+    /// </summary>
+    public async Task<DataSourceStructureResponse> ClearRowsAsync(
+        int userId, int id, CancellationToken ct = default)
+    {
+        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+        if (entity is null)
+            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+        var columns = DeserializeColumns(entity.ColumnsJson);
+
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var cells = await _db.DataSourceCells
+                .Where(c => c.DataSourceId == id)
+                .ToListAsync(ct);
+            if (cells.Count > 0) _db.DataSourceCells.RemoveRange(cells);
+
+            entity.RowCount = 0;
+            entity.CellsJson = "[]";
+            if (cells.Count > 0) entity.DataRevision += 1;
+            entity.UpdatedAtUtc = DateTime.UtcNow;
+            StampDataEditor(entity, userId);
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            await RefreshLinkedProcessSnapshotsAsync(entity, ct);
+            return new DataSourceStructureResponse
+            {
+                Ok = true,
+                DataSourceId = entity.Id,
+                Columns = columns,
+                ColumnKeys = columns.Select(c => c.Key).ToList(),
+                ColumnCount = columns.Count,
+                RowCount = 0,
+                DataRevision = entity.DataRevision
+            };
+        }
+        catch (Exception ex)
+        {
+            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+            _log.LogWarning(ex, "Clear rows of source {Ds} failed", id);
+            return new DataSourceStructureResponse
+            {
+                Ok = false,
+                Code = "error",
+                DataSourceId = id,
+                Message = "پاک‌سازی داده انجام نشد — دوباره تلاش کنید."
+            };
+        }
+    }
+
+    /// <summary>Re-stamp every linked process graph with this source's current shape.</summary>
+    private async Task RefreshLinkedProcessSnapshotsAsync(DataSource entity, CancellationToken ct)
+    {
+        var processIds = await _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.DataSourceId == entity.Id)
+            .Select(l => l.ProcessId)
+            .Distinct()
+            .ToListAsync(ct);
+        foreach (var pid in processIds)
+        {
+            try { await RefreshSourceSnapshotInProcessGraphAsync(pid, entity, ct); }
+            catch (Exception ex) { _log.LogWarning(ex, "Refresh source {Ds} snapshot on process {P}", entity.Id, pid); }
+        }
+    }
+
+    public async Task<bool> DeleteLibraryAsync(int userId, int id, CancellationToken ct = default)
+    {
+        var entity = await _db.DataSources
+            .Include(d => d.ProcessLinks)
+            .FirstOrDefaultAsync(d => d.Id == id && d.OwnerUserId == userId, ct);
+        if (entity is null) return false;
+
+        var processIds = entity.ProcessLinks.Select(l => l.ProcessId).Distinct().ToList();
+        _db.ProcessDataSources.RemoveRange(entity.ProcessLinks);
+        _db.DataSources.Remove(entity);
+        await _db.SaveChangesAsync(ct);
+
+        // Scrub snapshot from linked process graphs (keep selector column names on nodes).
+        foreach (var pid in processIds)
+        {
+            try { await ScrubSourceFromProcessGraphAsync(pid, id, ct); }
+            catch (Exception ex) { _log.LogWarning(ex, "Scrub source {Ds} from process {P}", id, pid); }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Admin-only: delete any library source regardless of who owns it. Shares
+    /// <see cref="DeleteLibraryAsync"/>'s cleanup (detach links, scrub process snapshots) so an
+    /// admin delete leaves linked processes in exactly the same state as an owner delete.
+    /// </summary>
+    public async Task<bool> DeleteLibraryForAdminAsync(int id, CancellationToken ct = default)
+    {
+        var entity = await _db.DataSources
+            .Include(d => d.ProcessLinks)
+            .FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (entity is null) return false;
+
+        var processIds = entity.ProcessLinks.Select(l => l.ProcessId).Distinct().ToList();
+        _db.ProcessDataSources.RemoveRange(entity.ProcessLinks);
+        _db.DataSources.Remove(entity);
+        await _db.SaveChangesAsync(ct);
+
+        // Scrub snapshot from linked process graphs (keep selector column names on nodes).
+        foreach (var pid in processIds)
+        {
+            try { await ScrubSourceFromProcessGraphAsync(pid, id, ct); }
+            catch (Exception ex) { _log.LogWarning(ex, "Scrub source {Ds} from process {P}", id, pid); }
+        }
+        return true;
+    }
+
+    /// <summary>Admin-only: delete several library sources, skipping ids that no longer exist.</summary>
+    /// <returns>How many sources were actually deleted.</returns>
+    public async Task<int> DeleteManyForAdminAsync(IEnumerable<int> ids, CancellationToken ct = default)
+    {
+        var deleted = 0;
+        foreach (var id in ids.Distinct())
+        {
+            if (await DeleteLibraryForAdminAsync(id, ct)) deleted++;
+        }
+        return deleted;
+    }
+
+    /// <summary>
+    /// Admin-only: delete every library source that no process links to. These are the leftovers of
+    /// trial imports and renamed files, and because nothing references them there is nothing to
+    /// detach or scrub.
+    /// </summary>
+    /// <returns>How many sources were deleted.</returns>
+    public async Task<int> DeleteUnusedForAdminAsync(CancellationToken ct = default)
+    {
+        var ids = await _db.DataSources.AsNoTracking()
+            .Where(d => !d.ProcessLinks.Any())
+            .Select(d => d.Id)
+            .ToListAsync(ct);
+        return await DeleteManyForAdminAsync(ids, ct);
+    }
+
+    public async Task<(bool ok, string? error)> AttachAsync(
+        int userId, int processId, int dataSourceId, bool setDefault = false, CancellationToken ct = default)
+    {
+        var process = await _db.Processes.Include(p => p.DataSourceLinks)
+            .FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null) return (false, "notfound");
+
+        var canChange = await _db.ProcessShares.AnyAsync(a =>
+            a.UserId == userId && a.ProcessId == processId
+            && (a.CanChangeDataSource || a.CanEdit || a.Process.CreatorUserId == userId), ct);
+        if (!canChange) return (false, "forbidden");
+
+        var ds = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == dataSourceId, ct);
+        if (ds is null) return (false, "sourcenotfound");
+        // Owner or already shared via another process of this user — require owner for attach from
+        // library. A public source is the exception: it exists precisely so anyone may attach it to
+        // their own process and use its columns, so the owner check does not apply to it.
+        if (!ds.IsPublic
+            && ds.OwnerUserId != userId && process.CreatorUserId != userId
+            && ds.OwnerUserId != process.CreatorUserId)
+            return (false, "forbidden");
+
+        if (process.DataSourceLinks.Any(l => l.DataSourceId == dataSourceId))
+        {
+            if (setDefault)
+            {
+                foreach (var l in process.DataSourceLinks) l.IsDefault = l.DataSourceId == dataSourceId;
+                await _db.SaveChangesAsync(ct);
+                // Do not patch GraphJson / UpdatedAtUtc here — open editors own concurrency via PUT /canvas.
+            }
+            return (true, null);
+        }
+
+        var sort = process.DataSourceLinks.Count == 0 ? 0 : process.DataSourceLinks.Max(l => l.SortOrder) + 1;
+        var makeDefault = setDefault || process.DataSourceLinks.Count == 0;
+        if (makeDefault)
+            foreach (var l in process.DataSourceLinks) l.IsDefault = false;
+
+        process.DataSourceLinks.Add(new ProcessDataSource
+        {
+            ProcessId = processId,
+            DataSourceId = dataSourceId,
+            IsDefault = makeDefault,
+            SortOrder = sort
+        });
+        await _db.SaveChangesAsync(ct);
+
+        // Re-wire any node that kept a column name from a previously detached source. Without this
+        // the bindings would only come back for an editor that re-read the canvas; the stored graph
+        // (and therefore the list counts and the player) would stay broken.
+        await RebindOrphanedColumnsAsync(processId, ds, ct);
+        return (true, null);
+    }
+
+    public async Task<(bool ok, string? error)> DetachAsync(
+        int userId, int processId, int dataSourceId, CancellationToken ct = default)
+    {
+        var canChange = await _db.ProcessShares.AnyAsync(a =>
+            a.UserId == userId && a.ProcessId == processId
+            && (a.CanChangeDataSource || a.CanEdit || a.Process.CreatorUserId == userId), ct);
+        if (!canChange) return (false, "forbidden");
+
+        var link = await _db.ProcessDataSources
+            .FirstOrDefaultAsync(l => l.ProcessId == processId && l.DataSourceId == dataSourceId, ct);
+        if (link is null)
+            return (true, null);
+
+        var wasDefault = link.IsDefault;
+        _db.ProcessDataSources.Remove(link);
+        await _db.SaveChangesAsync(ct);
+
+        if (wasDefault)
+        {
+            var next = await _db.ProcessDataSources
+                .Where(l => l.ProcessId == processId)
+                .OrderBy(l => l.SortOrder)
+                .FirstOrDefaultAsync(ct);
+            if (next != null)
+            {
+                next.IsDefault = true;
+                await _db.SaveChangesAsync(ct);
+            }
+        }
+
+        // Clear the detached source's id from the graph while KEEPING every column name. The id must
+        // go because the process no longer links that source, and a node pointing at an unlinked
+        // source reads nothing at run time. The column name is deliberately kept so that linking a
+        // source with those same names later re-wires the node automatically (RebindOrphanedColumns
+        // on attach, and RepointOrphanedColumns when the canvas is read).
+        await ScrubSourceIdFromProcessGraphAsync(processId, dataSourceId, ct);
+        return (true, null);
+    }
+
+    /// <summary>
+    /// Null out every source-id property that points at <paramref name="dataSourceId"/> and drop the
+    /// source from the graph's snapshot list, but leave the column-name fields untouched.
+    /// </summary>
+    private async Task ScrubSourceIdFromProcessGraphAsync(int processId, int dataSourceId, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return;
+
+        var envelope = GraphJsonHelper.TryParseEnvelope(process.GraphJson, out var bodyText);
+        var bodyJson = envelope is null ? process.GraphJson : bodyText;
+
+        JsonObject? body;
+        try { body = JsonNode.Parse(bodyJson) as JsonObject; }
+        catch { return; }
+        if (body is null) return;
+
+        var changed = false;
+        if (body["dataSources"] is JsonArray arr)
+        {
+            for (var i = arr.Count - 1; i >= 0; i--)
+            {
+                if (arr[i] is JsonObject o && (o["id"]?.GetValue<int?>() ?? o["Id"]?.GetValue<int?>()) == dataSourceId)
+                {
+                    arr.RemoveAt(i);
+                    changed = true;
+                }
+            }
+        }
+        if (body["nodes"] is JsonArray nodes)
+        {
+            foreach (var n in nodes)
+            {
+                if (n is not JsonObject no) continue;
+                foreach (var (idProp, _, _) in ColumnBindings)
+                {
+                    if (no[idProp]?.GetValue<int?>() == dataSourceId)
+                    {
+                        no[idProp] = null;
+                        changed = true;
+                    }
+                }
+                if (no["dataSourceId"]?.GetValue<int?>() == dataSourceId)
+                {
+                    no.Remove("dataSourceId");
+                    changed = true;
+                }
+            }
+        }
+        if (!changed) return;
+
+        process.GraphJson = envelope is null
+            ? body.ToJsonString(JsonOpts)
+            : EnvelopeWithBody(envelope, body).ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// On canvas save: upsert library rows for embedded sources, sync process links.
+    /// Detached library rows are never deleted. Returns possibly remapped GraphJson.
+    /// </summary>
+    public async Task<string> SyncFromCanvasAsync(
+        Process process, string canvasJson, int actingUserId, CancellationToken ct = default)
+    {
+        JsonNode? root;
+        try { root = JsonNode.Parse(canvasJson); }
+        catch { return canvasJson; }
+        if (root is not JsonObject obj) return canvasJson;
+
+        var arr = obj["dataSources"] as JsonArray ?? obj["DataSources"] as JsonArray;
+        if (arr is null)
+        {
+            arr = new JsonArray();
+            obj["dataSources"] = arr;
+        }
+
+        var ownerId = process.CreatorUserId ?? actingUserId;
+        var links = await _db.ProcessDataSources
+            .Where(l => l.ProcessId == process.Id)
+            .ToListAsync(ct);
+        var keepIds = new HashSet<int>();
+        var masterId = ReadMasterId(obj);
+        var order = 0;
+
+        foreach (var node in arr.ToList())
+        {
+            if (node is not JsonObject dsObj) continue;
+            var parsed = ParseEmbedded(dsObj);
+            if (parsed.columns.Count == 0 && parsed.cells.Count == 0 && string.IsNullOrWhiteSpace(parsed.title))
+                continue;
+
+            DataSource? entity = null;
+            if (parsed.id is int existingId && existingId > 0)
+                entity = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == existingId, ct);
+
+            if (entity is null)
+            {
+                entity = new DataSource
+                {
+                    OwnerUserId = ownerId,
+                    Title = Trunc(parsed.title, 200) ?? $"منبع {DateTime.UtcNow:yyyy-MM-dd}",
+                    FileName = Trunc(parsed.fileName, 260),
+                    ColumnCount = parsed.columnCount,
+                    RowCount = parsed.rowCount,
+                    ColumnsJson = JsonSerializer.Serialize(parsed.columns, JsonOpts),
+                    CellsJson = JsonSerializer.Serialize(parsed.cells, JsonOpts),
+                    CreatedAtUtc = DateTime.UtcNow,
+                    UpdatedAtUtc = DateTime.UtcNow
+                };
+                _db.DataSources.Add(entity);
+                await _db.SaveChangesAsync(ct);
+                await ReplaceAllCellsAsync(entity.Id, parsed.cells, ct);
+                entity.DataRevision = 1;
+                entity.CellsJson = JsonSerializer.Serialize(parsed.cells, JsonOpts);
+                await _db.SaveChangesAsync(ct);
+                dsObj["id"] = entity.Id;
+            }
+            else if (entity.OwnerUserId == ownerId || entity.OwnerUserId == actingUserId)
+            {
+                entity.Title = Trunc(parsed.title, 200) ?? entity.Title;
+                entity.FileName = Trunc(parsed.fileName, 260) ?? entity.FileName;
+                entity.ColumnCount = parsed.columnCount;
+                // Cells live in DataSourceCells — never replace entire grid from canvas snapshot (concurrency).
+                if (parsed.columns.Count > 0)
+                {
+                    entity.ColumnsJson = JsonSerializer.Serialize(parsed.columns, JsonOpts);
+                    entity.ColumnCount = parsed.columns.Count;
+                }
+                if (parsed.rowCount > entity.RowCount)
+                    entity.RowCount = parsed.rowCount;
+                entity.UpdatedAtUtc = DateTime.UtcNow;
+                StampDataEditor(entity, actingUserId);
+                dsObj["id"] = entity.Id;
+            }
+
+            keepIds.Add(entity.Id);
+            var link = links.FirstOrDefault(l => l.DataSourceId == entity.Id);
+            if (link is null)
+            {
+                link = new ProcessDataSource
+                {
+                    ProcessId = process.Id,
+                    DataSourceId = entity.Id,
+                    SortOrder = order
+                };
+                _db.ProcessDataSources.Add(link);
+                links.Add(link);
+            }
+            link.SortOrder = order++;
+            link.IsDefault = masterId is int mid && mid == entity.Id;
+        }
+
+        // If no master flagged, first link is default
+        if (!links.Any(l => keepIds.Contains(l.DataSourceId) && l.IsDefault) && keepIds.Count > 0)
+        {
+            var first = links.Where(l => keepIds.Contains(l.DataSourceId)).OrderBy(l => l.SortOrder).First();
+            first.IsDefault = true;
+            obj["dataSourceId"] = first.DataSourceId;
+            if (obj["nodes"] is JsonArray nodes)
+            {
+                foreach (var n in nodes)
+                {
+                    if (n is JsonObject no && string.Equals(no["kind"]?.GetValue<string>(), "start", StringComparison.OrdinalIgnoreCase))
+                    {
+                        no["dataSourceId"] = first.DataSourceId;
+                        break;
+                    }
+                }
+            }
+        }
+
+        foreach (var orphan in links.Where(l => !keepIds.Contains(l.DataSourceId)).ToList())
+            _db.ProcessDataSources.Remove(orphan);
+
+        await _db.SaveChangesAsync(ct);
+        return obj.ToJsonString(JsonOpts);
+    }
+
+    /// <summary>Hydrate process graph dataSources from library links (fallback to embedded).</summary>
+    public async Task<string?> HydrateCanvasAsync(int processId, string? graphJson, CancellationToken ct = default)
+    {
+        graphJson = GraphJsonHelper.UnwrapEnvelope(graphJson);
+
+        var links = await _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.ProcessId == processId)
+            .OrderBy(l => l.SortOrder)
+            .Include(l => l.DataSource)
+            .ToListAsync(ct);
+
+        if (links.Count == 0)
+        {
+            // Lazy extract: if graph has embedded sources, leave as-is (SyncFromCanvas on next save).
+            return graphJson;
+        }
+
+        JsonObject obj;
+        try
+        {
+            obj = string.IsNullOrWhiteSpace(graphJson)
+                ? new JsonObject()
+                : (JsonNode.Parse(graphJson) as JsonObject) ?? new JsonObject();
+        }
+        catch
+        {
+            obj = new JsonObject();
+        }
+
+        var arr = new JsonArray();
+        int? defaultId = null;
+        foreach (var link in links)
+        {
+            if (link.DataSource is null) continue;
+            if (link.IsDefault) defaultId = link.DataSourceId;
+            arr.Add(ToGraphNode(link.DataSource));
+        }
+        obj["dataSources"] = arr;
+        if (defaultId is int did)
+        {
+            obj["dataSourceId"] = did;
+            if (obj["nodes"] is JsonArray nodes)
+            {
+                foreach (var n in nodes)
+                {
+                    if (n is JsonObject no &&
+                        string.Equals(no["kind"]?.GetValue<string>(), "start", StringComparison.OrdinalIgnoreCase))
+                    {
+                        no["dataSourceId"] = did;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Auto-repair on the read path. Detaching a source keeps each node's column NAME and clears
+        // only the numeric id, precisely so this can run: when a source carrying those names is
+        // linked again, the bindings come back without the operator re-picking every column. Doing
+        // it here (rather than writing on attach) keeps the graph write owned by the editor's own
+        // canvas save, so an open editor's concurrency check is not surprised by a background write.
+        RepointOrphanedColumns(obj, links);
+
+        return obj.ToJsonString(JsonOpts);
+    }
+
+    /// <summary>
+    /// Point nodes whose column name matches one of the linked sources back at that source, but
+    /// only when they have no source id. A node already bound elsewhere keeps its binding, so a
+    /// second source can never silently take over an existing one.
+    /// </summary>
+    private static int RepointOrphanedColumns(JsonObject obj, IReadOnlyList<ProcessDataSource> links)
+    {
+        if (obj["nodes"] is not JsonArray nodes) return 0;
+
+        // sourceId → available column keys (ordinal-ignore-case, since casing varies between the
+        // legacy import and hand-written graphs).
+        var bySource = new List<(int Id, HashSet<string> Keys)>();
+        foreach (var link in links)
+        {
+            if (link.DataSource is null) continue;
+            var keys = DeserializeColumns(link.DataSource.ColumnsJson)
+                .Select(c => c.Key?.Trim())
+                .Where(k => !string.IsNullOrWhiteSpace(k))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (keys.Count > 0) bySource.Add((link.DataSourceId, keys!));
+        }
+        if (bySource.Count == 0) return 0;
+
+        var repaired = 0;
+        foreach (var n in nodes)
+        {
+            if (n is not JsonObject no) continue;
+            foreach (var (idProp, columnProp, _) in ColumnBindings)
+            {
+                if (no[idProp]?.GetValue<int?>() is not null) continue;      // already bound
+                var bound = ReadString(no, columnProp);
+                if (string.IsNullOrWhiteSpace(bound)) continue;
+
+                var hit = bySource.FirstOrDefault(s => s.Keys.Contains(bound.Trim()));
+                if (hit.Keys is null) continue;
+                no[idProp] = hit.Id;
+                repaired++;
+            }
+        }
+        return repaired;
+    }
+
+    private async Task PatchSourceTitleInProcessGraphAsync(int processId, int dataSourceId, string title, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return;
+        JsonObject? obj;
+        try { obj = JsonNode.Parse(process.GraphJson) as JsonObject; }
+        catch { return; }
+        if (obj is null) return;
+
+        var changed = false;
+        if (obj["dataSources"] is JsonArray arr)
+        {
+            foreach (var item in arr)
+            {
+                if (item is not JsonObject o) continue;
+                var sid = o["id"]?.GetValue<int?>() ?? o["Id"]?.GetValue<int?>();
+                if (sid != dataSourceId) continue;
+                o["title"] = title;
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        process.GraphJson = obj.ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    private async Task ScrubSourceFromProcessGraphAsync(int processId, int dataSourceId, CancellationToken ct)
+    {
+        var process = await _db.Processes.FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null || string.IsNullOrWhiteSpace(process.GraphJson)) return;
+        JsonObject? obj;
+        try { obj = JsonNode.Parse(process.GraphJson) as JsonObject; }
+        catch { return; }
+        if (obj is null) return;
+
+        if (obj["dataSources"] is JsonArray arr)
+        {
+            for (var i = arr.Count - 1; i >= 0; i--)
+            {
+                if (arr[i] is JsonObject o && o["id"]?.GetValue<int?>() == dataSourceId)
+                    arr.RemoveAt(i);
+            }
+        }
+        // Clear DS id refs on nodes — keep column name fields.
+        if (obj["nodes"] is JsonArray nodes)
+        {
+            foreach (var n in nodes)
+            {
+                if (n is not JsonObject no) continue;
+                ClearIdIfMatch(no, "dataSourceId", dataSourceId);
+                ClearIdIfMatch(no, "sourceId", dataSourceId);
+                ClearIdIfMatch(no, "selectorDataSourceId", dataSourceId);
+                ClearIdIfMatch(no, "equalSelectorDataSourceId", dataSourceId);
+                ClearIdIfMatch(no, "attributeDataSourceId", dataSourceId);
+                ClearIdIfMatch(no, "equalAttributeDataSourceId", dataSourceId);
+                ClearIdIfMatch(no, "saveDataSourceId", dataSourceId);
+            }
+        }
+        if (obj["dataSourceId"]?.GetValue<int?>() == dataSourceId)
+            obj.Remove("dataSourceId");
+
+        process.GraphJson = obj.ToJsonString(JsonOpts);
+        process.UpdatedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    private static void ClearIdIfMatch(JsonObject no, string prop, int id)
+    {
+        if (no[prop]?.GetValue<int?>() == id)
+            no[prop] = null;
+    }
+
+    private async Task<EntitlementsDto> ResolveEntitlements(int userId, CancellationToken ct)
+    {
+        var dbUser = await _db.Users.AsNoTracking().Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == userId, ct);
+        return dbUser is null
+            ? EntitlementService.LocalDefaults()
+            : await _entitlements.ResolveForUserAsync(dbUser, ct);
+    }
+
+    private static JsonObject ToGraphNode(DataSource d)
+    {
+        var cols = DeserializeColumns(d.ColumnsJson);
+        return new JsonObject
+        {
+            ["id"] = d.Id,
+            ["title"] = d.Title,
+            ["fileName"] = d.FileName,
+            ["columnCount"] = d.ColumnCount,
+            ["rowCount"] = d.RowCount,
+            ["dataRevision"] = d.DataRevision,
+            ["columnKeys"] = new JsonArray(cols.Select(c => (JsonNode?)JsonValue.Create(c.Key)).ToArray()),
+            ["columns"] = JsonNode.Parse(JsonSerializer.Serialize(cols, JsonOpts))!.AsArray()
+            // cells omitted — load via /api/datasources/{id}/cells or /rows
+        };
+    }
+
+    private static DataSourceMetaDto ToMeta(DataSource d)
+        => ToMeta(d, null);
+
+    /// <summary>
+    /// Builds meta from the cell table when available, falling back to the stored columns.
+    /// Cell writes no longer touch the parent row, so RowCount/DataRevision must be derived
+    /// here instead of read from stale DataSource columns.
+    /// </summary>
+    public async Task<DataSourceMetaDto?> GetMetaDerivedAsync(int userId, int id, CancellationToken ct = default)
+    {
+        var d = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (d is null) return null;
+        var (dataRevision, rowCount) = await GetDerivedCountersAsync(id, ct);
+        if (dataRevision == 0) dataRevision = d.DataRevision;
+        if (rowCount < d.RowCount) rowCount = d.RowCount;
+        return ToMeta(d, dataRevision, rowCount);
+    }
+
+    private static DataSourceMetaDto ToMeta(DataSource d, long? dataRevision, int? rowCount = null)
+    {
+        var cols = DeserializeColumns(d.ColumnsJson);
+        return new DataSourceMetaDto
+        {
+            Id = d.Id,
+            Title = d.Title,
+            FileName = d.FileName,
+            Columns = cols,
+            ColumnKeys = cols.Select(c => c.Key).ToList(),
+            ColumnCount = d.ColumnCount,
+            RowCount = Math.Max(rowCount ?? 0, d.RowCount),
+            DataRevision = dataRevision ?? d.DataRevision
+        };
+    }
+
+    private static DataSourceDetailDto ToDetail(DataSource d, List<DataSourceCellDto>? cells = null)
+    {
+        var cols = DeserializeColumns(d.ColumnsJson);
+        cells ??= DeserializeCells(d.CellsJson);
+        return new DataSourceDetailDto
+        {
+            Id = d.Id,
+            Title = d.Title,
+            FileName = d.FileName,
+            Columns = cols,
+            ColumnKeys = cols.Select(c => c.Key).ToList(),
+            Cells = cells,
+            ColumnCount = d.ColumnCount,
+            RowCount = d.RowCount,
+            DataRevision = d.DataRevision
+        };
+    }
+
+    private static UploadDataSourceResponse ToUploadResponse(
+        DataSource d, List<DataSourceColumnDto> cols, List<DataSourceCellDto> cells) => new()
+    {
+        Id = d.Id,
+        Title = d.Title,
+        FileName = d.FileName,
+        ColumnCount = d.ColumnCount,
+        RowCount = d.RowCount,
+        Columns = cols,
+        ColumnKeys = cols.Select(c => c.Key).ToList(),
+        Cells = cells
+    };
+
+    private static List<DataSourceColumnDto> NormalizeColumns(
+        List<DataSourceColumnDto>? columns, List<string>? keys)
+    {
+        if (columns is { Count: > 0 })
+            return columns.Where(c => !string.IsNullOrWhiteSpace(c.Key))
+                .Select(c => new DataSourceColumnDto
+                {
+                    Key = c.Key.Trim(),
+                    Title = string.IsNullOrWhiteSpace(c.Title) ? c.Key.Trim() : c.Title.Trim()
+                }).ToList();
+        return (keys ?? new List<string>())
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Select(k => new DataSourceColumnDto { Key = k.Trim(), Title = k.Trim() })
+            .ToList();
+    }
+
+    private static List<DataSourceColumnDto> DeserializeColumns(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try { return JsonSerializer.Deserialize<List<DataSourceColumnDto>>(json, JsonOpts) ?? new(); }
+        catch { return new(); }
+    }
+
+    private static List<DataSourceCellDto> DeserializeCells(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try { return JsonSerializer.Deserialize<List<DataSourceCellDto>>(json, JsonOpts) ?? new(); }
+        catch { return new(); }
+    }
+
+    private static int? ReadMasterId(JsonObject obj)
+    {
+        if (obj["dataSourceId"] is JsonValue v && v.TryGetValue<int>(out var id)) return id;
+        if (obj["nodes"] is JsonArray nodes)
+        {
+            foreach (var n in nodes)
+            {
+                if (n is JsonObject no &&
+                    string.Equals(no["kind"]?.GetValue<string>(), "start", StringComparison.OrdinalIgnoreCase)
+                    && no["dataSourceId"] is JsonValue sv && sv.TryGetValue<int>(out var sid))
+                    return sid;
+            }
+        }
+        return null;
+    }
+
+    private static (int? id, string? title, string? fileName, int columnCount, int rowCount,
+        List<DataSourceColumnDto> columns, List<DataSourceCellDto> cells) ParseEmbedded(JsonObject dsObj)
+    {
+        int? id = null;
+        if (dsObj["id"] is JsonValue idv)
+        {
+            if (idv.TryGetValue<int>(out var i)) id = i;
+            else if (int.TryParse(idv.ToString(), out var i2)) id = i2;
+        }
+        var title = dsObj["title"]?.GetValue<string>() ?? dsObj["Title"]?.GetValue<string>();
+        var fileName = dsObj["fileName"]?.GetValue<string>() ?? dsObj["FileName"]?.GetValue<string>();
+        var columns = new List<DataSourceColumnDto>();
+        if (dsObj["columns"] is JsonArray colsArr)
+        {
+            foreach (var c in colsArr)
+            {
+                if (c is not JsonObject co) continue;
+                var key = co["key"]?.GetValue<string>() ?? co["Key"]?.GetValue<string>() ?? "";
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                columns.Add(new DataSourceColumnDto
+                {
+                    Key = key,
+                    Title = co["title"]?.GetValue<string>() ?? co["Title"]?.GetValue<string>() ?? key
+                });
+            }
+        }
+        if (columns.Count == 0 && dsObj["columnKeys"] is JsonArray keys)
+        {
+            foreach (var k in keys)
+            {
+                var key = k?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                columns.Add(new DataSourceColumnDto { Key = key, Title = key });
+            }
+        }
+        var cells = new List<DataSourceCellDto>();
+        if (dsObj["cells"] is JsonArray cellsArr)
+        {
+            foreach (var c in cellsArr)
+            {
+                if (c is not JsonObject co) continue;
+                cells.Add(new DataSourceCellDto
+                {
+                    Key = co["key"]?.GetValue<string>() ?? co["Key"]?.GetValue<string>() ?? "",
+                    Index = co["index"]?.GetValue<int?>() ?? co["Index"]?.GetValue<int?>() ?? 0,
+                    CellValue = co["cellValue"]?.GetValue<string>() ?? co["CellValue"]?.GetValue<string>() ?? ""
+                });
+            }
+        }
+        var columnCount = dsObj["columnCount"]?.GetValue<int?>() ?? columns.Count;
+        var rowCount = dsObj["rowCount"]?.GetValue<int?>()
+                       ?? (cells.Count == 0 ? 0 : cells.Max(x => x.Index) + 1);
+        return (id, title, fileName, columnCount, rowCount, columns, cells);
+    }
+
+    private static string? Trunc(string? s, int max)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        s = s.Trim();
+        return s.Length <= max ? s : s[..max];
+    }
+
+    internal static (List<DataSourceColumnDto> Columns, List<DataSourceCellDto> Cells) ParseExcel(Stream stream)
+    {
+        using var book = new XLWorkbook(stream);
+        var sheet = book.Worksheets.FirstOrDefault()
+            ?? throw new InvalidOperationException("فایل اکسل برگه‌ای برای خواندن ندارد.");
+        var range = sheet.RangeUsed();
+        if (range is null)
+            throw new InvalidOperationException("فایل اکسل خالی است یا جدولی برای تبدیل به منبع ندارد.");
+
+        foreach (var merge in sheet.MergedRanges)
+        {
+            if (merge.Intersects(range))
+            {
+                throw new InvalidOperationException(
+                    "اکسل باید جدول تمیز باشد — سلول ادغام‌شده (Merge) مجاز نیست.");
+            }
+        }
+
+        var firstRow = range.FirstRow().RowNumber();
+        var lastRow = range.LastRow().RowNumber();
+        var firstCol = range.FirstColumn().ColumnNumber();
+        var lastCol = range.LastColumn().ColumnNumber();
+
+        while (lastCol >= firstCol)
+        {
+            var h = sheet.Cell(firstRow, lastCol).GetString()?.Trim() ?? "";
+            if (!string.IsNullOrWhiteSpace(h)) break;
+            lastCol--;
+        }
+        if (lastCol < firstCol)
+            throw new InvalidOperationException("سطر اول باید هدر ستون‌های معتبر داشته باشد.");
+
+        var columns = new List<DataSourceColumnDto>();
+        var usedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (var c = firstCol; c <= lastCol; c++)
+        {
+            var raw = sheet.Cell(firstRow, c).GetString()?.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                throw new InvalidOperationException(
+                    $"هدر ستون در موقعیت {c - firstCol + 1} خالی است — سطر اول باید عنوان همهٔ ستون‌ها را داشته باشد.");
+            }
+            if (raw.Length > 120)
+            {
+                throw new InvalidOperationException(
+                    $"عنوان ستون «{raw[..Math.Min(40, raw.Length)]}…» بیش از حد طولانی است.");
+            }
+            var key = raw;
+            var n = 2;
+            while (!usedKeys.Add(key))
+            {
+                key = $"{raw}_{n}";
+                n++;
+            }
+            columns.Add(new DataSourceColumnDto { Key = key, Title = raw });
+        }
+
+        if (columns.Count == 0)
+            throw new InvalidOperationException("فایل اکسل ستون معتبری ندارد (ردیف اول باید هدر باشد).");
+
+        // A header-only table is a valid source: rows can be added later from the grid, so an empty
+        // source must be attachable to a process. Only a sheet without any usable header is refused.
+        var cells = new List<DataSourceCellDto>();
+        var dataIndex = 0;
+        for (var r = firstRow + 1; r <= lastRow; r++)
+        {
+            var rowValues = new List<string>();
+            var any = false;
+            for (var i = 0; i < columns.Count; i++)
+            {
+                var cell = sheet.Cell(r, firstCol + i);
+                var text = cell.GetFormattedString()?.Trim() ?? cell.GetString()?.Trim() ?? "";
+                if (!string.IsNullOrEmpty(text)) any = true;
+                rowValues.Add(text);
+            }
+            if (!any) continue;
+            for (var i = 0; i < columns.Count; i++)
+            {
+                cells.Add(new DataSourceCellDto
+                {
+                    Key = columns[i].Key,
+                    Index = dataIndex,
+                    CellValue = rowValues[i]
+                });
+            }
+            dataIndex++;
+        }
+
+        return (columns, cells);
+    }
+}
+
+public class AdminLibrarySourceRow
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = "";
+    public string OwnerUserName { get; set; } = "";
+    public string? LastEditorUserName { get; set; }
+    public int ColumnCount { get; set; }
+    public int RowCount { get; set; }
+    public string? FileName { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
+    public int LinkedProcessCount { get; set; }
+    public string LinkedProcessTitles { get; set; } = "";
+}

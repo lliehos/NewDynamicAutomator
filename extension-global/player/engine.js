@@ -1079,7 +1079,7 @@ function broadcastPlayState() {
   notifyPortalTabs(message);
 }
 
-/** Send a message to Morobot portal/editor tabs (localhost + stored portalBase). */
+/** Send a message to Webautomator portal/editor tabs (localhost + stored portalBase). */
 function notifyPortalTabs(message) {
   chrome.storage.local.get("portalBase").then(({ portalBase }) => {
     const base = String(portalBase || "").replace(/\/$/, "");
@@ -1114,9 +1114,9 @@ async function injectPlayFab(tabId) {
     const [{ result: blocked } = {}] = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        if (document.documentElement.dataset.daMorobotMode === "record") return true;
+        if (document.documentElement.dataset.daWebautomatorMode === "record") return true;
         if (document.getElementById("da-recorder-fab")) return true;
-        document.documentElement.dataset.daMorobotMode = "play";
+        document.documentElement.dataset.daWebautomatorMode = "play";
         return false;
       }
     }).catch(() => [{ result: false }]);
@@ -1335,7 +1335,7 @@ async function stopPlay(reason) {
 }
 
 /**
- * Drop the `daMorobotMode="play"` stamp this run put on the target page.
+ * Drop the `daWebautomatorMode="play"` stamp this run put on the target page.
  *
  * Mounting the Player HUD stamps the page's <html> so the Recorder HUD knows not to mount on
  * top of it, and vice versa. `content/fab-play.js` clears it on its own teardown, but that only
@@ -1355,8 +1355,8 @@ async function clearPlayPageMode(tabId) {
       func: () => {
         // Only ever clear OUR value: a "record" stamp belongs to the Recorder, and wiping it
         // here would let the Player HUD mount on top of a live recording.
-        if (document.documentElement.dataset.daMorobotMode === "play") {
-          delete document.documentElement.dataset.daMorobotMode;
+        if (document.documentElement.dataset.daWebautomatorMode === "play") {
+          delete document.documentElement.dataset.daWebautomatorMode;
         }
       }
     });
@@ -5137,7 +5137,7 @@ async function detectOrphanedPlay() {
     if (!hb || !hb.at) return false;
     const age = Date.now() - Number(hb.at);
     if (!Number.isFinite(age) || age < PLAY_HEARTBEAT_STALE_MS) return false;
-    console.warn("[Morobot Global] orphaned play detected", hb);
+    console.warn("[Webautomator Global] orphaned play detected", hb);
     await chrome.storage.local.set({ playing: false, playPaused: false });
     await chrome.storage.local.remove(PLAY_HEARTBEAT_KEY);
     appendPlayLog(

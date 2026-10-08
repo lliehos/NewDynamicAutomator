@@ -1,4 +1,4 @@
-# Morobot encryption & .mrbt (design notes)
+# Webautomator encryption & .mrbt (design notes)
 
 ## Implemented now
 - AES-256-GCM via Web Crypto (`wwwroot/js/da-crypto.js`)

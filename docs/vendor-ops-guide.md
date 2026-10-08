@@ -1,4 +1,4 @@
-# راهنمای عملیات داخلی Morobot (Vendor / پشتیبانی / مالک)
+# راهنمای عملیات داخلی Webautomator (Vendor / پشتیبانی / مالک)
 
 > **نسخه:** 1.1.5 · **تاریخ:** 2026-10-04  
 > مخاطب: کارمند جدید پشتیبانی، DevOps، یا مالک محصول — بدون نیاز به توضیح شفاهی.
@@ -11,8 +11,8 @@
 2. [ساختار repository](#2-ساختار-repository)
 3. [کلیدهای لایسنس](#3-کلیدهای-لایسنس)
 4. [جریان لایسنس (همه نصب‌ها)](#4-جریان-لایسنس-همه-نصبها)
-5. [Morobot LicenseTool (CLI)](#5-morobot-licensetool-cli)
-6. [Morobot Vendor Studio (WPF)](#6-morobot-vendor-studio-wpf)
+5. [Webautomator LicenseTool (CLI)](#5-webautomator-licensetool-cli)
+6. [Webautomator Vendor Studio (WPF)](#6-webautomator-vendor-studio-wpf)
 7. [ساخت بسته مشتری (publish + zip)](#7-ساخت-بسته-مشتری)
 8. [ساخت بستهٔ آپدیت آفلاین](#8-ساخت-بستهٔ-آپدیت-آفلاین)
 9. [تنظیمات appsettings مشتری](#9-تنظیمات-appsettings-مشتری)
@@ -32,7 +32,7 @@
 | **مشتری (Admin)** | import لایسنس، تنظیم DB، برندینگ، آپلود/اعمال بستهٔ آپدیت آفلاین | sign لایسنس |
 | **کاربر نهایی** | پنل، افزونه، اتوماسیون | Admin/License |
 
-**هرگز** فایل `morobot-private.pem` داخل بسته مشتری، git عمومی، یا ایمیل بدون رمزنگاری قرار نگیرد.
+**هرگز** فایل `webautomator-private.pem` داخل بسته مشتری، git عمومی، یا ایمیل بدون رمزنگاری قرار نگیرد.
 
 > بستهٔ آپدیت **امضا نمی‌شود**؛ اعتبارش از مانیفست داخلی و تطبیق SHA-256 هر فایل می‌آید. بنابراین
 > تحویل آن باید از کانال مطمئن (فایل‌شر سازمانی، ایمیل رمزشده) انجام شود.
@@ -43,18 +43,18 @@
 
 ```
 src/
-  Morobot.Web/              ← اپلیکیشن مشتری / Cloud
-  Morobot.Licensing/        ← امضا و اعتبارسنجی
-  Morobot.LicenseTool/      ← CLI vendor
-  Morobot.VendorStudio/     ← UI vendor
-extension-global/           ← افزونه Morobot Global
+  Webautomator.Web/              ← اپلیکیشن مشتری / Cloud
+  Webautomator.Licensing/        ← امضا و اعتبارسنجی
+  Webautomator.LicenseTool/      ← CLI vendor
+  Webautomator.VendorStudio/     ← UI vendor
+extension-global/           ← افزونه Webautomator Global
 extension-smart-recorder/   ← Smart Recorder (جدا)
 docs/
   setup-guide.md            ← راهنمای مشتری (استقرار + آپدیت آفلاین)
   vendor-ops-guide.md       ← همین سند
   visual-editor.md          ← فهرست انواع اقدام و شرط ویرایشگر
   play-engine-logic.md      ← رفتار واقعی موتور اجرا + فهرست ایرادهای باز
-  marketing/morobot-brochure.html  ← چاپ PDF برای فروش
+  marketing/webautomator-brochure.html  ← چاپ PDF برای فروش
 tools/
   vendor-kit/               ← اسکریپت zip kit داخلی
   license-keys/             ← فقط .gitkeep در git؛ PEM محلی
@@ -68,12 +68,12 @@ tools/
 
 ```powershell
 cd d:\path\to\repo
-dotnet run --project src\Morobot.LicenseTool -- genkeypair --out-dir tools\license-keys
+dotnet run --project src\Webautomator.LicenseTool -- genkeypair --out-dir tools\license-keys
 ```
 
 خروجی:
-- `morobot-public.pem` → embed در `Morobot.Licensing` / build اپ
-- `morobot-private.pem` → **فقط offline** برای sign
+- `webautomator-public.pem` → embed در `Webautomator.Licensing` / build اپ
+- `webautomator-private.pem` → **فقط offline** برای sign
 
 ### 3.2 چرخش کلید
 
@@ -84,13 +84,13 @@ dotnet run --project src\Morobot.LicenseTool -- genkeypair --out-dir tools\licen
 ## 4. جریان لایسنس (همه نصب‌ها)
 
 ```
-[مشتری] نصب Morobot (بدون لایسنس → trial)
+[مشتری] نصب Webautomator (بدون لایسنس → trial)
     ↓
 [مشتری Admin] /Admin/License → Export activation-request.json
     ↓
-[شما] sign با private key → license.morobot
+[شما] sign با private key → license.webautomator
     ↓
-[مشتری Admin] Import license.morobot
+[مشتری Admin] Import license.webautomator
     ↓
 (اختیاری) restart برای connection string داخل لایسنس
 ```
@@ -103,16 +103,16 @@ dotnet run --project src\Morobot.LicenseTool -- genkeypair --out-dir tools\licen
 
 ---
 
-## 5. Morobot LicenseTool (CLI)
+## 5. Webautomator LicenseTool (CLI)
 
 ```powershell
 # راهنما
-dotnet run --project src\Morobot.LicenseTool -- help
+dotnet run --project src\Webautomator.LicenseTool -- help
 
 # امضا
-dotnet run --project src\Morobot.LicenseTool -- sign `
+dotnet run --project src\Webautomator.LicenseTool -- sign `
   --request C:\temp\activation-request.json `
-  --private-key tools\license-keys\morobot-private.pem `
+  --private-key tools\license-keys\webautomator-private.pem `
   --valid-until 2027-12-31 `
   --org "نام سازمان" `
   --max-users 100 `
@@ -120,22 +120,22 @@ dotnet run --project src\Morobot.LicenseTool -- sign `
   --allowed-host "automation.customer.ir" `
   --trial-days 3 `
   --allow-updates true `
-  --db-connection "Server=...;Database=MorobotDb;..." `
-  -o C:\temp\license.morobot
+  --db-connection "Server=...;Database=WebautomatorDb;..." `
+  -o C:\temp\license.webautomator
 
 # verify
-dotnet run --project src\Morobot.LicenseTool -- verify --license C:\temp\license.morobot
+dotnet run --project src\Webautomator.LicenseTool -- verify --license C:\temp\license.webautomator
 
 # بسته سرور
-dotnet run --project src\Morobot.LicenseTool -- package `
-  --project src\Morobot.Web\Morobot.Web.csproj `
-  --output dist\morobot-server-acme
+dotnet run --project src\Webautomator.LicenseTool -- package `
+  --project src\Webautomator.Web\Webautomator.Web.csproj `
+  --output dist\webautomator-server-acme
 
 # بستهٔ آپدیت آفلاین (بخش ۸)
-dotnet run --project src\Morobot.LicenseTool -- package-update `
+dotnet run --project src\Webautomator.LicenseTool -- package-update `
   --version 3.0.1 `
-  --source dist\morobot-server-acme `
-  --output dist\morobot-update-3.0.1.zip `
+  --source dist\webautomator-server-acme `
+  --output dist\webautomator-update-3.0.1.zip `
   --notes "رفع اشکال پنل منابع" `
   --channel stable `
   --min-current 2.9.0
@@ -158,10 +158,10 @@ dotnet run --project src\Morobot.LicenseTool -- package-update `
 
 ---
 
-## 6. Morobot Vendor Studio (WPF)
+## 6. Webautomator Vendor Studio (WPF)
 
 ```powershell
-dotnet run --project src\Morobot.VendorStudio
+dotnet run --project src\Webautomator.VendorStudio
 ```
 
 **تب ۱ — لایسنس:**
@@ -169,12 +169,12 @@ dotnet run --project src\Morobot.VendorStudio
 1. بارگذاری activation-request
 2. تنظیم تاریخ اعتبار / سازمان / MaxUsers / DB / دامنهٔ مجاز
 3. تعیین پرچم‌ها: **Allow updates** و **Allow legacy migration** (به‌صورت پیش‌فرض خاموش)
-4. Sign → Save `.morobot`
+4. Sign → Save `.webautomator`
 
 **تب ۲ — بسته نصب:**
 
-1. مسیر `Morobot.Web.csproj` و پوشهٔ خروجی
-2. Publish → ساخت `morobot-server.zip`
+1. مسیر `Webautomator.Web.csproj` و پوشهٔ خروجی
+2. Publish → ساخت `webautomator-server.zip`
 
 **تب ۳ — بسته آپدیت:**
 
@@ -194,17 +194,17 @@ dotnet run --project src\Morobot.VendorStudio
 ## 7. ساخت بسته مشتری
 
 خروجی استاندارد:
-- پوشه publish (شامل `Morobot.Web.exe` یا `.dll`، `appsettings.json`, `docs/setup-guide.md`)
-- فایل `morobot-server.zip`
+- پوشه publish (شامل `Webautomator.Web.exe` یا `.dll`، `appsettings.json`, `docs/setup-guide.md`)
+- فایل `webautomator-server.zip`
 - **بدون** private key
 - **بدون** سورس git
 
 Checklist قبل از ارسال:
-- [ ] `Morobot:AppInstanceKey` یکتا برای این مشتری/دامنه
+- [ ] `Webautomator:AppInstanceKey` یکتا برای این مشتری/دامنه
 - [ ] لایسنس روی همه نصب‌ها فعال است (تغییر DeploymentMode دور نمی‌زند)
 - [ ] `ConnectionStrings:Default` یا connection در لایسنس
 - [ ] راهنمای `setup-guide.md` داخل `docs/`
-- [ ] **بدون** `morobot-private.pem`
+- [ ] **بدون** `webautomator-private.pem`
 
 ---
 
@@ -216,10 +216,10 @@ Checklist قبل از ارسال:
 ### 8.1 ساخت
 
 ```powershell
-dotnet run --project src\Morobot.LicenseTool -- package-update `
+dotnet run --project src\Webautomator.LicenseTool -- package-update `
   --version 3.0.1 `
-  --source dist\morobot-server-acme `
-  --output dist\morobot-update-3.0.1.zip `
+  --source dist\webautomator-server-acme `
+  --output dist\webautomator-update-3.0.1.zip `
   --notes "رفع اشکال گزارش منابع" `
   --channel stable `
   --min-current 2.9.0
@@ -230,7 +230,7 @@ dotnet run --project src\Morobot.LicenseTool -- package-update `
 ### 8.2 داخل بسته
 
 ```
-morobot-update.json   ← مانیفست: version، notes، minCurrentVersion، SHA-256 هر فایل
+webautomator-update.json   ← مانیفست: version، notes، minCurrentVersion، SHA-256 هر فایل
 update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 <فایل‌های publish>     ← همان خروجی publish، به‌علاوه wwwroot و ...
 ```
@@ -256,7 +256,7 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 
 - **پیش از کپی** بررسی می‌کند فایل‌های برنامه قفل نباشند؛ اگر سرویس در حال اجرا باشد با کد
   خروج **۳** و پیام «Application still running» متوقف می‌شود (نیمه‌اعمال نمی‌کند)
-- فایل‌ها را کپی می‌کند، `update.ps1` / `update.log` / `morobot-update.json` را کپی **نمی‌کند**
+- فایل‌ها را کپی می‌کند، `update.ps1` / `update.log` / `webautomator-update.json` را کپی **نمی‌کند**
 - با سوئیچ `-Restart` برنامه را با `RestartCommand` (یا اولین exe پوشهٔ مقصد) اجرا می‌کند
 - هر مرحله را در `update.log` کنار اسکریپت ثبت می‌کند
 
@@ -280,9 +280,9 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 ```json
 {
   "ConnectionStrings": {
-    "Default": "Server=...;Database=MorobotDb;..."
+    "Default": "Server=...;Database=WebautomatorDb;..."
   },
-  "Morobot": {
+  "Webautomator": {
     "DeploymentMode": "Enterprise",
     "AppInstanceKey": "acme-prod",
     "OfflineUpdate": {
@@ -307,7 +307,7 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 
 ## 10. AppInstanceKey و افزونه Chrome
 
-مسیر همگام‌سازی افزونه روی ماشینی که **Morobot.Web** اجرا می‌شود (یا dev محلی):
+مسیر همگام‌سازی افزونه روی ماشینی که **Webautomator.Web** اجرا می‌شود (یا dev محلی):
 
 ```
 %LOCALAPPDATA%\webautomator\extension-global
@@ -315,9 +315,9 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 ```
 
 **چرا لازم است؟** یک کارمند ممکن است همزمان:
-- Cloud روی `app1.morobot.ir`
-- Cloud روی `app2.morobot.ir`
-- Enterprise روی `morobot.company.local`
+- Cloud روی `app1.webautomator.ir`
+- Cloud روی `app2.webautomator.ir`
+- Enterprise روی `webautomator.company.local`
 
 باز کند — هر استقرار **AppInstanceKey** جدا → پوشه افزونه جدا → بدون overwrite.
 
@@ -326,17 +326,17 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 **مشتری Cloud چند tenant:** برای هر tenant/دامنه جدا، `AppInstanceKey` جدا در appsettings همان deployment.
 
 > **افزونه فقط با پنلِ همان سرور کار می‌کند:** افزونه هنگام باز شدن پنل، `/extension/fingerprint` را
-> `fetch` می‌کند و اگر اثر انگشت با `morobot-binding.json` نخواند، پنل را علامت‌دار نمی‌کند. اگر گواهی
+> `fetch` می‌کند و اگر اثر انگشت با `webautomator-binding.json` نخواند، پنل را علامت‌دار نمی‌کند. اگر گواهی
 > سرور از **CA داخلی** است، گواهی **ریشه** باید در مخزن Trusted Root هر کلاینت نصب باشد؛ چون کلیک روی
 > «Proceed» هشدار مرورگر فقط روی بارگذاری خود صفحه اثر دارد و درخواست افزونه را باز نمی‌کند
 > (راهنمای گام‌به‌گام: `setup-guide.md` بخش ۷.۷).
 >
 > **پوشهٔ نصب را ثابت نگه دارید:** بسته را در یک مسیر دائمی (پیش‌فرض `%LOCALAPPDATA%\webautomator\…`)
 > استخراج و از همان مسیر Load unpacked کنید. اگر از `Downloads` نصب کنید، هر دانلود یک پوشهٔ
-> `morobot-global (2)` / `(3)` تازه می‌سازد، کروم همان نسخهٔ قدیمی را اجرا می‌کند و آپدیت هیچ اثری ندارد.
+> `webautomator-global (2)` / `(3)` تازه می‌سازد، کروم همان نسخهٔ قدیمی را اجرا می‌کند و آپدیت هیچ اثری ندارد.
 
 > **آیکون برند:** `icons/icon16|32|48|128.png` در پوشهٔ افزونه از آیکون برند ساخته می‌شوند
-> (پیش‌فرض `wwwroot/img/brand/morobot-icon.png`). منبع باید **PNG واقعی** باشد؛ اگر دادهٔ JPEG
+> (پیش‌فرض `wwwroot/img/brand/webautomator-icon.png`). منبع باید **PNG واقعی** باشد؛ اگر دادهٔ JPEG
 > داخل فایلی با پسوند `.png` نوشته شود، endpoint protection سازمانی آن را «دست‌کاری فایل تصویری»
 > می‌بیند، نوشتن را بلاک می‌کند و آیکون خراب می‌ماند (بخش ۱۴).
 
@@ -354,16 +354,16 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 نیازی به `dotnet ef database update` دستی روی سرور مشتری نیست (مگر troubleshooting).
 
 **شما هنگام release:**
-- migration جدید در `src/Morobot.Infrastructure/Persistence/Migrations/` commit کنید
+- migration جدید در `src/Webautomator.Infrastructure/Persistence/Migrations/` commit کنید
 - در release note بنویسید «پس از آپدیت یک بار restart»
-- نسخهٔ منتشرشده را در `Morobot:UpdateFeed` (appsettings یا env روی morobot.ir) به‌روز کنید — endpoint عمومی `GET /checkupdate?current=…`
+- نسخهٔ منتشرشده را در `Webautomator:UpdateFeed` (appsettings یا env روی webautomator.ir) به‌روز کنید — endpoint عمومی `GET /checkupdate?current=…`
 
 ```json
-"Morobot": {
+"Webautomator": {
   "UpdateFeed": {
     "LatestVersion": "3.0.1",
     "ReleaseNotes": "…",
-    "DownloadUrl": "https://morobot.ir/download",
+    "DownloadUrl": "https://webautomator.ir/download",
     "PublishedUtc": "2026-09-25T00:00:00Z"
   }
 }
@@ -389,7 +389,7 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 |-----|-------------|
 | setup-guide.md | نسخه در سربرگ + doc-versions |
 | vendor-ops-guide.md | همین |
-| morobot-brochure.html | marketingBrochure |
+| webautomator-brochure.html | marketingBrochure |
 
 ساخت zip kit برای کارمند جدید:
 
@@ -397,13 +397,13 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 .\tools\vendor-kit\BUILD-VENDOR-KIT.ps1 -Version 1.0.0
 ```
 
-خروجی: `dist/morobot-vendor-kit-v1.0.0.zip`
+خروجی: `dist/webautomator-vendor-kit-v1.0.0.zip`
 
 ---
 
 ## 13. بروشور بازاریابی (PDF)
 
-1. باز کنید: `docs/marketing/morobot-brochure.html` در Chrome/Edge
+1. باز کنید: `docs/marketing/webautomator-brochure.html` در Chrome/Edge
 2. Ctrl+P → **Save as PDF**
 3. به مشتری احتمالی بدهید
 
@@ -419,14 +419,14 @@ update.ps1            ← اسکریپت اعمال آپدیت (Windows)
 | Sequence rollback | sequence جدید > قبلی |
 | مشتری می‌گوید «انتقال از قدیمی» را نمی‌بیند | پرچم `allowLegacyMigration` در لایسنس او خاموش است؛ لایسنس جدید با `--allow-legacy-migration true` و `--sequence` بالاتر صادر کنید |
 | افزونه اشتباه به سرور | پنل همان دامنه را باز کنید؛ AppInstanceKey درست |
-| پنل می‌گوید «افزونه نصب نیست» / «افزونهٔ اجرا لازم است»، ولی افزونه نصب است و Load unpacked دوباره هم اثری ندارد | گواهی ریشهٔ سرور روی آن کلاینت در **Trusted Root** نصب نیست. افزونه برای تأیید سرور `/extension/fingerprint` را `fetch` می‌کند و «Proceed» هشدار مرورگر آن را باز نمی‌کند، پس پراب بی‌صدا شکست می‌خورد و پل صفحه را علامت‌دار نمی‌کند. سریع‌ترین رفع: `tools/Run-InstallRootCA.cmd` را روی کلاینت اجرا کنید (کاربر بدون ادمین: `-Scope User` که یک دیالوگ **Security Warning** ویندوزی دارد و باید Yes بزند؛ فقط بررسی: `-DryRun`) — خودش نصب می‌کند و با handshake واقعی تأیید می‌کند. تست دستی: `(Invoke-WebRequest https://<host>/extension/fingerprint -UseBasicParsing).Content` (یا curl با `--ssl-no-revoke`؛ بدون آن، curl خطای گمراه‌کنندهٔ `CRYPT_E_NO_REVOCATION_CHECK` می‌دهد چون ریشهٔ داخلی CRL ندارد). اگر مشتری شبکه توزیع نرم‌افزار دارد، بستهٔ MSI آماده (`tools/installer/Build-RootCaMsi.ps1` → `MorobotRootCA-<ver>.msi`) را تحویل دهید: `msiexec /i … /qn /norestart` آن را روی همهٔ کلاینت‌ها نصب می‌کند و `/x` هم برش می‌دارد (حذف با thumbprint). جزئیات: `setup-guide.md` بخش ۷.۷ |
+| پنل می‌گوید «افزونه نصب نیست» / «افزونهٔ اجرا لازم است»، ولی افزونه نصب است و Load unpacked دوباره هم اثری ندارد | گواهی ریشهٔ سرور روی آن کلاینت در **Trusted Root** نصب نیست. افزونه برای تأیید سرور `/extension/fingerprint` را `fetch` می‌کند و «Proceed» هشدار مرورگر آن را باز نمی‌کند، پس پراب بی‌صدا شکست می‌خورد و پل صفحه را علامت‌دار نمی‌کند. سریع‌ترین رفع: `tools/Run-InstallRootCA.cmd` را روی کلاینت اجرا کنید (کاربر بدون ادمین: `-Scope User` که یک دیالوگ **Security Warning** ویندوزی دارد و باید Yes بزند؛ فقط بررسی: `-DryRun`) — خودش نصب می‌کند و با handshake واقعی تأیید می‌کند. تست دستی: `(Invoke-WebRequest https://<host>/extension/fingerprint -UseBasicParsing).Content` (یا curl با `--ssl-no-revoke`؛ بدون آن، curl خطای گمراه‌کنندهٔ `CRYPT_E_NO_REVOCATION_CHECK` می‌دهد چون ریشهٔ داخلی CRL ندارد). اگر مشتری شبکه توزیع نرم‌افزار دارد، بستهٔ MSI آماده (`tools/installer/Build-RootCaMsi.ps1` → `WebautomatorRootCA-<ver>.msi`) را تحویل دهید: `msiexec /i … /qn /norestart` آن را روی همهٔ کلاینت‌ها نصب می‌کند و `/x` هم برش می‌دارد (حذف با thumbprint). جزئیات: `setup-guide.md` بخش ۷.۷ |
 | بعد از کوچ سرور به ماشین/VM/کانتینر جدید، همهٔ کلاینت‌ها پیام «افزونه به سرور دیگری تعلق دارد» می‌گیرند | اثر انگشت سرور از `MachineGuid` + نام ماشین + تعداد هسته + پلتفرم ساخته می‌شود و با جابجایی استقرار عوض می‌شود. هر کلاینت باید بستهٔ سرور جدید را از پنل ← نصب افزونه‌ها بگیرد و Load unpacked کند |
 | دو Cloud روی یک PC | AppInstanceKey متفاوت + Load unpacked از دو مسیر |
 | Migration fail | لاگ startup؛ دسترسی SQL؛ نسخه اپ با migration هماهنگ |
-| بستهٔ آپدیت رد می‌شود | مانیفست (`morobot-update.json`) موجود باشد؛ `version` جدیدتر از نصب مشتری؛ `minCurrentVersion` رعایت شده؛ پیام دقیق در `/Admin/OfflineUpdate` |
+| بستهٔ آپدیت رد می‌شود | مانیفست (`webautomator-update.json`) موجود باشد؛ `version` جدیدتر از نصب مشتری؛ `minCurrentVersion` رعایت شده؛ پیام دقیق در `/Admin/OfflineUpdate` |
 | اعمال آپدیت روی Windows انجام نمی‌شود | سرویس مشتری هنوز در حال اجراست (کد خروج ۳)؛ `update.log` را بخوانید |
 | `uploads/` و `updates/` در git ظاهر می‌شوند | این دو پوشه در `.gitignore` هستند؛ اگر دیده می‌شوند، سیاست repo را بررسی کنید |
-| آنتی‌ویروس هنگام اجرا به `…\webautomator\extension-*\icons\icon16.png` گیر می‌دهد، یا آیکون خراب/پرِ صفر می‌شود | آیکون برند باید PNG **واقعی** باشد (نه JPEG/WebP با پسوند `.png`)؛ منبع پیش‌فرض `wwwroot/img/brand/morobot-icon.png` است. پس از اصلاح فایل، صفحهٔ نصب را باز کنید یا اپ را ری‌استارت کنید تا Sync فایل‌های آیکون را ترمیم کند — نیازی به حذف دستی پوشهٔ افزونه نیست |
+| آنتی‌ویروس هنگام اجرا به `…\webautomator\extension-*\icons\icon16.png` گیر می‌دهد، یا آیکون خراب/پرِ صفر می‌شود | آیکون برند باید PNG **واقعی** باشد (نه JPEG/WebP با پسوند `.png`)؛ منبع پیش‌فرض `wwwroot/img/brand/webautomator-icon.png` است. پس از اصلاح فایل، صفحهٔ نصب را باز کنید یا اپ را ری‌استارت کنید تا Sync فایل‌های آیکون را ترمیم کند — نیازی به حذف دستی پوشهٔ افزونه نیست |
 
 ---
 

@@ -48,7 +48,7 @@
     AD CS certificate template name. Default: WebServer
 
 .PARAMETER OutDir
-    Folder for the exported .cer files. Default: C:\certs\morobot
+    Folder for the exported .cer files. Default: C:\certs\webautomator
 
 .PARAMETER RootCertPath
     Use an already exported root .cer for client distribution instead of the
@@ -107,7 +107,7 @@ param(
     [string]$Mode = "Auto",
     [string]$SiteName,
     [string]$CaTemplate = "WebServer",
-    [string]$OutDir = "C:\certs\morobot",
+    [string]$OutDir = "C:\certs\webautomator",
     [string]$RootCertPath,
     [int]$Years = 3,
     [switch]$Force,

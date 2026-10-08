@@ -61,14 +61,14 @@
 - آپلود zip → استخراج در `updates/staged/<version>` → اسکریپت آپدیتور
   (`update.ps1` روی Windows) که سرویس را می‌بندد، فایل‌ها را جانشین می‌کند و دوباره
   استارت می‌زند. بعد از استارت، migration (#9) اعمال شود.
-- در `Morobot.VendorStudio` یک تب «ساخت بستهٔ آپدیت» برای تولید zip + manifest نسخه.
+- در `Webautomator.VendorStudio` یک تب «ساخت بستهٔ آپدیت» برای تولید zip + manifest نسخه.
 
 **پیاده‌سازی انجام‌شده:**
-- قالب بسته در `Morobot.Licensing` (مشترک بین ابزار فروشنده و سرور):
+- قالب بسته در `Webautomator.Licensing` (مشترک بین ابزار فروشنده و سرور):
   `UpdatePackageManifest` (نسخه، یادداشت، `minCurrentVersion`، فهرست فایل‌ها با
   SHA-256 و اندازه، `entrypoint`)، `UpdatePackageJson` (سریال‌سازی + هش + مقایسهٔ نسخه)،
   `UpdatePackageBuilder` (ساخت zip + تولید `update.ps1`).
-- CLI: `dotnet run --project src/Morobot.LicenseTool -- package-update --version 1.2.0
+- CLI: `dotnet run --project src/Webautomator.LicenseTool -- package-update --version 1.2.0
   --source <published-folder> [-o out.zip] [--notes ...] [--channel stable]
   [--min-current 1.0.0]`.
 - Vendor Studio: تب «بسته آپدیت» با انتخاب پوشهٔ publish، نسخه، یادداشت، حداقل نسخه،
@@ -81,7 +81,7 @@
 - اسکریپت `update.ps1` قبل از کپی، قفل‌بودن فایل‌ها را بررسی می‌کند (سرویس در حال اجرا →
   خروج با کد ۳ و پیام روشن) و بعد از موفقیت برنامه را با `-StartCommand` (یا اولین exe)
   دوباره اجرا می‌کند. لاگ در `update.log` کنار اسکریپت.
-- تنظیمات: `Morobot:OfflineUpdate` (`UploadDirectory`, `StagingDirectory`,
+- تنظیمات: `Webautomator:OfflineUpdate` (`UploadDirectory`, `StagingDirectory`,
   `MaxUploadMegabytes`, `RestartCommand`). `uploads/` و `updates/` در `.gitignore`.
 
 ### #20 شرط/اکشن‌های تکمیلی

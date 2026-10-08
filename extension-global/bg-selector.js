@@ -571,11 +571,11 @@ if (chrome.contextMenus?.onClicked?.addListener) {
 
     // A tab of ANOTHER deployment is not ours to act on: copying selectors from it or building
     // nodes into its editor would mix two panels' data. Ordinary sites answer the fingerprint probe
-    // with 404, so only a real Morobot server (of a different deployment) can trigger this refusal.
+    // with 404, so only a real Webautomator server (of a different deployment) can trigger this refusal.
     if (typeof verifyOriginAgainstBinding === "function") {
       const verdict = await verifyOriginAgainstBinding(tab.url || info.pageUrl || "").catch(() => null);
       if (verdict && verdict.match === false) {
-        console.info("[Morobot Global Selector] refused: tab belongs to another deployment", tab.url);
+        console.info("[Webautomator Global Selector] refused: tab belongs to another deployment", tab.url);
         return;
       }
     }
@@ -609,12 +609,12 @@ if (chrome.contextMenus?.onClicked?.addListener) {
         result = await copySelectorObject(info, tab, unique);
       }
       if (result.ok) {
-        console.info("[Morobot Global Selector]", id, result.preview || result.selector || "");
+        console.info("[Webautomator Global Selector]", id, result.preview || result.selector || "");
       } else {
-        console.warn("[Morobot Global Selector] failed", result.error);
+        console.warn("[Webautomator Global Selector] failed", result.error);
       }
     } catch (err) {
-      console.warn("[Morobot Global Selector] error", err?.message || err);
+      console.warn("[Webautomator Global Selector] error", err?.message || err);
     }
   });
 }

@@ -3,7 +3,7 @@
   if (window !== window.top) return;
   if (window.__daFabInit || document.getElementById("da-recorder-fab")) return;
   // Player already owns this page for playback — don't mount a second HUD.
-  if (document.documentElement.dataset.daMorobotMode === "play") return;
+  if (document.documentElement.dataset.daWebautomatorMode === "play") return;
   window.__daFabInit = true;
 
   try {
@@ -114,8 +114,8 @@
     userDismissed = true;
     window.__daFabInit = false;
     try {
-      if (document.documentElement.dataset.daMorobotMode === "record") {
-        delete document.documentElement.dataset.daMorobotMode;
+      if (document.documentElement.dataset.daWebautomatorMode === "record") {
+        delete document.documentElement.dataset.daWebautomatorMode;
       }
     } catch { /* ignore */ }
     try { root.remove(); } catch { /* ignore */ }
@@ -765,7 +765,7 @@
     const active = phase === "recording" || phase === "review";
     const ver = session?.version || chrome.runtime.getManifest().version;
     const user = session?.userName || "test";
-    const pageMode = document.documentElement.dataset.daMorobotMode || "";
+    const pageMode = document.documentElement.dataset.daWebautomatorMode || "";
 
     // Don't fight an active Player session on this page.
     if (!active && pageMode === "play") {
@@ -775,8 +775,8 @@
     }
 
     // Claim the page so Player HUD stays hidden while we record.
-    if (active) document.documentElement.dataset.daMorobotMode = "record";
-    else if (pageMode === "record") delete document.documentElement.dataset.daMorobotMode;
+    if (active) document.documentElement.dataset.daWebautomatorMode = "record";
+    else if (pageMode === "record") delete document.documentElement.dataset.daWebautomatorMode;
 
     if (!active) {
       panel.hidden = true;

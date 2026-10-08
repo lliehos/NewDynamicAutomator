@@ -1,16 +1,16 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Build the deployable MSI that trusts the Morobot server root certificate on a client machine.
+    Build the deployable MSI that trusts the Webautomator server root certificate on a client machine.
 
 .DESCRIPTION
-    Produces one file - MorobotRootCA-<version>.msi - that SCCM, Intune, GPO Software Installation,
+    Produces one file - WebautomatorRootCA-<version>.msi - that SCCM, Intune, GPO Software Installation,
     PDQ Deploy or any RMM can push to every client:
 
-        msiexec /i MorobotRootCA-<version>.msi /qn /norestart /l*v C:\Windows\Temp\MorobotRootCA.log
+        msiexec /i WebautomatorRootCA-<version>.msi /qn /norestart /l*v C:\Windows\Temp\WebautomatorRootCA.log
 
     What the MSI does, in order:
-      1. copies <host>-root.cer to %ProgramFiles%\Morobot Root CA,
+      1. copies <host>-root.cer to %ProgramFiles%\Webautomator Root CA,
       2. adds that certificate to the machine Trusted Root store (certutil -addstore -f root),
       3. sets HKLM\SOFTWARE\Policies\Mozilla\Firefox\Certificates\ImportEnterpriseRoots = 1 so
          Firefox reads the Windows store too (Chrome and Edge already do),
@@ -21,7 +21,7 @@
     CA=True, so a server certificate can never be packaged here by mistake.
 
 .PARAMETER CerPath
-    The exported root certificate, e.g. C:\certs\morobot\automator.krtax.ir-root.cer
+    The exported root certificate, e.g. C:\certs\webautomator\automator.krtax.ir-root.cer
 
 .PARAMETER OutDir
     Where the MSI (and its .sha256) are written. Default: dist\installer
@@ -30,7 +30,7 @@
     MSI version, a.b.c. Default: 1.0.0
 
 .PARAMETER Manufacturer
-    Vendor shown in Add/Remove Programs. Default: Morobot
+    Vendor shown in Add/Remove Programs. Default: Webautomator
 
 .PARAMETER WixPath
     wix.exe to use. Default: PATH, then %USERPROFILE%\.dotnet\tools\wix.exe
@@ -39,7 +39,7 @@
     Skip the post-build checks (MSI table inspection and payload extraction).
 
 .EXAMPLE
-    .\Build-RootCaMsi.ps1 -CerPath C:\certs\morobot\automator.krtax.ir-root.cer
+    .\Build-RootCaMsi.ps1 -CerPath C:\certs\webautomator\automator.krtax.ir-root.cer
 
 .EXAMPLE
     .\Build-RootCaMsi.ps1 -CerPath .\automator.krtax.ir-root.cer -OutDir C:\Deploy -Version 1.0.1
@@ -59,7 +59,7 @@ param(
     [string]$CerPath,
     [string]$OutDir = "dist\installer",
     [string]$Version = "1.0.0",
-    [string]$Manufacturer = "Morobot",
+    [string]$Manufacturer = "Webautomator",
     [string]$WixPath,
     [switch]$SkipVerify
 )
@@ -131,7 +131,7 @@ function Get-MsiTableRows {
 
 Write-Host ""
 Write-Host "===================================================" -ForegroundColor DarkCyan
-Write-Host " Morobot root CA - MSI builder" -ForegroundColor White
+Write-Host " Webautomator root CA - MSI builder" -ForegroundColor White
 Write-Host "===================================================" -ForegroundColor DarkCyan
 
 Write-Step "Validating the certificate"
@@ -173,10 +173,10 @@ if (-not $wix) {
 $wixVersion = (& $wix --version 2>&1 | Select-Object -First 1)
 Write-Ok ("Using " + $wix + "  (" + $wixVersion + ")")
 
-$wxs = Join-Path $PSScriptRoot "MorobotRootCA.wxs"
+$wxs = Join-Path $PSScriptRoot "WebautomatorRootCA.wxs"
 if (-not (Test-Path -LiteralPath $wxs)) { throw ("Source not found: " + $wxs) }
 
-$staging = Join-Path $env:TEMP ("morobot-msi-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+$staging = Join-Path $env:TEMP ("webautomator-msi-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 try {
     # The certificate is referenced where it lives: a copy inside %TEMP% was rejected by the WiX
@@ -185,13 +185,13 @@ try {
 
     if (-not [System.IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path (Get-Location).Path $OutDir }
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-    $msiName = "MorobotRootCA-" + $Version + ".msi"
+    $msiName = "WebautomatorRootCA-" + $Version + ".msi"
     $msiPath = Join-Path (Resolve-Path -LiteralPath $OutDir).Path $msiName
 
     Write-Step "Building the MSI"
     Write-Info ("Output: " + $msiPath)
     # Leftovers from earlier builds in the same folder would otherwise be mistaken for part of the package.
-    Get-ChildItem -Path (Resolve-Path -LiteralPath $OutDir).Path -Filter ("MorobotRootCA-" + $Version + ".wixpdb") -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path (Resolve-Path -LiteralPath $OutDir).Path -Filter ("WebautomatorRootCA-" + $Version + ".wixpdb") -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     $buildArgs = @(
         "build",
         "-arch", "x64",
@@ -200,7 +200,7 @@ try {
         "-d", ("RootThumbprint=" + $cer.Thumbprint),
         "-d", ("ProductVersion=" + $Version),
         "-d", ("Manufacturer=" + $Manufacturer),
-        (Join-Path $staging "MorobotRootCA.wxs"),
+        (Join-Path $staging "WebautomatorRootCA.wxs"),
         "-o", $msiPath,
         # The .wixpdb is only useful for debugging, so it stays in the staging folder and is cleaned up.
         "-pdb", (Join-Path $staging ($msiName + ".wixpdb"))
@@ -262,17 +262,17 @@ try {
     Write-Host " Deploy it with:" -ForegroundColor White
     Write-Host ""
     Write-Host "   SCCM / Intune / PDQ / any RMM (as SYSTEM or admin):" -ForegroundColor Gray
-    Write-Host ("     msiexec /i `"" + $msiPath + "`" /qn /norestart /l*v %TEMP%\MorobotRootCA.log") -ForegroundColor White
+    Write-Host ("     msiexec /i `"" + $msiPath + "`" /qn /norestart /l*v %TEMP%\WebautomatorRootCA.log") -ForegroundColor White
     Write-Host ""
     Write-Host "   GPO (Computer Configuration > Policies > Windows Settings > Scripts > Startup):" -ForegroundColor Gray
-    Write-Host "     msiexec /i \\fileserver\share\MorobotRootCA.msi /qn /norestart /l*v C:\Windows\Temp\MorobotRootCA.log" -ForegroundColor White
+    Write-Host "     msiexec /i \\fileserver\share\WebautomatorRootCA.msi /qn /norestart /l*v C:\Windows\Temp\WebautomatorRootCA.log" -ForegroundColor White
     Write-Host "     (or deploy it as a GPO Software Installation package - no script needed)" -ForegroundColor Gray
     Write-Host ""
     Write-Host "   Uninstall:" -ForegroundColor Gray
-    Write-Host "     msiexec /x MorobotRootCA.msi /qn /norestart" -ForegroundColor White
+    Write-Host "     msiexec /x WebautomatorRootCA.msi /qn /norestart" -ForegroundColor White
     Write-Host ""
     Write-Host " Test on one client first (elevated prompt), then read the log for exit code 0:" -ForegroundColor Gray
-    Write-Host "     msiexec /i MorobotRootCA.msi /l*v MorobotRootCA.log" -ForegroundColor White
+    Write-Host "     msiexec /i WebautomatorRootCA.msi /l*v WebautomatorRootCA.log" -ForegroundColor White
     Write-Host "---------------------------------------------------" -ForegroundColor DarkCyan
     Write-Host ""
     exit 0

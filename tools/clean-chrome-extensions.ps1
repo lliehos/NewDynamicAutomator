@@ -1,12 +1,12 @@
-# Removes the three dead Morobot extension registrations from Chrome.
+# Removes the three dead Webautomator extension registrations from Chrome.
 #
 # Why this is needed: the extension folders for recorder/player/selector were merged into
 # `extension-global` and the old folders moved away, but Chrome still has the old registrations with
 # paths that no longer exist. They show up as broken entries in chrome://extensions and make it hard
-# to tell which Morobot card is the real one.
+# to tell which Webautomator card is the real one.
 #
 # The Smart Recorder entry is removed for the same reason: its registration points at the OLD flat
-# path (`morobot.soras.ir\extension-smart-recorder`) while the real folder now lives under
+# path (`webautomator.soras.ir\extension-smart-recorder`) while the real folder now lives under
 # `default\`. Chrome cannot load it from a path that does not exist, which is why the extension never
 # appeared at all. After running this, load it again from the correct path.
 #
@@ -29,18 +29,18 @@ if (-not (Test-Path $prefPath)) {
 }
 
 # Back up before touching anything. The file holds the whole extension configuration, not just our
-# entries, so a mistake here is not limited to Morobot.
-$backup = "$prefPath.morobot-backup-$(Get-Date -Format yyyyMMdd-HHmmss)"
+# entries, so a mistake here is not limited to Webautomator.
+$backup = "$prefPath.webautomator-backup-$(Get-Date -Format yyyyMMdd-HHmmss)"
 Copy-Item $prefPath $backup -Force
 Write-Host "Backup: $backup" -ForegroundColor Green
 
 # The IDs to drop. Each one is paired with the path it is registered under, so the script can prove
 # it is removing the entry it thinks it is removing rather than trusting the ID alone.
 $targets = @(
-    @{ Id = "mandaapocccbdcjomfogllfidfghmlcm"; Path = "morobot.soras.ir\extension-recorder";          Label = "old recorder" },
-    @{ Id = "mnboaegmidehphkakbeodfihkdbnihaf"; Path = "morobot.soras.ir\extension-player";            Label = "old player" },
-    @{ Id = "pfokmldjndngjlendmchpembbbeoemjf"; Path = "morobot.soras.ir\extension-selector";          Label = "old selector" },
-    @{ Id = "pneejnjnpoibhaiedbipkjacbhbggnkf"; Path = "morobot.soras.ir\extension-smart-recorder";    Label = "smart recorder (stale path)" }
+    @{ Id = "mandaapocccbdcjomfogllfidfghmlcm"; Path = "webautomator.soras.ir\extension-recorder";          Label = "old recorder" },
+    @{ Id = "mnboaegmidehphkakbeodfihkdbnihaf"; Path = "webautomator.soras.ir\extension-player";            Label = "old player" },
+    @{ Id = "pfokmldjndngjlendmchpembbbeoemjf"; Path = "webautomator.soras.ir\extension-selector";          Label = "old selector" },
+    @{ Id = "pneejnjnpoibhaiedbipkjacbhbggnkf"; Path = "webautomator.soras.ir\extension-smart-recorder";    Label = "smart recorder (stale path)" }
 )
 
 $json = Get-Content $prefPath -Raw | ConvertFrom-Json

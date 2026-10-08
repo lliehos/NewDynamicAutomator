@@ -1,0 +1,103 @@
+@using Webautomator.Web.Areas.Panel.Controllers
+@{
+    ViewData["Title"] = L["billing.checkout.title"];
+    var model = Model as BillingController.CheckoutView;
+    var order = model?.Order;
+    var lines = model?.Lines ?? new List<Webautomator.Infrastructure.Services.Payments.PriceLine>();
+    var error = TempData["BillingError"] as string;
+    string CycleLabel(string? cycle) => cycle switch
+    {
+        "yearly" => L["billing.common.cycleYearlyPeriod"],
+        "perpetual" => L["billing.common.cyclePerpetual"],
+        _ => L["billing.common.cycleMonthlyPeriod"]
+    };
+}
+
+<div class="da-home da-billing-checkout">
+  <header class="da-home-head">
+    <div>
+      <h4 class="da-home-title mb-1">@L["billing.checkout.heading"]</h4>
+    </div>
+  </header>
+
+  @if (order is null)
+  {
+    <div class="alert alert-danger">@L["billing.checkout.notFound"]</div>
+    return;
+  }
+
+  @if (!string.IsNullOrWhiteSpace(error))
+  {
+    <div class="alert alert-warning">@error</div>
+  }
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+        <div>
+          <div class="fw-semibold mb-1">@order.ItemTitle</div>
+          <div class="text-muted small">
+            @CycleLabel(order.BillingCycle)
+            · @L.T("billing.checkout.orderNo", ("n", order.Id.ToString()))
+          </div>
+        </div>
+        <div class="text-end">
+          <div class="billing-total">@order.PayableAmount.ToString("N0") @order.Currency</div>
+          @if (order.DiscountAmount is > 0)
+          {
+            <div class="text-muted small">@L.T("billing.checkout.discountLine", ("amount", $"{order.DiscountAmount.Value:N0} {order.Currency}"))</div>
+          }
+        </div>
+      </div>
+
+      @if (lines.Count > 0)
+      {
+        <hr class="my-3" />
+        <table class="table table-sm mb-0">
+          <tbody>
+            @foreach (var line in lines)
+            {
+              <tr>
+                <td>
+                  @line.Title
+                  @if (!string.IsNullOrWhiteSpace(line.Detail))
+                  {
+                    <span class="text-muted small ms-1">(@line.Detail)</span>
+                  }
+                </td>
+                <td class="text-end">@line.Amount.ToString("N0")</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </div>
+  </div>
+
+  @* The risk statement is shown BEFORE the pay button, not after: the customer is being asked to
+     accept that a platform service can fail, and burying that below the button would make the
+     acceptance meaningless. *@
+  <div class="card mb-3">
+    <div class="card-body">
+      <div class="fw-semibold mb-2">@L["billing.checkout.riskTitle"]</div>
+      <ul class="small mb-0">
+        <li class="mb-1">@L["billing.checkout.risk1"]</li>
+        <li class="mb-1">@L["billing.checkout.risk2"]</li>
+        <li class="mb-1">@L["billing.checkout.risk3"]</li>
+        <li class="mb-0">@L["billing.checkout.risk4"]</li>
+      </ul>
+    </div>
+  </div>
+
+  <form method="post" asp-area="Panel" asp-controller="Billing" asp-action="Pay">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="orderId" value="@order.Id" />
+    <button type="submit" class="btn btn-primary btn-lg w-100">@L["billing.checkout.payNow"]</button>
+  </form>
+
+  <p class="text-center text-muted small mt-3 mb-0">@L["billing.checkout.afterNote"]</p>
+
+  <div class="text-center mt-2">
+    <a class="small" asp-area="Panel" asp-controller="Billing" asp-action="Plans">@L["billing.checkout.changePlan"]</a>
+  </div>
+</div>

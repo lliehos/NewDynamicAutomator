@@ -1,6 +1,6 @@
 importScripts("lib/branding.js", "lib/session-scope.js", "lib/alert-dialog.js", "player/action-specs.js", "player/engine.js", "bg-selector.js");
 
-/** Morobot Global extension — record, play, and selector in one package. */
+/** Webautomator Global extension — record, play, and selector in one package. */
 const DEFAULT_PORTAL = "https://localhost:7201";
 
 /**
@@ -11,14 +11,14 @@ const DEFAULT_PORTAL = "https://localhost:7201";
  * without an identity check the wrong extension answers a portal it does not belong to: it marks
  * the page as connected and starts a run against ITS server, with the user looking at the other.
  *
- * The extension is bound to one deployment by `morobot-binding.json`, written into its install
+ * The extension is bound to one deployment by `webautomator-binding.json`, written into its install
  * folder by the server that synced it, and the server proves the same identity on
  * `/extension/fingerprint`. The fingerprint is the deployment instance id hashed with the
  * AppInstanceKey — unique per deployment even when two of them share a machine.
  *
  * No binding file (an older or hand-built bundle) means the old behaviour: no fingerprint checks.
  */
-const DEPLOYMENT_BINDING_FILE = "morobot-binding.json";
+const DEPLOYMENT_BINDING_FILE = "webautomator-binding.json";
 let deploymentBinding = null;
 let deploymentBindingLoaded = false;
 let deploymentBindingPromise = null;
@@ -482,11 +482,11 @@ async function handleMessage(message, sender) {
     // (a dialog blocks the page's own script), so it asks the extension to do it — see
     // lib/alert-dialog.js for why the answer is pre-set rather than decided on the fly.
     case "armAlertDialog":
-      return MorobotAlerts.armAlertDialog(message.tabId, message.alertType);
+      return WebautomatorAlerts.armAlertDialog(message.tabId, message.alertType);
     case "setAlertAnswer":
-      return MorobotAlerts.setAlertAnswer(message.tabId, message.alertType, message.alertPromptText);
+      return WebautomatorAlerts.setAlertAnswer(message.tabId, message.alertType, message.alertPromptText);
     case "readAlertResult":
-      return MorobotAlerts.readAlertResult(message.tabId);
+      return WebautomatorAlerts.readAlertResult(message.tabId);
     case "persistPlayDataSources":
       return persistPlayDataSourcesMessage(message);
     case "readDataSourceCell":
@@ -1088,7 +1088,7 @@ async function injectRecordFab(tabId, attempt = 0) {
     // Mark page as recording BEFORE scripts so Player content-script skips its HUD.
     await chrome.scripting.executeScript({
       target: { tabId },
-      func: () => { document.documentElement.dataset.daMorobotMode = "record"; }
+      func: () => { document.documentElement.dataset.daWebautomatorMode = "record"; }
     }).catch(() => {});
     await chrome.scripting.insertCSS({
       target: { tabId },
@@ -1220,7 +1220,7 @@ async function handlePlayTabClosed(tabId) {
 
   // The tab is gone, so there is nothing left to disarm — but the tracking map must not keep the
   // dead tab id, or a later run reusing that id would inherit a stale arming record.
-  try { MorobotAlerts.clearAllAlertArming(); } catch { /* module may not be loaded yet */ }
+  try { WebautomatorAlerts.clearAllAlertArming(); } catch { /* module may not be loaded yet */ }
 
   await chrome.storage.local.set({ playing: false, playPaused: false, playTabId: null });
   if (typeof playStatus !== "undefined" && playStatus) {
@@ -2435,7 +2435,7 @@ async function startPlayWithAutoReload(message, sender) {
   const needsReload = !!(prev && stampInfo?.stamp && prev !== stampInfo.stamp);
   if (!needsReload || hasExplicitTab || isConditionCheck) {
     if (hasExplicitTab || isConditionCheck) {
-      console.info("[Morobot Global] startPlay in tab", pendingPlay.tabId, {
+      console.info("[Webautomator Global] startPlay in tab", pendingPlay.tabId, {
         step: pendingPlay.stepNodeId,
         group: pendingPlay.groupNodeId,
         condition: pendingPlay.conditionNodeId
@@ -2453,7 +2453,7 @@ async function startPlayWithAutoReload(message, sender) {
   });
 
   setTimeout(() => {
-    console.info("[Morobot Global] play → auto reload after response", pendingPlay.taskId);
+    console.info("[Webautomator Global] play → auto reload after response", pendingPlay.taskId);
     try { chrome.runtime.reload(); } catch { /* ignore */ }
   }, 120);
 
@@ -2527,7 +2527,7 @@ async function resumePendingPlayAfterReload() {
   }
   await chrome.storage.local.remove(["pendingPlayRequest", "pendingPlayAt"]);
   await chrome.storage.local.set({ resumePlayAfterReload: true });
-  console.info("[Morobot Global] resuming play after auto-reload", pendingPlayRequest.taskId);
+  console.info("[Webautomator Global] resuming play after auto-reload", pendingPlayRequest.taskId);
   setTimeout(() => {
     startPlay(
       pendingPlayRequest.taskId,
@@ -2555,7 +2555,7 @@ async function resumePendingPlayAfterReload() {
       playStatus.lastError = msg;
       playStatus.playing = false;
       notifyPortalTabs({ type: "playStateChanged", ...getPlayStatus() });
-      console.warn("[Morobot Global] resume play failed", err);
+      console.warn("[Webautomator Global] resume play failed", err);
     });
   }, 700);
 }
@@ -2595,7 +2595,7 @@ async function reinjectPlayHudForTab(tabId, reason) {
       await new Promise((r) => setTimeout(r, 150 + i * 120));
     }
   } catch (err) {
-    console.warn("[Morobot Global] reinjectPlayHudForTab", reason, err?.message || err);
+    console.warn("[Webautomator Global] reinjectPlayHudForTab", reason, err?.message || err);
   }
 }
 
@@ -2638,8 +2638,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   // Closing a tab can close the portal (dropping the poll back to idle) or end a run (letting it
   // resume), so both answers are re-evaluated here.
   applyDevPollCadence();
-  handleRecordTabClosed(tabId).catch((err) => console.warn("[Morobot Global] record tab close", err));
-  handlePlayTabClosed(tabId).catch((err) => console.warn("[Morobot Global] play tab close", err));
+  handleRecordTabClosed(tabId).catch((err) => console.warn("[Webautomator Global] record tab close", err));
+  handlePlayTabClosed(tabId).catch((err) => console.warn("[Webautomator Global] play tab close", err));
 });
 chrome.tabs.onActivated.addListener(() => scheduleOpenTabsBroadcast("activated"));
 chrome.windows.onFocusChanged.addListener((windowId) => {

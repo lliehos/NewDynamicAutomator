@@ -1,0 +1,216 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Webautomator.Infrastructure\Webautomator.Infrastructure.csproj" />
+    <ProjectReference Include="..\Webautomator.Contracts\Webautomator.Contracts.csproj" />
+    <ProjectReference Include="..\Webautomator.Domain\Webautomator.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Markdig" Version="0.40.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>3.0.0</Version>
+    <InformationalVersion>3.0.0</InformationalVersion>
+  </PropertyGroup>
+
+  <!--
+    Do not let the SDK compress the static assets.
+
+    From net9.0 the Web SDK has compression on by default (EnableDefaultCompressedItems), so every
+    build and publish writes a .br AND a .gz sibling next to each css/js/html/json/svg file in
+    wwwroot. A compressed sibling is only ever served by two things: MapStaticAssets(), or a host
+    that was configured to prefer them (IIS's staticCompression is per-MIME, not per-file, and
+    nginx only does it with gzip_static/brotli_static turned on). This application uses
+    UseStaticFiles(), and both documented deployments are a plain reverse proxy in front of it
+    (docs/setup-guide.md), so the siblings are never read: requesting /css/admin-app.css with
+    "Accept-Encoding: gzip" and with "br" both return 200 with no Content-Encoding header.
+
+    They are not free, either. They are written at build/publish time, so a deployment ships an
+    unused duplicate of every asset — two extra files per asset, tens of megabytes in the package,
+    and a deployment folder where "a zip appears next to every CSS file", which is confusing to
+    anyone looking at it and looks like the server is generating them.
+
+    If the host is ever switched to gzip_static/brotli_static (or the app to MapStaticAssets, which
+    does use them), delete this line to get the pre-compressed copies back.
+  -->
+  <PropertyGroup>
+    <DisableBuildCompression>true</DisableBuildCompression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\docs\setup-guide.md" Link="docs\setup-guide.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
+    The two Chrome extension packages. ExtensionSyncService resolves them from the content root
+    (it probes <ContentRoot>\extension-global and <ContentRoot>\extension-smart-recorder) and
+    /extension/download/{role} serves whatever it finds there, so a publish without them leaves
+    the install page empty and the download endpoint answering "پوشه افزونه پیدا نشد".
+    They live in the repository root, outside this project, so reaching the publish output needs
+    an explicit include; %(RecursiveDir) keeps the content/ styles/ lib/ layout intact.
+  -->
+  <ItemGroup>
+    <None Include="..\..\extension-global\**\*" Link="extension-global\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Include="..\..\extension-smart-recorder\**\*" Link="extension-smart-recorder\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
+    NOTE: do NOT add the four "Remove" lines Visual Studio writes when a wwwroot subfolder is
+    excluded in Solution Explorer (<Compile/Content/EmbeddedResource/None Remove="wwwroot\assets\**" />).
+    They do not break Development — static files are read straight off disk there — but they DO
+    remove those files from the MSBuild item list, so every publish silently ships without them.
+    wwwroot/assets holds the icon font, the chart library and the vendor CSS/JS the layouts link to,
+    so a package built with them excluded renders with no icons and no charts.
+  -->
+
+  <!--
+    The four-file appsettings layout. appsettings.json and appsettings.Development.json are picked
+    up by the SDK automatically, but the two environment files are only copied when named explicitly
+    — without this, a publish would ship a Production server with no Production file at all, and the
+    operator would have nothing to edit. Both are optional at runtime (Program.cs adds the update
+    layer with optional: true, and the SDK's environment file is optional by default), so deleting
+    either one is a supported deployment.
+  -->
+  <ItemGroup>
+    <None Update="appsettings.Production.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Update="appsettings.ServerUpdate.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
+    Publish the desktop player beside this app, so one publish ships both clients.
+
+    The extension ships by being copied into the publish output (see the include above); the player
+    needs more than a copy, because it is a compiled app rather than loose files: it has to be
+    PUBLISHED (net10.0-windows, win-x64) into `desktop/`, and it has to carry a version.txt so
+    DesktopSyncService can tell a client whether it is behind. Doing that here — in the same publish
+    that produces the server — is what makes "a publish also ships the latest player" true rather
+    than a step someone has to remember.
+
+    It is skippable: pass -p:SkipDesktopPlayer=true for a server-only publish. It is also skipped
+    automatically on a non-Windows build host, because the player is WPF and cannot be built there —
+    see CanBuildDesktopPlayer below for why that must be a hard skip rather than a failed build.
+  -->
+  <PropertyGroup>
+    <DesktopPlayerProject>$(MSBuildThisFileDirectory)..\Webautomator.Player\Webautomator.Player.csproj</DesktopPlayerProject>
+    <!--
+      The player's version in the package. Kept as a property rather than read from the project file
+      so an operator can ship a specific build with -p:DesktopPlayerVersion=1.2.0 without editing
+      anything, which is what a hotfix needs.
+    -->
+    <DesktopPlayerVersion Condition="'$(DesktopPlayerVersion)' == ''">1.0.0</DesktopPlayerVersion>
+  </PropertyGroup>
+
+  <!--
+    Whether this build host can produce the player at all.
+
+    The player is a WPF app, so it can only be built on Windows. A publish performed ON a Linux
+    server (or in a Linux build container) therefore cannot build it, and attempting to does not
+    merely skip it — the WPF SDK fails the whole publish with NETSDK1100 ("The target platform must
+    be set to Windows ... when using Windows Forms or WPF"), taking the server's own publish down
+    with it. That is the opposite of what this target is for: shipping the player must never be able
+    to break shipping the server.
+
+    So the target is enabled only when the host is genuinely Windows. Note this keys on the HOST
+    ($(MSBuildRuntimeType)/$(OS)), not on $(RuntimeIdentifier): publishing the server for a win-x64
+    RID from Linux is still a Linux host that has no WPF targeting pack, and still cannot produce
+    the player.
+  -->
+  <PropertyGroup>
+    <CanBuildDesktopPlayer Condition="'$(OS)' == 'Windows_NT'">true</CanBuildDesktopPlayer>
+    <CanBuildDesktopPlayer Condition="'$(CanBuildDesktopPlayer)' == ''">false</CanBuildDesktopPlayer>
+  </PropertyGroup>
+
+  <Target Name="PublishDesktopPlayer"
+          AfterTargets="Publish"
+          Condition="'$(SkipDesktopPlayer)' != 'true' and '$(CanBuildDesktopPlayer)' == 'true' and Exists('$(DesktopPlayerProject)')">
+    <!--
+      Resolve the destination NOW (target-execution time), not at property-evaluation time.
+
+      Two things make the evaluated-time value wrong for the FTP/WebDeploy publish methods:
+      * $(PublishDir) is only populated by the time the Publish target has run, and some methods
+        (FTP) leave it EMPTY and carry the destination in their own settings instead. An empty
+        $(PublishDir) made the previous property collapse to a bare "desktop\" — which the nested
+        player Publish then resolved against the Web project directory and dumped 26 files into
+        `src\Webautomator.Web\desktop\`, right in the source tree.
+      * A relative $(PublishDir) (e.g. "bin\Release\net10.0\publish\") has the same problem: the
+        nested Publish resolves it against the PLAYER's project directory, so the player landed in
+        `src\Webautomator.Player\...\desktop\` — the "Publishing desktop player … → desktop\" symptom.
+
+      $(PublishDir) is authoritative whenever it is set (this is what `-o` and the IDE use). Only
+      when it is empty — i.e. the publish method handles the copy itself and never sets it, as FTP
+      does — do we fall back to $(PublishUrl)/$(publishUrl): WebDeploy/FTP set that to the final
+      destination, and for a local folder it is the output path. GetFullPath then makes whatever we
+      chose ABSOLUTE against the Web project directory, so the nested Publish can never rebase it.
+    -->
+    <PropertyGroup>
+      <_DesktopPublishRoot Condition="'$(PublishDir)' != ''">$(PublishDir)</_DesktopPublishRoot>
+      <_DesktopPublishRoot Condition="'$(_DesktopPublishRoot)' == ''">$(PublishUrl)</_DesktopPublishRoot>
+      <_DesktopPublishRoot Condition="'$(_DesktopPublishRoot)' == ''">$(publishUrl)</_DesktopPublishRoot>
+      <!-- Still nothing (a profile that carries no destination at all): use the default output. -->
+      <_DesktopPublishRoot Condition="'$(_DesktopPublishRoot)' == ''">$(OutputPath)</_DesktopPublishRoot>
+      <DesktopPlayerPublishDir>$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine($(MSBuildProjectDirectory), $(_DesktopPublishRoot), 'desktop'))))\</DesktopPlayerPublishDir>
+    </PropertyGroup>
+
+    <Message Importance="high" Text="Publishing desktop player $(DesktopPlayerVersion) → $(DesktopPlayerPublishDir)" />
+
+    <!--
+      PublishProfile is cleared (passed as empty) to the nested build on purpose. Without this the
+      player project inherits PublishProfile=FTPProfile.pubxml from the outer publish, looks for
+      that profile among ITS OWN Properties/PublishProfiles, does not find it, and emits
+      warning NETSDK1198 — and, worse, would try to apply FTP settings to the player. Empty means
+      "no profile", which is exactly right: we drive the player's publish entirely through the
+      Properties below.
+
+      TargetFramework is pinned for the same class of reason, and it is NOT redundant with the
+      player's own <TargetFramework>. Visual Studio (and `dotnet msbuild`) passes the OUTER
+      project's TargetFramework down as a GLOBAL property. A global property overrides the value
+      in every project it reaches, so the nested player build received net9.0 instead of its own
+      net10.0-windows — and a WPF project on a non-Windows target framework fails the whole publish
+      with NETSDK1136 ("The target platform must be set to Windows ... when using Windows Forms or
+      WPF"). Pinning it here makes the player's publish independent of whatever target framework
+      the caller used for the server, which is the point: shipping the server must never fail
+      because of how the player is built.
+
+      Do NOT add TargetFramework to the include list by adding it to the outer project instead —
+      the server legitimately targets plain net10.0, and the mismatch is only a problem because the
+      value leaks. Pin it at the boundary.
+    -->
+    <MSBuild Projects="$(DesktopPlayerProject)"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=net10.0-windows;RuntimeIdentifier=win-x64;SelfContained=false;PublishDir=$(DesktopPlayerPublishDir);PublishProfile=" />
+
+    <!--
+      version.txt is what DesktopSyncService reads to know what it is serving. Written AFTER the
+      publish so it is never swept away by the player's own publish output.
+    -->
+    <WriteLinesToFile File="$(DesktopPlayerPublishDir)version.txt"
+                      Lines="$(DesktopPlayerVersion)"
+                      Overwrite="true" />
+  </Target>
+
+</Project>

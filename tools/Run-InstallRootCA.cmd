@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title Morobot - client root certificate installer
+title Webautomator - client root certificate installer
 
 rem One-click launcher for Install-ClientRootCA.ps1.
 rem Double-click this file (it asks for admin rights, which the machine-wide store needs).

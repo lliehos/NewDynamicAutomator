@@ -397,7 +397,7 @@
         .catch((e) => ({ ok: false, error: e.message, tabs: [] }));
     }
     const tabs = Array.isArray(res?.tabs) ? res.tabs : [];
-    // Execution targets: http(s) pages and blank/about:blank tabs (not the Morobot portal).
+    // Execution targets: http(s) pages and blank/about:blank tabs (not the Webautomator portal).
     const list = tabs.filter((t) => {
       if (!t || !t.id || t.isPortal) return false;
       if (t.isBlank) return true;
@@ -551,7 +551,7 @@
     const d = ev.data;
     if (!d || d.source !== "da-editor") return;
     // Only the extension that OWNS this page (fingerprint handshake succeeded) answers the editor.
-    // With a second Morobot extension installed, both content scripts see this message; without
+    // With a second Webautomator extension installed, both content scripts see this message; without
     // the guard both would start a run against their own server.
     if (!playerOk()) return;
     if (d.type === "play") {

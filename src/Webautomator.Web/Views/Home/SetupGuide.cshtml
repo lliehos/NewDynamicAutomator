@@ -1,0 +1,51 @@
+@model Webautomator.Web.Services.SetupGuideDocument
+@{
+  var culture = L.Culture;
+  var dir = L.Dir;
+  var isEn = !L.IsRtl;
+  Layout = null;
+  var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+  var pageTitle = ViewData["Title"] as string;
+}
+<!doctype html>
+<html lang="@culture" dir="@dir" class="@(isEn ? "lp-ltr" : "lp-rtl")">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>@brandHead.ComposeTitle(pageTitle, L["brand.tagline"])</title>
+  <meta name="description" content="@L["setupGuide.description"]" />
+  <partial name="_BrandHead" model="brandHead" />
+  <link rel="stylesheet" href="~/css/da-fonts.css" />
+  <link rel="stylesheet" href="~/css/landing.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/setup-guide.css?v=@V.AssetVersion" />
+</head>
+<body class="lp sg-page">
+  <header class="lp-nav sg-nav">
+    <a class="lp-brand" href="/">
+      @{ ViewData["BrandImgClass"] = ""; ViewData["BrandImgWidth"] = 32; ViewData["BrandImgHeight"] = 32; }
+      <partial name="_BrandMark" model="brandHead" />
+      <span class="lp-brand-name">@brandHead.AppName</span>
+    </a>
+    <div class="lp-nav-actions">
+      <a class="lp-btn lp-btn-ghost" asp-action="SetupGuideDownload">@L["setupGuide.download"]</a>
+      <a class="lp-btn lp-btn-solid" asp-area="Panel" asp-controller="Account" asp-action="Login">@L["common.panel"]</a>
+    </div>
+  </header>
+
+  <main class="sg-main">
+    <header class="sg-head">
+      <p class="lp-kicker">@L["setupGuide.kicker"]</p>
+      <h1>@L["setupGuide.title"]</h1>
+      <p class="sg-meta">@L.T("setupGuide.updated", ("date", Webautomator.Web.Services.DateDisplay.DateLocal(Model.LastUpdatedUtc)))</p>
+    </header>
+    <article class="sg-body markdown-body">
+      @Html.Raw(Model.HtmlBody)
+    </article>
+  </main>
+
+  <footer class="lp-foot">
+    <p data-i18n="brand.copyright">@L["brand.copyright"]</p>
+  </footer>
+  <script src="~/js/i18n.js?v=@V.AssetVersion"></script>
+</body>
+</html>

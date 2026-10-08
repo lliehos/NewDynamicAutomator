@@ -1,0 +1,114 @@
+@using Webautomator.Infrastructure.Services
+@using Webautomator.Web.Areas.Admin.Models
+@{
+  ViewData["Title"] = L["admin.migrate.preprocessTitle"];
+  var groups = ViewBag.Groups as List<LegacyUserProcesses> ?? new List<LegacyUserProcesses>();
+  var userIds = ViewBag.UserIds as int[] ?? Array.Empty<int>();
+  var selected = ViewBag.SelectedTaskIds as HashSet<int> ?? new HashSet<int>();
+  var selectedCount = groups.Sum(g => g.Processes.Count(p => selected.Contains(p.Id)));
+  var usersSelected = groups.Count(g => g.Processes.Any(p => selected.Contains(p.Id)));
+  // A plan per NEW account is chosen here, and only when the licence manages plans.
+  var allowsPlanManagement = ViewBag.AllowsPlanManagement == true;
+  var plans = ViewBag.Plans as List<Webautomator.Domain.Entities.Plan> ?? new List<Webautomator.Domain.Entities.Plan>();
+  var isFa = L.IsRtl;
+}
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L.T("admin.migrate.preprocessSummary",
+    ("count", selectedCount.ToString()), ("users", usersSelected.ToString()))
+}' />
+
+@* Everything down to the buttons is ONE form: the review tables and the per-account plan pickers
+   have to be submitted together for the transfer to know what was chosen. *@
+<form method="post" asp-area="Admin" asp-controller="Migrate" asp-action="RunProcesses">
+  @Html.AntiForgeryToken()
+  <input type="hidden" name="connectionString" value="@ViewBag.ConnectionString" />
+  @foreach (var id in userIds)
+  {
+    <input type="hidden" name="userIds" value="@id" />
+  }
+  @foreach (var t in selected)
+  {
+    <input type="hidden" name="taskIds" value="@t" />
+  }
+
+@* The converter's decision items land here (a legacy construct the automatic mapping cannot
+   settle). Until the conversion model is final the section reports that nothing is pending. *@
+<div class="card-admin" style="margin-bottom:1rem">
+  <h3><i class="ti ti-adjustments" aria-hidden="true"></i>@L["admin.migrate.unknownItems"]</h3>
+  <p class="admin-field-hint">@L["admin.migrate.noneDetected"]</p>
+</div>
+
+@foreach (var g in groups)
+{
+  var rows = g.Processes.Where(p => selected.Contains(p.Id)).ToList();
+  if (rows.Count == 0) { continue; }
+  var name = $"{g.User.FirstName} {g.User.LastName}".Trim();
+  if (string.IsNullOrWhiteSpace(name)) name = g.User.UserName;
+  <div class="admin-table-wrap" data-no-page="1" style="margin-bottom:1.25rem">
+    <h3 style="padding:.75rem 1rem 0">
+      <i class="ti ti-user" aria-hidden="true"></i>
+      @name <span class="admin-muted">· @g.User.UserName · #@g.User.Id</span>
+      @if (g.User.MatchedHere)
+      {
+        <span class="admin-badge is-ok">@L["admin.migrate.matched"] #@g.User.MatchedUserId</span>
+      }
+      else
+      {
+        <span class="admin-badge is-muted">@L["admin.migrate.newAccount"]</span>
+      }
+    </h3>
+    @if (allowsPlanManagement && !g.User.MatchedHere)
+    {
+      @* Only a NEW account needs a plan; one that matches an existing account keeps the level it
+         already has. *@
+      <div style="padding:.5rem 1rem .25rem">
+        <label class="form-label" for="newPlan_@g.User.Id">@L["admin.migrate.newUserPlan"]</label>
+        @if (plans.Count == 0)
+        {
+          <div class="admin-field-hint">@L["admin.migrate.newUserPlanNone"]</div>
+        }
+        else
+        {
+          <select class="form-select" style="max-width:26rem" id="newPlan_@g.User.Id" name="newPlan_@g.User.Id">
+            @foreach (var p in plans)
+            {
+              var planLabel = isFa ? p.NameFa : p.NameEn;
+              <option value="@p.Id" selected="@(string.Equals(p.Code, "Free", StringComparison.OrdinalIgnoreCase))">@planLabel (@p.Code)</option>
+            }
+          </select>
+          <div class="admin-field-hint">@L["admin.migrate.newUserPlanHint"]</div>
+        }
+      </div>
+    }
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>Id</th>
+          <th>@L["admin.migrate.colTitle"]</th>
+          <th>@L["admin.migrate.colGroups"]</th>
+          <th>@L["admin.migrate.colSteps"]</th>
+        </tr>
+      </thead>
+      <tbody>
+      @foreach (var p in rows)
+      {
+        <tr>
+          <td>@p.Id</td>
+          <td>@p.Title</td>
+          <td class="num">@p.GroupCount</td>
+          <td class="num">@p.StepsCount</td>
+        </tr>
+      }
+      </tbody>
+    </table>
+  </div>
+}
+
+  <div class="admin-form-actions" style="padding:0 1rem 1rem">
+    <button type="submit" class="btn-admin"><i class="ti ti-database-import" aria-hidden="true"></i>@L["admin.migrate.startTransfer"]</button>
+    <button type="submit" class="btn-admin secondary"
+            formaction="@Url.Action("Processes", "Migrate", new { area = "Admin" })">
+      <i class="ti ti-arrow-back-up" aria-hidden="true"></i>@L["admin.migrate.backToProcesses"]
+    </button>
+  </div>
+</form>

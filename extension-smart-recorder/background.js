@@ -1,4 +1,4 @@
-/** Morobot Smart Recorder — blank tab + soft API stub (Microsoft LM later). */
+/** Webautomator Smart Recorder — blank tab + soft API stub (Microsoft LM later). */
 importScripts("lib/branding.js", "lib/session-scope.js");
 
 const DEFAULT_PORTAL = "https://localhost:7201";
