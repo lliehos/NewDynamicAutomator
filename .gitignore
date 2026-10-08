@@ -10,6 +10,11 @@
 _run/
 _run[0-9]/
 _run[0-9][0-9]/
+publish-clean/
+publish-clean[0-9]/
+
+# Local demo deployment snapshot (a built copy of the app; never commit)
+_demo/
 
 # Local AI / agent tooling (machine-specific; do not commit)
 .claude/
@@ -515,4 +520,6 @@ updates/
 # Local DB / canvas backups (do not commit)
 _backup_*.bak
 _morobot*.bak
+_webautomator*.bak
+*.bak
 /.vscode
