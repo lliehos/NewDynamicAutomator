@@ -8,15 +8,15 @@
 
   <ItemGroup>
     <PackageReference Include="Markdig" Version="0.40.0" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12">
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.31" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.31">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
   </ItemGroup>
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Version>3.0.0</Version>
@@ -28,7 +28,11 @@
 
     From net9.0 the Web SDK has compression on by default (EnableDefaultCompressedItems), so every
     build and publish writes a .br AND a .gz sibling next to each css/js/html/json/svg file in
-    wwwroot. A compressed sibling is only ever served by two things: MapStaticAssets(), or a host
+    wwwroot. This project targets net8.0, where that default does not exist and no sibling is
+    written, so the property below is inert today — it is kept as the guard it was: a retarget to
+    net9.0 or later would otherwise silently start shipping the duplicates again.
+
+    A compressed sibling is only ever served by two things: MapStaticAssets(), or a host
     that was configured to prefer them (IIS's staticCompression is per-MIME, not per-file, and
     nginx only does it with gzip_static/brotli_static turned on). This application uses
     UseStaticFiles(), and both documented deployments are a plain reverse proxy in front of it
@@ -106,7 +110,7 @@
 
     The extension ships by being copied into the publish output (see the include above); the player
     needs more than a copy, because it is a compiled app rather than loose files: it has to be
-    PUBLISHED (net10.0-windows, win-x64) into `desktop/`, and it has to carry a version.txt so
+    PUBLISHED (net8.0-windows, win-x64) into `desktop/`, and it has to carry a version.txt so
     DesktopSyncService can tell a client whether it is behind. Doing that here — in the same publish
     that produces the server — is what makes "a publish also ships the latest player" true rather
     than a step someone has to remember.
@@ -157,7 +161,7 @@
         $(PublishDir) made the previous property collapse to a bare "desktop\" — which the nested
         player Publish then resolved against the Web project directory and dumped 26 files into
         `src\Webautomator.Web\desktop\`, right in the source tree.
-      * A relative $(PublishDir) (e.g. "bin\Release\net10.0\publish\") has the same problem: the
+      * A relative $(PublishDir) (e.g. "bin\Release\net8.0\publish\") has the same problem: the
         nested Publish resolves it against the PLAYER's project directory, so the player landed in
         `src\Webautomator.Player\...\desktop\` — the "Publishing desktop player … → desktop\" symptom.
 
@@ -189,20 +193,20 @@
       TargetFramework is pinned for the same class of reason, and it is NOT redundant with the
       player's own <TargetFramework>. Visual Studio (and `dotnet msbuild`) passes the OUTER
       project's TargetFramework down as a GLOBAL property. A global property overrides the value
-      in every project it reaches, so the nested player build received net9.0 instead of its own
-      net10.0-windows — and a WPF project on a non-Windows target framework fails the whole publish
+      in every project it reaches, so the nested player build received net8.0 instead of its own
+      net8.0-windows — and a WPF project on a non-Windows target framework fails the whole publish
       with NETSDK1136 ("The target platform must be set to Windows ... when using Windows Forms or
       WPF"). Pinning it here makes the player's publish independent of whatever target framework
       the caller used for the server, which is the point: shipping the server must never fail
       because of how the player is built.
 
       Do NOT add TargetFramework to the include list by adding it to the outer project instead —
-      the server legitimately targets plain net10.0, and the mismatch is only a problem because the
+      the server legitimately targets plain net8.0, and the mismatch is only a problem because the
       value leaks. Pin it at the boundary.
     -->
     <MSBuild Projects="$(DesktopPlayerProject)"
              Targets="Publish"
-             Properties="Configuration=$(Configuration);TargetFramework=net10.0-windows;RuntimeIdentifier=win-x64;SelfContained=false;PublishDir=$(DesktopPlayerPublishDir);PublishProfile=" />
+             Properties="Configuration=$(Configuration);TargetFramework=net8.0-windows;RuntimeIdentifier=win-x64;SelfContained=false;PublishDir=$(DesktopPlayerPublishDir);PublishProfile=" />
 
     <!--
       version.txt is what DesktopSyncService reads to know what it is serving. Written AFTER the

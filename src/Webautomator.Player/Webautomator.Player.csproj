@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -52,7 +52,7 @@
     <PackageReference Include="Selenium.Support" Version="4.27.0" />
     <!-- The SignalR client lets the server push a new version to a running player instead of the
          player having to poll for one. -->
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.31" />
   </ItemGroup>
 
 </Project>

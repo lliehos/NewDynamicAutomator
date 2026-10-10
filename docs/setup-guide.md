@@ -43,7 +43,7 @@ Webautomator یک سامانه اتوماسیون فرآیندهای وب است
 
 ## 2. محیط‌های پشتیبانی‌شده برای هاست وب
 
-Webautomator یک برنامه **ASP.NET Core 9** است و روی سیستم‌عامل‌های مختلف قابل اجراست. **دیتابیس** باید **SQL Server** باشد (روی همان سرور یا سرور جدا — Windows، Linux یا سرویس ابری).
+Webautomator یک برنامه **ASP.NET Core 8** است و روی سیستم‌عامل‌های مختلف قابل اجراست. **دیتابیس** باید **SQL Server** باشد (روی همان سرور یا سرور جدا — Windows، Linux یا سرویس ابری).
 
 ### جدول محیط‌های هاست
 
@@ -52,7 +52,7 @@ Webautomator یک برنامه **ASP.NET Core 9** است و روی سیستم‌
 | **Windows Server 2019+** | ✅ | IIS + Hosting Bundle، یا اجرای مستقیم برنامه |
 | **Linux** (Ubuntu 22.04+, RHEL 8+, Debian 12+, …) | ✅ | برنامه + **nginx** (reverse proxy) + **systemd** |
 | **Azure App Service** (Windows / Linux) | ✅ | استقرار بسته ASP.NET Core |
-| **Docker / Kubernetes** | ✅ | کانتینر ASP.NET Core 9 + اتصال به SQL Server |
+| **Docker / Kubernetes** | ✅ | کانتینر ASP.NET Core 8 + اتصال به SQL Server |
 | **macOS** | ⚠️ فقط آزمایش | اجرای مستقیم — برای production توصیه نمی‌شود |
 
 ### نکات مهم
@@ -70,11 +70,11 @@ Webautomator یک برنامه **ASP.NET Core 9** است و روی سیستم‌
 
 **Windows:**
 - Windows Server 2019 یا جدیدتر
-- [.NET 9 ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/9.0) — برای IIS از **Hosting Bundle** استفاده کنید
+- [.NET 8 ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) — برای IIS از **Hosting Bundle** استفاده کنید
 
 **Linux:**
 - توزیع پشتیبانی‌شده (Ubuntu 22.04 LTS، RHEL 8+، Debian 12+ و مشابه)
-- [.NET 9 ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/9.0) برای Linux
+- [.NET 8 ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) برای Linux
 - **nginx** (یا Apache) به‌عنوان reverse proxy — توصیه می‌شود
 
 ### دیتابیس (الزامی — SQL Server)
@@ -280,7 +280,7 @@ dotnet Webautomator.Web.dll
 
 ### 7.1 Windows — IIS (پیشنهادی برای سازمان‌های Windows)
 
-1. نصب **ASP.NET Core Hosting Bundle 9**
+1. نصب **ASP.NET Core Hosting Bundle 8**
 2. ایجاد **Application Pool** با گزینه **No Managed Code**
 3. ایجاد **Site** — مسیر فیزیکی = پوشه نصب Webautomator
 4. تنظیم **Binding** با HTTPS
@@ -346,14 +346,14 @@ server {
 
 ### 7.4 Docker / Kubernetes
 
-- تصویر پایه: `mcr.microsoft.com/dotnet/aspnet:9.0`
+- تصویر پایه: `mcr.microsoft.com/dotnet/aspnet:8.0`
 - متغیر `ConnectionStrings__Default` را در environment تنظیم کنید
 - SQL Server باید از داخل کانتینر در دسترس باشد
 - برای HTTPS از ingress یا load balancer استفاده کنید
 
 ### 7.5 Azure App Service
 
-- Runtime stack: **.NET 9**
+- Runtime stack: **.NET 8**
 - Connection string را در **Configuration → Connection strings** تنظیم کنید
 - برای Linux plan همان بسته `Webautomator.Web.dll` را deploy کنید
 
@@ -762,7 +762,7 @@ wwwroot/ …              ← سایر فایل‌ها
 | لایسنس قدیمی‌تر قبول نمی‌شود | لایسنس جدید باید شماره نسخه بالاتر داشته باشد |
 | سقف کاربر | دریافت لایسنس با سقف کاربر بالاتر |
 | تغییر اتصال دیتابیس بعد از لایسنس | appsettings.json را هماهنگ کنید و سرویس را restart کنید |
-| برنامه روی Linux بالا نمی‌آید | نصب ASP.NET Core 9 Runtime برای Linux؛ مسیر `dotnet` در systemd |
+| برنامه روی Linux بالا نمی‌آید | نصب ASP.NET Core 8 Runtime برای Linux؛ مسیر `dotnet` در systemd |
 | 502 از nginx | بررسی `systemctl status webautomator`؛ پورت `ASPNETCORE_URLS` با `proxy_pass` یکی باشد |
 | افزونه به سرور اشتباه وصل است | پنل سرور درست را باز کنید؛ refresh؛ دوباره Record/Play |
 | افزونه روی دامنه سازمانی کار نمی‌کند | یک بار `/Panel` را روی همان دامنه باز کنید تا آدرس سرور ثبت شود |
