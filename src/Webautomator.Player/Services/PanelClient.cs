@@ -208,12 +208,20 @@ public sealed class PanelClient : IDisposable
         return ApiResult<string>.Success(userName ?? "کاربر");
     }
 
+    /// <summary>Error text meaning "the session is gone", so the window can sign out instead of showing it.</summary>
+    public const string AuthError = "auth";
+
     /// <summary>The process list, in the shape the desktop list shows.</summary>
     public async Task<ApiResult<List<ProcessRow>>> ListProcessesAsync(CancellationToken ct = default)
     {
         try
         {
             var res = await _http.GetAsync($"{BaseUrl}/api/tasks", ct);
+            // 401 here means the token is no longer accepted — most often because a monitoring
+            // administrator closed the session. Reported as a distinct error so the window can return
+            // to the sign-in form rather than leaving a signed-out client looking merely unlucky.
+            if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                return ApiResult<List<ProcessRow>>.Fail(AuthError);
             if (!res.IsSuccessStatusCode)
                 return ApiResult<List<ProcessRow>>.Fail(await ReadErrorAsync(res, ct) ?? "لیست فرآیندها دریافت نشد.");
 
@@ -244,16 +252,69 @@ public sealed class PanelClient : IDisposable
         }
     }
 
+    /// <summary>What the server answered when a run asked to register itself.</summary>
+    public enum PlayRegistration
+    {
+        /// <summary>Registered: this is a server-side run.</summary>
+        Registered,
+        /// <summary>The portal could not be reached. A server-mode run carries on; its session is missing.</summary>
+        Unavailable,
+        /// <summary>The monitoring dashboard's stop-all switch is on, so no run may start.</summary>
+        Suspended
+    }
+
     /// <summary>Register a server-managed run, mirroring what the extension does before it plays.</summary>
-    public async Task<bool> RegisterPlayAsync(int taskId, CancellationToken ct = default)
+    /// <remarks>
+    /// The three outcomes are deliberately distinct. A portal that cannot be reached leaves a
+    /// server-mode run to continue (the user's browser work should not be blocked by a monitoring
+    /// blip), while a SUSPENDED deployment means the run must not start at all — that is the whole
+    /// point of the switch, and treating the two as one "false" would silently ignore it.
+    /// </remarks>
+    public async Task<PlayRegistration> RegisterPlayAsync(int taskId, CancellationToken ct = default)
     {
         try
         {
             var res = await _http.PostAsJsonAsync($"{BaseUrl}/Panel/Tasks/RegisterPlay",
                 new { taskId = taskId.ToString(), userName = UserName }, JsonOpts, ct);
-            return res.IsSuccessStatusCode;
+            if (res.StatusCode == System.Net.HttpStatusCode.Conflict) return PlayRegistration.Suspended;
+            return res.IsSuccessStatusCode ? PlayRegistration.Registered : PlayRegistration.Unavailable;
         }
-        catch { return false; }
+        catch { return PlayRegistration.Unavailable; }
+    }
+
+    /// <summary>What a running client should do next.</summary>
+    public enum RunDirective
+    {
+        /// <summary>Carry on. Also what an unreachable portal answers: only an explicit instruction stops a run.</summary>
+        Continue,
+        /// <summary>Stop this run — an administrator stopped it, or every run was stopped.</summary>
+        Stop,
+        /// <summary>The session behind this run was closed; the client must sign out.</summary>
+        SessionClosed
+    }
+
+    /// <summary>
+    /// Ask whether this run may continue.
+    /// </summary>
+    /// <remarks>
+    /// Polled while a run is in flight, for local runs too: a local run registers nothing, but the
+    /// stop-all switch and a closed session still apply to it, and this is the only channel to a client
+    /// that never registered. An unreachable portal answers Continue — a local run has to survive the
+    /// server being down, which is why "no answer" is not "stop".
+    /// </remarks>
+    public async Task<RunDirective> GetRunDirectiveAsync(int taskId, CancellationToken ct = default)
+    {
+        try
+        {
+            var res = await _http.GetAsync($"{BaseUrl}/api/run-command?taskId={taskId}", ct);
+            if (res.StatusCode == System.Net.HttpStatusCode.Unauthorized) return RunDirective.SessionClosed;
+            if (!res.IsSuccessStatusCode) return RunDirective.Continue;
+
+            using var doc = System.Text.Json.JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+            var stop = doc.RootElement.TryGetProperty("abort", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.True;
+            return stop ? RunDirective.Stop : RunDirective.Continue;
+        }
+        catch { return RunDirective.Continue; }
     }
 
     /// <summary>Clear a server-managed run when it ends (or when the stop button is used).</summary>

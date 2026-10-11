@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Webautomator.Contracts.DataSources;
+using Webautomator.Domain;
 using Webautomator.Infrastructure.Services;
 using Webautomator.Web.Hubs;
 using Webautomator.Web.Services;
@@ -20,6 +21,7 @@ public class TasksController : Controller
     private readonly CatalogLiveService _catalog;
     private readonly EntitlementService _entitlements;
     private readonly DiagramSettingsService _diagram;
+    private readonly SystemSettingsService _settings;
 
     public TasksController(
         TaskService tasks,
@@ -28,7 +30,8 @@ public class TasksController : Controller
         PlaySessionTracker plays,
         CatalogLiveService catalog,
         EntitlementService entitlements,
-        DiagramSettingsService diagram)
+        DiagramSettingsService diagram,
+        SystemSettingsService settings)
     {
         _tasks = tasks;
         _dataSources = dataSources;
@@ -37,6 +40,7 @@ public class TasksController : Controller
         _catalog = catalog;
         _diagram = diagram;
         _entitlements = entitlements;
+        _settings = settings;
     }
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -249,6 +253,17 @@ public class TasksController : Controller
     {
         var taskId = (body?.TaskId ?? "").Trim();
         if (string.IsNullOrEmpty(taskId)) return BadRequest();
+
+        // The monitoring dashboard's stop-all switch. Registering is how a run becomes a "server-side
+        // run", so refusing here is what makes the switch a stop rather than a suggestion: without it a
+        // client that is still open would simply start the same process again.
+        if (await _settings.GetBoolAsync(SystemSettingKeys.StopAllServerRuns, false, ct))
+            return StatusCode(StatusCodes.Status409Conflict, new
+            {
+                code = "runs_suspended",
+                message = "اجرای جدید توسط مدیر نظارت متوقف شده است."
+            });
+
         var userName = body?.UserName
             ?? (User.Identity?.IsAuthenticated == true ? User.Identity.Name : null);
         int? uid = null;
@@ -285,13 +300,19 @@ public class TasksController : Controller
 
     [HttpGet]
     [AllowAnonymous]
-    public IActionResult PlayAbort(string taskId)
+    public async Task<IActionResult> PlayAbort(string taskId, CancellationToken ct)
     {
         taskId = (taskId ?? "").Trim();
         if (string.IsNullOrEmpty(taskId)) return BadRequest();
-        var abort = _plays.PeekAbort(taskId);
+
+        // The client polls this while it plays, so the answer carries both stop signals it has to obey:
+        // a per-task abort (an administrator stopped this run, or the canvas changed under it) and the
+        // stop-all switch, which has to reach even a run that was started with the feature off and is
+        // therefore not registered here at all.
+        var stopAll = await _settings.GetBoolAsync(SystemSettingKeys.StopAllServerRuns, false, ct);
+        var abort = _plays.PeekAbort(taskId) || stopAll;
         if (abort) _plays.ConsumeAbort(taskId);
-        return Ok(new { abort, playing = _plays.IsPlaying(taskId) });
+        return Ok(new { abort, playing = _plays.IsPlaying(taskId), stopAll });
     }
 
     [HttpPost]

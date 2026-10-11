@@ -1930,9 +1930,12 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   const taskRecord = tasks.find((t) => String(t.id) === String(taskId));
   const runOnServer = taskRecord?.runOnServer !== false;
   playStatus.runOnServer = runOnServer;
-  if (runOnServer) {
-    startPlayAbortWatch(String(graph.taskId || taskId));
-  } else {
+  // The watch runs for a LOCAL run too. A local run registers nothing with the server, but an
+  // administrator can still put a stop to it - the stop-all switch, or closing the session itself -
+  // and a poll is the only channel to a browser that never registered. Only the registration half is
+  // skipped in local mode, which is what "local" means.
+  startPlayAbortWatch(String(graph.taskId || taskId), runOnServer);
+  if (!runOnServer) {
     // Local mode still needs the in-memory HUD/liveness bookkeeping, just none of the server halves.
     await markPlayHeartbeat(graph.taskId || taskId, 1);
     appendPlayLog("info", "اجرای محلی: روی سرور ثبت نمی‌شود و منابع غیرعمومی محلی خوانده/نوشته می‌شوند.");
@@ -5068,24 +5071,85 @@ function collectWrittenCells(results) {
   return out;
 }
 
-function startPlayAbortWatch(taskId) {
+function startPlayAbortWatch(taskId, register) {
   if (playAbortPoll) clearInterval(playAbortPoll);
-  registerPlayOnServer(taskId).catch(() => {});
+  // Registering is what makes this a SERVER-side run; a local run must not create a session.
+  if (register !== false) registerPlayOnServer(taskId).catch(() => {});
   playAbortPoll = setInterval(async () => {
     if (!playStatus.playing) return;
     // Refresh liveness on the tick we already pay for. This is what lets detectOrphanedPlay tell a
     // worker that was killed from one that is merely in a long step — see PLAY_HEARTBEAT_KEY.
     markPlayHeartbeat(taskId, playStatus.stepIndex);
     try {
-      const res = await portalFetch(`/Panel/Tasks/PlayAbort?taskId=${encodeURIComponent(taskId)}`, { method: "GET" });
-      if (!res || !res.ok) return;
-      const body = await res.json().catch(() => ({}));
-      if (body.abort) {
+      const command = await fetchRunCommand(taskId);
+      if (command === SESSION_CLOSED) {
+        // The token is already dead server-side; stopping the run is the client's half of the
+        // administrator's "close all runs and sessions".
+        appendPlayLog("error", "دسترسی این حساب توسط مدیر نظارت بسته شد؛ اجرا متوقف شد. برای ادامه دوباره وارد شوید.");
+        await stopPlay("session_closed");
+        return;
+      }
+      if (!command) return;
+      if (command.stopAll) {
+        appendPlayLog("error", "همهٔ اجراهای سروری توسط مدیر نظارت متوقف شدند.");
+        await stopPlay("stop_all");
+        return;
+      }
+      if (command.abort) {
         appendPlayLog("error", "اجرا به‌خاطر تغییر فرآیند متوقف شد");
         await stopPlay("canvas_changed");
       }
     } catch { /* ignore */ }
   }, 1500);
+}
+
+/** Returned by fetchRunCommand when the server says this session is no longer valid. */
+const SESSION_CLOSED = "session_closed";
+
+/**
+ * Ask whether this run has to stop, and whether the session behind it still exists.
+ *
+ * Two endpoints, in order of how much they can answer. The authenticated one can report a per-user
+ * decision - including "this session was closed", which arrives as a 401 - while the older anonymous
+ * abort poll can only report the global stop switch. The anonymous one is still used as a fallback so
+ * that a browser with no token (and an installation whose server predates the newer endpoint) keeps
+ * working exactly as before, global switch included.
+ */
+async function fetchRunCommand(taskId) {
+  const headers = await portalAuthHeaders();
+  if (headers.Authorization) {
+    const res = await portalFetch(`/api/run-command?taskId=${encodeURIComponent(taskId)}`, { method: "GET", headers });
+    if (res && res.status === 401) return SESSION_CLOSED;
+    if (res && res.ok) return await res.json().catch(() => null);
+  }
+  const legacy = await portalFetch(`/Panel/Tasks/PlayAbort?taskId=${encodeURIComponent(taskId)}`, { method: "GET" });
+  if (!legacy || !legacy.ok) return null;
+  return await legacy.json().catch(() => null);
+}
+
+/**
+ * The portal credential, from the same two places the background worker reads it: the portal's own
+ * cookie when the browser will hand it over, then the token stored in extension storage.
+ *
+ * No headers (rather than an empty Authorization) when neither is available, because the caller uses
+ * their absence to decide between the authenticated and the anonymous poll.
+ */
+async function portalAuthHeaders() {
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  try {
+    const portal = await portalBase().catch(() => null);
+    if (!portal) return headers;
+    try {
+      const cookie = await chrome.cookies.get({ url: portal, name: "da_access" });
+      if (cookie && cookie.value) {
+        headers.Authorization = `Bearer ${cookie.value}`;
+        return headers;
+      }
+    } catch { /* the cookies API may be unavailable in this context */ }
+    const stored = await chrome.storage.local.get("token").catch(() => ({}));
+    if (stored && stored.token) headers.Authorization = `Bearer ${stored.token}`;
+  } catch { /* no identity: the caller falls back to the anonymous poll */ }
+  return headers;
 }
 
 /**

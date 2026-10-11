@@ -33,6 +33,18 @@ public sealed class MetricsSamplerService : BackgroundService
     private readonly ILogger<MetricsSamplerService> _log;
     private readonly PlaySessionTracker _plays;
 
+    /// <summary>
+    /// The per-key traffic totals read at the previous tick, so this tick can store the difference.
+    /// </summary>
+    /// <remarks>
+    /// Kept in memory because the counters behind it are (see <see cref="TrafficMeter"/>), and because
+    /// the table stores DELTAS: a running total persisted from one process life would be meaningless in
+    /// the next, whereas a difference recomputed from the previous reading is correct across restarts.
+    /// A key seen for the first time contributes nothing, which is what makes a restart show no
+    /// artificial spike.
+    /// </remarks>
+    private readonly Dictionary<string, TrafficTotal> _lastTraffic = new(StringComparer.Ordinal);
+
     public MetricsSamplerService(
         IServiceScopeFactory scopes,
         ILogger<MetricsSamplerService> log,
@@ -124,6 +136,14 @@ public sealed class MetricsSamplerService : BackgroundService
             });
             await db.SaveChangesAsync(ct);
 
+            // The same tick records who the traffic belonged to, as one row per user and per address.
+            var traffic = BuildTrafficDeltas(now);
+            if (traffic.Count > 0)
+            {
+                db.TrafficUsageSamples.AddRange(traffic);
+                await db.SaveChangesAsync(ct);
+            }
+
             // Prune by age. Done on the same tick so no separate job is needed, and only when there
             // is almost certainly something to remove (cheap guard against a query per minute).
             var cutoff = now - Retention;
@@ -133,6 +153,12 @@ public sealed class MetricsSamplerService : BackgroundService
                 db.ServerMetricsSamples.RemoveRange(stale);
                 await db.SaveChangesAsync(ct);
             }
+
+            // Same retention for the per-user/per-address rows: they are the same age-bounded series,
+            // and keeping one longer than the other would let the dashboard's tables outlive its charts.
+            await db.TrafficUsageSamples
+                .Where(s => s.CapturedAtUtc < cutoff)
+                .ExecuteDeleteAsync(ct);
         }
         catch (OperationCanceledException)
         {
@@ -145,8 +171,52 @@ public sealed class MetricsSamplerService : BackgroundService
         }
     }
 
-    private static long SafeStat(Func<long> f) { try { return f(); } catch { return 0; } }
-    private static double SafeStatD(Func<double> f) { try { return f(); } catch { return 0; } }
+    /// <summary>
+    /// Turn the in-memory per-user and per-address totals into the rows this minute contributes.
+    /// </summary>
+    /// <remarks>
+    /// Every key that moved is written, including anonymous traffic, so "who is generating this" has an
+    /// answer for every byte the charts show. A key whose counters did not move is skipped: a minute of
+    /// silence is an absent row, not a row of zeros.
+    /// </remarks>
+    private List<TrafficUsageSample> BuildTrafficDeltas(DateTime now)
+    {
+        var rows = new List<TrafficUsageSample>();
+
+        void Collect(TrafficScope scope, IReadOnlyList<TrafficTotal> totals)
+        {
+            foreach (var total in totals)
+            {
+                var id = $"{(int)scope}:{total.Key}";
+                var previous = _lastTraffic.TryGetValue(id, out var last) ? last : null;
+                _lastTraffic[id] = total;
+
+                // No previous reading means this is the first time the key is seen (startup, or a new
+                // user): it contributes nothing this tick. A negative difference means the process
+                // restarted, so the counters went back to zero — recorded as nothing rather than as a
+                // negative spike that would make the range totals nonsense.
+                if (previous is null) continue;
+                var deltaIn = Math.Max(0, total.BytesIn - previous.BytesIn);
+                var deltaOut = Math.Max(0, total.BytesOut - previous.BytesOut);
+                if (deltaIn == 0 && deltaOut == 0) continue;
+
+                rows.Add(new TrafficUsageSample
+                {
+                    CapturedAtUtc = now,
+                    Scope = scope,
+                    Key = total.Key,
+                    BytesIn = deltaIn,
+                    BytesOut = deltaOut
+                });
+            }
+        }
+
+        Collect(TrafficScope.User, TrafficMeter.UserTotals());
+        Collect(TrafficScope.Ip, TrafficMeter.IpTotals());
+        return rows;
+    }
+
+    private static long SafeStat(Func<long> f) { try { return f(); } catch { return 0; } }    private static double SafeStatD(Func<double> f) { try { return f(); } catch { return 0; } }
     private static int SafeStatI(Func<int> f) { try { return f(); } catch { return 0; } }
 
     private static long AvailableMemory()

@@ -36,6 +36,9 @@ public partial class RunWindow : Window, INotifyPropertyChanged
 
     public LocalRunEngine? Engine { get; private set; }
 
+    /// <summary>Raised when a run was stopped because the server closed this session.</summary>
+    public event Action? SessionClosed;
+
     public RunWindow(PanelClient client, Func<FirefoxRunner, LocalRunEngine> engineFactory)
     {
         InitializeComponent();
@@ -68,6 +71,10 @@ public partial class RunWindow : Window, INotifyPropertyChanged
         // The engine owns the highlight colour; the window just shows the current value.
         Engine.HighlightColor = ReadStartHighlightColor(_graph);
         Engine.State.StepTotal = Math.Max(1, _graph.Nodes.Count(n => n.IsAction));
+        // A run told to stop because the session was closed ends this window's business with the
+        // server entirely, so the window reports it upward (the owner signs out) rather than just
+        // showing a stopped run.
+        Engine.SessionClosed += () => SessionClosed?.Invoke();
         StatusLabel = DsStrings.RunStarting;
         _timer.Start();
 

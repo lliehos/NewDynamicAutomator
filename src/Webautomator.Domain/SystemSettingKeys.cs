@@ -105,7 +105,10 @@ public static class SystemSettingKeys
         ProfileFieldLastName,
         ProfileFieldEmail,
         ProfileFieldMobile,
-        ProfileFieldNationalId
+        ProfileFieldNationalId,
+        // The monitoring stop-all switch is a plain flag too, and the Monitoring page renders it with
+        // the same switch chrome the settings page uses.
+        StopAllServerRuns
     };
 
     /// <summary>True when the setting is a plain on/off flag.</summary>
@@ -641,6 +644,36 @@ public static class SystemSettingKeys
     /// <summary>True when the key belongs to a page other than Admin → Settings.</summary>
     public static bool IsBrandingOwned(string? key) =>
         !string.IsNullOrWhiteSpace(key) && BrandingOwned.Contains(key);
+
+    // ── Monitoring ──
+
+    /// <summary>
+    /// The monitoring dashboard's stop-all switch.
+    /// </summary>
+    /// <remarks>
+    /// While it is on, every running server-side play is asked to stop and a NEW one is refused, which
+    /// is what makes it a stop rather than a race: without the second half a user could simply start the
+    /// run again from the client that is still open. It is a setting — not a field on some in-memory
+    /// flag — so it survives a restart, and so the clients that must obey it can read it.
+    /// </remarks>
+    public const string StopAllServerRuns = "StopAllServerRuns";
+
+    /// <summary>
+    /// Keys owned by the Monitoring page, which Admin → Settings filters out.
+    /// </summary>
+    /// <remarks>
+    /// Same reasoning as <see cref="BrandingOwned"/>: two pages writing one row means a stale form can
+    /// silently undo the other page's change, and this switch is the one an operator reaches for during
+    /// an incident — it has to be on the page they are already looking at.
+    /// </remarks>
+    public static readonly IReadOnlySet<string> MonitoringOwned = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        StopAllServerRuns
+    };
+
+    /// <summary>True when the key is edited on the Monitoring page rather than in Admin → Settings.</summary>
+    public static bool IsMonitoringOwned(string? key) =>
+        !string.IsNullOrWhiteSpace(key) && MonitoringOwned.Contains(key);
 
     /// <summary>
     /// Keys that are set by the system itself (background services, licence import) and are only

@@ -44,7 +44,8 @@ internal static class DsStrings
     public const string Sync = "سینک";
     public const string SyncHint = "نتیجهٔ اجرای محلی را روی سرور بنویس";
     public const string Stop = "توقف";
-
+    /// <summary>Shown when the server ended this session, most often because a monitoring administrator closed it.</summary>
+    public const string SessionClosed = "دسترسی این حساب توسط مدیر نظارت بسته شد. برای ادامه دوباره وارد شوید.";
     // ---- Repeat indices ----
     public const string RepeatTitle = "انتخاب اندیس تکرار";
     public const string RepeatHint = "این فرآیند بیش از یک تکرار دارد. اندیس‌هایی که باید اجرا شوند را انتخاب کنید.";

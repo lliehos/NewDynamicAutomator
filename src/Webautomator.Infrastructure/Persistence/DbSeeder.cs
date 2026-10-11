@@ -341,6 +341,17 @@ public static class DbSeeder
             "خاموش باشد، نه پرسیده می‌شود و نه اجباری است. پیش‌فرض خاموش است.",
             "When off it is neither asked for nor required. Off by default.");
 
+        // The monitoring dashboard's stop-all switch. Edited on that page (Admin → Settings filters it
+        // out, so one page owns the row) and read wherever a play is registered.
+        await Upsert(
+            SystemSettingKeys.StopAllServerRuns,
+            "false",
+            "Monitoring",
+            "توقف همهٔ اجراهای سروری",
+            "Stop all server-side runs",
+            "روشن باشد، اجراهای در حال انجام متوقف می‌شوند و شروع اجرای سروری جدید تا خاموش‌شدن این سویچ ممکن نیست. اجراهای محلی کاربران که به سامانه وصل نیستند تحت تأثیر قرار نمی‌گیرند.",
+            "While on, running server-side plays are asked to stop and no new server-side run can start. Local runs that never contact this application are unaffected.");
+
         // The language a first-time visitor sees. The per-visitor cookie still wins once someone
         // chooses, so this only decides the starting point.
         await Upsert(

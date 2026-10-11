@@ -344,7 +344,17 @@ public partial class MainWindow : Window
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
-    private void Logout_Click(object sender, RoutedEventArgs e)
+    private void Logout_Click(object sender, RoutedEventArgs e) => ResetToLogin(null);
+
+    /// <summary>
+    /// Drop the session and go back to the sign-in form.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the Logout button and by the two ways the server can end a session by itself: a run
+    /// told to stop because the session was closed, and a 401 on the next refresh. A forced sign-out
+    /// that left the process list on screen would look like the client was still signed in.
+    /// </remarks>
+    private void ResetToLogin(string? notice)
     {
         _client?.Dispose();
         _client = null;
@@ -363,7 +373,7 @@ public partial class MainWindow : Window
         MinHeight = 260;
         SizeToContent = SizeToContent.WidthAndHeight;
         LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsDangerBrush");
-        LoginStatus.Text = "";
+        LoginStatus.Text = notice ?? "";
     }
 
     // ---- Process list ---------------------------------------------------------------------------
@@ -377,6 +387,14 @@ public partial class MainWindow : Window
         var res = await _client.ListProcessesAsync();
         if (!res.Ok)
         {
+            // A dead token means the session is over (a monitoring administrator closed it, or it was
+            // superseded); showing the list behind an error would leave a signed-out client looking
+            // merely unlucky. Anything else is a normal error on screen.
+            if (res.Error == PanelClient.AuthError)
+            {
+                ResetToLogin(DsStrings.SessionClosed);
+                return;
+            }
             ListStatus.Text = res.Error;
             return;
         }
@@ -433,6 +451,9 @@ public partial class MainWindow : Window
 
         var runWindow = new RunWindow(_client, _browser => new LocalRunEngine(_client, _browser, row.RunOnServer));
         runWindow.Configure(row.Title, graph, rowIndices, row.RunOnServer);
+        // A closed session ends the whole client, not just the run: the token is already dead, so the
+        // window goes back to the sign-in form and says why.
+        runWindow.SessionClosed += () => ResetToLogin(DsStrings.SessionClosed);
         runWindow.Closed += (_, _) =>
         {
             _runs.Remove(runWindow);

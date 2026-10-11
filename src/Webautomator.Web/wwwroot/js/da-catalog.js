@@ -38,6 +38,10 @@
       c.on("playState", (p) => emit("playState", p));
       // Pushed by UpdateNotifyBackgroundService when a newer version appears.
       c.on("updateAvailable", (p) => emit("updateAvailable", p));
+      // Sent to this user's own group when an administrator closes their session from Admin →
+      // Monitoring. The token is already dead server-side, so the page goes back to the sign-in form
+      // now rather than looking signed in until the next click fails.
+      c.on("sessionEnded", () => { window.location.reload(); });
       c.onreconnected(async () => {
         try { await c.invoke("JoinCatalog"); } catch { /* ignore */ }
         if (opts?.admin) {

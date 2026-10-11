@@ -63,6 +63,24 @@ public class SystemSettingsService
         _ => false
     };
 
+    /// <summary>
+    /// True when the setting is one of the on-spellings; an unset row falls back.
+    /// </summary>
+    /// <remarks>
+    /// One reader for every switch, so "is this flag on?" cannot be answered two different ways in two
+    /// places: the settings page writes "true"/"false", an older row may hold "1", and a hand-edited one
+    /// may hold "on".
+    /// </remarks>
+    public async Task<bool> GetBoolAsync(string key, bool fallback = false, CancellationToken ct = default)
+    {
+        var row = await _db.SystemSettings.AsNoTracking()
+            .Where(s => s.Key == key)
+            .Select(s => s.Value)
+            .FirstOrDefaultAsync(ct);
+
+        return string.IsNullOrWhiteSpace(row) ? fallback : IsOn(row);
+    }
+
     public async Task<Plan> GetDefaultRegisterPlanAsync(CancellationToken ct = default)
     {
         var code = await GetAsync(SystemSettingKeys.DefaultRegisterPlan, nameof(PlanCode.Pro), ct);

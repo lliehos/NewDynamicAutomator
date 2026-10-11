@@ -92,6 +92,57 @@ public sealed class LocalRunEngine
         _cts?.Cancel();
     }
 
+    /// <summary>
+    /// Raised when the server closed this session, so the window can sign out instead of leaving a
+    /// signed-out client on screen looking healthy.
+    /// </summary>
+    public event Action? SessionClosed;
+
+    /// <summary>
+    /// Poll the server for a stop instruction while the run is in flight.
+    /// </summary>
+    /// <remarks>
+    /// Runs for local mode too. It never fails the run: an unreachable portal answers "carry on", so a
+    /// local run still works with no server at all — but when the portal IS reachable, an
+    /// administrator's stop (or a closed session) arrives within a couple of seconds.
+    /// </remarks>
+    private void StartDirectiveWatch(int taskId, CancellationToken ct)
+    {
+        if (taskId <= 0) return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!ct.IsCancellationRequested && State.Running && !State.Stopped)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+                    var directive = await _client.GetRunDirectiveAsync(taskId, ct);
+                    if (directive == PanelClient.RunDirective.Continue) continue;
+
+                    if (directive == PanelClient.RunDirective.SessionClosed)
+                    {
+                        Log("error", "دسترسی این حساب توسط مدیر نظارت بسته شد؛ اجرا متوقف شد.");
+                        State.LastError = "دسترسی این حساب توسط مدیر نظارت بسته شد.";
+                        Stop();
+                        Changed?.Invoke();
+                        SessionClosed?.Invoke();
+                        return;
+                    }
+
+                    Log("error", "اجرا توسط مدیر نظارت متوقف شد.");
+                    State.LastError = "اجرا توسط مدیر نظارت متوقف شد.";
+                    Stop();
+                    Changed?.Invoke();
+                    return;
+                }
+            }
+            catch (OperationCanceledException) { /* the run ended */ }
+            catch { /* a watcher that throws must never fail the run it watches */ }
+        }, CancellationToken.None);
+    }
+
     /// <summary>Wait here while paused, so a long pause does not burn the loop-back guard.</summary>
     private async Task WaitWhilePausedAsync(CancellationToken ct)
     {
@@ -126,7 +177,18 @@ public sealed class LocalRunEngine
 
             if (State.RunOnServer && _allowServerCalls && taskId > 0)
             {
-                registered = await _client.RegisterPlayAsync(taskId, ct);
+                var registration = await _client.RegisterPlayAsync(taskId, ct);
+                if (registration == PanelClient.PlayRegistration.Suspended)
+                {
+                    // The monitoring dashboard stopped server-side runs; starting one anyway would make
+                    // the switch a suggestion. Local runs are unaffected by the switch, which is why
+                    // this only blocks the server-mode path.
+                    Log("error", "اجرای سروری توسط مدیر نظارت متوقف شده است؛ اجرا شروع نشد.");
+                    State.LastError = "اجرای سروری توسط مدیر نظارت متوقف شده است.";
+                    State.Running = false;
+                    return;
+                }
+                registered = registration == PanelClient.PlayRegistration.Registered;
                 if (!registered)
                     Log("warn", "ثبت اجرا روی سرور انجام نشد؛ اجرا ادامه می‌یابد.");
             }
@@ -134,6 +196,10 @@ public sealed class LocalRunEngine
             {
                 Log("info", "این اجرا روی سرور ثبت نمی‌شود.");
             }
+
+            // Watch for a stop from the dashboard for BOTH modes: a local run is not registered, but an
+            // administrator closing the session still has to reach it, and this is the only channel.
+            StartDirectiveWatch(taskId, ct);
 
             await WalkAsync(graph, rowIndices, ct);
             if (State.Stopped)

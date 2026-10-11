@@ -114,42 +114,30 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             },
             OnTokenValidated = async ctx =>
             {
-                // Single-session enforcement. Each token carries the session version it was minted
-                // at, and a newer sign-in bumps the stored one, so a token that no longer matches is
-                // a token that has been superseded. Rejecting here rather than in a filter means
-                // EVERY entry point — panel pages, the API the extension uses, the SignalR hubs —
-                // is covered by one check, and the check costs one keyed read.
+                // Session validity, in ONE check. Each token carries the session version it was minted
+                // at, and the stored value moves when a newer sign-in supersedes it OR when a
+                // monitoring administrator closes the session. Rejecting here rather than in a filter
+                // covers every entry point in one place - panel pages, the API the extension uses, and
+                // the SignalR hubs - and the stored version itself is cached (see SessionGuard), so
+                // the check costs a cache hit on the requests that never change it.
                 var versionClaim = ctx.Principal?.FindFirst("session_version")?.Value;
                 if (!int.TryParse(versionClaim, out var tokenVersion)) return;
 
                 var userIdClaim = ctx.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
                 if (!int.TryParse(userIdClaim, out var userId)) return;
 
-                var license = ctx.HttpContext.RequestServices
-                    .GetRequiredService<Webautomator.Infrastructure.Services.LicenseService>();
-                Webautomator.Licensing.LicenseRuntimeState runtime;
-                try { runtime = await license.GetRuntimeStateAsync(ctx.HttpContext.RequestAborted); }
-                catch { return; }
-
-                // A deployment that sells no seats has nothing to protect, so the rule is not applied
-                // there — an install with no commerce must never start signing people out.
-                if (!runtime.EnforcesSingleSession) return;
-
-                var db = ctx.HttpContext.RequestServices
-                    .GetRequiredService<Webautomator.Infrastructure.Persistence.AppDbContext>();
-                var stored = await db.Users
-                    .AsNoTracking()
-                    .Where(u => u.Id == userId)
-                    .Select(u => (int?)u.SessionVersion)
-                    .FirstOrDefaultAsync(ctx.HttpContext.RequestAborted);
-                if (stored is null) return;
-
-                if (stored.Value != tokenVersion)
+                var guard = ctx.HttpContext.RequestServices.GetRequiredService<SessionGuard>();
+                var verdict = await guard.EvaluateAsync(userId, tokenVersion, ctx.HttpContext.RequestAborted);
+                if (verdict == SessionVerdict.Superseded)
                 {
                     ctx.Fail("این حساب روی دستگاه دیگری وارد شده است.");
+                    return;
                 }
-            }
-        };
+                if (verdict == SessionVerdict.Closed)
+                {
+                    ctx.Fail("دسترسی این حساب توسط مدیر نظارت بسته شده است.");
+                }
+            }        };
     });
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton<ExtensionSyncService>();
@@ -159,6 +147,9 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<DesktopSyncService
 builder.Services.AddHostedService<UpdateNotifyBackgroundService>();
 // Writes one server-metrics sample a minute so the monitoring dashboard has a time range to show.
 builder.Services.AddHostedService<MetricsSamplerService>();
+// Ends a session on demand (the monitoring dashboard's "close session") and answers whether a token
+// is still accepted. Singleton: it holds the short version cache and the closures it just performed.
+builder.Services.AddSingleton<SessionGuard>();
 
 var app = builder.Build();
 

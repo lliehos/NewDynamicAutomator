@@ -21,6 +21,7 @@ public class AppDbContext : DbContext
     public DbSet<DeviceSession> DeviceSessions => Set<DeviceSession>();
     public DbSet<AppEventLog> EventLogs => Set<AppEventLog>();
     public DbSet<ServerMetricsSample> ServerMetricsSamples => Set<ServerMetricsSample>();
+    public DbSet<TrafficUsageSample> TrafficUsageSamples => Set<TrafficUsageSample>();
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<DeploymentAnchor> DeploymentAnchors => Set<DeploymentAnchor>();
     public DbSet<DeploymentTrialRecord> DeploymentTrialRecords => Set<DeploymentTrialRecord>();
@@ -76,6 +77,17 @@ public class AppDbContext : DbContext
             e.ToTable("ServerMetricsSamples");
             // The dashboard always reads a TIME RANGE, newest first, and the pruner deletes by age —
             // both are served by the same index.
+            e.HasIndex(x => x.CapturedAtUtc);
+        });
+
+        modelBuilder.Entity<TrafficUsageSample>(e =>
+        {
+            e.ToTable("TrafficUsageSamples");
+            e.Property(x => x.Key).HasMaxLength(64).IsRequired();
+            // The dashboard aggregates one dimension over a time range ("this user's bytes in the last
+            // 24h"), so the composite index covers both the filter and the grouping. The age index
+            // serves the pruner, which deletes by time alone.
+            e.HasIndex(x => new { x.Scope, x.Key, x.CapturedAtUtc });
             e.HasIndex(x => x.CapturedAtUtc);
         });
 

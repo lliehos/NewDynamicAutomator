@@ -48,6 +48,9 @@ public class SettingsController : Controller
             Settings = all
                 .Where(s => allowsPlanManagement || !string.Equals(s.Key, SystemSettingKeys.DefaultRegisterPlan, StringComparison.OrdinalIgnoreCase))
                 .Where(s => !SystemSettingKeys.IsBrandingOwned(s.Key))
+                // The monitoring stop-all switch is edited on the Monitoring dashboard, which an
+                // operator can reach during an incident without being an administrator at all.
+                .Where(s => !SystemSettingKeys.IsMonitoringOwned(s.Key))
                 // The legacy AuthMode row is superseded by the two provider switches. It survives
                 // in the table only so an install too old to have been seeded with them still
                 // resolves its sign-in, and rendering it here would offer a second, contradictory
@@ -80,6 +83,8 @@ public class SettingsController : Controller
             .Select(k => (k["setting_".Length..], LastValue(form, k)))
             // Defence in depth: ignore branding keys even if a crafted form posts them.
             .Where(p => !SystemSettingKeys.IsBrandingOwned(p.Item1))
+            // Likewise the monitoring switch, which this page does not render.
+            .Where(p => !SystemSettingKeys.IsMonitoringOwned(p.Item1))
             // Likewise the plan field, which the page does not render without plan management.
             .Where(p => allowsPlanManagement
                 || !string.Equals(p.Item1, SystemSettingKeys.DefaultRegisterPlan, StringComparison.OrdinalIgnoreCase))

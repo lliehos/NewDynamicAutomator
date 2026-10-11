@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Threading;
 
 namespace Webautomator.Infrastructure.Services;
@@ -42,4 +43,51 @@ public static class TrafficMeter
     {
         if (bytes > 0) Interlocked.Add(ref _bytesOut, bytes);
     }
+
+    /// <summary>Per-user totals, keyed by the user id as text ("anon" for unauthenticated traffic).</summary>
+    private static readonly ConcurrentDictionary<string, long[]> ByUser = new(StringComparer.Ordinal);
+
+    /// <summary>Per-address totals, keyed by the client IP (or "unknown" when it cannot be read).</summary>
+    private static readonly ConcurrentDictionary<string, long[]> ByIp = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Account one finished request against both the acting user and the client address.
+    /// </summary>
+    /// <remarks>
+    /// Called once per request, after the response has been written. Anonymous traffic is attributed
+    /// too — an unauthenticated flood is exactly what a dashboard about traffic should show — under a
+    /// fixed key, so "who is generating this" has an answer for every byte. Attribution is exact for
+    /// everything that reaches this application; it deliberately does NOT try to account for traffic
+    /// the user's own browser generates elsewhere, which never passes through here.
+    /// </remarks>
+    public static void AddRequest(string? userId, string? ipAddress, long bytesIn, long bytesOut)
+    {
+        if (bytesIn <= 0 && bytesOut <= 0) return;
+
+        Add(ByUser, string.IsNullOrWhiteSpace(userId) ? "anon" : userId!, bytesIn, bytesOut);
+        Add(ByIp, string.IsNullOrWhiteSpace(ipAddress) ? "unknown" : ipAddress!, bytesIn, bytesOut);
+    }
+
+    private static void Add(ConcurrentDictionary<string, long[]> map, string key, long bytesIn, long bytesOut)
+    {
+        var slot = map.GetOrAdd(key, static _ => new long[2]);
+        if (bytesIn > 0) Interlocked.Add(ref slot[0], bytesIn);
+        if (bytesOut > 0) Interlocked.Add(ref slot[1], bytesOut);
+    }
+
+    /// <summary>Every per-user total seen since the process started.</summary>
+    public static IReadOnlyList<TrafficTotal> UserTotals() => Snapshot(ByUser);
+
+    /// <summary>Every per-address total seen since the process started.</summary>
+    public static IReadOnlyList<TrafficTotal> IpTotals() => Snapshot(ByIp);
+
+    private static IReadOnlyList<TrafficTotal> Snapshot(ConcurrentDictionary<string, long[]> map) =>
+        map.Select(kv => new TrafficTotal(kv.Key, Interlocked.Read(ref kv.Value[0]), Interlocked.Read(ref kv.Value[1])))
+            .ToList();
 }
+
+/// <summary>One user's (or one address's) share of this application's HTTP traffic, as a running total.</summary>
+/// <param name="Key">The user id as a string, or <c>anon</c>/<c>unknown</c> for unattributed traffic.</param>
+/// <param name="BytesIn">Request bytes attributed to this key since the process started.</param>
+/// <param name="BytesOut">Response bytes attributed to this key since the process started.</param>
+public sealed record TrafficTotal(string Key, long BytesIn, long BytesOut);

@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Webautomator.Infrastructure.Services;
 
 namespace Webautomator.Web.Middleware;
@@ -25,8 +26,12 @@ public sealed class TrafficMeterMiddleware
     public async Task InvokeAsync(HttpContext context)
     {
         // Only count real request bodies. A ContentLength of 0 or null is the common case for a GET.
+        long requestBytes = 0;
         if (context.Request.ContentLength is long reqLen && reqLen > 0)
+        {
+            requestBytes = reqLen;
             TrafficMeter.AddIn(reqLen);
+        }
 
         var original = context.Response.Body;
         await using var counter = new CountingStream(original);
@@ -43,6 +48,15 @@ public sealed class TrafficMeterMiddleware
             // anything that writes after us.
             context.Response.Body = original;
             TrafficMeter.AddOut(counter.BytesWritten);
+
+            // The same bytes are attributed to whoever asked for them, which is what lets the dashboard
+            // say who the traffic belongs to instead of only how much of it there is. The identity is
+            // read here rather than before the pipeline ran, because that is when it exists.
+            TrafficMeter.AddRequest(
+                context.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value,
+                context.Connection.RemoteIpAddress?.ToString(),
+                requestBytes,
+                counter.BytesWritten);
         }
     }
 

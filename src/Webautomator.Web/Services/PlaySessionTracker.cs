@@ -74,6 +74,44 @@ public class PlaySessionTracker
         _abort[taskId.Trim()] = 1;
     }
 
+    /// <summary>
+    /// Ask every running session belonging to one user to stop.
+    /// </summary>
+    /// <remarks>
+    /// Only sessions the server knows about can be asked, which is exactly the "server-side run" the
+    /// operator sees: a run whose <c>runOnServer</c> is off never registers here, so it does not appear
+    /// in the list and is left alone — the dashboard's other button is the one that reaches the client
+    /// itself. The abort is picked up the same way a canvas-change abort is: the client polls
+    /// <c>/Panel/Tasks/PlayAbort</c> while it plays.
+    /// </remarks>
+    /// <returns>The task ids that were asked to stop.</returns>
+    public IReadOnlyList<string> RequestAbortForUser(int userId)
+    {
+        if (userId <= 0) return Array.Empty<string>();
+
+        var tasks = _byTask.Values
+            .Where(s => s.UserId == userId)
+            .Select(s => s.TaskId)
+            .ToList();
+
+        foreach (var taskId in tasks) RequestAbort(taskId);
+        return tasks;
+    }
+
+    /// <summary>
+    /// Ask every running session to stop, and answer which ones were asked.
+    /// </summary>
+    /// <remarks>
+    /// The caller pairs this with the stop-all setting, which is what stops the same runs from being
+    /// started again a second later.
+    /// </remarks>
+    public IReadOnlyList<string> RequestAbortAll()
+    {
+        var tasks = _byTask.Keys.ToList();
+        foreach (var taskId in tasks) RequestAbort(taskId);
+        return tasks;
+    }
+
     public bool ConsumeAbort(string taskId)
     {
         if (string.IsNullOrWhiteSpace(taskId)) return false;
