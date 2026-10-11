@@ -298,15 +298,41 @@ public class TasksApiController : ControllerBase
 
         var cells = body?.Cells ?? new List<SyncLocalRunCellDto>();
         var applied = 0;
+        var unchanged = 0;
         var skipped = 0;
+        var conflicts = new List<object>();
         foreach (var cell in cells)
         {
-            if (cell.DataSourceId <= 0) { skipped++; continue; }
+            if (cell.DataSourceId <= 0 || string.IsNullOrWhiteSpace(cell.ColumnKey)) { skipped++; continue; }
+            var incoming = cell.CellValue ?? "";
+
+            // Merge instead of a blind overwrite: the client ships the value the cell held when the
+            // run loaded it (`BaseValue`). When the server's current value still equals that, nobody
+            // else has touched the cell and the run's value is written; when it differs, the
+            // server's newer value wins and the cell is reported so the user sees what was kept.
+            var current = await _sources.GetCellAsync(UserId, cell.DataSourceId, cell.RowIndex, cell.ColumnKey, ct);
+            if (current is null) { skipped++; continue; }
+            var serverValue = current.CellValue ?? "";
+            if (string.Equals(serverValue, incoming, StringComparison.Ordinal)) { unchanged++; continue; }
+            if (cell.BaseValue is not null
+                && !string.Equals(serverValue, cell.BaseValue, StringComparison.Ordinal))
+            {
+                conflicts.Add(new
+                {
+                    dataSourceId = cell.DataSourceId,
+                    rowIndex = cell.RowIndex,
+                    columnKey = cell.ColumnKey,
+                    serverValue,
+                    localValue = incoming
+                });
+                continue;
+            }
+
             var res = await _sources.PatchCellAsync(UserId, cell.DataSourceId, new Webautomator.Contracts.DataSources.PatchDataSourceCellRequest
             {
                 RowIndex = cell.RowIndex,
                 ColumnKey = cell.ColumnKey,
-                CellValue = cell.CellValue ?? "",
+                CellValue = incoming,
                 // Let the service resolve the current revision itself: the local run's revision is
                 // from another machine and would only produce spurious conflicts.
                 ExpectedCellRevision = null,
@@ -315,16 +341,17 @@ public class TasksApiController : ControllerBase
             if (res?.Ok == true) applied++; else skipped++;
         }
 
-        // The server now holds this run's values for these sources, so the "there is a newer copy on
-        // the client" flag has served its purpose and is cleared — even for cells that were skipped,
-        // because the user has made the sync decision and a badge that never clears would train them
-        // to ignore it.
+        // The merge has consumed this run's payload: applied cells are on the server, conflicting
+        // cells deliberately kept the server's newer value (reported above), and unchanged cells
+        // already agreed. The "there is a newer copy on the client" flag has served its purpose and
+        // is cleared — even for cells that were skipped, because the user has made the sync
+        // decision and a badge that never clears would train them to ignore it.
         await _sources.ClearNeedsSyncAsync(cells.Select(c => c.DataSourceId), ct);
 
         await _events.LogAsync("Info", "Play", "LocalRunSynced",
-            $"Local run results synced ({applied} cell(s))",
+            $"Local run results synced ({applied} cell(s), {conflicts.Count} conflict(s))",
             UserId, User.Identity?.Name,
-            System.Text.Json.JsonSerializer.Serialize(new { taskId = id, applied, skipped }),
+            System.Text.Json.JsonSerializer.Serialize(new { taskId = id, applied, unchanged, conflicts = conflicts.Count, skipped }),
             path: HttpContext.Request.Path,
             ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
             ct: ct);
@@ -338,7 +365,7 @@ public class TasksApiController : ControllerBase
             reason = "local_run_synced"
         }, ct);
 
-        return Ok(new { ok = true, applied, skipped });
+        return Ok(new { ok = true, applied, unchanged, conflicts, skipped });
     }
 
     /// <summary>
@@ -678,6 +705,13 @@ public class TaskDataSourcesApiController : ControllerBase
             {
                 "forbidden" => Forbid(),
                 "sourcenotfound" or "notfound" => NotFound(),
+                // The source's manager has not granted this process access. A dedicated code (and a
+                // message the sources page shows verbatim) keeps this distinct from a generic refusal.
+                "noaccess" => StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    message = "این فرآیند به منبع عمومی دسترسی ندارد؛ در صفحهٔ منابع، «دسترسی فرآیندها» را تنظیم کنید.",
+                    code = "noaccess"
+                }),
                 _ => BadRequest(new { message = error })
             };
         await _catalog.SourceChangedAsync(taskId, new { id = dataSourceId }, "attached", User.Identity?.Name, ct);
@@ -1081,6 +1115,35 @@ public class DataSourcesApiController : ControllerBase
         {
             return BadRequest(new { message = ex.Message, code = "forbidden" });
         }
+    }
+
+    /// <summary>
+    /// Which processes may use a public source — the sources page's «دسترسی فرآیندها» dialog.
+    /// Any user who can see the source may read it (the attach picker filters with it); only the
+    /// owner or a ProcessManager/Admin may write it.
+    /// </summary>
+    [HttpGet("{id:int}/access")]
+    public async Task<IActionResult> GetAccess(int id, CancellationToken ct)
+    {
+        var dto = await _sources.GetAccessAsync(UserId, id, ct);
+        return dto is null ? NotFound() : Ok(dto);
+    }
+
+    /// <summary>Replace a public source's process access (grant list + "any process" flag).</summary>
+    [HttpPut("{id:int}/access")]
+    public async Task<IActionResult> SetAccess(
+        int id, [FromBody] Webautomator.Contracts.DataSources.SetDataSourceAccessRequest req, CancellationToken ct)
+    {
+        var (ok, error, attached, detached) = await _sources.SetAccessAsync(UserId, id, req, ct);
+        if (!ok)
+            return error switch
+            {
+                "notfound" or "notpublic" => NotFound(),
+                "forbidden" => Forbid(),
+                _ => BadRequest(new { message = error })
+            };
+        await _catalog.LibrarySourceChangedAsync(new { id, access = true }, "access", User.Identity?.Name, UserId, ct);
+        return Ok(new { ok = true, id, attached, detached });
     }
 
     [HttpPut("{id:int}")]

@@ -41,6 +41,11 @@ public class DataSourceListItemDto
     /// public source they do not own, which is what the list uses to hide the structural buttons.
     /// </summary>
     public bool CanEditStructure { get; set; }
+    /// <summary>
+    /// Whether the CURRENT user may manage which processes have access to this public source
+    /// (the sources page's «دسترسی فرآیندها» dialog). True for the owner and for ProcessManager/Admin.
+    /// </summary>
+    public bool CanManageAccess { get; set; }
 }
 
 public class DataSourceDetailDto
@@ -261,6 +266,52 @@ public class UploadDataSourceResponse
 public class SetPublicSourceRequest
 {
     public bool IsPublic { get; set; }
+}
+
+/// <summary>
+/// Which processes may use a public source — the «دسترسی فرآیندها» dialog's state.
+/// </summary>
+/// <remarks>
+/// <see cref="Processes"/> is the union of the processes the caller can manage and the processes
+/// the source is currently attached to, so a manager always sees every row they could untick.
+/// <see cref="GrantedProcessIds"/> and <see cref="LinkedProcessIds"/> let the dialog tick a process
+/// that either holds the grant or already uses the source (or both).
+/// </remarks>
+public class DataSourceAccessDto
+{
+    public int DataSourceId { get; set; }
+    /// <summary>When true, ANY process may attach this source; the grant list is then only the explicit records.</summary>
+    public bool AllProcesses { get; set; }
+    public List<int> GrantedProcessIds { get; set; } = new();
+    public List<int> LinkedProcessIds { get; set; } = new();
+    public List<DataSourceAccessProcessDto> Processes { get; set; } = new();
+}
+
+/// <summary>One selectable process row of the access dialog.</summary>
+public class DataSourceAccessProcessDto
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? OwnerUserName { get; set; }
+    /// <summary>Whether the CALLER may attach/detach this source for this process (owner or a change-data-source share).</summary>
+    public bool CanManage { get; set; }
+    /// <summary>Whether the source is currently attached to this process.</summary>
+    public bool Linked { get; set; }
+}
+
+/// <summary>
+/// Replacement state for a public source's process access.
+/// </summary>
+/// <remarks>
+/// <see cref="ProcessIds"/> is the complete new grant list (the ticked rows), and
+/// <see cref="DetachProcessIds"/> is only what the manager explicitly unticked — a linked process
+/// the dialog never showed can therefore never be detached by accident.
+/// </remarks>
+public class SetDataSourceAccessRequest
+{
+    public bool AllProcesses { get; set; }
+    public List<int> ProcessIds { get; set; } = new();
+    public List<int> DetachProcessIds { get; set; } = new();
 }
 
 /// <summary>Parsed Excel without persisting — for local-first process properties.</summary>

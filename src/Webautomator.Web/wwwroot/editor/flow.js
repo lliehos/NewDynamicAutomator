@@ -333,6 +333,17 @@
   let playFocusNodeId = null;
   let playSessionActive = false;
   let playSessionPaused = false;
+  /**
+   * The server-run master switch (Admin → Settings / Monitoring), as the editor knows it.
+   *
+   * `Blocked` is the answer of the one probe per page load: TRUE means the administrator has
+   * switched server runs off, so this surface — which only ever runs on the server — must refuse and
+   * point the user at the processes list's local-run menu. `Checked` keeps that probe to one request;
+   * until it answers, the request is deferred rather than allowed, so a run can never slip through in
+   * the gap.
+   */
+  let playUiServerRunBlocked = false;
+  let playUiServerRunChecked = false;
   // Reconciliation guard: a play-state reply is only honoured if it belongs to the request that was
   // outstanding when it was sent, so a slow reply cannot clear a run that started in the meantime.
   let playReconcileSeq = 0;
@@ -1359,6 +1370,14 @@
       const label = d.title || dataSourceFileTitle(d.fileName) || t("editor.ds.removed");
       const sid = Number(d.id);
       const onServer = !isLocalMode && Number.isFinite(sid) && sid > 0;
+      /**
+       * A PUBLIC source is lent to this process, not owned by it: its place in the process is the
+       * manager's decision (they attached it from the sources list and they can take it away), so
+       * the process author gets no detach and no rename here. The switch is disabled rather than
+       * hidden so the row still says what it is, and the badge names why.
+       */
+      const isPublic = d.isPublic === true || d.IsPublic === true;
+      const canEditRow = canModify && !isPublic;
       const masterBtn = isMaster
         ? dsIconBtn("is-master", t("editor.ds.masterBadge"), DS_ICO_STAR, "disabled")
         : (canModify
@@ -1372,13 +1391,16 @@
         ${dsIconBtn("js-ds-dl", t("editor.ds.downloadExcel"), DS_ICO_DL, `data-id="${sid}"`)}
         ${dsIconBtn(cloudCls, cloudTitle, cloudIco, `data-id="${sid}" data-on-server="${onServer ? "1" : "0"}" disabled`)}
         ${masterBtn}
-        ${canModify ? dsIconBtn("js-ds-del is-danger", t("editor.ds.detach"), DS_ICO_DEL, `data-id="${sid}"`) : ""}
+        ${canEditRow ? dsIconBtn("js-ds-del is-danger", t("editor.ds.detach"), DS_ICO_DEL, `data-id="${sid}"`) : ""}
       `;
-      return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}">
+      const publicBadge = isPublic
+        ? `<span class="ds-badge-public" title="${esc(t("editor.ds.publicLockedHint"))}">${esc(t("editor.ds.publicBadge"))}</span>`
+        : "";
+      return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}${isPublic ? " ds-is-public" : ""}">
         <div class="ds-row-top">
           <div class="ds-title-row">
-            <span class="ds-title">${esc(label)}</span>
-            ${canModify ? dsIconBtn("js-ds-rename", t("editor.ds.rename"), DS_ICO_RENAME, `data-id="${sid}"`) : ""}
+            <span class="ds-title">${esc(label)}${publicBadge}</span>
+            ${canEditRow ? dsIconBtn("js-ds-rename", t("editor.ds.rename"), DS_ICO_RENAME, `data-id="${sid}"`) : ""}
           </div>
           <div class="ds-actions">${actions}</div>
         </div>
@@ -2887,9 +2909,6 @@
       </div>
       <div id="ds-status" class="ds-status"></div>
       <ul class="ds-list" id="ds-list"></ul>
-      <button type="button" class="btn-flow" id="ds-use-public" style="width:100%;margin-top:8px" ${disabled}>
-        ${t("editor.ds.useShared")}
-      </button>
       </div>
     `;
   }
@@ -2972,6 +2991,8 @@
     const titleDisabled = canModify && !structLocked ? "" : "disabled";
     const start = processStart();
     const rst = start?.repeatSourceType || graph.repeatSourceType || "None";
+    // Default is a SERVER run, matching the historical behaviour and the server's own default.
+    const runOnServer = start?.runOnServer !== false && graph.runOnServer !== false;
     const master = (graph.dataSources || []).find((d) => Number(d.id) === Number(masterDataSourceId()));
     const count = (graph.dataSources || []).length;
     return `
@@ -2986,6 +3007,16 @@
         <label>${t("editor.insp.loopBackLimit")}</label>
         <input type="number" min="1" max="1000" step="1" data-task-k="loopBackLimit" value="${Number(start?.loopBackLimit ?? graph.loopBackLimit) || 100}" ${disabled} />
         <p class="palette-hint" style="margin:4px 0 0">${t("editor.insp.loopBackLimitHint")}</p>
+      </div>
+      <div class="insp-field">
+        <label>${t("editor.insp.runType")}</label>
+        <label class="da-switch" for="proc-run-on-server">
+          <input type="checkbox" id="proc-run-on-server" data-task-k="runOnServer"
+                 ${runOnServer ? "checked" : ""} ${disabled} />
+          <span class="da-switch-ui" aria-hidden="true"></span>
+          <span class="da-switch-text">${esc(t(runOnServer ? "editor.insp.runOnServerOn" : "editor.insp.runOnServerOff"))}</span>
+        </label>
+        <p class="palette-hint" style="margin:4px 0 0">${esc(t(runOnServer ? "editor.insp.runOnServerOnHint" : "editor.insp.runOnServerOffHint"))}</p>
       </div>
       <div class="insp-field">
         <label>${t("editor.insp.selectorLabel")}</label>
@@ -3046,6 +3077,18 @@
           inspector.querySelectorAll('[data-task-k="highlightColor"]').forEach((el) => {
             if (el !== inp) el.value = color;
           });
+        } else if (k === "runOnServer") {
+          // Where the run happens. Stored on the root start node (the same place the other
+          // process-level settings live) and mirrored on the graph for payloads without a start.
+          const on = inp.checked;
+          graph.runOnServer = on;
+          const start = processStart();
+          if (start) start.runOnServer = on;
+          // The title/hint pair is state, not a label, so the panel is rebuilt to swap the wording.
+          renderInspector();
+          syncNodeValidity();
+          render();
+          return;
         }
       };
       inp.addEventListener("change", apply);
@@ -3065,7 +3108,6 @@
   function bindDataSourcesPanel() {
     const zone = document.getElementById("ds-dropzone");
     const fileInp = document.getElementById("ds-file");
-    document.getElementById("ds-use-public")?.addEventListener("click", () => { attachPublicSource(); });
     if (zone && fileInp && canModify) {
       const openPicker = () => {
         if (zone.classList.contains("is-busy")) return;
@@ -3286,6 +3328,22 @@
 
   function processStart() {
     return graph.nodes.find((n) => n.kind === "start" && !n.groupNodeId) || null;
+  }
+
+  /**
+   * Where a run started from the diagram should execute.
+   *
+   * Read from the process's own switch (process properties → «نوع اجرا»), which lives on the root
+   * start node with the graph as the mirror — the same pattern the other process-level settings use.
+   * A server run is the default, matching both the historical behaviour and the server's own default.
+   *
+   * This is deliberately NOT a per-surface decision: the process list, the diagram's run button and
+   * the element context menus all ask this one question, so they cannot disagree about the same
+   * process.
+   */
+  function resolveRunOnServerForPlay() {
+    const start = processStart();
+    return start?.runOnServer !== false && graph.runOnServer !== false;
   }
 
   function scopeStart(gid) {
@@ -6596,7 +6654,51 @@
     });
   }
 
+  /**
+   * Refuse a diagram run because the administrator has switched server runs off.
+   *
+   * The diagram is a server-run surface only, so there is no local fallback to offer here — the
+   * owner's rule is that the user goes to the processes list and picks a local run from the run
+   * button's menu. The message says exactly that, because "the run did nothing" is the one outcome
+   * the user cannot act on.
+   */
+  function refusePlayForServerRunOff() {
+    const msg = t("editor.play.serverRunDisabled")
+      || "اجرای روی سرور توسط مدیر غیرفعال شده است. برای اجرای این فرآیند از منوی دکمهٔ اجرای «فرآیندها» اجرای محلی را انتخاب کنید.";
+    setStatus(msg, "warn");
+    try {
+      window.dispatchEvent(new CustomEvent("da-notify", { detail: { message: msg, type: "warn" } }));
+    } catch { /* ignore */ }
+  }
+
   function requestPlayInTab(scope) {
+    /**
+     * The diagram is a SERVER-run surface: a run started here is registered on the server (the live
+     * session is what blocks concurrent edits), so when the administrator has switched server runs
+     * off, the editor cannot start a run at all — the owner's rule is that the user must go to the
+     * processes list and choose a local run there instead. The check is async, so the whole request
+     * is deferred behind it rather than partially run.
+     */
+    if (playUiServerRunBlocked) {
+      refusePlayForServerRunOff();
+      return;
+    }
+    if (!playUiServerRunChecked) {
+      playUiServerRunChecked = true;
+      fetch("/api/play-mode", { credentials: "same-origin", cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (d && d.serverRunEnabled === false) {
+            playUiServerRunBlocked = true;
+            refusePlayForServerRunOff();
+            return;
+          }
+          requestPlayInTab(scope);
+        })
+        .catch(() => requestPlayInTab(scope)); // an unreachable probe must not block the editor
+      return;
+    }
+
     /**
      * A single-node test («اجرای این اقدام» / «بررسی شرط») is a probe of ONE node, so it must not be
      * blocked by an unrelated node elsewhere in the diagram. Whole-graph validation belongs to a
@@ -6706,6 +6808,13 @@
                 : "task",
         tabId: hasTab ? rawTab : null,
         openNewTab: scope?.openNewTab === true,
+        // Where the run happens comes from the process's own switch (process properties → «نوع اجرا»),
+        // NOT from this surface. A server run is the default: having the process open here IS the
+        // concurrency guarantee it provides (an edit during the run is refused, and the run stops if the
+        // process is changed). Switching it off makes this a LOCAL run, which is also the only kind
+        // available when the admin's master switch forbids server runs. Single source of truth:
+        // read it off the root start node, with the graph mirror as the fallback for a graph with no start.
+        runOnServer: resolveRunOnServerForPlay(),
         task: cached,
         graph: cached.graph
       };
@@ -7575,6 +7684,15 @@
           }
           if (k === "ignorePlayError" && n.kind === "start" && !n.groupNodeId) {
             graph.ignorePlayError = inp.checked;
+          }
+          // Where the run happens. Kept on the start node (with the graph as a mirror for payloads
+          // with no start) and the panel is rebuilt because the label/hint are STATE, not a caption.
+          if (k === "runOnServer" && n.kind === "start" && !n.groupNodeId) {
+            graph.runOnServer = inp.checked;
+            renderInspector();
+            syncNodeValidity();
+            render();
+            return;
           }
           if (k === "isActive" && isActionNode(n)) {
             clearTimeout(window.__daInspSwitchT);
@@ -10368,6 +10486,12 @@
     const dsWarn = rst === "DataSource" && !hasSources
       ? `<p class="palette-hint" style="margin:6px 0 0;color:#ea5455">برای تکرار بر اساس منبع، حداقل یک منبع اضافه کنید.</p>`
       : "";
+    /**
+     * Where this process runs. Lives on the ROOT start node because that is where the process-level
+     * settings already are (step gap, loop limit, repeat), so clicking the start node shows it and
+     * the process-properties panel (nothing selected) shows the same field from `processPropsHtml`.
+     */
+    const runOnServer = n.runOnServer !== false && graph.runOnServer !== false;
 
     return `
       <p class="palette-hint" style="margin:0 0 10px;line-height:1.7">
@@ -10375,6 +10499,19 @@
         <b>منبع پیش‌فرض</b>. چند منبع مجاز است؛ یکی باید پیش‌فرض باشد.
       </p>
       <div class="insp-section-title">تنظیمات اجرا</div>
+      <div class="insp-field">
+        <label>نوع اجرا</label>
+        <label class="da-switch" for="start-run-on-server">
+          <input type="checkbox" id="start-run-on-server" data-k="runOnServer" ${runOnServer ? "checked" : ""} />
+          <span class="da-switch-ui" aria-hidden="true"></span>
+          <span class="da-switch-text">${runOnServer ? "اجرا روی سرور" : "اجرای محلی"}</span>
+        </label>
+        <p class="palette-hint" style="margin:6px 0 0;line-height:1.6">
+          ${runOnServer
+            ? "روشن: نشست اجرا روی سرور ثبت می‌شود (مدیر اجرا را می‌بیند) و ویرایش در حین اجرا مسدود است."
+            : "خاموش: اجرا روی همین سیستم انجام می‌شود و چیزی روی سرور ثبت نمی‌شود؛ داده یک‌بار خوانده و تغییرات محلی می‌شوند. برای برگرداندن نتیجه، سینک دستی لازم است."}
+        </p>
+      </div>
       <div class="insp-field">
         <label>فاصله بین مراحل (ms)</label>
         <input type="number" min="0" step="50" data-k="stepDelayMs" value="${esc(stepDelayMs)}" />

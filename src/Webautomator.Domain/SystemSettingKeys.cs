@@ -86,9 +86,24 @@ public static class SystemSettingKeys
     public const string FrontShowSite = "FrontShowSite";
 
     /// <summary>
+    /// Master switch for SERVER runs: when off, every process must be run locally (from the
+    /// processes list's run-type menu), and the diagram's run actions are disabled.
+    /// </summary>
+    /// <remarks>
+    /// Stored as a plain boolean setting so Admin → Settings renders it as a switch automatically,
+    /// and mirrored on the monitoring page for the operator who is watching live sessions. It is
+    /// deliberately a SETTING and not a licence flag: a deployment can be licensed for server runs
+    /// and still want them switched off during a migration or an incident.
+    ///
+    /// Default <c>true</c> (see the seeder): an upgrade must not silently take the server-run
+    /// capability away from a deployment that never asked for the switch.
+    /// </remarks>
+    public const string ServerRunEnabled = "ServerRunEnabled";
+
+    /// <summary>
     /// Keys whose value is a plain "true"/"false" flag. Admin → Settings renders these as a switch
     /// rather than a text box: a free-text field accepting any string invites a typo like "ture",
-    /// which \u2014 for a flag the code reads with a strict comparison \u2014 silently means "off".
+    /// which — for a flag the code reads with a strict comparison — silently means "off".
     /// </summary>
     public static readonly IReadOnlySet<string> BooleanKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -99,6 +114,7 @@ public static class SystemSettingKeys
         DiagramIgnorePlayError,
         DiagramNodeIgnoreError,
         FrontShowSite,
+        ServerRunEnabled,
         // The registration/profile field switches. Grouped here rather than listed individually at
         // the point of use, because "is this a switch?" is what the settings page asks of every key.
         ProfileFieldFirstName,

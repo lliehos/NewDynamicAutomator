@@ -416,6 +416,30 @@ public partial class MainWindow : Window
             return;
         }
 
+        // The admin's deployment-wide switch: when server runs are off, this row may not run on the
+        // server — the user has to switch it to a local run. Asked here (at the moment of running)
+        // rather than cached at sign-in, because the administrator can turn it off while this window
+        // is already open, and a stale "allowed" would start exactly the run they just stopped.
+        if (row.RunOnServer)
+        {
+            var serverRunEnabled = await _client.GetServerRunEnabledAsync();
+            if (serverRunEnabled == false)
+            {
+                MessageBox.Show(this, DsStrings.ServerRunDisabledBody, DsStrings.ServerRunDisabledTitle,
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (serverRunEnabled is null)
+            {
+                // Unreachable server (or an older deployment without the endpoint). Refusing is the
+                // honest answer: the whole point of the master switch is to stop server runs, and
+                // starting one while the answer is unknown could do the opposite.
+                MessageBox.Show(this, DsStrings.ServerRunUnknownBody, DsStrings.ServerRunDisabledTitle,
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+        }
+
         // Reading the process is only worth a request when the process has moved since it was cached.
         // The list already carries the server's stamp for the row, so an unchanged process starts from
         // the cached canvas and costs no traffic at all.
@@ -562,7 +586,7 @@ public partial class MainWindow : Window
 
         var engineState = FindLatestRunState(row.Id);
         var cells = (engineState?.Writes ?? new List<LocalCellWrite>())
-            .Select(w => (object)new { w.DataSourceId, w.RowIndex, w.ColumnKey, w.CellValue })
+            .Select(w => (object)new { w.DataSourceId, w.RowIndex, w.ColumnKey, w.CellValue, w.BaseValue })
             .ToList();
 
         var res = await _client.SyncLocalRunAsync(row.Id, engineState?.StartedAtUtc, cells);
@@ -572,8 +596,30 @@ public partial class MainWindow : Window
             return;
         }
         row.LocalRunPendingSync = false;
-        MessageBox.Show(this, DsStrings.SyncDone, DsStrings.SyncConfirmTitle,
+        // The server MERGES: cells nobody else touched take the local value, and cells the server has
+        // moved on from keep the server's. Reporting that number matters — a silent "synced" over
+        // cells that were deliberately NOT written is exactly the surprise the merge exists to avoid.
+        MessageBox.Show(this, DescribeSyncOutcome(res.Value), DsStrings.SyncConfirmTitle,
             MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    /// <summary>Turn the sync response into one sentence, naming anything the server kept.</summary>
+    private static string DescribeSyncOutcome(string? responseBody)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody)) return DsStrings.SyncDone;
+        try
+        {
+            using var doc = JsonDocument.Parse(responseBody);
+            var root = doc.RootElement;
+            var applied = root.TryGetProperty("applied", out var a) && a.TryGetInt32(out var av) ? av : 0;
+            var unchanged = root.TryGetProperty("unchanged", out var u) && u.TryGetInt32(out var uv) ? uv : 0;
+            var conflicts = root.TryGetProperty("conflicts", out var c) && c.ValueKind == JsonValueKind.Array
+                ? c.GetArrayLength() : 0;
+            if (conflicts > 0)
+                return $"{DsStrings.SyncDone}\n{applied} سلول نوشته شد · {unchanged} سلول از قبل یکسان بود · {conflicts} سلول روی سرور تازه‌تر بود و با نسخهٔ سرور نگه داشته شد.";
+            return $"{DsStrings.SyncDone}\n{applied} سلول نوشته شد · {unchanged} سلول از قبل یکسان بود.";
+        }
+        catch { return DsStrings.SyncDone; }
     }
 
     /// <summary>

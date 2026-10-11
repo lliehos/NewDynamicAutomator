@@ -226,6 +226,19 @@ public static class DbSeeder
             "وقتی روشن شود، فیلدهای تنظیمات LDAP نمایش داده می‌شوند. پیش‌فرض خاموش است.",
             "Turning this on reveals the LDAP settings fields. Off by default.");
 
+        // Master switch for SERVER runs. Seeded ON so an upgrade keeps the capability the
+        // deployment already had; turning it off forces every run to be a local run. Lives in the
+        // Auth group's sibling "Play" group so it reads next to the run-related settings rather
+        // than among the sign-in switches.
+        await Upsert(
+            SystemSettingKeys.ServerRunEnabled,
+            "true",
+            "Play",
+            "اجرای فرآیندها روی سرور",
+            "Run processes on the server",
+            "روشن: فرآیندها می‌توانند روی سرور اجرا شوند (نشست زنده، ویرایش در حین اجرا مسدود). خاموش: همهٔ اجراها محلی‌اند و اجرای زندهٔ روی سرور فوراً متوقف می‌شود.",
+            "On: processes may run on the server (live session, edits during a run blocked). Off: every run is local, and live server runs are stopped at once.");
+
         await Upsert(
             SystemSettingKeys.LdapHost,
             "",

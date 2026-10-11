@@ -39,6 +39,18 @@ public class DataSource
     public bool IsPublic { get; set; }
 
     /// <summary>
+    /// When set on a public source, ANY process may attach it (and, once attached, use it). When not
+    /// set, only the processes listed in <see cref="ProcessAccesses"/> may attach it.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <c>true</c> so a public source behaves exactly as it always has — usable by
+    /// everyone — until the manager who shared it deliberately narrows the list from the sources
+    /// page. The access list is the narrow half: adding a process there also attaches the source to
+    /// it, and removing a process detaches it, so "who has access" has exactly one visible answer.
+    /// </remarks>
+    public bool AllowAllProcesses { get; set; } = true;
+
+    /// <summary>
     /// Set when a LOCAL run changed this source and the server has not received the new values yet.
     /// </summary>
     /// <remarks>
@@ -59,6 +71,9 @@ public class DataSource
     public AppUser? Owner { get; set; }
     public AppUser? LastEditor { get; set; }
     public ICollection<ProcessDataSource> ProcessLinks { get; set; } = new List<ProcessDataSource>();
+
+    /// <summary>Process grants for a public source — see <see cref="DataSourceProcessAccess"/>.</summary>
+    public ICollection<DataSourceProcessAccess> ProcessAccesses { get; set; } = new List<DataSourceProcessAccess>();
 }
 
 /// <summary>Attach a library data source to a process (unlink ≠ delete).</summary>

@@ -544,7 +544,9 @@
             conditionNodeId: lastPlayRequest?.conditionNodeId || null,
             playScope: lastPlayRequest?.playScope || null,
             tabId: lastPlayRequest?.tabId ?? null,
-            openNewTab: lastPlayRequest?.openNewTab === true
+            openNewTab: lastPlayRequest?.openNewTab === true,
+            // Repeat the SAME kind of run the HUD belongs to: a local run restarts locally.
+            runOnServer: lastPlayRequest?.runOnServer
           }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
           if (!res?.ok && !res?.reloading) {
             status.textContent = res?.error || t("play.startError");

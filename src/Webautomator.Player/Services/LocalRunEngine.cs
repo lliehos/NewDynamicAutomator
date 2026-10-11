@@ -25,7 +25,16 @@ public sealed class RunState
 
 public sealed record RunLogLine(DateTime AtUtc, string Kind, string Text);
 
-public sealed record LocalCellWrite(int DataSourceId, int RowIndex, string ColumnKey, string? CellValue);
+/// <summary>
+/// One cell a local run wrote, ready to be merged by Sync.
+/// </summary>
+/// <param name="BaseValue">
+/// The value the cell held in the copy this run started from. The server compares it with its own
+/// current value to tell "nobody else touched this cell" (write the run's value) from a real
+/// conflict (keep the server's newer value). <c>null</c> means the run never read the cell, so the
+/// server falls back to writing the value as before.
+/// </param>
+public sealed record LocalCellWrite(int DataSourceId, int RowIndex, string ColumnKey, string? CellValue, string? BaseValue);
 
 /// <summary>
 /// Walks a process graph and executes it against a Firefox session.
@@ -517,8 +526,20 @@ public sealed class LocalRunEngine
         }
 
         var targetRow = node.SpecificRowIndex ?? rowIndex;
-        _localCells[CellKey(dsId.Value, targetRow, col)] = text;
-        State.Writes.Add(new LocalCellWrite(dsId.Value, targetRow, col, text));
+        var cellKey = CellKey(dsId.Value, targetRow, col);
+        // Capture the PRE-WRITE value before overwriting the table: that is the only way the server
+        // can later tell "nobody else changed this cell" from a genuine conflict. Only the first
+        // write to a cell contributes a base — a later write in the same run would record this run's
+        // own previous value and make every cell look conflicted.
+        string? baseValue = null;
+        if (State.Writes.All(w => w.DataSourceId != dsId.Value || w.RowIndex != targetRow || w.ColumnKey != col))
+        {
+            baseValue = _localCells.TryGetValue(cellKey, out var before) && before is not null
+                ? before
+                : ReadCell(graph, dsId, targetRow, col);
+        }
+        _localCells[cellKey] = text;
+        State.Writes.Add(new LocalCellWrite(dsId.Value, targetRow, col, text, baseValue));
         Log("info", $"نوشتن در منبع #{dsId} ستون «{col}» ردیف {targetRow + 1}");
 
         var isShared = graph.DataSources.FirstOrDefault(d => d.Id == dsId)?.IsPublic == true;

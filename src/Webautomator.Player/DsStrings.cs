@@ -46,6 +46,13 @@ internal static class DsStrings
     public const string Stop = "توقف";
     /// <summary>Shown when the server ended this session, most often because a monitoring administrator closed it.</summary>
     public const string SessionClosed = "دسترسی این حساب توسط مدیر نظارت بسته شد. برای ادامه دوباره وارد شوید.";
+    /// <summary>Shown when the administrator has switched server runs off deployment-wide.</summary>
+    public const string ServerRunDisabledTitle = "اجرای روی سرور غیرفعال است";
+    public const string ServerRunDisabledBody =
+        "اجرای روی سرور توسط مدیر غیرفعال شده است. برای اجرای این فرآیند، کلید «اجرا» را روی «محلی» بگذارید و سپس اجرا بزنید.";
+    public const string ServerRunUnknownBody =
+        "وضعیت اجرای روی سرور از سرور خوانده نشد (سرور در دسترس نیست یا نسخهٔ قدیمی است). برای اطمینان، اجرای سروری شروع نشد؛ از اجرای محلی استفاده کنید یا اتصال سرور را بررسی کنید.";
+
     // ---- Repeat indices ----
     public const string RepeatTitle = "انتخاب اندیس تکرار";
     public const string RepeatHint = "این فرآیند بیش از یک تکرار دارد. اندیس‌هایی که باید اجرا شوند را انتخاب کنید.";

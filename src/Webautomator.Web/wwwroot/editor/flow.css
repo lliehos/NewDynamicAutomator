@@ -808,6 +808,10 @@ rect.flow-marquee{pointer-events:none}
 .ds-list .ds-title-row{display:flex;align-items:center;gap:4px;min-width:0;position:relative;z-index:2}
 .ds-list .ds-title{font-weight:700;color:#4b465c;display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:0;line-height:1.35;flex:1}
 .ds-badge-master{display:inline-flex;align-items:center;font-size:10px;font-weight:700;color:#28c76f;background:#e8f9f0;border-radius:999px;padding:1px 7px}
+/* A public source lent to this process: its badge is the only visible sign that the row's detach and
+   rename controls are deliberately absent, so it must read as "shared", not as decoration. */
+.ds-badge-public{display:inline-flex;align-items:center;font-size:10px;font-weight:700;color:#0f766e;background:#e6f6f4;border-radius:999px;padding:1px 7px;margin-inline-start:6px}
+.ds-list li.ds-is-public{background:#f4fbfa}
 .ds-icon-btn{
   display:inline-flex;align-items:center;justify-content:center;
   width:30px;height:30px;padding:0;border:0;border-radius:8px;

@@ -193,6 +193,12 @@
   }
 
   const ICO_PLAY = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg>`;
+  /**
+   * Local run: the same play triangle with a device baseline under it. The two run actions sit next
+   * to each other, so they must be distinguishable at a glance without reading the tooltip — the
+   * server one stays the plain triangle and this one adds the "on this machine" mark.
+   */
+  const ICO_PLAY_LOCAL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 4.2v10.6l9-5.3-9-5.3z"/><path fill="currentColor" d="M4 18.2h13v1.8H4z"/></svg>`;
   const ICO_REC = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="currentColor"/></svg>`;
   /** Robot head only (not brand mark / browser chrome). */
   const ICO_SMART = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="10.5" y="2.5" width="3" height="3.2" rx="1" fill="currentColor"/><circle cx="12" cy="2.2" r="1.4" fill="currentColor"/><rect x="5" y="6.5" width="14" height="13" rx="3.5" fill="currentColor"/><circle cx="9.2" cy="12" r="1.7" fill="#fff"/><circle cx="14.8" cy="12" r="1.7" fill="#fff"/><rect x="9" y="15.8" width="6" height="1.6" rx="0.8" fill="#fff" opacity="0.9"/></svg>`;
@@ -510,6 +516,31 @@
   }
 
   /**
+   * Is running on the server allowed at all? (Admin → Settings / Monitoring master switch.)
+   *
+   * Cached briefly: the process list renders on every poll, and the answer rarely changes. The cache
+   * is short so flipping the switch takes effect on the next render rather than needing a reload.
+   *
+   * `serverRunAllowedSync()` is the synchronous read the row renderer uses — an `await` cannot happen
+   * mid-render, and the default (`true`) must not disable the button before the first probe answers.
+   */
+  let serverRunFlag = { value: true, at: 0 };
+  async function fetchServerRunEnabled({ force = false } = {}) {
+    if (!force && Date.now() - serverRunFlag.at < 15000) return serverRunFlag.value;
+    try {
+      const res = await fetch("/api/play-mode", { credentials: "same-origin", cache: "no-store" });
+      if (res.ok) {
+        const body = await res.json();
+        serverRunFlag = { value: body?.serverRunEnabled !== false, at: Date.now() };
+      }
+    } catch { /* keep the last known value; the default is enabled */ }
+    return serverRunFlag.value;
+  }
+  function serverRunAllowedSync() {
+    return serverRunFlag.value !== false;
+  }
+
+  /**
    * Whether the signed-in user may shape the shared templates (Admin or ProcessManager).
    *
    * The flag is rendered by the view from the same role check the sidebar and HomeController use,
@@ -565,11 +596,29 @@
           t("tasks.editLocked", { name: task.templateTitle || t("panel.colTemplate") }) || t("tasks.edit"),
           `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_DIAGRAM)
       : iconLink("is-edit", t("tasks.edit"), `/Panel/Tasks/Editor/${encodeURIComponent(task.id)}`, ICO_EDIT);
+
+    /**
+     * TWO run actions, because the earlier single button hid the choice behind a menu and then had to
+     * ask which tab to drive — a question the list cannot answer, since a list-launched run ALWAYS
+     * opens its own tab (the page the run drives is not open yet; that is what makes it a run from
+     * here). The run TYPE is the only real choice, so it is two buttons. The diagram's element
+     * context menus are different: they run against a page the user is already looking at, so they
+     * still ask which tab.
+     *
+     * A server run needs the admin's master switch (Admin → Settings / Monitoring) to be on; when it
+     * is off the button stays visible but disabled, with the reason in the tooltip — hiding it would
+     * leave the user wondering where server runs went.
+     */
+    const serverRunDisabled = !serverRunAllowedSync();
+    const runTipCommon = `${t("tasks.runOpensTab") || "در یک تب جدید باز و اجرا می‌شود.\n"}${t("tasks.runWhere") || "محل اجرا: "}`;
     return `
       ${editBtn}
       ${iconBtn("is-info", t("tasks.details"), ICO_INFO, `data-da-details="${tid}"`)}
       ${templateBtn}
-      ${iconBtn("is-play", t("tasks.play"), ICO_PLAY, `data-da-action="play-task-menu" data-task-id="${tid}" aria-haspopup="menu"`)}
+      ${iconBtn("is-play", runTipCommon + t("tasks.runOnServer"), ICO_PLAY,
+        `data-da-action="play-task" data-da-run="server" data-task-id="${tid}"${serverRunDisabled ? " disabled aria-disabled=\"true\"" : ""}`)}
+      ${iconBtn("is-play-local", runTipCommon + t("tasks.runLocal"), ICO_PLAY_LOCAL,
+        `data-da-action="play-task" data-da-run="local" data-task-id="${tid}"`)}
       ${iconBtn("is-rec", recTip, ICO_REC, recExtra)}
       ${smartBtn}
       ${dataBtns}
@@ -590,63 +639,7 @@
         : ""}
       ${task.localRunPendingSync
         ? iconBtn("is-sync", t("tasks.syncLocalRun"), ICO_SYNC, `data-da-sync="${tid}"`)
-        : ""}
-      ${runOnServerSwitch(task, tid)}`;
-  }
-
-  /**
-   * The per-row "run on server" switch.
-   *
-   * Default ON: the server tracks the run (visible to the admin, and an edit while it plays is
-   * refused). Turning it OFF runs the process entirely on this machine — no server registration,
-   * and only shared sources are still server-backed — and arms the Sync button that appears after
-   * such a run so its results can be pushed up deliberately.
-   *
-   * A switch rather than a menu item because it is a standing property of the process, not an
-   * action: the user should be able to see its state at a glance on every row.
-   */
-  function runOnServerSwitch(task, tid) {
-    const on = task.runOnServer !== false;
-    const title = on ? t("tasks.runOnServerOn") : t("tasks.runOnServerOff");
-    return `<label class="da-runswitch" title="${escapeHtml(title)}">
-      <input type="checkbox" class="da-runswitch-input" data-da-runserver="${tid}" ${on ? "checked" : ""} />
-      <span class="da-runswitch-ui" aria-hidden="true"></span>
-      <span class="da-runswitch-text">${escapeHtml(t("tasks.runOnServer"))}</span>
-    </label>`;
-  }
-
-  /**
-   * Flip where this process is run and persist it on the task record.
-   *
-   * Kept local-first: the flag lives with the process, so it survives a reload and travels with the
-   * record. Turning it OFF is a real change of behaviour, so it is confirmed once — the user is
-   * about to lose the server-side visibility and concurrency guard they may be relying on.
-   */
-  async function setRunOnServer(taskId, on) {
-    const tasks = readTasks();
-    const idx = findTaskIndex(tasks, taskId);
-    if (idx < 0) return;
-    if (!on) {
-      const msg = t("tasks.runOnServerOffConfirm")
-        || "اجرای این فرآیند به سیستم خودتان منتقل می‌شود و روی سرور ثبت نمی‌شود. مطمئنید؟";
-      const ok = window.DaNotify
-        ? await DaNotify.confirm(msg, {
-            title: t("tasks.runOnServer"),
-            okText: t("common.confirm") || "تأیید",
-            cancelText: t("common.cancel"),
-            danger: false
-          })
-        : window.confirm(msg);
-      if (!ok) {
-        // The switch already moved under the pointer; put it back so it never lies about the state.
-        render(tasks);
-        return;
-      }
-    }
-    tasks[idx] = { ...tasks[idx], runOnServer: on !== false };
-    writeTasks(tasks);
-    render(tasks);
-    notifyHome(on !== false ? t("tasks.runOnServerNowOn") : t("tasks.runOnServerNowOff"), "success");
+        : ""}`;
   }
 
   /**
@@ -703,9 +696,6 @@
   }
 
   function bindTaskActions(root) {
-    root?.querySelectorAll("[data-da-runserver]").forEach((inp) => {
-      inp.addEventListener("change", () => setRunOnServer(inp.getAttribute("data-da-runserver"), inp.checked));
-    });
     root?.querySelectorAll("[data-da-sync]").forEach((btn) => {
       btn.addEventListener("click", () => syncLocalRun(btn.getAttribute("data-da-sync")));
     });
@@ -1242,6 +1232,79 @@ function dataSourceSafeFileName(ds) {
       cellRevisions,
       cellMeta
     };
+  }
+
+  /**
+   * Load a source's data for a LOCAL run — but only when the server copy actually moved.
+   *
+   * "Local" means the server is read ONCE, before the first step, and the run then works on its own
+   * copy. Re-downloading every source on every local run would defeat the entire point (traffic,
+   * and the local copy is already correct if nothing changed), so each source is checked against
+   * the revision we last cached and only the changed ones are fetched.
+   *
+   * The check is cheap by design: one small request per source asking for its CURRENT revision,
+   * compared against the revision stored alongside the cached snapshot. Only a mismatch pulls the
+   * rows. A source with no cached snapshot is always fetched — it has never been loaded.
+   *
+   * The cells are written ONTO the graph's own source entries, because that is the only place the
+   * engine's `readCellForRun` looks for local data (`ds.cells`). Storing them anywhere else would
+   * leave every local read falling back to the server, which is exactly what "local" must avoid.
+   *
+   * Returns the number of sources that FAILED to load, so the caller can warn without pretending
+   * the run cannot proceed: an unloaded source simply falls back to server reads during the run.
+   */
+  async function hydrateLocalRunSources(task) {
+    const sources = (task?.graph?.dataSources || []);
+    if (!sources.length) return 0;
+
+    // Public/shared sources are deliberately NOT cached: they stay server-backed even in a local run,
+    // so they are read live and their state is shared with everyone else by design.
+    const isPublic = (d) => d?.isPublic === true || d?.IsPublic === true;
+    const targets = sources.filter((d) => d && d.id != null && !isPublic(d));
+    if (!targets.length) return 0;
+
+    // Revisions live on the task, keyed by source id: `{ [id]: dataRevision }`.
+    const revisions = task.localSourceRevisions || {};
+    let failed = 0;
+    let loaded = 0;
+
+    for (const ds of targets) {
+      const id = Number(ds.id);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      try {
+        // What revision does the server hold right now? The meta endpoint is small and already
+        // exists (`GET /api/datasources/{id}` → DataSourceMetaDto), so the check costs one light
+        // request per source instead of re-downloading every cell.
+        const metaRes = await fetch(`/api/datasources/${id}`, {
+          credentials: "same-origin",
+          cache: "no-store"
+        });
+        if (!metaRes.ok) throw new Error(`meta ${metaRes.status}`);
+        const meta = await metaRes.json();
+        const serverRevision = meta?.dataRevision ?? meta?.DataRevision ?? null;
+
+        // Unchanged since our snapshot AND we still hold the cells on the graph → nothing to do.
+        const alreadyLoaded = Array.isArray(ds.cells) && ds.cells.length > 0;
+        if (alreadyLoaded && serverRevision != null && revisions[id] === serverRevision) continue;
+
+        const content = await fetchProcessSourceContent(id);
+        // Write the snapshot exactly where the engine reads it.
+        ds.cells = content.cells;
+        ds.columns = content.columns;
+        ds.columnKeys = content.columnKeys;
+        ds.rowCount = content.rowCount;
+        ds.columnCount = content.columnCount ?? content.columns.length;
+        revisions[id] = serverRevision;
+        loaded += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+
+    task.localSourceRevisions = revisions;
+    task.localSourcesLoadedAt = Date.now();
+    task.localSourcesLoadedCount = loaded;
+    return failed;
   }
 
   // --- Live read/write overlays (same behaviour as the sources-page viewer) --------------------
@@ -2686,29 +2749,97 @@ function dataSourceSafeFileName(ds) {
       return;
     }
 
-    const btn = ev.target instanceof Element
-      ? ev.target.closest('[data-da-action="play-task-menu"]')
+    // A run from the LIST always opens its own tab, so the only choice left is the run TYPE — which
+    // is the two buttons themselves. No menu, and no "which tab?" question: the process list has no
+    // page in hand, and asking would be asking about a page the user has not opened yet.
+    const runBtn = ev.target instanceof Element
+      ? ev.target.closest("[data-da-run]")
       : null;
-    if (!btn) return;
+    if (!runBtn) return;
     if (!document.getElementById("da-tasks-panel")) return;
-    ev.preventDefault();
-    ev.stopPropagation();
+    // NOTE: no `ev.preventDefault()` / `stopPropagation()` here, and no early return when the
+    // extension is missing. The extension gate listens on `[data-da-action="play-task"]` in the
+    // CAPTURE phase and is what opens the "extension required" modal; swallowing the click would
+    // leave the user with a button that silently does nothing. So this handler only acts when the
+    // extension really is usable, and lets every other case fall through to the gate.
     const playerOn = typeof window.daHasPlayer === "function"
       ? window.daHasPlayer()
       : (document.documentElement.dataset.daPlayerExtension === "1"
         || document.documentElement.dataset.daExtension === "1"
         || document.documentElement.dataset.daRecorderExtension === "1");
     if (!playerOn) {
-      return; // gate modal will open instead
+      return; // the gate's capture handler opens the modal
     }
-    // A connected but OUTDATED bundle is not usable: the gate modal (which names the required
-    // version) opens from the same click, so do not also open the play menu behind it.
+    // A connected but OUTDATED bundle is not usable either: the gate shows its own modal naming the
+    // required version, so fall through to it rather than starting a run that would fail.
     if (typeof window.daExtensionVersionStale === "function"
       && window.daExtensionVersionStale("player")) {
       return;
     }
-    openPlayTargetMenu(btn);
+    if (runBtn.hasAttribute("disabled") || runBtn.getAttribute("aria-disabled") === "true") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      notifyHome(t("tasks.runServerOff") || "اجرای روی سرور توسط مدیر غیرفعال شده است.", "warn");
+      return;
+    }
+    ev.preventDefault();
+    ev.stopPropagation();
+    startRunFromList(runBtn.getAttribute("data-task-id"), runBtn.getAttribute("data-da-run") === "server");
   }, true);
+
+  /**
+   * Start a whole-process run chosen directly from the process list.
+   *
+   * A list run has no target page yet, so it always opens a fresh tab and lets the process's own
+   * GoToUrl navigate — the historical list behaviour. The run TYPE is the caller's argument.
+   *
+   * A local run loads all its data ONCE before the first step (that is what "local" means: the
+   * server is read once, then the run works on its own copy), so that hydration happens here.
+   */
+  async function startRunFromList(taskId, useServerRun) {
+    if (taskId == null) return;
+    setTasksBusy(true, t("tasks.preparing") || "آماده‌سازی افزونهٔ اجرا…");
+    let cached = null;
+    try {
+      cached = await ensureTaskGraphCached(taskId);
+      if (!cached?.graph?.nodes?.length) {
+        throw new Error(t("tasks.graphNotCached") || "فرآیند در حافظهٔ محلی پیدا نشد. صفحه را رفرش کنید.");
+      }
+      const actionSteps = cached.graph.nodes.filter((n) => n.kind === "action" || n.kind === "step").length;
+      if (!actionSteps) {
+        throw new Error(t("tasks.noActionSteps") || "مرحله‌ای برای اجرا نیست — در دیاگرام اقدام اضافه کنید.");
+      }
+    } catch (e) {
+      setTasksBusy(false);
+      notifyHome(String(e.message || e), "error");
+      return;
+    }
+    if (!useServerRun) {
+      setTasksBusy(true, t("tasks.localHydrateLoading") || "بارگذاری یک‌بارهٔ منابع برای اجرای محلی…");
+      const failed = await hydrateLocalRunSources(cached).catch(() => 0);
+      if (failed > 0) {
+        notifyHome(t("tasks.localHydrateFail", { n: failed })
+          || `بارگذاری محلی ${failed} منبع ناموفق بود؛ خواندن آن‌ها در زمان اجرا از سرور انجام می‌شود.`, "warn");
+      }
+      // Persist the hydrated copy: the extension reads the page store rather than this payload, and
+      // it must see the same loaded-once snapshot.
+      const list = readTasks();
+      const i = findTaskIndex(list, taskId);
+      if (i >= 0) {
+        list[i] = { ...list[i], graph: cached.graph };
+        writeTasks(list, { silent: true });
+      }
+    }
+    window.dispatchEvent(new CustomEvent("da-play", {
+      detail: {
+        taskId,
+        task: cached,
+        graph: cached.graph,
+        openNewTab: true,
+        runOnServer: !!useServerRun
+      }
+    }));
+  }
 
   let playMenuEl = null;
   let playMenuCloser = null;
@@ -2873,121 +3004,6 @@ function dataSourceSafeFileName(ds) {
     });
   }
 
-  async function openPlayTargetMenu(anchor) {
-    closePlayTargetMenu();
-    const taskId = anchor.getAttribute("data-task-id");
-    if (!taskId) return;
-
-    const menu = document.createElement("div");
-    menu.className = "da-play-target-menu";
-    menu.setAttribute("role", "menu");
-    menu.innerHTML = `<div class="da-play-target-loading">در حال بارگذاری تب‌ها…</div>`;
-    document.body.appendChild(menu);
-    playMenuEl = menu;
-
-    const place = () => {
-      const r = anchor.getBoundingClientRect();
-      const mw = Math.max(220, menu.offsetWidth || 260);
-      let left = r.left + window.scrollX;
-      let top = r.bottom + window.scrollY + 6;
-      if (left + mw > window.scrollX + window.innerWidth - 8) {
-        left = window.scrollX + window.innerWidth - mw - 8;
-      }
-      if (top + menu.offsetHeight > window.scrollY + window.innerHeight - 8) {
-        top = r.top + window.scrollY - menu.offsetHeight - 6;
-      }
-      menu.style.left = `${Math.max(8, left)}px`;
-      menu.style.top = `${Math.max(8, top)}px`;
-    };
-    place();
-
-    playMenuCloser = (ev) => {
-      if (!(ev.target instanceof Element)) return;
-      if (menu.contains(ev.target) || anchor.contains(ev.target)) return;
-      closePlayTargetMenu();
-    };
-    setTimeout(() => document.addEventListener("click", playMenuCloser, true), 0);
-
-    const startPlay = async (scope) => {
-      closePlayTargetMenu();
-      setTasksBusy(true, "آماده‌سازی افزونهٔ اجرا…");
-      let cached = null;
-      try {
-        cached = await ensureTaskGraphCached(taskId);
-        if (!cached?.graph?.nodes?.length) {
-          throw new Error("فرآیند در حافظهٔ محلی پیدا نشد. صفحه را رفرش کنید.");
-        }
-        const actionSteps = cached.graph.nodes.filter((n) => n.kind === "action" || n.kind === "step").length;
-        if (!actionSteps) {
-          throw new Error("مرحله‌ای برای اجرا نیست — در دیاگرام اقدام اضافه کنید.");
-        }
-      } catch (e) {
-        setTasksBusy(false);
-        notifyHome(String(e.message || e), "error");
-        return;
-      }
-      window.dispatchEvent(new CustomEvent("da-play", {
-        detail: {
-          taskId,
-          task: cached,
-          graph: cached.graph,
-          ...(scope || {})
-        }
-      }));
-    };
-
-    menu.innerHTML = `
-      <button type="button" class="da-play-target-item" data-open-new="1" role="menuitem">
-        <span class="da-play-target-title">تب جدید</span>
-        <span class="da-play-target-sub">صفحه خالی در مرورگر</span>
-      </button>
-      <div class="da-play-target-sep"></div>
-      <div class="da-play-target-loading">بارگذاری تب‌های باز…</div>
-    `;
-    place();
-    menu.querySelector('[data-open-new="1"]')?.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      startPlay({ openNewTab: true });
-    });
-
-    const tabs = await requestOpenTabs();
-    if (!playMenuEl) return;
-    const listHost = menu.querySelector(".da-play-target-loading");
-    if (!listHost) return;
-    if (!tabs.length) {
-      listHost.className = "da-play-target-empty";
-      listHost.textContent = "تب http(s) باز پیدا نشد — صفحه هدف را باز کنید";
-      place();
-      return;
-    }
-    const frag = document.createDocumentFragment();
-    const label = document.createElement("div");
-    label.className = "da-play-target-label";
-    label.textContent = "تب‌های باز";
-    frag.appendChild(label);
-    tabs.forEach((tab) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "da-play-target-item";
-      btn.setAttribute("role", "menuitem");
-      btn.setAttribute("data-tab-id", String(tab.id));
-      btn.title = tab.url || "";
-      btn.innerHTML = `<span class="da-play-target-title"></span><span class="da-play-target-sub"></span>`;
-      btn.querySelector(".da-play-target-title").textContent = tab.label || tab.title || `#${tab.id}`;
-      btn.querySelector(".da-play-target-sub").textContent = (tab.url || "").replace(/^https?:\/\//i, "").slice(0, 56);
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const tabId = Number(btn.getAttribute("data-tab-id"));
-        if (!Number.isFinite(tabId)) return;
-        startPlay({ tabId, openNewTab: false });
-      });
-      frag.appendChild(btn);
-    });
-    listHost.replaceWith(frag);
-    place();
-  }
 
   window.addEventListener("da-play-ui", (ev) => {
     const d = ev.detail || {};
@@ -3232,6 +3248,9 @@ function dataSourceSafeFileName(ds) {
   if (window.DaEntitlements?.fetch) {
     DaEntitlements.fetch().then(() => scheduleRender()).catch(() => {});
   }
+  // The server-run master switch decides whether the server run button is usable, so ask once up
+  // front and re-render when the answer arrives — otherwise the first paint assumes it is allowed.
+  fetchServerRunEnabled({ force: true }).then(() => scheduleRender()).catch(() => {});
   window.dispatchEvent(new CustomEvent("da-request-local-tasks"));
 
   // Search box: filter as the user types. The page only renders the input on the processes view,

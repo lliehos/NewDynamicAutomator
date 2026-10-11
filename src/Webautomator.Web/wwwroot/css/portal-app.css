@@ -982,7 +982,11 @@ html.light-style {
   min-width: 260px;
   max-width: min(360px, calc(100vw - 16px));
   max-height: min(420px, calc(100vh - 24px));
-  overflow: auto;
+  /* NOT `overflow: auto`: the target-tab submenus are positioned OUTSIDE this box
+     (`inset-inline-start: 100%`), so a scrolling ancestor clips them and the browser answers with a
+     scrollbar on the parent menu instead of letting the child float free. The scroll lives on the
+     submenus, which own their own `max-height`. */
+  overflow: visible;
   background: #fff;
   border: 1px solid #e6e6f0;
   border-radius: 12px;
@@ -991,6 +995,10 @@ html.light-style {
   direction: rtl;
   font-family: Vazirmatn, Tahoma, sans-serif;
 }
+
+/* A DIRECT child of the menu is the only thing that may scroll: the menu is `overflow: visible` so
+   submenus can escape it, which means the menu itself cannot scroll. */
+.da-play-target-menu > .da-play-target-item { overflow: visible; }
 
 .da-play-target-item {
   display: flex;
@@ -1145,6 +1153,117 @@ html.light-style {
   color: #8a8699;
   white-space: nowrap;
 }
+
+/* Explanatory line inside the run-type menu (a process already running, or server runs switched
+   off). It is not a menu item, so it must not look clickable. */
+.da-play-target-note {
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #b45309;
+  background: #fff7e6;
+  border-radius: 8px;
+  margin: 4px 6px;
+}
+
+/* ---- Run-type submenus ----------------------------------------------------------------
+   The run menu is two levels: the run type is the parent and the target tab list opens beside it.
+   A submenu is shown on hover/focus of its parent row, so the whole thing stays one hover gesture —
+   the same pattern the diagram's context menu uses (flow.css .ctx-menu li.has-sub). */
+/* The parent row is a column (title above subtitle), so the caret must be taken OUT of that flow and
+   its two parts put on one line — `margin-inline-start: auto` alone does nothing on a column axis. */
+.da-rt-has-sub > .da-play-target-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "title caret"
+    "sub   caret";
+  align-items: center;
+  column-gap: 8px;
+}
+.da-rt-has-sub > .da-play-target-item .da-play-target-title { grid-area: title; }
+.da-rt-has-sub > .da-play-target-item .da-play-target-sub { grid-area: sub; }
+.da-rt-has-sub > .da-play-target-item .da-rt-caret {
+  grid-area: caret;
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-inline-end: 6px solid #a8aaae; /* RTL/`inline-end` points the caret at the submenu side */
+}
+.da-play-target-submenu {
+  display: none;
+  position: absolute;
+  top: -6px;
+  inset-inline-start: 100%;
+  min-width: 250px;
+  max-height: min(320px, 60vh);
+  /* The only scroller in the widget: the parent menu cannot scroll without clipping this box. */
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 10px 34px rgba(47, 43, 61, .22);
+  padding: 6px;
+  z-index: 3;
+}
+/* The 4px gap between the row and its submenu would drop hover; the pseudo-element bridges it. */
+.da-rt-has-sub::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  inset-inline-start: 100%;
+  width: 8px;
+}
+.da-rt-has-sub:hover > .da-play-target-submenu,
+.da-rt-has-sub:focus-within > .da-play-target-submenu {
+  display: block;
+}
+/* Only one submenu at a time: a sibling that is not hovered hides its own. */
+.da-rt-item:not(:hover):not(:focus-within) > .da-play-target-submenu { display: none; }
+.da-rt-item.is-disabled > .da-play-target-submenu { display: none !important; }
+
+.da-play-target-item[disabled],
+.da-play-target-item[aria-disabled="true"] {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* «دسترسی فرآیندها» dialog — the public source's process access list. */
+.ds-access-box { width: min(520px, 100%); }
+.ds-access-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 8px 0;
+  background: #f7f7fb;
+  border-radius: 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ds-access-list {
+  max-height: 45vh;
+  overflow: auto;
+  border: 1px solid #ebe9f1;
+  border-radius: 10px;
+  padding: 4px;
+}
+.ds-access-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ds-access-row:hover { background: #f7f7fb; }
+.ds-access-row.is-readonly { opacity: .6; cursor: default; }
+.ds-access-title { font-weight: 600; color: #4b465c; }
+.ds-access-sub { color: #a8aaae; font-size: 11px; margin-inline-start: auto; }
 
 .da-task-actions .da-import-btn {
   display: inline-flex;

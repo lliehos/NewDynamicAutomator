@@ -18,6 +18,7 @@ public class AppDbContext : DbContext
     public DbSet<DataSource> DataSources => Set<DataSource>();
     public DbSet<DataSourceCell> DataSourceCells => Set<DataSourceCell>();
     public DbSet<ProcessDataSource> ProcessDataSources => Set<ProcessDataSource>();
+    public DbSet<DataSourceProcessAccess> DataSourceProcessAccesses => Set<DataSourceProcessAccess>();
     public DbSet<DeviceSession> DeviceSessions => Set<DeviceSession>();
     public DbSet<AppEventLog> EventLogs => Set<AppEventLog>();
     public DbSet<ServerMetricsSample> ServerMetricsSamples => Set<ServerMetricsSample>();
@@ -345,6 +346,10 @@ public class AppDbContext : DbContext
             // Every public-source lookup filters on this, so it is worth its own index rather than
             // riding along on the owner one.
             e.HasIndex(x => x.IsPublic);
+            // Database default (not just the CLR initialiser): every row that already exists is a
+            // public source that behaved as "anyone may attach", so back-filling with true keeps
+            // them working exactly as before until a manager narrows the access list.
+            e.Property(x => x.AllowAllProcesses).HasDefaultValue(true);
             e.HasOne(x => x.Owner)
                 .WithMany()
                 .HasForeignKey(x => x.OwnerUserId)
@@ -353,6 +358,22 @@ public class AppDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(x => x.LastEditorUserId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<DataSourceProcessAccess>(e =>
+        {
+            e.ToTable("DataSourceProcessAccesses");
+            e.HasKey(x => new { x.DataSourceId, x.ProcessId });
+            e.HasOne(x => x.DataSource)
+                .WithMany(x => x.ProcessAccesses)
+                .HasForeignKey(x => x.DataSourceId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // Cascade, not Restrict: a deleted process must not leave a grant behind that would
+            // show in the access dialog as a process that no longer exists.
+            e.HasOne(x => x.Process)
+                .WithMany()
+                .HasForeignKey(x => x.ProcessId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<DataSourceCell>(e =>

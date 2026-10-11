@@ -404,6 +404,33 @@ public sealed class PanelClient : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Is running on the server allowed for this deployment right now? (Admin's master switch.)
+    /// </summary>
+    /// <remarks>
+    /// The same endpoint the browser extension reads. The desktop runner must honour it too: it is
+    /// the deployment-wide answer to "may anything run on the server", and a client that skipped the
+    /// check would happily register a run the administrator has just switched off.
+    ///
+    /// Returns <c>null</c> when the answer could not be obtained (the server is unreachable, or an
+    /// older deployment has no such endpoint). The caller decides what that means — the runner
+    /// refuses rather than guesses, because starting a server run during an outage is exactly the
+    /// case the switch exists to prevent.
+    /// </remarks>
+    public async Task<bool?> GetServerRunEnabledAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var res = await _http.GetAsync($"{BaseUrl}/api/play-mode", ct);
+            if (!res.IsSuccessStatusCode) return null;
+            var doc = await res.Content.ReadFromJsonAsync<JsonElement>(JsonOpts, ct);
+            if (doc.TryGetProperty("serverRunEnabled", out var el) && el.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                return el.GetBoolean();
+            return null;
+        }
+        catch { return null; }
+    }
+
     /// <summary>Read one cell of a source, for a step that pulls its value from the server.</summary>
     public async Task<string?> ReadCellAsync(int dataSourceId, int rowIndex, string columnKey, CancellationToken ct = default)
     {

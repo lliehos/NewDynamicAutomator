@@ -28,6 +28,7 @@ public class SystemSettingsService
         _db.SystemSettings.AsNoTracking().AnyAsync(s => s.Key == key, ct);
 
     /// <summary>
+    /// <summary>
     /// Which of the user's own details this deployment asks for, from the Admin → Settings switches.
     /// </summary>
     /// <remarks>
@@ -79,6 +80,17 @@ public class SystemSettingsService
             .FirstOrDefaultAsync(ct);
 
         return string.IsNullOrWhiteSpace(row) ? fallback : IsOn(row);
+    }
+
+    /// <summary>
+    /// The master switch for server runs. Defaults to TRUE when the row is missing or blank, so a
+    /// deployment that has never had this setting keeps the behaviour it already had — the same
+    /// "absent means the capability stays" rule the licence flags use.
+    /// </summary>
+    public async Task<bool> IsServerRunEnabledAsync(CancellationToken ct = default)
+    {
+        var raw = await GetAsync(SystemSettingKeys.ServerRunEnabled, "true", ct);
+        return !string.Equals(raw, "false", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<Plan> GetDefaultRegisterPlanAsync(CancellationToken ct = default)

@@ -478,6 +478,14 @@ async function handleMessage(message, sender) {
       }
       return { ok: true };
     }
+    // A local run has just recorded its writes into the task records. Push the updated list to the
+    // open portal tabs so the row's Sync button appears at once — waiting for the next page load
+    // left the pending results invisible, which is how a finished local run could look "lost".
+    case "localRunPendingSync": {
+      const tasks = await loadUserTasks().catch(() => []);
+      if (tasks.length) await pushTasksToPortalTabs(tasks).catch(() => false);
+      return { ok: true };
+    }
     // AlertAccept's three calls. The Player cannot answer a browser dialog from inside the page
     // (a dialog blocks the page's own script), so it asks the extension to do it — see
     // lib/alert-dialog.js for why the answer is pre-set rather than decided on the fly.
@@ -2477,7 +2485,9 @@ async function startPlayWithAutoReload(message, sender) {
           : message.stepNodeId ? "step"
             : message.groupNodeId ? "group"
               : "task"),
-    openNewTab: hasExplicitTab || isConditionCheck ? false : (message.openNewTab === true)
+    openNewTab: hasExplicitTab || isConditionCheck ? false : (message.openNewTab === true),
+    // Per-run choice from the portal's run-type menu. Absent (editor menus, legacy callers) = server.
+    runOnServer: message.runOnServer !== false
   };
 
   const playOpts = {
@@ -2487,7 +2497,8 @@ async function startPlayWithAutoReload(message, sender) {
     nextFromNodeId: pendingPlay.nextFromNodeId,
     playScope: pendingPlay.playScope,
     openNewTab: pendingPlay.openNewTab,
-    activateTab: isConditionCheck ? false : undefined
+    activateTab: isConditionCheck ? false : undefined,
+    runOnServer: pendingPlay.runOnServer
   };
 
   // Keep the manual-click preview's colour in step with the process being run. Done here (on a
@@ -2619,7 +2630,9 @@ async function resumePendingPlayAfterReload() {
         conditionNodeId: pendingPlayRequest.conditionNodeId || null,
         nextFromNodeId: pendingPlayRequest.nextFromNodeId || null,
         playScope: pendingPlayRequest.playScope || null,
-        openNewTab: pendingPlayRequest.openNewTab === true
+        openNewTab: pendingPlayRequest.openNewTab === true,
+        // The choice must survive the dev-reload resume too, or a local run would resume as server.
+        runOnServer: pendingPlayRequest.runOnServer !== false
       }
     ).then((res) => {
       chrome.storage.local.remove("resumePlayAfterReload");

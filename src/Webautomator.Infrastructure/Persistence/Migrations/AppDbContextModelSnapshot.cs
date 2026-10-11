@@ -185,6 +185,11 @@ namespace Webautomator.Infrastructure.Persistence.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<bool>("AllowAllProcesses")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
                     b.Property<string>("CellsJson")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -283,6 +288,21 @@ namespace Webautomator.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("DataSourceCells", (string)null);
+                });
+
+            modelBuilder.Entity("Webautomator.Domain.Entities.DataSourceProcessAccess", b =>
+                {
+                    b.Property<int>("DataSourceId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ProcessId")
+                        .HasColumnType("int");
+
+                    b.HasKey("DataSourceId", "ProcessId");
+
+                    b.HasIndex("ProcessId");
+
+                    b.ToTable("DataSourceProcessAccesses", (string)null);
                 });
 
             modelBuilder.Entity("Webautomator.Domain.Entities.DeploymentAnchor", b =>
@@ -1323,6 +1343,25 @@ namespace Webautomator.Infrastructure.Persistence.Migrations
                     b.Navigation("DataSource");
                 });
 
+            modelBuilder.Entity("Webautomator.Domain.Entities.DataSourceProcessAccess", b =>
+                {
+                    b.HasOne("Webautomator.Domain.Entities.DataSource", "DataSource")
+                        .WithMany("ProcessAccesses")
+                        .HasForeignKey("DataSourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Webautomator.Domain.Entities.Process", "Process")
+                        .WithMany()
+                        .HasForeignKey("ProcessId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("DataSource");
+
+                    b.Navigation("Process");
+                });
+
             modelBuilder.Entity("Webautomator.Domain.Entities.DeviceSession", b =>
                 {
                     b.HasOne("Webautomator.Domain.Entities.AppUser", "User")
@@ -1455,6 +1494,8 @@ namespace Webautomator.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Webautomator.Domain.Entities.DataSource", b =>
                 {
                     b.Navigation("Cells");
+
+                    b.Navigation("ProcessAccesses");
 
                     b.Navigation("ProcessLinks");
                 });

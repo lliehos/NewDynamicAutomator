@@ -69,6 +69,8 @@
   const ICO_RENAME = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 17.5V20h2.5L18 8.5 15.5 6 4 17.5zm16.7-11.2a1 1 0 0 0 0-1.4l-2.1-2.1a1 1 0 0 0-1.4 0l-1.6 1.6 3.5 3.5 1.6-1.6z"/></svg>`;
   const ICO_RELOAD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5a7 7 0 0 1 6.5 4.4l1.9-1.1V13h-4.7l1.8-1A5 5 0 1 0 12 17v2a7 7 0 1 1 0-14z"/></svg>`;
   const ICO_GLOBE = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.9 6h-3a15 15 0 0 0-1.3-3.4A8 8 0 0 1 18.9 8zM12 4.2c.7 1 1.3 2.3 1.7 3.8h-3.4A14 14 0 0 1 12 4.2zM4.3 14A8 8 0 0 1 4 12c0-.7.1-1.4.3-2h3.4a17 17 0 0 0 0 4H4.3zm.8 2h3a15 15 0 0 0 1.3 3.4A8 8 0 0 1 5.1 16zm3-8h-3A8 8 0 0 1 8.4 4.6 15 15 0 0 0 7.1 8zM12 19.8a14 14 0 0 1-1.7-3.8h3.4a14 14 0 0 1-1.7 3.8zm2.1-5.8H9.9a15 15 0 0 1 0-4h4.2a15 15 0 0 1 0 4zm.5 5.4a15 15 0 0 0 1.3-3.4h3a8 8 0 0 1-4.3 3.4zm1.7-5.4a17 17 0 0 0 0-4h3.4c.2.6.3 1.3.3 2s-.1 1.4-.3 2h-3.4z"/></svg>`;
+  const ICO_ADD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5z"/></svg>`;
+  const ICO_SHIELD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2l7 3v6c0 4.4-3 8-7 11-4-3-7-6.6-7-11V5l7-3zm0 2.2L7 6v5c0 3.4 2.1 6.2 5 8.7 2.9-2.5 5-5.3 5-8.7V6l-5-1.8zM10.9 9.6l1.9 1.9 3.4-3.4 1.1 1.1-4.5 4.5-3-3 1.1-1.1z"/></svg>`;
 
   function iconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
@@ -190,6 +192,219 @@
     } catch (e) {
       notify(e.message || t("sources.publicCreateFail") || "ساخت منبع عمومی ناموفق بود.", "error");
     }
+  }
+
+  /**
+   * Merge this source's local-run results back into the server.
+   *
+   * The writes live in the task record the extension wrote (`locallyRunSources`), so they are read
+   * from the local task cache and posted exactly like the panel's Sync used to be — the server
+   * checks each cell against its own current value, writes the ones nobody else touched and keeps
+   * its own newer value where they disagree. The row's "needs sync" badge clears when it is done.
+   */
+  async function syncSourceWithServer(sourceId, title, btn) {
+    const sid = Number(sourceId);
+    if (!Number.isFinite(sid) || sid <= 0) return;
+    const msg = t("sources.syncConfirm", { title: title || "" })
+      || `تغییرات محلی منبع «${title}» با دادهٔ سرور بررسی و ادغام می‌شود. ادامه می‌دهید؟`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("sources.syncNow") || "همگام‌سازی با سرور",
+          okText: t("common.confirm") || "تأیید",
+          cancelText: t("common.cancel")
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+    if (btn) { btn.disabled = true; btn.classList.add("is-busy"); }
+    try {
+      // Collect this source's pending cells from every task that recorded some.
+      const tasks = readTasks();
+      let applied = 0, unchanged = 0, conflicts = 0, skipped = 0, syncedTasks = 0;
+      for (const task of tasks) {
+        const cells = (Array.isArray(task.locallyRunSources) ? task.locallyRunSources : [])
+          .filter((c) => Number(c?.dataSourceId) === sid);
+        if (!cells.length) continue;
+        const res = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/sync-local-run`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ localRunAt: task.lastLocalRunAt || null, cells })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || t("sources.syncFail") || "همگام‌سازی ناموفق بود.");
+        applied += Number(body.applied) || 0;
+        unchanged += Number(body.unchanged) || 0;
+        skipped += Number(body.skipped) || 0;
+        conflicts += Array.isArray(body.conflicts) ? body.conflicts.length : 0;
+        syncedTasks += 1;
+        // Drop just this source's cells from the task's pending list; keep any other source's.
+        const idx = tasks.findIndex((x) => String(x.id) === String(task.id));
+        if (idx >= 0) {
+          const rest = (tasks[idx].locallyRunSources || []).filter((c) => Number(c?.dataSourceId) !== sid);
+          tasks[idx] = {
+            ...tasks[idx],
+            locallyRunSources: rest.length ? rest : null,
+            localRunPendingSync: rest.length ? tasks[idx].localRunPendingSync : false
+          };
+        }
+      }
+      if (syncedTasks === 0) {
+        notify(t("sources.syncNothing") || "تغییر محلی‌ای برای این منبع ثبت نشده است.", "info");
+      } else {
+        writeTasks(tasks);
+        notify(
+          conflicts > 0
+            ? (t("sources.syncedConflicts", { applied, conflicts }) || `همگام‌سازی انجام شد — ${applied} سلول نوشته شد · ${conflicts} سلول روی سرور تازه‌تر بود.`)
+            : (t("sources.synced", { applied }) || `همگام‌سازی انجام شد — ${applied} سلول نوشته شد.`),
+          conflicts > 0 ? "warn" : "success"
+        );
+        if (skipped > 0) notify(t("sources.syncSkipped", { n: skipped }) || `${skipped} سلول قابل اعمال نبود.`, "warn");
+      }
+      await renderAsync();
+      window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: currentUser(), tasks } }));
+    } catch (e) {
+      notify(e.message || t("sources.syncFail") || "همگام‌سازی ناموفق بود.", "error");
+    } finally {
+      if (btn) { btn.disabled = false; btn.classList.remove("is-busy"); }
+    }
+  }
+
+  /**
+   * Add a public source to one of the caller's processes.
+   *
+   * This is the action that used to live in the diagram editor; the sources list is where a source
+   * is picked, so the button lives on the source's own row now. The server decides whether the
+   * chosen process may use it (the access list the manager edits), and a refusal is shown verbatim.
+   */
+  async function attachPublicToProcess(sourceId, title) {
+    const sid = Number(sourceId);
+    if (!Number.isFinite(sid) || sid <= 0) return;
+    let list;
+    try {
+      const res = await fetch("/api/tasks", { credentials: "same-origin" });
+      list = await res.json();
+    } catch {
+      notify(t("sources.attachLoadFail") || "بارگذاری فهرست فرآیندها ناموفق بود.", "error");
+      return;
+    }
+    const rows = Array.isArray(list) ? list.filter((t) => t.canChangeDataSource !== false) : [];
+    if (!rows.length) {
+      notify(t("sources.attachNoProcess") || "فرآیندی برای افزودن این منبع وجود ندارد.", "info");
+      return;
+    }
+    const pick = await (window.DaNotify?.prompt
+      ? DaNotify.prompt(
+          (t("sources.attachPickPrompt") || "فرآیند مقصد را انتخاب کنید:") + "\n" + rows.map((r) => `#${r.id} ${r.title}`).join("\n"),
+          { title: t("sources.attachToProcess") || "افزودن به فرآیند", value: String(rows[0].id), okText: t("common.confirm") || "افزودن" })
+      : window.prompt(t("sources.attachPickPrompt") || "شناسهٔ فرآیند:", String(rows[0].id)));
+    if (pick == null) return;
+    const taskId = String(pick).trim();
+    if (!/^\d+$/.test(taskId)) {
+      notify(t("sources.attachBadProcess") || "شناسهٔ فرآیند نامعتبر است.", "warn");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/datasources/${sid}/attach`, {
+        method: "POST",
+        credentials: "same-origin"
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || t("sources.attachFail") || "افزودن منبع ناموفق بود.");
+      notify((t("sources.attached", { title }) || `منبع «${title}» به فرآیند ${taskId} اضافه شد.`), "success");
+      await renderAsync();
+    } catch (e) {
+      notify(e.message || t("sources.attachFail") || "افزودن منبع ناموفق بود.", "error");
+    }
+  }
+
+  /**
+   * The «دسترسی فرآیندها» dialog for a public source: the checkbox that lets any process use it,
+   * plus a process list whose ticked rows are the processes that may attach it.
+   *
+   * Server-state first, then writes back the whole state in one call — which attaches the newly
+   * ticked processes, detaches the explicitly unticked ones and stores the blanket flag, so the
+   * permission and the actual usage can never drift apart.
+   */
+  async function openAccessDialog(sourceId, title) {
+    const sid = Number(sourceId);
+    if (!Number.isFinite(sid) || sid <= 0) return;
+    let state;
+    try {
+      const res = await fetch(`/api/datasources/${sid}/access`, { credentials: "same-origin" });
+      if (!res.ok) throw new Error(`access ${res.status}`);
+      state = await res.json();
+    } catch {
+      notify(t("sources.accessLoadFail") || "بارگذاری دسترسی‌ها ناموفق بود.", "error");
+      return;
+    }
+    const selected = new Set((state.grantedProcessIds || []).map((x) => Number(x)));
+    // Everything linked but not granted still counts as "may use it" — it is attached, so its row
+    // must read as ticked, otherwise saving would silently revoke a working attachment.
+    (state.linkedProcessIds || []).forEach((x) => selected.add(Number(x)));
+    const rows = (state.processes || []).map((p) => {
+      const checked = selected.has(Number(p.id));
+      return `<label class="ds-access-row${p.canManage === false ? " is-readonly" : ""}">
+        <input type="checkbox" data-access-pid="${p.id}" ${checked ? "checked" : ""} ${p.canManage === false ? "disabled" : ""} />
+        <span class="ds-access-title">${escapeHtml(p.title || `#${p.id}`)}</span>
+        <span class="ds-access-sub">${escapeHtml(p.ownerUserName || "")}${p.linked ? " · متصل" : ""}</span>
+      </label>`;
+    }).join("");
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "da-confirm-backdrop ds-access-backdrop";
+    backdrop.innerHTML = `
+      <div class="da-confirm-box ds-access-box" role="dialog" aria-modal="true">
+        <div class="da-confirm-title">${escapeHtml(t("sources.manageAccess") || "دسترسی فرآیندها")}</div>
+        <div class="da-confirm-msg">${escapeHtml(title || "")}</div>
+        <label class="ds-access-all">
+          <input type="checkbox" id="ds-access-all" ${state.allProcesses ? "checked" : ""} />
+          <span>${escapeHtml(t("sources.accessAll") || "همهٔ فرآیندها بتوانند از این منبع استفاده کنند")}</span>
+        </label>
+        <div class="ds-access-list">${rows || `<div class="da-field-hint">${escapeHtml(t("sources.accessNoProcess") || "فرآیندی برای نمایش نیست.")}</div>`}</div>
+        <div class="da-confirm-actions">
+          <button type="button" class="da-confirm-cancel">${escapeHtml(t("common.cancel") || "انصراف")}</button>
+          <button type="button" class="da-confirm-ok">${escapeHtml(t("common.save") || "ذخیره")}</button>
+        </div>
+      </div>`;
+    document.documentElement.appendChild(backdrop);
+    requestAnimationFrame(() => backdrop.classList.add("da-confirm-in"));
+
+    const close = () => {
+      backdrop.classList.remove("da-confirm-in");
+      setTimeout(() => backdrop.remove(), 160);
+    };
+    backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) close(); });
+    backdrop.querySelector(".da-confirm-cancel")?.addEventListener("click", close);
+    backdrop.querySelector(".da-confirm-ok")?.addEventListener("click", async () => {
+      const all = backdrop.querySelector("#ds-access-all")?.checked === true;
+      const processIds = [];
+      const detachIds = [];
+      backdrop.querySelectorAll("[data-access-pid]").forEach((inp) => {
+        const pid = Number(inp.getAttribute("data-access-pid"));
+        if (!Number.isFinite(pid)) return;
+        if (inp.checked) processIds.push(pid);
+        else if (selected.has(pid)) detachIds.push(pid); // was granted/linked, now unticked
+      });
+      try {
+        const res = await fetch(`/api/datasources/${sid}/access`, {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ allProcesses: all, processIds, detachProcessIds: detachIds })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || t("sources.accessSaveFail") || "ذخیرهٔ دسترسی‌ها ناموفق بود.");
+        notify(
+          (t("sources.accessSaved", { attached: Number(body.attached) || 0, detached: Number(body.detached) || 0 })
+            || `دسترسی ذخیره شد — ${Number(body.attached) || 0} فرآیند افزوده و ${Number(body.detached) || 0} فرآیند جدا شد.`),
+          "success"
+        );
+        close();
+        await renderAsync();
+      } catch (e) {
+        notify(e.message || t("sources.accessSaveFail") || "ذخیرهٔ دسترسی‌ها ناموفق بود.", "error");
+      }
+    });
   }
 
   /**
@@ -333,6 +548,8 @@
           // Carried through so the row can badge a shared source and hide the buttons the server
           // would refuse anyway (a public source's shape is not the reader's to change).
           isPublic: d.isPublic === true,
+          // Owner or ProcessManager/Admin: may open the «دسترسی فرآیندها» dialog for this source.
+          canManageAccess: d.canManageAccess === true,
           ownerUserName: d.ownerUserName || null,
           // True while a local run's changes for this source have not been synced; the row shows the
           // sync badge so "somewhere there is a newer copy" is visible instead of remembered.
@@ -1685,14 +1902,20 @@
           ICO_GLOBE,
           `data-id="${sid}" data-public="${isPublic ? "0" : "1"}"`)
       : "";
-    // The sync button appears only when THIS browser holds the writes: the divergence is reported to
-    // the server, but the values live in the client that ran the process, so a button here would have
-    // nothing to send for a run that happened elsewhere (a desktop player, say) — that one carries its
-    // own Sync button.
-    // The dialog is the same one the processes list uses for a whole-process sync: same risk, so the
-    // same words — and the same translations, rather than a second set for the same action.
-    const syncBtn = row.ds.needsSync && pendingWritesForSource(sid)
-      ? iconBtn("js-sync is-sync", t("tasks.syncLocalRun") || "سینک نتیجهٔ اجرای محلی", ICO_SYNC, `data-id="${sid}"`)
+    // The add-a-public-source-to-my-process action that used to live in the diagram editor; the
+    // sources list is where a source is picked, so the button lives next to the source now.
+    const attachBtn = isPublic && Number(sid) > 0
+      ? iconBtn("js-attach", t("sources.attachToProcess") || "افزودن به فرآیند", ICO_ADD, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`)
+      : "";
+    const accessBtn = isPublic && Number(sid) > 0 && row.ds.canManageAccess === true
+      ? iconBtn("js-access", t("sources.manageAccess") || "دسترسی فرآیندها", ICO_SHIELD, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`)
+      : "";
+    // Sync button: shown when a LOCAL run left this source diverged from the server. It replaces the
+    // old per-process Sync button — the divergence belongs to the source, so that is where the
+    // affordance lives, next to the "needs sync" badge that explains it.
+    const syncBtn = row.ds.needsSync === true
+      ? iconBtn("js-sync is-sync", t("sources.syncNow") || "همگام‌سازی با سرور", ICO_RELOAD,
+          `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`)
       : "";
     return `
       ${Number(sid) > 0 && canShape ? iconBtn("js-rename", t("sources.rename"), ICO_RENAME, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
@@ -1700,9 +1923,11 @@
       ${Number(sid) > 0 ? iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}"`) : ""}
       ${row.taskId != null ? iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`) : ""}
       ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-id="${sid}"`)}
-      ${syncBtn}
       ${master}
       ${publicToggle}
+      ${attachBtn}
+      ${accessBtn}
+      ${syncBtn}
       ${iconBtn("js-del is-danger", delLabel, ICO_DEL, `data-task="${tid}" data-id="${sid}" data-lib="${row.fromLibrary ? "1" : "0"}"`)}
       ${openBtn}
     `;
@@ -1729,8 +1954,14 @@
     root.querySelectorAll(".js-public").forEach((btn) => {
       btn.addEventListener("click", () => togglePublic(btn.dataset.id, btn.dataset.public === "1"));
     });
+    root.querySelectorAll(".js-access").forEach((btn) => {
+      btn.addEventListener("click", () => openAccessDialog(btn.dataset.id, btn.dataset.title || ""));
+    });
+    root.querySelectorAll(".js-attach").forEach((btn) => {
+      btn.addEventListener("click", () => attachPublicToProcess(btn.dataset.id, btn.dataset.title || ""));
+    });
     root.querySelectorAll(".js-sync").forEach((btn) => {
-      btn.addEventListener("click", () => syncSourceWrites(btn.dataset.id, btn));
+      btn.addEventListener("click", () => syncSourceWithServer(btn.dataset.id, btn.dataset.title || "", btn));
     });
     root.querySelectorAll(".js-master").forEach((btn) => {
       btn.addEventListener("click", () => setMaster(btn.dataset.task, btn.dataset.id));

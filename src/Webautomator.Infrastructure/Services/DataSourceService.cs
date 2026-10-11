@@ -186,7 +186,10 @@ public class DataSourceService
                 NeedsSync = d.NeedsSync,
                 OwnerUserName = d.OwnerUserName,
                 // Mirrors CanReshapeAsync so the list never offers a button the service would refuse.
-                CanEditStructure = d.OwnerUserId == userId || (d.IsPublic && canReshapePublic)
+                CanEditStructure = d.OwnerUserId == userId || (d.IsPublic && canReshapePublic),
+                // Same shape for the access dialog: only a public source's owner or a
+                // ProcessManager/Admin may decide which processes may use it.
+                CanManageAccess = d.IsPublic && (d.OwnerUserId == userId || canReshapePublic)
             };
         }).ToList();
     }
@@ -1909,6 +1912,154 @@ public class DataSourceService
         return await DeleteManyForAdminAsync(ids, ct);
     }
 
+    /// <summary>Permission check shared by attach and the access dialog: may this user change this process's data source?</summary>
+    private Task<bool> CanChangeProcessDataSourceAsync(int userId, int processId, CancellationToken ct)
+        => _db.ProcessShares.AnyAsync(a =>
+            a.UserId == userId && a.ProcessId == processId
+            && (a.CanChangeDataSource || a.CanEdit || a.Process.CreatorUserId == userId), ct);
+
+    /// <summary>
+    /// The access state of a public source: the blanket flag, the granted/linked sets, and every
+    /// process row the caller may need to see (their own processes plus anything already attached).
+    /// </summary>
+    public async Task<DataSourceAccessDto?> GetAccessAsync(int userId, int id, CancellationToken ct = default)
+    {
+        var ds = await GetAccessibleAsync(userId, id, write: false, ct);
+        if (ds is null || !ds.IsPublic) return null;
+
+        var granted = await _db.DataSourceProcessAccesses.AsNoTracking()
+            .Where(a => a.DataSourceId == id)
+            .Select(a => a.ProcessId).ToListAsync(ct);
+        var linked = await _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.DataSourceId == id)
+            .Select(l => l.ProcessId).ToListAsync(ct);
+
+        // The caller's own view of the world (their shares), so the dialog lists exactly the
+        // processes they work with…
+        var visible = await _db.ProcessShares.AsNoTracking()
+            .Where(s => s.UserId == userId)
+            .Select(s => new
+            {
+                ProcessId = s.ProcessId,
+                Title = s.Process != null ? s.Process.Title : "",
+                OwnerUserName = s.Process != null && s.Process.Creator != null ? s.Process.Creator.UserName : null,
+                CanChange = s.CanChangeDataSource || s.CanEdit,
+                CreatorUserId = s.Process != null ? s.Process.CreatorUserId : null
+            })
+            .ToListAsync(ct);
+
+        var rows = visible.ToDictionary(
+            v => v.ProcessId,
+            v => new DataSourceAccessProcessDto
+            {
+                Id = v.ProcessId,
+                Title = v.Title ?? "",
+                OwnerUserName = v.OwnerUserName,
+                CanManage = v.CreatorUserId == userId || v.CanChange,
+                Linked = false
+            });
+
+        // …plus every process the source is already attached to, even one the caller cannot see in
+        // their list: otherwise a manager could never untick (and detach) it.
+        var extraIds = linked.Except(rows.Keys).ToList();
+        if (extraIds.Count > 0)
+        {
+            var extras = await _db.Processes.AsNoTracking()
+                .Where(p => extraIds.Contains(p.Id))
+                .Select(p => new
+                {
+                    p.Id,
+                    p.Title,
+                    OwnerUserName = p.Creator != null ? p.Creator.UserName : null,
+                    p.CreatorUserId
+                })
+                .ToListAsync(ct);
+            foreach (var p in extras)
+            {
+                rows[p.Id] = new DataSourceAccessProcessDto
+                {
+                    Id = p.Id,
+                    Title = p.Title ?? "",
+                    OwnerUserName = p.OwnerUserName,
+                    CanManage = p.CreatorUserId == userId,
+                    Linked = false
+                };
+            }
+        }
+
+        foreach (var pid in linked)
+            if (rows.TryGetValue(pid, out var row)) row.Linked = true;
+
+        return new DataSourceAccessDto
+        {
+            DataSourceId = id,
+            AllProcesses = ds.AllowAllProcesses,
+            GrantedProcessIds = granted,
+            LinkedProcessIds = linked,
+            Processes = rows.Values.OrderBy(r => r.Id).ToList()
+        };
+    }
+
+    /// <summary>
+    /// Replace a public source's process access: record the new grant list, attach every ticked
+    /// process that is not attached yet, detach the ones the manager explicitly unticked, and store
+    /// the "any process may use it" flag.
+    /// </summary>
+    /// <remarks>
+    /// Only processes that already held the access or that the caller may change the data source
+    /// of are touched; a linked process the caller never unticked is left alone even if it is not
+    /// in the target list, because the request's detach list is explicit.
+    /// </remarks>
+    public async Task<(bool ok, string? error, int attached, int detached)> SetAccessAsync(
+        int userId, int id, SetDataSourceAccessRequest? req, CancellationToken ct = default)
+    {
+        var ds = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == id, ct);
+        if (ds is null) return (false, "notfound", 0, 0);
+        if (!ds.IsPublic) return (false, "notpublic", 0, 0);
+        if (ds.OwnerUserId != userId && !await IsProcessManagerOrAdminAsync(userId, ct))
+            return (false, "forbidden", 0, 0);
+
+        var targetIds = (req?.ProcessIds ?? new List<int>()).Where(x => x > 0).Distinct().ToList();
+        var known = await _db.Processes.AsNoTracking()
+            .Where(p => targetIds.Contains(p.Id)).Select(p => p.Id).ToListAsync(ct);
+        targetIds = targetIds.Where(known.Contains).ToList();
+
+        var links = await _db.ProcessDataSources.AsNoTracking()
+            .Where(l => l.DataSourceId == id).Select(l => l.ProcessId).ToListAsync(ct);
+        var grants = await _db.DataSourceProcessAccesses
+            .Where(a => a.DataSourceId == id).ToListAsync(ct);
+
+        // Attaching (a ticked process that is not linked yet) needs the same permission as a normal
+        // attach — a manager cannot push their source into a process they cannot change data on.
+        foreach (var pid in targetIds.Where(pid => !links.Contains(pid)))
+        {
+            if (!await CanChangeProcessDataSourceAsync(userId, pid, ct))
+                return (false, "forbidden", 0, 0);
+        }
+
+        // Grants are replaced exactly by the ticked set.
+        foreach (var g in grants.Where(g => !targetIds.Contains(g.ProcessId)).ToList())
+            _db.DataSourceProcessAccesses.Remove(g);
+        foreach (var pid in targetIds.Where(pid => grants.All(g => g.ProcessId != pid)))
+            _db.DataSourceProcessAccesses.Add(new DataSourceProcessAccess { DataSourceId = id, ProcessId = pid });
+        ds.AllowAllProcesses = req?.AllProcesses == true;
+        await _db.SaveChangesAsync(ct);
+
+        var attached = 0;
+        foreach (var pid in targetIds.Where(pid => !links.Contains(pid)))
+        {
+            if (await EnsureAttachedCoreAsync(pid, ds, ct)) attached++;
+        }
+        var detached = 0;
+        foreach (var pid in (req?.DetachProcessIds ?? new List<int>())
+                     .Where(x => x > 0 && !targetIds.Contains(x) && links.Contains(x))
+                     .Distinct())
+        {
+            if (await EnsureDetachedCoreAsync(pid, id, ct)) detached++;
+        }
+        return (true, null, attached, detached);
+    }
+
     public async Task<(bool ok, string? error)> AttachAsync(
         int userId, int processId, int dataSourceId, bool setDefault = false, CancellationToken ct = default)
     {
@@ -1916,20 +2067,27 @@ public class DataSourceService
             .FirstOrDefaultAsync(p => p.Id == processId, ct);
         if (process is null) return (false, "notfound");
 
-        var canChange = await _db.ProcessShares.AnyAsync(a =>
-            a.UserId == userId && a.ProcessId == processId
-            && (a.CanChangeDataSource || a.CanEdit || a.Process.CreatorUserId == userId), ct);
-        if (!canChange) return (false, "forbidden");
+        if (!await CanChangeProcessDataSourceAsync(userId, processId, ct))
+            return (false, "forbidden");
 
         var ds = await _db.DataSources.FirstOrDefaultAsync(d => d.Id == dataSourceId, ct);
         if (ds is null) return (false, "sourcenotfound");
         // Owner or already shared via another process of this user — require owner for attach from
-        // library. A public source is the exception: it exists precisely so anyone may attach it to
-        // their own process and use its columns, so the owner check does not apply to it.
+        // library. A public source is the exception: it exists precisely so it can be attached to a
+        // process, so the owner check does not apply to it.
         if (!ds.IsPublic
             && ds.OwnerUserId != userId && process.CreatorUserId != userId
             && ds.OwnerUserId != process.CreatorUserId)
             return (false, "forbidden");
+
+        // A public source's attach permission is per-process: either the "any process may use it"
+        // checkbox, or an explicit grant its manager recorded from the sources page.
+        if (ds.IsPublic && !ds.AllowAllProcesses)
+        {
+            var granted = await _db.DataSourceProcessAccesses
+                .AnyAsync(a => a.DataSourceId == dataSourceId && a.ProcessId == processId, ct);
+            if (!granted) return (false, "noaccess");
+        }
 
         if (process.DataSourceLinks.Any(l => l.DataSourceId == dataSourceId))
         {
@@ -1939,18 +2097,51 @@ public class DataSourceService
                 await _db.SaveChangesAsync(ct);
                 // Do not patch GraphJson / UpdatedAtUtc here — open editors own concurrency via PUT /canvas.
             }
+            await RecordPublicGrantAsync(ds, processId, ct);
             return (true, null);
         }
 
-        var sort = process.DataSourceLinks.Count == 0 ? 0 : process.DataSourceLinks.Max(l => l.SortOrder) + 1;
-        var makeDefault = setDefault || process.DataSourceLinks.Count == 0;
-        if (makeDefault)
-            foreach (var l in process.DataSourceLinks) l.IsDefault = false;
+        await EnsureAttachedCoreAsync(processId, ds, ct);
+        if (setDefault)
+        {
+            var links = await _db.ProcessDataSources
+                .Where(l => l.ProcessId == processId).ToListAsync(ct);
+            foreach (var l in links) l.IsDefault = l.DataSourceId == dataSourceId;
+            await _db.SaveChangesAsync(ct);
+        }
+        await RecordPublicGrantAsync(ds, processId, ct);
+        return (true, null);
+    }
 
+    /// <summary>
+    /// Record that the process may use this public source, so a manager sees the row in the access
+    /// dialog and can untick it later. Idempotent, and a no-op for private sources.
+    /// </summary>
+    private async Task RecordPublicGrantAsync(DataSource ds, int processId, CancellationToken ct)
+    {
+        if (!ds.IsPublic) return;
+        if (await _db.DataSourceProcessAccesses.AnyAsync(a => a.DataSourceId == ds.Id && a.ProcessId == processId, ct))
+            return;
+        _db.DataSourceProcessAccesses.Add(new DataSourceProcessAccess { DataSourceId = ds.Id, ProcessId = processId });
+        await _db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Attach a source to a process: link row, default-if-first, orphaned-column repair. Permission-free.
+    /// </summary>
+    private async Task<bool> EnsureAttachedCoreAsync(int processId, DataSource ds, CancellationToken ct)
+    {
+        var process = await _db.Processes.Include(p => p.DataSourceLinks)
+            .FirstOrDefaultAsync(p => p.Id == processId, ct);
+        if (process is null) return false;
+        if (process.DataSourceLinks.Any(l => l.DataSourceId == ds.Id)) return false;
+
+        var sort = process.DataSourceLinks.Count == 0 ? 0 : process.DataSourceLinks.Max(l => l.SortOrder) + 1;
+        var makeDefault = process.DataSourceLinks.Count == 0;
         process.DataSourceLinks.Add(new ProcessDataSource
         {
             ProcessId = processId,
-            DataSourceId = dataSourceId,
+            DataSourceId = ds.Id,
             IsDefault = makeDefault,
             SortOrder = sort
         });
@@ -1960,21 +2151,18 @@ public class DataSourceService
         // the bindings would only come back for an editor that re-read the canvas; the stored graph
         // (and therefore the list counts and the player) would stay broken.
         await RebindOrphanedColumnsAsync(processId, ds, ct);
-        return (true, null);
+        return true;
     }
 
-    public async Task<(bool ok, string? error)> DetachAsync(
-        int userId, int processId, int dataSourceId, CancellationToken ct = default)
+    /// <summary>
+    /// Remove the link between a process and a source, moving the default flag to the next source
+    /// and scrubbing the source's ids from the process graph. Permission-free.
+    /// </summary>
+    private async Task<bool> EnsureDetachedCoreAsync(int processId, int dataSourceId, CancellationToken ct)
     {
-        var canChange = await _db.ProcessShares.AnyAsync(a =>
-            a.UserId == userId && a.ProcessId == processId
-            && (a.CanChangeDataSource || a.CanEdit || a.Process.CreatorUserId == userId), ct);
-        if (!canChange) return (false, "forbidden");
-
         var link = await _db.ProcessDataSources
             .FirstOrDefaultAsync(l => l.ProcessId == processId && l.DataSourceId == dataSourceId, ct);
-        if (link is null)
-            return (true, null);
+        if (link is null) return false;
 
         var wasDefault = link.IsDefault;
         _db.ProcessDataSources.Remove(link);
@@ -1999,6 +2187,16 @@ public class DataSourceService
         // source with those same names later re-wires the node automatically (RebindOrphanedColumns
         // on attach, and RepointOrphanedColumns when the canvas is read).
         await ScrubSourceIdFromProcessGraphAsync(processId, dataSourceId, ct);
+        return true;
+    }
+
+    public async Task<(bool ok, string? error)> DetachAsync(
+        int userId, int processId, int dataSourceId, CancellationToken ct = default)
+    {
+        if (!await CanChangeProcessDataSourceAsync(userId, processId, ct))
+            return (false, "forbidden");
+
+        await EnsureDetachedCoreAsync(processId, dataSourceId, ct);
         return (true, null);
     }
 
@@ -2153,6 +2351,28 @@ public class DataSourceService
             }
             link.SortOrder = order++;
             link.IsDefault = masterId is int mid && mid == entity.Id;
+        }
+
+        // The editor deliberately offers no detach control for a public source, but an editor that
+        // was opened BEFORE the source was attached can still save a canvas without it. Keep the
+        // link and put the snapshot back into the canvas, so such a save cannot silently drop a
+        // source the manager put here — removing it is the manager's call, from the sources page.
+        var orphanCandidates = links.Where(l => !keepIds.Contains(l.DataSourceId)).ToList();
+        if (orphanCandidates.Count > 0)
+        {
+            var orphanIds = orphanCandidates.Select(l => l.DataSourceId).ToList();
+            var publicOnes = await _db.DataSources.AsNoTracking()
+                .Where(d => orphanIds.Contains(d.Id) && d.IsPublic)
+                .ToListAsync(ct);
+            foreach (var p in publicOnes)
+            {
+                var link = orphanCandidates.First(l => l.DataSourceId == p.Id);
+                link.SortOrder = order++;
+                keepIds.Add(p.Id);
+                if (!arr.OfType<JsonObject>().Any(o => o["id"]?.GetValue<int?>() == p.Id))
+                    arr.Add(ToGraphNode(p));
+                _log.LogInformation("Kept public source {Ds} on process {P} during canvas save", p.Id, process.Id);
+            }
         }
 
         // If no master flagged, first link is default
@@ -2387,7 +2607,11 @@ public class DataSourceService
             // copy and left the server with the old value.
             ["isPublic"] = d.IsPublic,
             ["columnKeys"] = new JsonArray(cols.Select(c => (JsonNode?)JsonValue.Create(c.Key)).ToArray()),
-            ["columns"] = JsonNode.Parse(JsonSerializer.Serialize(cols, JsonOpts))!.AsArray()
+            ["columns"] = JsonNode.Parse(JsonSerializer.Serialize(cols, JsonOpts))!.AsArray(),
+            // The editor uses this to lock a public source's row (no detach / no rename): the
+            // manager owns where it lives, so the process author only gets to use it and choose
+            // whether it is the process's default.
+            ["isPublic"] = d.IsPublic
             // cells omitted — load via /api/datasources/{id}/cells or /rows
         };
     }

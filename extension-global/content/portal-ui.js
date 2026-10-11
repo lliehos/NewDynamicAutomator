@@ -286,7 +286,9 @@
                 : "task"),
       tabId: hasTargetTab ? rawTab : null,
       // Portal Start → new blank tab; ctx check/run → never open a new tab.
-      openNewTab: hasTargetTab ? false : (isConditionCheck ? false : (scope?.openNewTab !== false))
+      openNewTab: hasTargetTab ? false : (isConditionCheck ? false : (scope?.openNewTab !== false)),
+      // Per-run choice from the run-type menu. Unset means the default: a server run.
+      runOnServer: scope?.runOnServer !== false
     };
     const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
     if (res?.reloading) {
@@ -565,7 +567,9 @@
         tabId: d.tabId,
         openNewTab: d.openNewTab,
         task: d.task || null,
-        graph: d.graph || null
+        graph: d.graph || null,
+        // Editor context menus never set this: a run started with the diagram open is a server run.
+        runOnServer: d.runOnServer
       });
       return;
     }
@@ -591,11 +595,13 @@
     if (d.type === "get-play-state") {
       // Reconciler for the editor: it may have missed a "done" broadcast (a dropped message, or a run
       // that ended in the editor's own tab). Reading the engine's real state lets the editor clear a
-      // Stop button it is otherwise stuck showing forever.
+      // Stop button it is otherwise stuck showing forever. The panel's run-mode switch uses the same
+      // answer (with taskId) to refuse flipping a process that is currently running.
       const st = await chrome.runtime.sendMessage({ type: "getPlayState" }).catch(() => null);
       const detail = {
         playing: !!st?.playing,
         paused: !!st?.paused,
+        taskId: st?.taskId != null ? String(st.taskId) : null,
         scope: st?.scope || null,
         lastError: st?.lastError || null,
         currentNodeId: st?.currentNodeId || null
@@ -645,7 +651,9 @@
       tabId: d.tabId,
       openNewTab: d.openNewTab,
       task: d.task || null,
-      graph: d.graph || null
+      graph: d.graph || null,
+      // The processes list's run-type menu sends this; the editor's own menu leaves it unset.
+      runOnServer: d.runOnServer
     });
   });
 

@@ -52,7 +52,12 @@ public class MonitoringController : Controller
         var model = new MonitoringViewModel
         {
             Snapshot = await CaptureAsync(hours, ct),
-            IsRtl = _locale.IsRtl
+            IsRtl = _locale.IsRtl,
+            // The same master switch Admin → Settings shows. It lives here too because the operator
+            // watching live sessions is the one who needs to stop them, and sending them to another
+            // page mid-incident would be the wrong kind of tidiness.
+            ServerRunEnabled = await _settings.IsServerRunEnabledAsync(ct),
+            CanToggleServerRun = User.IsInRole("Admin")
         };
         return View(model);
     }

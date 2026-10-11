@@ -343,6 +343,31 @@
     });
   }
 
+  /**
+   * Page → extension task push that must not drop extension-owned fields.
+   *
+   * The page rebuilds its rows for display, so a server-backed row arrives with no graph, and rows
+   * the page has not seen a local run's flags on arrive with no `localRunPendingSync` /
+   * `locallyRunSources`. A blind overwrite therefore used to erase exactly the state a finished
+   * local run needs: its cell writes were listed only in the extension copy, so one page write
+   * could delete the pending list before the user ever pressed Sync — the "inserted value is gone
+   * after a refresh" report. Properties the page DID carry always win (including a deliberate
+   * `null`/`false`); properties it omits keep the extension's value.
+   */
+  function mergePageTasksPreservingExtensionFields(prev, incoming) {
+    const prevById = new Map((prev || []).map((t) => [String(t.id), t]));
+    return (incoming || []).map((t) => {
+      const old = prevById.get(String(t.id));
+      if (!old) return t;
+      const out = { ...old, ...t };
+      if (!t.graph && old.graph) out.graph = old.graph;
+      if (!("localRunPendingSync" in t) && old.localRunPendingSync) out.localRunPendingSync = true;
+      if (!("locallyRunSources" in t) && old.locallyRunSources) out.locallyRunSources = old.locallyRunSources;
+      if (!("lastLocalRunAt" in t) && old.lastLocalRunAt) out.lastLocalRunAt = old.lastLocalRunAt;
+      return out;
+    });
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "portalPing") {
       sendResponse({ ok: true, extension: true, role: ROLE, version: chrome.runtime.getManifest().version });
@@ -376,12 +401,19 @@
   });
   window.addEventListener("da-local-tasks", (ev) => {
     const d = ev.detail;
-    if (d?.tasks) {
-      chrome.storage.local.set({
-        localUser: d.user || currentUser(),
-        [`localTasks__${d.user || currentUser()}`]: d.tasks
-      });
-    }
+    if (!d?.tasks) return;
+    const user = d.user || currentUser();
+    const key = `localTasks__${user}`;
+    // Merge rather than overwrite: the page's write is a display-shaped list, and everything the
+    // extension owns (cached graph, pending-sync flag, the written-cell list) must survive it. See
+    // mergePageTasksPreservingExtensionFields.
+    chrome.storage.local.get(key).then((st) => {
+      const prev = Array.isArray(st?.[key]) ? st[key] : [];
+      const merged = prev.length ? mergePageTasksPreservingExtensionFields(prev, d.tasks) : d.tasks;
+      chrome.storage.local.set({ localUser: user, [key]: merged });
+    }).catch(() => {
+      chrome.storage.local.set({ localUser: user, [key]: d.tasks });
+    });
   });
 
   function pushTenantBranding() {

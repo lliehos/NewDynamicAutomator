@@ -23,6 +23,15 @@ public class SyncLocalRunCellDto
     public int RowIndex { get; set; }
     public string ColumnKey { get; set; } = string.Empty;
     public string? CellValue { get; set; }
+
+    /// <summary>
+    /// The value the cell held in the copy the local run started from (the server's value at load).
+    /// The sync merges with it: when the server's current value still equals this, nobody else has
+    /// touched the cell and the run's value is written; when it differs, the server's newer value is
+    /// kept and the cell is reported back as a conflict. <c>null</c> means the client could not know
+    /// it (an older client, or a cell the local copy never carried) — the write then proceeds.
+    /// </summary>
+    public string? BaseValue { get; set; }
 }
 
 /// <summary>
