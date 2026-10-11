@@ -148,7 +148,7 @@ public class DesktopAuthController : Controller
             return Unauthorized(new { message = "کاربر یافت نشد." });
 
         // Minted fresh rather than replayed, so the Player never holds a token the browser ever saw.
-        var token = _auth.CreateToken(user);
+        var token = await _auth.CreateTokenAsync(user, ct: ct);
         _log.LogInformation("Desktop token issued for user {UserId}", userId);
         return Json(new { token, userName = user.UserName, displayName = AuthService.FormatDisplayName(user) });
     }

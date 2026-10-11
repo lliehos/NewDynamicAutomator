@@ -19,6 +19,10 @@ public class RegisterRequest
     public string? FirstName { get; set; }
     public string? LastName { get; set; }
     public string? Email { get; set; }
+    /// <summary>Only collected when the deployment switches the mobile field on.</summary>
+    public string? Mobile { get; set; }
+    /// <summary>Only collected when the deployment switches the national-ID field on.</summary>
+    public string? NationalId { get; set; }
     public DeviceFingerprintDto? Device { get; set; }
 }
 

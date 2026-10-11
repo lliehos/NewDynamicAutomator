@@ -1,3 +1,4 @@
+@using Webautomator.Domain
 @{
     Layout = "_AuthLayout";
     ViewData["Title"] = L["register.title"];
@@ -5,6 +6,9 @@
     var langLabel = L.IsRtl ? L["common.switchToEn"] : L["common.switchToFa"];
     var errKey = ViewBag.Error as string;
     var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+    // The fields Admin → Settings asks for. They are drawn only when switched on, and then they are
+    // required — the same answer the profile gate applies after sign-in.
+    var fields = ViewBag.ProfileFields as ProfileFieldSet ?? ProfileFieldSet.Default;
 }
 
 <div class="card">
@@ -36,20 +40,49 @@
         <input class="form-control" id="userName" name="userName" autocomplete="username" autofocus required maxlength="50" />
         <div class="form-text" data-i18n="register.userNameHint">@L["register.userNameHint"]</div>
       </div>
-      <div class="row">
-        <div class="col-md-6 mb-4">
-          <label class="form-label" for="firstName" data-i18n="register.firstName">@L["register.firstName"]</label>
-          <input class="form-control" id="firstName" name="firstName" maxlength="50" />
+      @* Each field below appears only when Admin → Settings switches it on, and is then required.
+         The asterisk sits outside the data-i18n span because the language switcher replaces the
+         span's text, which would otherwise take the marker with it. *@
+      @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldFirstName) || fields.IsEnabled(SystemSettingKeys.ProfileFieldLastName))
+      {
+        <div class="row">
+          @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldFirstName))
+          {
+            <div class="col-md-6 mb-4">
+              <label class="form-label" for="firstName"><span data-i18n="register.firstName">@L["register.firstName"]</span> *</label>
+              <input class="form-control" id="firstName" name="firstName" maxlength="50" required />
+            </div>
+          }
+          @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldLastName))
+          {
+            <div class="col-md-6 mb-4">
+              <label class="form-label" for="lastName"><span data-i18n="register.lastName">@L["register.lastName"]</span> *</label>
+              <input class="form-control" id="lastName" name="lastName" maxlength="50" required />
+            </div>
+          }
         </div>
-        <div class="col-md-6 mb-4">
-          <label class="form-label" for="lastName" data-i18n="register.lastName">@L["register.lastName"]</label>
-          <input class="form-control" id="lastName" name="lastName" maxlength="50" />
+      }
+      @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldEmail))
+      {
+        <div class="mb-4">
+          <label class="form-label" for="email"><span data-i18n="register.email">@L["register.email"]</span> *</label>
+          <input class="form-control" type="email" id="email" name="email" autocomplete="email" maxlength="120" required />
         </div>
-      </div>
-      <div class="mb-4">
-        <label class="form-label" for="email" data-i18n="register.email">@L["register.email"]</label>
-        <input class="form-control" type="email" id="email" name="email" autocomplete="email" maxlength="120" />
-      </div>
+      }
+      @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldMobile))
+      {
+        <div class="mb-4">
+          <label class="form-label" for="mobile"><span data-i18n="register.mobile">@L["register.mobile"]</span> *</label>
+          <input class="form-control" type="tel" id="mobile" name="mobile" autocomplete="tel" maxlength="30" required />
+        </div>
+      }
+      @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldNationalId))
+      {
+        <div class="mb-4">
+          <label class="form-label" for="nationalId"><span data-i18n="register.nationalId">@L["register.nationalId"]</span> *</label>
+          <input class="form-control" id="nationalId" name="nationalId" inputmode="numeric" maxlength="20" required />
+        </div>
+      }
       <div class="mb-4">
         <label class="form-label" for="password" data-i18n="register.password">@L["register.password"]</label>
         <input class="form-control" type="password" id="password" name="password" autocomplete="new-password" required minlength="3" />

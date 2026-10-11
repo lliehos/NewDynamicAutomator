@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Webautomator.Contracts.Auth;
 using Webautomator.Infrastructure.Identity;
+using Webautomator.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,12 +13,18 @@ public class AccountController : Controller
     private readonly AuthService _auth;
     private readonly IWebHostEnvironment _env;
     private readonly AuthModeResolver _authMode;
+    private readonly SystemSettingsService _settings;
 
-    public AccountController(AuthService auth, IWebHostEnvironment env, AuthModeResolver authMode)
+    public AccountController(
+        AuthService auth,
+        IWebHostEnvironment env,
+        AuthModeResolver authMode,
+        SystemSettingsService settings)
     {
         _auth = auth;
         _env = env;
         _authMode = authMode;
+        _settings = settings;
     }
 
     [HttpGet]
@@ -39,12 +46,15 @@ public class AccountController : Controller
 
     [HttpGet]
     [AllowAnonymous]
-    public IActionResult Register(string? returnUrl = null)
+    public async Task<IActionResult> Register(string? returnUrl = null, CancellationToken ct = default)
     {
         if (User.Identity?.IsAuthenticated == true)
             return RedirectToAction("Index", "Home", new { area = "Panel" });
         ViewBag.ReturnUrl = returnUrl;
         ViewBag.Error = TempData["RegisterError"];
+        // Only the fields Admin → Settings has switched on are drawn, and they are required: the form
+        // and the profile gate read the same answer, so it cannot ask for less than it will demand.
+        ViewBag.ProfileFields = await _settings.GetProfileFieldsAsync(ct);
         return View();
     }
 
@@ -58,6 +68,8 @@ public class AccountController : Controller
         string? firstName,
         string? lastName,
         string? email,
+        string? mobile,
+        string? nationalId,
         string? returnUrl,
         string? deviceJson = null,
         CancellationToken ct = default)
@@ -72,6 +84,8 @@ public class AccountController : Controller
             FirstName = firstName,
             LastName = lastName,
             Email = email,
+            Mobile = mobile,
+            NationalId = nationalId,
             Device = device
         }, ip, ct);
 

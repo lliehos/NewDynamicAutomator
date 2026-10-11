@@ -98,7 +98,14 @@ public static class SystemSettingKeys
         PasswordRequireLetterAndDigit,
         DiagramIgnorePlayError,
         DiagramNodeIgnoreError,
-        FrontShowSite
+        FrontShowSite,
+        // The registration/profile field switches. Grouped here rather than listed individually at
+        // the point of use, because "is this a switch?" is what the settings page asks of every key.
+        ProfileFieldFirstName,
+        ProfileFieldLastName,
+        ProfileFieldEmail,
+        ProfileFieldMobile,
+        ProfileFieldNationalId
     };
 
     /// <summary>True when the setting is a plain on/off flag.</summary>
@@ -262,6 +269,61 @@ public static class SystemSettingKeys
     public static bool IsPasswordPolicy(string? key) =>
         !string.IsNullOrWhiteSpace(key)
         && PasswordPolicyKeys.Contains(key, StringComparer.OrdinalIgnoreCase);
+
+    // ── Registration / profile fields ──
+    // Which of the user's own details the product asks for, and insists on. They used to be compiled
+    // into the two forms and into the profile-completion rule, so an installation (or a customer
+    // whose users have no e-mail address) could not say "we don't collect that" without a code
+    // change. Username and the profile image stay outside this list: the first identifies the
+    // account and the second is presentation, so neither is something a deployment may stop asking
+    // for altogether.
+
+    /// <summary>Ask for (and require) the user's first name.</summary>
+    public const string ProfileFieldFirstName = "ProfileFieldFirstName";
+    /// <summary>Ask for (and require) the user's last name.</summary>
+    public const string ProfileFieldLastName = "ProfileFieldLastName";
+    /// <summary>Ask for (and require) the user's e-mail address.</summary>
+    public const string ProfileFieldEmail = "ProfileFieldEmail";
+    /// <summary>Ask for (and require) the user's mobile number.</summary>
+    public const string ProfileFieldMobile = "ProfileFieldMobile";
+    /// <summary>Ask for (and require) the user's national ID (کد ملی).</summary>
+    public const string ProfileFieldNationalId = "ProfileFieldNationalId";
+
+    /// <summary>
+    /// The configurable profile fields, in the order both forms and the settings card read them.
+    /// </summary>
+    /// <remarks>
+    /// The order is the form order — name, then contact details, then the identifier — so a field
+    /// added here appears in the same place on Admin → Settings and on the two forms that ask for it.
+    /// </remarks>
+    public static readonly IReadOnlyList<string> ProfileFieldKeys = new[]
+    {
+        ProfileFieldFirstName,
+        ProfileFieldLastName,
+        ProfileFieldEmail,
+        ProfileFieldMobile,
+        ProfileFieldNationalId
+    };
+
+    /// <summary>True when the key is one of the configurable profile fields.</summary>
+    public static bool IsProfileField(string? key) =>
+        !string.IsNullOrWhiteSpace(key)
+        && ProfileFieldKeys.Contains(key, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The profile-field switches as shipped: the two names are asked for, and the contact details
+    /// plus the national ID are off until an administrator turns them on. Turning one off only stops
+    /// the product asking — a value already stored is left alone, because a deployment that stops
+    /// requesting a field is not thereby asking to forget what it already knows.
+    /// </summary>
+    /// <remarks>
+    /// Email and mobile default to off even though the profile gate used to require them, so that
+    /// upgrading an installation cannot suddenly start rejecting registrations that have no e-mail
+    /// address. National ID is off for the same reason it was never asked for before.
+    /// </remarks>
+    public static bool ProfileFieldDefault(string? key) =>
+        string.Equals(key, ProfileFieldFirstName, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(key, ProfileFieldLastName, StringComparison.OrdinalIgnoreCase);
 
     // ── Diagram defaults ──
     // The editor's colours and play defaults were compiled into flow.js, so changing how every
@@ -662,6 +724,10 @@ public static class SystemSettingKeys
     public static readonly IReadOnlyList<SettingGroupInfo> GroupPresentation = new[]
     {
         new SettingGroupInfo("Auth", "auth", "ti-shield-lock", 10),
+        // The profile fields sit directly under Auth: both answer "what does signing in involve?",
+        // and an administrator looking for them starts at the top of the page rather than scrolling
+        // past updates and deployment.
+        new SettingGroupInfo("Profile", "profile", "ti-user-check", 15),
         new SettingGroupInfo("Updates", "updates", "ti-refresh", 20),
         // "Diagram" is gone from this page. Its colours moved to Admin → Branding first, and now the
         // behaviour defaults (selector width, step delay, loop-back limit, the two ignore-error

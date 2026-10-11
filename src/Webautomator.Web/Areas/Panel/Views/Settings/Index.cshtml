@@ -1,3 +1,4 @@
+@using Webautomator.Domain
 @{
   Layout = "_Layout";
   ViewData["Title"] = L["settings.title"];
@@ -18,6 +19,9 @@
   // The upgrade page is a plan operation; without licence plan management there are no levels to
   // move to, so the link is not offered at all.
   var allowsPlanManagement = TenantBrandingViewDataFilter.AllowsPlanManagement(ViewData);
+  // Which profile fields this deployment asks for. The form draws exactly those, marks them
+  // required, and the server-side save insists on the same list.
+  var fields = ViewBag.ProfileFields as ProfileFieldSet ?? ProfileFieldSet.Default;
 }
 <div class="da-home da-settings">
   <header class="da-home-head">
@@ -30,7 +34,9 @@
 
   @if (incomplete)
   {
-    <div class="alert alert-warning">برای ادامه کار با پنل، نام، نام خانوادگی، ایمیل و موبایل را تکمیل کنید.</div>
+    @* Names no fields: which ones are missing is an administrative decision (Admin → Settings), and
+       the sentence used to spell out four of them in Persian regardless of the interface language. *@
+    <div class="alert alert-warning" data-i18n="settings.incompleteNotice">@L["settings.incompleteNotice"]</div>
   }
   @if (pwdChangeRequired)
   {
@@ -99,24 +105,46 @@
               <label class="form-label" for="da-prof-user" data-i18n="settings.userName">@L["settings.userName"]</label>
               <input class="form-control" id="da-prof-user" type="text" value="@userName" readonly />
             </div>
+            @* Each field is drawn only when Admin → Settings asks for it, and is required while it is.
+               The asterisk sits outside the data-i18n span because the language switcher replaces the
+               span's text, which would otherwise take the marker with it. *@
             <div class="row">
-              <div class="col-md-6 mb-3">
-                <label class="form-label" for="firstName" data-i18n="settings.firstName">@L["settings.firstName"] *</label>
-                <input class="form-control" id="firstName" name="firstName" type="text" required value="@ViewBag.FirstName" />
+              @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldFirstName))
+              {
+                <div class="col-md-6 mb-3">
+                  <label class="form-label" for="firstName"><span data-i18n="settings.firstName">@L["settings.firstName"]</span> *</label>
+                  <input class="form-control" id="firstName" name="firstName" type="text" required value="@ViewBag.FirstName" />
+                </div>
+              }
+              @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldLastName))
+              {
+                <div class="col-md-6 mb-3">
+                  <label class="form-label" for="lastName"><span data-i18n="settings.lastName">@L["settings.lastName"]</span> *</label>
+                  <input class="form-control" id="lastName" name="lastName" type="text" required value="@ViewBag.LastName" />
+                </div>
+              }
+            </div>
+            @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldEmail))
+            {
+              <div class="mb-3">
+                <label class="form-label" for="email"><span data-i18n="settings.email">@L["settings.email"]</span> *</label>
+                <input class="form-control" id="email" name="email" type="email" required value="@ViewBag.Email" />
               </div>
-              <div class="col-md-6 mb-3">
-                <label class="form-label" for="lastName" data-i18n="settings.lastName">@L["settings.lastName"] *</label>
-                <input class="form-control" id="lastName" name="lastName" type="text" required value="@ViewBag.LastName" />
+            }
+            @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldMobile))
+            {
+              <div class="mb-3">
+                <label class="form-label" for="mobile"><span data-i18n="settings.mobile">@L["settings.mobile"]</span> *</label>
+                <input class="form-control" id="mobile" name="mobile" type="tel" required value="@ViewBag.Mobile" />
               </div>
-            </div>
-            <div class="mb-3">
-              <label class="form-label" for="email" data-i18n="settings.email">@L["settings.email"] *</label>
-              <input class="form-control" id="email" name="email" type="email" required value="@ViewBag.Email" />
-            </div>
-            <div class="mb-3">
-              <label class="form-label" for="mobile" data-i18n="settings.mobile">@L["settings.mobile"] *</label>
-              <input class="form-control" id="mobile" name="mobile" type="tel" required value="@ViewBag.Mobile" />
-            </div>
+            }
+            @if (fields.IsEnabled(SystemSettingKeys.ProfileFieldNationalId))
+            {
+              <div class="mb-3">
+                <label class="form-label" for="nationalId"><span data-i18n="settings.nationalId">@L["settings.nationalId"]</span> *</label>
+                <input class="form-control" id="nationalId" name="nationalId" type="text" inputmode="numeric" maxlength="20" required value="@ViewBag.NationalId" />
+              </div>
+            }
             <button type="submit" class="btn btn-primary" data-i18n="settings.saveProfile">@L["settings.saveProfile"]</button>
           </form>
           @if (allowsPlanManagement)

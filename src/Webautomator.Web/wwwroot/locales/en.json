@@ -455,7 +455,9 @@
     "userNameHint": "A national code (8–10 digits), or an account name starting with a letter (3–50 chars; letters, digits, dot, dash, _).",
     "firstName": "First name",
     "lastName": "Last name",
-    "email": "Email (optional)",
+    "email": "Email",
+    "mobile": "Mobile",
+    "nationalId": "National ID",
     "password": "Password",
     "passwordHint": "At least 3 characters.",
     "confirmPassword": "Confirm password",
@@ -467,7 +469,8 @@
     "errorPasswordShort": "Password must be at least 3 characters.",
     "errorPasswordMismatch": "Passwords do not match.",
     "errorExists": "This username is already taken.",
-    "errorInvalid": "Registration failed."
+    "errorInvalid": "Registration failed.",
+    "errorProfileRequired": "Every field this site asks for is required."
   },
   "license": {
     "error": {
@@ -819,6 +822,10 @@
         "auth": {
           "title": "Authentication",
           "desc": "Sign-in and new-user registration behaviour."
+        },
+        "profile": {
+          "title": "Registration and profile fields",
+          "desc": "A field that is on is asked for — and required — on the registration and the profile form; off means it is never asked for. The username and profile image are always there."
         },
         "updates": {
           "title": "Updates",
@@ -1372,7 +1379,8 @@
     "avatarSaved": "Profile image saved.",
     "avatarRemoved": "Profile image removed.",
     "avatarSaveFailed": "Could not save the profile image.",
-    "errorRequired": "First name, last name, email, and mobile are required.",
+    "errorRequired": "Every field this site asks for is required.",
+    "incompleteNotice": "Fill in the requested fields to keep using the panel.",
     "errorNotFound": "User not found.",
     "changePassword": "Change password",
     "currentPassword": "Current password",

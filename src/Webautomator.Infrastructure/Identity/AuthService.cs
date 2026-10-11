@@ -113,6 +113,28 @@ public class AuthService
         if (await _db.Users.AnyAsync(u => u.UserName == userName, ct))
             return (null, "register.errorExists");
 
+        // The registration form asks for whichever profile fields this deployment has switched on, and
+        // insists on them — the same rule the profile gate applies afterwards, so nobody can register
+        // their way past a field the deployment wants.
+        var fields = await _settings.GetProfileFieldsAsync(ct);
+        var firstName = Trunc(request.FirstName?.Trim(), 50);
+        var lastName = Trunc(request.LastName?.Trim(), 50);
+        var email = Trunc(request.Email?.Trim(), 120);
+        var mobile = Trunc(request.Mobile?.Trim(), 30);
+        var nationalId = Trunc(request.NationalId?.Trim(), 20);
+
+        var posted = new List<(string Key, string? Value)>
+        {
+            (SystemSettingKeys.ProfileFieldFirstName, firstName),
+            (SystemSettingKeys.ProfileFieldLastName, lastName),
+            (SystemSettingKeys.ProfileFieldEmail, email),
+            (SystemSettingKeys.ProfileFieldMobile, mobile),
+            (SystemSettingKeys.ProfileFieldNationalId, nationalId)
+        }.Where(p => fields.IsEnabled(p.Key)).ToList();
+
+        if (posted.Any(p => string.IsNullOrWhiteSpace(p.Value)))
+            return (null, "register.errorProfileRequired");
+
         try
         {
             await _license.EnsureCanAddActiveUserAsync(ct);
@@ -125,9 +147,13 @@ public class AuthService
         var user = new AppUser
         {
             UserName = userName,
-            FirstName = Trunc(request.FirstName, 50),
-            LastName = Trunc(request.LastName, 50),
-            Email = Trunc(request.Email, 120),
+            // Only the fields this deployment asks for are stored. A disabled field is not collected,
+            // so a crafted POST cannot fill in something the deployment chose not to record.
+            FirstName = fields.IsEnabled(SystemSettingKeys.ProfileFieldFirstName) ? firstName : null,
+            LastName = fields.IsEnabled(SystemSettingKeys.ProfileFieldLastName) ? lastName : null,
+            Email = fields.IsEnabled(SystemSettingKeys.ProfileFieldEmail) ? email : null,
+            Mobile = fields.IsEnabled(SystemSettingKeys.ProfileFieldMobile) ? mobile : null,
+            NationalId = fields.IsEnabled(SystemSettingKeys.ProfileFieldNationalId) ? nationalId : null,
             IsActive = true,
             Role = UserRole.User,
             PlanId = registerPlan.Id,
@@ -150,7 +176,7 @@ public class AuthService
             ct: ct);
 
         var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
-        var token = CreateToken(user, entitlements);
+        var token = await CreateTokenAsync(user, entitlements, ct);
         return (new LoginResponse
         {
             Token = token,
@@ -224,7 +250,7 @@ public class AuthService
             ct: ct);
 
         var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
-        var token = CreateToken(user, entitlements);
+        var token = await CreateTokenAsync(user, entitlements, ct);
         return (new LoginResponse
         {
             Token = token,
@@ -467,7 +493,7 @@ public class AuthService
         }
 
         var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
-        var token = CreateToken(user, entitlements);
+        var token = await CreateTokenAsync(user, entitlements, ct);
         if (mode != AuthMode.Ldap)
         {
             await _events.LogAsync(
@@ -575,7 +601,7 @@ public class AuthService
 
         await _events.UpsertDeviceSessionAsync(user.Id, claimed, device, ip, ct);
         var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
-        var token = CreateToken(user, entitlements);
+        var token = await CreateTokenAsync(user, entitlements, ct);
         await _events.LogAsync(
             "Audit", "Auth", "LoginLocal",
             $"Local/test login claimed '{claimed}' as {storageName}",
@@ -596,7 +622,17 @@ public class AuthService
         };
     }
 
-    public string CreateToken(AppUser user, EntitlementsDto? entitlements = null)
+    /// <summary>
+    /// Mint the sign-in token, recording whether the user's profile still holds every field this
+    /// deployment asks for.
+    /// </summary>
+    /// <remarks>
+    /// The field set is passed in rather than resolved here: this method is synchronous and every
+    /// caller has already had to await something, while a token that guessed at the answer would
+    /// silently start or stop gating users. Use <see cref="CreateTokenAsync"/> when the field set has
+    /// not been read yet.
+    /// </remarks>
+    public string CreateToken(AppUser user, EntitlementsDto? entitlements, ProfileFieldSet profileFields)
     {
         entitlements ??= EntitlementService.LocalDefaults();
         var key = _config["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key missing");
@@ -625,7 +661,7 @@ public class AuthService
             // Carried in the token so the layout can render the avatar without an
             // extra per-request user query. Refreshed whenever the token is reissued.
             new("avatar_path", user.AvatarPath ?? ""),
-            new("profile_complete", IsProfileComplete(user) ? "1" : "0"),
+            new("profile_complete", profileFields.IsComplete(user) ? "1" : "0"),
             // Read by the panel gate: a pending password change must be finished before the rest of
             // the panel opens. Lives in the token so the gate costs no query per request.
             new("password_change_required", user.PasswordChangeRequired ? "1" : "0"),
@@ -658,14 +694,19 @@ public class AuthService
         return new JwtSecurityTokenHandler().WriteToken(jwt);
     }
 
+    /// <summary>Mint a token, reading the profile-field switches first.</summary>
+    public async Task<string> CreateTokenAsync(
+        AppUser user, EntitlementsDto? entitlements = null, CancellationToken ct = default) =>
+        CreateToken(user, entitlements, await _settings.GetProfileFieldsAsync(ct));
+
     public async Task<AppUser?> GetUserAsync(int userId, CancellationToken ct = default)
         => await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
 
     /// <summary>
     /// Set (or clear, with <c>null</c>) the user's avatar path, returning a freshly
     /// minted token because `avatar_path` lives in the cookie claims. Kept separate
-    /// from UpdateProfileAsync because the profile form requires all four fields and
-    /// the avatar must be changeable on its own.
+    /// from UpdateProfileAsync because the profile form insists on the fields it asks
+    /// for and the avatar must be changeable on its own.
     /// </summary>
     public async Task<string?> SetAvatarPathAsync(int userId, string? avatarPath, CancellationToken ct = default)
     {
@@ -675,14 +716,8 @@ public class AuthService
         await _db.SaveChangesAsync(ct);
 
         var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
-        return CreateToken(user, entitlements);
+        return await CreateTokenAsync(user, entitlements, ct);
     }
-
-    public static bool IsProfileComplete(AppUser user) =>
-        !string.IsNullOrWhiteSpace(user.FirstName)
-        && !string.IsNullOrWhiteSpace(user.LastName)
-        && !string.IsNullOrWhiteSpace(user.Email)
-        && !string.IsNullOrWhiteSpace(user.Mobile);
 
     public static string FormatDisplayName(AppUser user)
     {
@@ -690,29 +725,64 @@ public class AuthService
         return string.IsNullOrWhiteSpace(full) ? user.UserName : full;
     }
 
+    /// <summary>
+    /// Save the signed-in user's own details, insisting on whichever of them this deployment asks for.
+    /// </summary>
+    /// <remarks>
+    /// A field the deployment does not ask for keeps its stored value. The form cannot post it, and
+    /// treating "not posted" as "clear it" would delete an e-mail address the moment an administrator
+    /// switched that field off.
+    /// </remarks>
     public async Task<(LoginResponse? result, string? errorKey)> UpdateProfileAsync(
-        int userId, string? firstName, string? lastName, string? email, string? mobile, CancellationToken ct = default)
+        int userId,
+        string? firstName,
+        string? lastName,
+        string? email,
+        string? mobile,
+        string? nationalId,
+        CancellationToken ct = default)
     {
         var user = await _db.Users.Include(u => u.Plan).FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user is null) return (null, "settings.errorNotFound");
+
+        var fields = await _settings.GetProfileFieldsAsync(ct);
 
         firstName = Trunc(firstName?.Trim(), 50);
         lastName = Trunc(lastName?.Trim(), 50);
         email = Trunc(email?.Trim(), 120);
         mobile = Trunc(mobile?.Trim(), 30);
+        nationalId = Trunc(nationalId?.Trim(), 20);
 
-        if (string.IsNullOrWhiteSpace(firstName) || string.IsNullOrWhiteSpace(lastName)
-            || string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(mobile))
+        // Asking for a field means insisting on it, so an enabled field that arrives blank is the
+        // failure the caller reports and the page marks. Anything not asked for is skipped entirely.
+        var posted = new List<(string Key, string? Value)>
+        {
+            (SystemSettingKeys.ProfileFieldFirstName, firstName),
+            (SystemSettingKeys.ProfileFieldLastName, lastName),
+            (SystemSettingKeys.ProfileFieldEmail, email),
+            (SystemSettingKeys.ProfileFieldMobile, mobile),
+            (SystemSettingKeys.ProfileFieldNationalId, nationalId)
+        }.Where(p => fields.IsEnabled(p.Key)).ToList();
+
+        if (posted.Any(p => string.IsNullOrWhiteSpace(p.Value)))
             return (null, "settings.errorRequired");
 
-        user.FirstName = firstName;
-        user.LastName = lastName;
-        user.Email = email;
-        user.Mobile = mobile;
+        foreach (var (key, value) in posted)
+        {
+            switch (key)
+            {
+                case SystemSettingKeys.ProfileFieldFirstName: user.FirstName = value; break;
+                case SystemSettingKeys.ProfileFieldLastName: user.LastName = value; break;
+                case SystemSettingKeys.ProfileFieldEmail: user.Email = value; break;
+                case SystemSettingKeys.ProfileFieldMobile: user.Mobile = value; break;
+                case SystemSettingKeys.ProfileFieldNationalId: user.NationalId = value; break;
+            }
+        }
+
         await _db.SaveChangesAsync(ct);
 
         var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
-        var token = CreateToken(user, entitlements);
+        var token = await CreateTokenAsync(user, entitlements, ct);
         return (new LoginResponse
         {
             Token = token,
@@ -800,7 +870,7 @@ public class AuthService
             ct: ct);
 
         var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
-        return (true, null, CreateToken(user, entitlements));
+        return (true, null, await CreateTokenAsync(user, entitlements, ct));
     }
 
     /// <summary>

@@ -15,17 +15,20 @@ public class SettingsController : Controller
     private readonly AuthService _auth;
     private readonly IWebHostEnvironment _env;
     private readonly LicenseService _license;
+    private readonly SystemSettingsService _settings;
 
     public SettingsController(
         ILocaleService locale,
         AuthService auth,
         IWebHostEnvironment env,
-        LicenseService license)
+        LicenseService license,
+        SystemSettingsService settings)
     {
         _locale = locale;
         _auth = auth;
         _env = env;
         _license = license;
+        _settings = settings;
     }
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -46,7 +49,11 @@ public class SettingsController : Controller
         ViewBag.LastName = dbUser?.LastName ?? "";
         ViewBag.Email = dbUser?.Email ?? "";
         ViewBag.Mobile = dbUser?.Mobile ?? "";
+        ViewBag.NationalId = dbUser?.NationalId ?? "";
         ViewBag.AvatarPath = dbUser?.AvatarPath ?? "";
+        // Which fields the form draws, and insists on. Same answer the registration form and the
+        // completion gate use, so the three can never disagree about what a finished profile is.
+        ViewBag.ProfileFields = await _settings.GetProfileFieldsAsync(ct);
 
         var (pwdMin, pwdComplexity, pwdDirectory) = await _auth.GetPasswordPolicyAsync(UserId, ct);
         ViewBag.PasswordMinLength = pwdMin;
@@ -79,9 +86,14 @@ public class SettingsController : Controller
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> SaveProfile(
-        string? firstName, string? lastName, string? email, string? mobile, CancellationToken ct)
+        string? firstName,
+        string? lastName,
+        string? email,
+        string? mobile,
+        string? nationalId,
+        CancellationToken ct)
     {
-        var (result, errorKey) = await _auth.UpdateProfileAsync(UserId, firstName, lastName, email, mobile, ct);
+        var (result, errorKey) = await _auth.UpdateProfileAsync(UserId, firstName, lastName, email, mobile, nationalId, ct);
         if (result is null)
         {
             TempData["ProfileError"] = errorKey ?? "settings.errorRequired";

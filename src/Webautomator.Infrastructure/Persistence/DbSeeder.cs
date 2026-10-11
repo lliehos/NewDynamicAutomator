@@ -292,6 +292,55 @@ public static class DbSeeder
             "با روشن بودن، رمز عبور باید دست‌کم یک حرف و یک رقم داشته باشد. پلنی که قاعدهٔ خودش را دارد، بر این تنظیم مقدم است.",
             "When on, a password must contain at least one letter and one digit. A plan with its own rule takes precedence.");
 
+        // The registration/profile field switches. An install that has never seen them keeps asking
+        // for exactly what the forms asked for before: the two names are on, the contact details and
+        // the national ID are off. Turning one on adds it to both forms AND makes it required — see
+        // ProfileFieldSet, which is the single place the forms and the completion gate agree on.
+        await Upsert(
+            SystemSettingKeys.ProfileFieldFirstName,
+            "true",
+            "Profile",
+            "نام",
+            "First name",
+            "در فرم ثبت‌نام و فرم پروفایل پرسیده می‌شود و پر کردنش الزامی است.",
+            "Asked for — and required — on the registration and the profile form.");
+
+        await Upsert(
+            SystemSettingKeys.ProfileFieldLastName,
+            "true",
+            "Profile",
+            "نام خانوادگی",
+            "Last name",
+            "در فرم ثبت‌نام و فرم پروفایل پرسیده می‌شود و پر کردنش الزامی است.",
+            "Asked for — and required — on the registration and the profile form.");
+
+        await Upsert(
+            SystemSettingKeys.ProfileFieldEmail,
+            "false",
+            "Profile",
+            "ایمیل",
+            "Email address",
+            "خاموش باشد، نه پرسیده می‌شود و نه اجباری است. پیش‌فرض خاموش است تا نصب‌های موجود که ایمیل نمی‌گیرند تغییر رفتار ندهند.",
+            "When off it is neither asked for nor required. Off by default so existing installs that never collected an address keep working.");
+
+        await Upsert(
+            SystemSettingKeys.ProfileFieldMobile,
+            "false",
+            "Profile",
+            "موبایل",
+            "Mobile number",
+            "خاموش باشد، نه پرسیده می‌شود و نه اجباری است.",
+            "When off it is neither asked for nor required.");
+
+        await Upsert(
+            SystemSettingKeys.ProfileFieldNationalId,
+            "false",
+            "Profile",
+            "کد ملی",
+            "National ID",
+            "خاموش باشد، نه پرسیده می‌شود و نه اجباری است. پیش‌فرض خاموش است.",
+            "When off it is neither asked for nor required. Off by default.");
+
         // The language a first-time visitor sees. The per-visitor cookie still wins once someone
         // chooses, so this only decides the starting point.
         await Upsert(

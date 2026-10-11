@@ -27,6 +27,42 @@ public class SystemSettingsService
     public Task<bool> ExistsAsync(string key, CancellationToken ct = default) =>
         _db.SystemSettings.AsNoTracking().AnyAsync(s => s.Key == key, ct);
 
+    /// <summary>
+    /// Which of the user's own details this deployment asks for, from the Admin → Settings switches.
+    /// </summary>
+    /// <remarks>
+    /// A row that has never been written falls back to <see cref="SystemSettingKeys.ProfileFieldDefault"/>
+    /// rather than to "off": an installation whose rows predate the switch (or that runs against a
+    /// database seeded before this feature existed) must ask exactly what it asked before, instead of
+    /// silently dropping fields from its registration form.
+    /// </remarks>
+    public async Task<ProfileFieldSet> GetProfileFieldsAsync(CancellationToken ct = default)
+    {
+        var rows = await _db.SystemSettings.AsNoTracking()
+            .Where(s => SystemSettingKeys.ProfileFieldKeys.Contains(s.Key))
+            .Select(s => new { s.Key, s.Value })
+            .ToListAsync(ct);
+
+        var enabled = new List<string>();
+        foreach (var key in SystemSettingKeys.ProfileFieldKeys)
+        {
+            var value = rows.FirstOrDefault(r => string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase))?.Value;
+            var on = string.IsNullOrWhiteSpace(value)
+                ? SystemSettingKeys.ProfileFieldDefault(key)
+                : IsOn(value);
+            if (on) enabled.Add(key);
+        }
+
+        return ProfileFieldSet.FromEnabled(enabled);
+    }
+
+    /// <summary>The on/off spellings a switch may hold, matching how other boolean settings are read.</summary>
+    private static bool IsOn(string value) => value.Trim() switch
+    {
+        "true" or "True" or "1" or "on" or "yes" => true,
+        _ => false
+    };
+
     public async Task<Plan> GetDefaultRegisterPlanAsync(CancellationToken ct = default)
     {
         var code = await GetAsync(SystemSettingKeys.DefaultRegisterPlan, nameof(PlanCode.Pro), ct);
