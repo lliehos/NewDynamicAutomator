@@ -49,7 +49,11 @@ bld/
 [Bb]in/
 [Oo]bj/
 [Ll]og/
-[Ll]ogs/
+# NOTE: the Visual Studio template's "[Ll]ogs/" is deliberately NOT used here. It matches ANY
+# directory named "Logs" at any depth, which also swallowed the admin area's own view folder
+# (Areas/Admin/Views/Logs) — those views were therefore never committed and the /Admin/Logs pages
+# died with "view not found". Log output in this repository is console + the Windows event log;
+# local run logs live under _run/logs (ignored above) and build output under bin/obj (ignored above).
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/
