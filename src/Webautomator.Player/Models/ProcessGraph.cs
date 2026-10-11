@@ -19,6 +19,16 @@ public sealed class ProcessGraph
     [JsonPropertyName("edges")] public List<GraphEdge> Edges { get; set; } = new();
     [JsonPropertyName("dataSources")] public List<GraphDataSource> DataSources { get; set; } = new();
 
+    /// <summary>
+    /// The process revision this canvas was read at.
+    /// </summary>
+    /// <remarks>
+    /// The canvas endpoint stamps every answer with the process's own last-saved time, which is what
+    /// makes "is my cached copy still the server's?" answerable without fetching it again — see
+    /// <see cref="Services.CanvasCache"/>.
+    /// </remarks>
+    [JsonPropertyName("updatedAtUtc")] public DateTime? UpdatedAtUtc { get; set; }
+
     /// <summary>Step gap applied between actions, from the process-level start node.</summary>
     public int StepDelayMs { get; set; }
 

@@ -416,13 +416,22 @@ public partial class MainWindow : Window
             return;
         }
 
-        var canvas = await _client.GetCanvasAsync(row.Id);
-        if (!canvas.Ok)
+        // Reading the process is only worth a request when the process has moved since it was cached.
+        // The list already carries the server's stamp for the row, so an unchanged process starts from
+        // the cached canvas and costs no traffic at all.
+        string? canvasJson = null;
+        if (!CanvasCache.TryGetCanvas(row.Id, row.UpdatedAtUtc, out canvasJson))
         {
-            MessageBox.Show(this, canvas.Error, "خطا", MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
+            var canvas = await _client.GetCanvasAsync(row.Id);
+            if (!canvas.Ok)
+            {
+                MessageBox.Show(this, canvas.Error, "خطا", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            canvasJson = canvas.Value;
+            CanvasCache.SaveCanvas(row.Id, row.UpdatedAtUtc, canvasJson);
         }
-        var graph = ProcessGraph.Parse(canvas.Value);
+        var graph = ProcessGraph.Parse(canvasJson);
         if (graph is null)
         {
             MessageBox.Show(this, "دیاگرام فرآیند قابل خواندن نبود.", "خطا", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -449,7 +458,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        var runWindow = new RunWindow(_client, _browser => new LocalRunEngine(_client, _browser, row.RunOnServer));
+        // A local run reads its private sources from itself, so their values are loaded here — once,
+        // and only for this revision of the process — which is what keeps the run off the wire.
+        var seedCells = row.RunOnServer ? null : await LoadLocalSourceValuesAsync(row, graph);
+
+        var runWindow = new RunWindow(_client, _browser => new LocalRunEngine(_client, _browser, row.RunOnServer, seedCells));
         runWindow.Configure(row.Title, graph, rowIndices, row.RunOnServer);
         // A closed session ends the whole client, not just the run: the token is already dead, so the
         // window goes back to the sign-in form and says why.
@@ -470,6 +483,39 @@ public partial class MainWindow : Window
         _runs.Add(runWindow);
         runWindow.Show();
         runWindow.StartRun();
+    }
+
+    /// <summary>
+    /// The values a local run needs, loaded once per revision of the process.
+    /// </summary>
+    /// <remarks>
+    /// A local run keeps its private sources to itself, which only works if the values are already in
+    /// hand: reading them here — one request per source, and only when the process changed — is what
+    /// makes the run itself free of server traffic. Shared sources are skipped deliberately: they stay
+    /// server-backed in both modes, so copying them locally would add traffic and let this machine
+    /// disagree with everyone else.
+    /// </remarks>
+    private async Task<List<LocalCellWrite>?> LoadLocalSourceValuesAsync(ProcessRow row, ProcessGraph graph)
+    {
+        if (_client is null || graph.DataSources.Count == 0) return null;
+
+        if (CanvasCache.TryGetSourceValues(row.Id, graph.UpdatedAtUtc ?? row.UpdatedAtUtc, out var cached))
+            return cached;
+
+        var privateSources = graph.DataSources.Where(d => d.Id > 0 && !d.IsPublic).ToList();
+        if (privateSources.Count == 0) return null;
+
+        var loaded = new List<LocalCellWrite>();
+        foreach (var ds in privateSources)
+        {
+            var cells = await _client.GetSourceContentAsync(ds.Id);
+            if (cells is null) continue;
+            loaded.AddRange(cells);
+        }
+        if (loaded.Count == 0) return null;
+
+        CanvasCache.SaveSourceValues(row.Id, graph.UpdatedAtUtc ?? row.UpdatedAtUtc, loaded);
+        return loaded;
     }
 
     /// <summary>How many rows this process iterates, from its start node and default source.</summary>

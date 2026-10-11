@@ -2380,6 +2380,12 @@ public class DataSourceService
             ["columnCount"] = d.ColumnCount,
             ["rowCount"] = d.RowCount,
             ["dataRevision"] = d.DataRevision,
+            // Whether this source is shared. The clients need it to decide what a LOCAL run may take
+            // off the server: a shared source is read and written on the server in BOTH modes (that is
+            // what sharing means), while a private one belongs to the run. Omitting the flag made both
+            // clients treat every source as private, so a local run wrote shared data into its own
+            // copy and left the server with the old value.
+            ["isPublic"] = d.IsPublic,
             ["columnKeys"] = new JsonArray(cols.Select(c => (JsonNode?)JsonValue.Create(c.Key)).ToArray()),
             ["columns"] = JsonNode.Parse(JsonSerializer.Serialize(cols, JsonOpts))!.AsArray()
             // cells omitted — load via /api/datasources/{id}/cells or /rows

@@ -1938,6 +1938,8 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   if (!runOnServer) {
     // Local mode still needs the in-memory HUD/liveness bookkeeping, just none of the server halves.
     await markPlayHeartbeat(graph.taskId || taskId, 1);
+    // The values this run will read, fetched once here so the run itself stays off the wire.
+    await ensureLocalSourceValues(String(graph.taskId || taskId), graph);
     appendPlayLog("info", "اجرای محلی: روی سرور ثبت نمی‌شود و منابع غیرعمومی محلی خوانده/نوشته می‌شوند.");
   }
   // HUD (pause/stop + results) on the execution tab — skip for condition-only check.
@@ -4389,15 +4391,80 @@ async function readServerCell(dataSourceId, rowIndex, columnKey) {
 }
 
 /**
+ * Load a LOCAL run's private source values from the server, once per process revision.
+ *
+ * Local mode exists to keep traffic off the wire, and it can only do that if the cells a step reads
+ * are already in the browser: without them every read would fall back to the server (see
+ * readCellForRun) and the run would cost MORE than a server run, not less. So this is the one load
+ * that happens, and it happens at the start of a local run, for private sources only, and never twice
+ * for the same revision of the process — starting a process nobody edited reads nothing at all.
+ *
+ * Shared sources are deliberately skipped: they stay server-backed in both modes.
+ */
+async function ensureLocalSourceValues(taskId, graph) {
+  const sources = Array.isArray(graph?.dataSources) ? graph.dataSources : [];
+  if (!sources.length || playStatus.runOnServer !== false) return;
+
+  // Shared sources are left alone on purpose: they stay server-backed in both modes, so copying them
+  // here would add traffic AND invite this machine to disagree with everyone else.
+  const privateSources = sources.filter((ds) => Number(ds?.id) > 0 && !isPublicSource(ds, graph));
+  if (!privateSources.length) return;
+
+  const missing = privateSources.filter((ds) => !Array.isArray(ds.cells));
+  const stamp = String(graph.updatedAtUtc || graph.updatedAt || "");
+  const tasks = await loadUserTasks();
+  const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
+  const task = idx >= 0 ? tasks[idx] : null;
+  const stampMatches = !!stamp && String(task?.localValuesStamp || "") === stamp;
+
+  if (!missing.length) {
+    // Values are already in hand; only the revision marker may need writing down.
+    if (task && stamp && !stampMatches) {
+      tasks[idx] = { ...task, localValuesStamp: stamp };
+      await saveUserTasks(tasks);
+    }
+    return;
+  }
+  // A process whose values were already loaded for THIS revision does not load them again: that is
+  // what makes starting an unchanged process cost no traffic.
+  if (stampMatches) return;
+
+  let loaded = 0;
+  for (const ds of missing) {
+    try {
+      const res = await callBackground({ type: "readDataSourceContent", dataSourceId: Number(ds.id) });
+      const body = res?.ok ? res.body : null;
+      if (!body) continue;
+      ds.cells = Array.isArray(body.cells) ? body.cells : [];
+      if (Array.isArray(body.columns)) ds.columns = body.columns;
+      if (Array.isArray(body.columnKeys)) ds.columnKeys = body.columnKeys;
+      if (body.rowCount != null) ds.rowCount = body.rowCount;
+      if (body.dataRevision != null) ds.dataRevision = body.dataRevision;
+      loaded += 1;
+    } catch { /* unreadable source: each cell read falls back to the server, and the run still works */ }
+  }
+
+  if (idx >= 0) {
+    // Remember the revision these values came from AND persist them, so the next local run of an
+    // unchanged process reads nothing at all.
+    tasks[idx] = { ...tasks[idx], localValuesStamp: stamp, graph };
+    await saveUserTasks(tasks);
+  }
+  appendPlayLog("info", loaded
+    ? `اجرای محلی: مقدار ${loaded} منبع غیرعمومی یک‌بار خوانده و در حافظهٔ مرورگر نگه داشته شد.`
+    : "اجرای محلی: مقدار منابع غیرعمومی خوانده نشد؛ اگر لازم شود هر خانه جداگانه از سرور خوانده می‌شود.");
+}
+
+/**
  * Read a cell for a LOCAL run.
  *
  * Local mode keeps non-shared sources off the server entirely, so their cells come from the copy
- * the portal pushed into the task record. A SHARED (public) source is the deliberate exception: it
- * belongs to everyone, so it stays server-backed even in a local run — reading it locally would
- * show one machine's stale view of data other people are writing.
+ * loaded before the run began (see ensureLocalSourceValues). A SHARED (public) source is the
+ * deliberate exception: it belongs to everyone, so it stays server-backed even in a local run —
+ * reading it locally would show one machine's stale view of data other people are writing.
  *
- * Falls back to the server when the local copy has no value, so a source the user never opened
- * locally still reads correctly rather than coming back empty.
+ * Falls back to the server when the local copy has no value at all, so a source that could not be
+ * loaded still reads correctly rather than coming back empty.
  */
 async function readCellForRun(ds, graph, rowIndex, columnKey) {
   if (playStatus.runOnServer !== false || isPublicSource(ds, graph)) {

@@ -1337,7 +1337,9 @@
     "colDeleted": "Column \"{key}\" deleted.",
     "colDeletedAffected": "Column \"{key}\" deleted — {count} process(es) depended on it; pick a new column in the editor.",
     "deleteColumnFail": "Could not delete the column.",
-    "deletingColumn": "Deleting the column…"
+    "deletingColumn": "Deleting the column…",
+    "needsSync": "Needs sync",
+    "needsSyncHint": "A local run changed this source and its values have not been sent to the server yet."
   },
   "settings": {
     "title": "Account settings",

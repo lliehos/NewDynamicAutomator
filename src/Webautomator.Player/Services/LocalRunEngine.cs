@@ -50,6 +50,16 @@ public sealed class LocalRunEngine
     private readonly FirefoxRunner _browser;
     private readonly bool _allowServerCalls;
 
+    /// <summary>
+    /// Values a local run loaded before it started, copied into the run's own mirror.
+    /// </summary>
+    /// <remarks>
+    /// A local run reads non-shared sources from itself, which is only possible if the values are
+    /// already here — see <see cref="CanvasCache"/>, which is where this player keeps the copy it
+    /// loaded for this revision of the process.
+    /// </remarks>
+    private readonly List<LocalCellWrite> _seedCells;
+
     private readonly Dictionary<string, string> _memory = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _localCells = new(StringComparer.Ordinal);
 
@@ -58,13 +68,18 @@ public sealed class LocalRunEngine
 
     private CancellationTokenSource? _cts;
 
-    public LocalRunEngine(PanelClient client, FirefoxRunner browser, bool runOnServer)
+    public LocalRunEngine(
+        PanelClient client,
+        FirefoxRunner browser,
+        bool runOnServer,
+        IEnumerable<LocalCellWrite>? seedCells = null)
     {
         _client = client;
         _browser = browser;
         // A local run must work with no server at all, so its calls are switched off wholesale
         // rather than each being wrapped in a try/catch that would mask a real bug.
         _allowServerCalls = runOnServer;
+        _seedCells = seedCells?.ToList() ?? new List<LocalCellWrite>();
         State.RunOnServer = runOnServer;
     }
 
@@ -166,6 +181,14 @@ public sealed class LocalRunEngine
         State.Log.Clear();
         State.Writes.Clear();
         _localCells.Clear();
+        if (!State.RunOnServer && _seedCells.Count > 0)
+        {
+            // Seeded AFTER the clear (which resets the mirror for this run), so a local run starts
+            // with the values loaded for this revision instead of an empty mirror.
+            foreach (var cell in _seedCells)
+                _localCells[CellKey(cell.DataSourceId, cell.RowIndex, cell.ColumnKey)] = cell.CellValue ?? "";
+            Log("info", $"مقدار {_seedCells.Count} خانه از منابع محلی از قبل خوانده شد.");
+        }
         Log("info", State.RunOnServer ? "شروع اجرا (حالت سرور)" : "شروع اجرا (حالت محلی)");
 
         var taskId = ReadTaskId(graph);
@@ -456,10 +479,11 @@ public sealed class LocalRunEngine
         if (_localCells.TryGetValue(CellKey(dsId.Value, rowIndex, columnKey), out var cached))
             return cached;
 
-        // A shared source is authoritative on the server even in a local run; a private one is this
-        // run's own business, and having no server copy is normal rather than an error.
+        // Server mode reads every source from the server; a local run reads its private ones from the
+        // mirror it loaded before starting, and only shared sources remotely — a shared source is
+        // authoritative on the server even in a local run, because other people are writing it.
         var isShared = graph.DataSources.FirstOrDefault(d => d.Id == dsId)?.IsPublic == true;
-        if (_allowServerCalls && isShared)
+        if (_allowServerCalls || isShared)
         {
             var remote = _client.ReadCellAsync(dsId.Value, rowIndex, columnKey).GetAwaiter().GetResult();
             if (remote is not null)
@@ -471,6 +495,16 @@ public sealed class LocalRunEngine
         return "";
     }
 
+    /// <summary>
+    /// Write one cell.
+    /// </summary>
+    /// <remarks>
+    /// Server mode keeps EVERY source on the server — that is what the mode means — while a local run
+    /// keeps private ones to itself and leaves shared ones on the server, because a shared source's
+    /// whole point is that everyone reads the same values. The condition therefore asks "may this run
+    /// call the server at all, or is the source shared?", not "is the source shared?" — the latter
+    /// sent a server run's private writes into a mirror that nobody ever read.
+    /// </remarks>
     private StepOutcome WriteCell(ProcessGraph graph, GraphNode node, int rowIndex, string text)
     {
         var dsId = node.SaveDataSourceId ?? node.DataSourceId;
@@ -488,10 +522,11 @@ public sealed class LocalRunEngine
         Log("info", $"نوشتن در منبع #{dsId} ستون «{col}» ردیف {targetRow + 1}");
 
         var isShared = graph.DataSources.FirstOrDefault(d => d.Id == dsId)?.IsPublic == true;
-        if (_allowServerCalls && isShared)
+        if (_allowServerCalls || isShared)
         {
             var ok = _client.PatchCellAsync(dsId.Value, targetRow, col, text).GetAwaiter().GetResult();
-            if (!ok) return StepOutcome.Fail("نوشتن در منبع عمومی روی سرور ناموفق بود.");
+            if (!ok) return StepOutcome.Fail(
+                isShared ? "نوشتن در منبع عمومی روی سرور ناموفق بود." : "نوشتن در منبع روی سرور ناموفق بود.");
         }
         return StepOutcome.Success;
     }
@@ -532,7 +567,9 @@ public sealed class LocalRunEngine
         var targetRow = node.SpecificRowIndex ?? rowIndex;
         var isShared = graph.DataSources.FirstOrDefault(d => d.Id == dsId)?.IsPublic == true;
 
-        if (!(_allowServerCalls && isShared))
+        // Same rule as a cell write: a server run edits the server's rows whatever the source is; a
+        // local run edits its own mirror for private sources and the server for shared ones.
+        if (!(_allowServerCalls || isShared))
         {
             Log("info", isInsert
                 ? $"ردیف خالی در جای {targetRow} منبع #{dsId} (محلی) درج شد"

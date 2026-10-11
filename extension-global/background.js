@@ -491,6 +491,8 @@ async function handleMessage(message, sender) {
       return persistPlayDataSourcesMessage(message);
     case "readDataSourceCell":
       return readDataSourceCellMessage(message);
+    case "readDataSourceContent":
+      return readDataSourceContentMessage(message);
     case "readDataSourceMeta":
       return readDataSourceMetaMessage(message);
     case "readDataSourceRow":
@@ -779,8 +781,50 @@ async function syncTasksFromPortal(message = {}) {
     };
   }
   if (message.user) await chrome.storage.local.set({ localUser: String(message.user) });
-  await saveUserTasks(tasks);
+  const previous = await loadUserTasks();
+  const prevById = new Map(previous.map((t) => [String(t.id), t]));
+  await saveUserTasks(tasks.map((t) => preserveLoadedLocalValues(t, prevById.get(String(t.id)))));
   return { ok: true, count: tasks.length };
+}
+
+/**
+ * Carry a process's already-loaded local values across a portal push.
+ *
+ * The portal pushes a canvas of STRUCTURE before a run (its data sources carry no cells), and saving
+ * that list as-is would throw away the values a local run loaded for its private sources — the very
+ * bytes local mode exists to avoid re-reading. The structure always comes from the push, because a
+ * live editor canvas is the freshest copy there is; only the VALUES are carried over, only for
+ * sources that already hold them, and only while the pushed revision is the one they came from.
+ */
+function preserveLoadedLocalValues(incoming, previous) {
+  if (!incoming || !previous) return incoming;
+  const inGraph = incoming.graph;
+  const prevGraph = previous.graph;
+  if (!inGraph || !prevGraph) return incoming;
+
+  const inStamp = String(inGraph.updatedAtUtc || inGraph.updatedAt || "");
+  const prevStamp = String(prevGraph.updatedAtUtc || prevGraph.updatedAt || "");
+  if (!inStamp || !previous.localValuesStamp
+    || String(previous.localValuesStamp) !== inStamp || prevStamp !== inStamp) {
+    return incoming;
+  }
+
+  const byId = new Map((prevGraph.dataSources || []).map((d) => [String(d.id), d]));
+  const sources = (inGraph.dataSources || []).map((d) => {
+    const held = byId.get(String(d.id));
+    if (!held || !Array.isArray(held.cells)) return d;
+    return {
+      ...d,
+      cells: held.cells,
+      columns: d.columns || held.columns,
+      columnKeys: d.columnKeys || held.columnKeys
+    };
+  });
+  return {
+    ...incoming,
+    graph: { ...inGraph, dataSources: sources },
+    localValuesStamp: previous.localValuesStamp
+  };
 }
 
 function findTaskIndex(tasks, targetId) {
@@ -2004,6 +2048,30 @@ async function readDataSourceCellMessage(message) {
     if (!res.ok) return { ok: false, error: `http ${res.status}` };
     const body = await res.json();
     return { ok: true, body };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+/**
+ * The whole content of one data source, as a single read.
+ *
+ * Used to seed a LOCAL run: the run's reads should come from the browser instead of the server, which
+ * only works if the values are here before it starts. One request per source — at the start, and only
+ * for a process that changed — replaces the per-cell reads a local run would otherwise make.
+ */
+async function readDataSourceContentMessage(message) {
+  const id = Number(message?.dataSourceId);
+  if (!id) return { ok: false, error: "invalid" };
+  const portal = String(await portalBase()).replace(/\/$/, "");
+  try {
+    const res = await fetch(`${portal}/api/datasources/${id}`, {
+      method: "GET",
+      headers: await authHeaders()
+    });
+    if (res.status === 401 || res.status === 403) return { ok: false, error: "auth" };
+    if (!res.ok) return { ok: false, error: `http ${res.status}` };
+    return { ok: true, body: await res.json() };
   } catch (e) {
     return { ok: false, error: e?.message || String(e) };
   }

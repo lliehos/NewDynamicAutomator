@@ -60,6 +60,8 @@
   const ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
   const ICO_DL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.4-3.4 1.4 1.4L12 17l-4.8-5.8 1.4-1.4L11 13.2V3h1zM5 19h14v2H5v-2z"/></svg>`;
   const ICO_CLOUD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17.5 19H8a5 5 0 0 1-.7-9.95A6.5 6.5 0 0 1 20 12.5a3.5 3.5 0 0 1-2.5 6.5zM12 8v6.2l2.4-2.4 1.2 1.2L12 17l-3.6-3.999 1.2-1.2L11 14.2V8h1z"/></svg>`;
+  /** Two arrows in a circle — "this source and the server disagree; send the local values up". */
+  const ICO_SYNC = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 4V1L8 5l4 4V6a6 6 0 0 1 6 6h2a8 8 0 0 0-8-8zm0 14a6 6 0 0 1-6-6H4a8 8 0 0 0 8 8v3l4-4-4-4v3z"/></svg>`;
   const ICO_STAR = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
   const ICO_STAR_OUT = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
   const ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
@@ -600,8 +602,91 @@
     render();
   }
 
-  async function deleteSource(taskId, sourceId) {
-    const entry = findEntry(taskId, sourceId);
+  /**
+   * The local-run writes this browser still owes the server for one source, and their process.
+   *
+   * The values live with the client that ran the process — the server only knows a source diverged —
+   * so the button that sends them up can only be offered where the writes actually are.
+   */
+  function pendingWritesForSource(sourceId) {
+    const sid = Number(sourceId);
+    if (!Number.isFinite(sid) || sid <= 0) return null;
+    const tasks = readTasks();
+    for (const task of tasks) {
+      const writes = Array.isArray(task.locallyRunSources) ? task.locallyRunSources : [];
+      const mine = writes.filter((w) => Number(w?.dataSourceId) === sid);
+      if (mine.length) return { tasks, task, writes: mine };
+    }
+    return null;
+  }
+
+  /**
+   * Send one source's local-run values to the server.
+   *
+   * A local run is off the server's books by design, and the divergence it leaves behind is resolved
+   * here — for the source the operator is looking at, rather than for the whole process — which is
+   * what makes the badge on that row actionable instead of just a warning. The writes are dropped
+   * from the local record only after the server accepted them, so a failed sync loses nothing.
+   */
+  async function syncSourceWrites(sourceId, btn) {
+    const pending = pendingWritesForSource(sourceId);
+    if (!pending) {
+      notify(t("sources.needsSyncHint") || "نتیجهٔ اجرای محلی برای این منبع در این مرورگر نیست.", "info");
+      return;
+    }
+    const label = pending.task.title || `#${pending.task.id}`;
+    const msg = t("tasks.syncConfirm")
+      || `نتیجهٔ اجرای محلی منبع از «${label}» روی سرور نوشته می‌شود. اگر منبع روی سرور تغییر کرده باشد، ممکن است اطلاعات جایگزین یا از دست برود. ادامه می‌دهید؟`;
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("tasks.syncLocalRun") || "سینک نتیجهٔ اجرای محلی",
+          okText: t("tasks.syncConfirmOk") || "سینک کن",
+          cancelText: t("common.cancel") || "انصراف",
+          danger: true
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(`/api/tasks/${pending.task.id}/sync-local-run`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          localRunAt: pending.task.lastLocalRunAt || null,
+          // `cells`, not `dataSources`: that is the name SyncLocalRunRequest binds, and the wrong one
+          // silently synced nothing while still reporting success.
+          cells: pending.writes
+        })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        if (body.code === "playing") {
+          throw new Error(body.playerUserName
+            ? `${t("sources.syncPlaying") || "فرآیند همین حالا در حال اجراست"} (${body.playerUserName})`
+            : (t("sources.syncPlaying") || "فرآیند همین حالا در حال اجراست؛ بعد از پایان اجرا سینک کنید."));
+        }
+        throw new Error(body.message || t("tasks.syncFail") || "سینک انجام نشد.");
+      }
+      // The server holds these values now: forget exactly the writes it accepted, and clear the
+      // process-level flag only when nothing is left for ANY of its sources.
+      const tasks = pending.tasks.map((task) => {
+        if (String(task.id) !== String(pending.task.id)) return task;
+        const kept = (task.locallyRunSources || [])
+          .filter((w) => Number(w?.dataSourceId) !== Number(sourceId));
+        return { ...task, locallyRunSources: kept, localRunPendingSync: kept.length > 0 };
+      });
+      writeTasks(tasks);
+      notify(t("tasks.syncDone") || "نتیجهٔ اجرای محلی روی سرور سینک شد.", "success");
+      await renderAsync();
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      notify(String(e.message || e), "error");
+    }
+  }
+
+  async function deleteSource(taskId, sourceId) {    const entry = findEntry(taskId, sourceId);
     // Library-mode row (no task): hard-delete from user library
     if (!entry && (taskId == null || taskId === "null" || taskId === "")) {
       const label = String(sourceId);
@@ -1600,12 +1685,22 @@
           ICO_GLOBE,
           `data-id="${sid}" data-public="${isPublic ? "0" : "1"}"`)
       : "";
+    // The sync button appears only when THIS browser holds the writes: the divergence is reported to
+    // the server, but the values live in the client that ran the process, so a button here would have
+    // nothing to send for a run that happened elsewhere (a desktop player, say) — that one carries its
+    // own Sync button.
+    // The dialog is the same one the processes list uses for a whole-process sync: same risk, so the
+    // same words — and the same translations, rather than a second set for the same action.
+    const syncBtn = row.ds.needsSync && pendingWritesForSource(sid)
+      ? iconBtn("js-sync is-sync", t("tasks.syncLocalRun") || "سینک نتیجهٔ اجرای محلی", ICO_SYNC, `data-id="${sid}"`)
+      : "";
     return `
       ${Number(sid) > 0 && canShape ? iconBtn("js-rename", t("sources.rename"), ICO_RENAME, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
       ${Number(sid) > 0 && canShape ? iconBtn("js-reload", t("sources.reloadFile"), ICO_RELOAD, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
       ${Number(sid) > 0 ? iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}"`) : ""}
       ${row.taskId != null ? iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`) : ""}
       ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-id="${sid}"`)}
+      ${syncBtn}
       ${master}
       ${publicToggle}
       ${iconBtn("js-del is-danger", delLabel, ICO_DEL, `data-task="${tid}" data-id="${sid}" data-lib="${row.fromLibrary ? "1" : "0"}"`)}
@@ -1633,6 +1728,9 @@
     });
     root.querySelectorAll(".js-public").forEach((btn) => {
       btn.addEventListener("click", () => togglePublic(btn.dataset.id, btn.dataset.public === "1"));
+    });
+    root.querySelectorAll(".js-sync").forEach((btn) => {
+      btn.addEventListener("click", () => syncSourceWrites(btn.dataset.id, btn));
     });
     root.querySelectorAll(".js-master").forEach((btn) => {
       btn.addEventListener("click", () => setMaster(btn.dataset.task, btn.dataset.id));

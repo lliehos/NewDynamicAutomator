@@ -419,6 +419,42 @@ public sealed class PanelClient : IDisposable
         catch { return null; }
     }
 
+    /// <summary>One whole source, values included — the read that seeds a LOCAL run.</summary>
+    /// <remarks>
+    /// A local run keeps its private sources off the wire, which only works if their values are in
+    /// hand before it starts. Reading the source once, here, is what makes the run itself free of
+    /// server traffic — one request instead of one per cell.
+    /// </remarks>
+    public async Task<List<LocalCellWrite>?> GetSourceContentAsync(int dataSourceId, CancellationToken ct = default)
+    {
+        try
+        {
+            var res = await _http.GetAsync($"{BaseUrl}/api/datasources/{dataSourceId}", ct);
+            if (!res.IsSuccessStatusCode) return null;
+            using var doc = await res.Content.ReadFromJsonAsync<JsonDocument>(JsonOpts, ct);
+            if (doc is null) return null;
+
+            var cells = new List<LocalCellWrite>();
+            if (!doc.RootElement.TryGetProperty("cells", out var arr) || arr.ValueKind != JsonValueKind.Array)
+                return cells;
+
+            foreach (var cell in arr.EnumerateArray())
+            {
+                var key = ReadString(cell, "key") ?? ReadString(cell, "Key") ?? "";
+                if (string.IsNullOrWhiteSpace(key)) continue;
+                // The API serialises camelCase; the PascalCase reads are for payloads written before
+                // that naming was settled.
+                var index = cell.TryGetProperty("index", out var rawIndex) && rawIndex.TryGetInt32(out var i)
+                    ? i
+                    : ReadInt(cell, "Index");
+                var value = ReadString(cell, "cellValue") ?? ReadString(cell, "CellValue") ?? "";
+                cells.Add(new LocalCellWrite(dataSourceId, index, key, value));
+            }
+            return cells;
+        }
+        catch { return null; }
+    }
+
     /// <summary>Write one cell of a SHARED source — the only source a local run writes remotely.</summary>
     public async Task<bool> PatchCellAsync(
         int dataSourceId, int rowIndex, string columnKey, string? value, CancellationToken ct = default)

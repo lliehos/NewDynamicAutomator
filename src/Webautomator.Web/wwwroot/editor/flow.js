@@ -2945,7 +2945,10 @@
         columnCount: meta.columnCount,
         rowCount: meta.rowCount,
         columnKeys: meta.columnKeys || [],
-        columns: meta.columns || []
+        columns: meta.columns || [],
+        // Mirrors what the server writes into the canvas for this source (see ToGraphNode): the
+        // clients decide from this flag whether a local run may keep the source's values to itself.
+        isPublic: true
       }]);
       // The first source in a process becomes the default, matching the upload path.
       if (masterDataSourceId() == null) setMasterDataSource(sid);

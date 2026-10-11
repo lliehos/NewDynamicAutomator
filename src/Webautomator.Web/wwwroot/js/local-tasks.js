@@ -680,7 +680,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           localRunAt: task.lastLocalRunAt || null,
-          dataSources: (task.locallyRunSources || [])
+          // The API names this `cells` (see SyncLocalRunRequest). Sending it as `dataSources` meant
+          // the server read an empty list: the sync reported success, cleared nothing and wrote no
+          // values, so the badge stayed and the divergence was never resolved.
+          cells: (task.locallyRunSources || [])
         })
       });
       if (!res.ok) {
@@ -2336,7 +2339,7 @@ function dataSourceSafeFileName(ds) {
     }));
   }
 
-  /** Merge API list into cache: drop removed server ids, refresh metadata; refetch canvas when counts changed. */
+  /** Merge API list into cache: drop removed server ids, refresh metadata. */
   async function syncServerListToLocalCache(serverRows) {
     const rows = serverRows || [];
     const serverIds = new Set(rows.map((r) => String(r.id)));
@@ -2347,18 +2350,13 @@ function dataSourceSafeFileName(ds) {
     for (const row of mergedMeta) {
       const id = String(row.id);
       const prev = prevById.get(id);
-      const countsChanged = prev
-        && (Number(prev.stepCount) !== Number(row.stepCount)
-          || Number(prev.groupCount) !== Number(row.groupCount)
-          || String(prev.title || "") !== String(row.title || ""));
       const next = { ...(prev || {}), ...row };
       if (isServerBackedTaskId(id)) delete next.graph;
       prevById.set(id, next);
-      if (countsChanged) {
-        try {
-          await ensureTaskGraphCached(id);
-        } catch { /* list still shows API counts */ }
-      }
+      // No canvas is fetched here on purpose. A list refresh happens whenever ANY process changes,
+      // and pulling every edited process's canvas for a page that is merely being looked at was
+      // traffic with no reader: the run start is where the canvas is needed, and it decides there
+      // whether the cached copy is still the server's revision (see ensureTaskGraphCached).
     }
 
     const out = [...prevById.values()];
@@ -2366,7 +2364,7 @@ function dataSourceSafeFileName(ds) {
     return out;
   }
 
-  /** List API has no canvas body — metadata only; canvas lives on server and in extension cache after explicit sync. */
+  /** List API has no canvas body — metadata only; canvas lives on server and in the local canvas cache. */
   function mergeServerTasksWithLocal(serverRows) {
     // runOnServer (and the pending-sync flag) are CLIENT-LOCAL: the server has no such column and
     // never sends them. Rebuilding each row from the API response alone therefore dropped them and
@@ -2379,7 +2377,11 @@ function dataSourceSafeFileName(ds) {
       const next = normalizeTask({
         ...row,
         runOnServer: prev ? prev.runOnServer : row.runOnServer,
-        localRunPendingSync: prev ? prev.localRunPendingSync : row.localRunPendingSync
+        localRunPendingSync: prev ? prev.localRunPendingSync : row.localRunPendingSync,
+        // The cached canvas is client-local state as well, and it is what makes "an unchanged
+        // process costs no traffic" possible. Rebuilt from the API row it would be dropped on every
+        // list refresh — i.e. exactly when the next start would want it.
+        canvasCache: prev ? prev.canvasCache : null
       });
       delete next.graph;
       return next;
@@ -2421,6 +2423,49 @@ function dataSourceSafeFileName(ds) {
       window.dispatchEvent(new CustomEvent("da-local-tasks", { detail: { user: currentUser(), tasks } }));
     } catch { /* ignore */ }
     return item;
+  }
+
+  /**
+   * The cached canvas of a server-backed process, together with the server revision it came from.
+   *
+   * Kept on the task row so "is my copy still the server's?" is answered from data the list already
+   * carries. The whole point of the cache is that a process nobody edited does not have to be read
+   * again before a run: reading it would be traffic spent to learn nothing.
+   */
+  function canvasCacheOf(task) {
+    const cache = task?.canvasCache;
+    return cache && cache.graph && Array.isArray(cache.graph.nodes) && cache.graph.nodes.length
+      ? cache
+      : null;
+  }
+
+  /**
+   * A server timestamp as a number, for comparison.
+   *
+   * The two endpoints carrying the same stamp do not format it alike: the list serialises the stored
+   * value as-is, while the canvas marks it UTC with a trailing "Z". Comparing the strings would never
+   * match; reading a zone-less stamp as LOCAL time would be off by the machine's offset. A missing
+   * zone is therefore read as UTC, which is what the database holds.
+   */
+  function stampValue(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return NaN;
+    const iso = /(z|[+-]\d{2}:?\d{2})$/i.test(s) ? s : `${s}Z`;
+    const ms = Date.parse(iso);
+    return Number.isFinite(ms) ? ms : NaN;
+  }
+
+  /**
+   * True when the cached canvas is the revision the server is still serving.
+   *
+   * Both stamps must exist: a cache with no stamp (or a row whose stamp the list never gave us)
+   * cannot be proven current, and an unprovable copy is refetched rather than guessed at.
+   */
+  function canvasCacheIsCurrent(task) {
+    const cache = canvasCacheOf(task);
+    const cached = stampValue(cache?.updatedAtUtc);
+    const known = stampValue(task?.updatedAtUtc);
+    return Number.isFinite(cached) && Number.isFinite(known) && cached === known;
   }
 
   /** Ensure the process canvas is in the local cache (player reads localStorage / extension sync). */
@@ -2465,8 +2510,15 @@ function dataSourceSafeFileName(ds) {
       }
     };
 
-    // Server-backed processes: canvas API is authoritative (list cache may lag after editor save).
+    // Server-backed processes: the canvas comes from the server — but only when the process has
+    // moved since we cached it. The list already told us when it last changed, so an unchanged
+    // process is run from the cached copy and the start costs no traffic at all. A process that DID
+    // change (or one we have never loaded) is read once, whole, and then cached against its stamp.
     if (/^\d+$/.test(id)) {
+      if (canvasCacheIsCurrent(hit)) {
+        hit.graph = canvasCacheOf(hit).graph;
+        return hit;
+      }
       const res = await fetch(`/api/tasks/${id}/canvas`, { credentials: "same-origin" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -2478,6 +2530,10 @@ function dataSourceSafeFileName(ds) {
         throw new Error(t("tasks.noGraph") || "گراف فرآیند پیدا نشد.");
       }
       applyCanvasToHit(graph);
+      // The stamp is the canvas's OWN revision, not the list row's: if the two disagree the canvas is
+      // the newer of the two, and caching it against the row's older stamp would send the next start
+      // to the server to fetch the very revision it already holds.
+      hit.canvasCache = { updatedAtUtc: String(graph.updatedAtUtc || ""), graph };
       await mirrorServerCanvasToLocalCache(hit);
       return hit;
     }
