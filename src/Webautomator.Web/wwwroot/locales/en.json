@@ -688,23 +688,6 @@
       "clearConfirmFiltered": "Delete events with level \"{level}\" in category \"{category}\"? This cannot be undone.",
       "empty": "No events to show."
     },
-    "devices": {
-      "title": "Connected devices",
-      "summary": "{count} devices — {online} online",
-      "user": "User",
-      "status": "Status",
-      "online": "Online",
-      "offline": "Offline",
-      "lastSeen": "Last seen",
-      "platform": "Platform",
-      "screen": "Screen",
-      "language": "Language",
-      "logins": "Logins",
-      "ip": "IP",
-      "fingerprint": "Fingerprint",
-      "claimedAs": "Signed in as \"{name}\"",
-      "empty": "No devices recorded."
-    },
     "live": {
       "connecting": "Connecting live…",
       "live": "Live",
@@ -1740,7 +1723,6 @@
       "RightClick": "Right-clicks the chosen element.",
       "Hover": "Keeps the pointer on the element so a hidden menu or tooltip opens.",
       "Hold": "Like a click, but the mouse button is held down for the configured duration.",
-      "AlertAccept": "Dismisses (accepts) the browser's alert dialog.",
       "InputContent": "Fills the chosen element's field with the given value.",
       "ClearContent": "Empties the text of the chosen field.",
       "SelectOption": "Chooses one option inside a dropdown (select).",
