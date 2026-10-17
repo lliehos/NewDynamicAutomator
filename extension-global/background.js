@@ -1073,6 +1073,8 @@ async function startRecordSession(message = {}) {
     recordingGroups,
     recordTabId: null,
     lastNavUrl: null,
+    navChainFrom: null,
+    navChainAt: 0,
     recordTargetTaskId: targetTaskId,
     recordTargetTitle: targetTitle,
     recordOptions: defaultRecordOptions(prevOpts)
@@ -1311,6 +1313,8 @@ async function resumeRecord() {
     draft: [],
     recordingGroups,
     lastNavUrl: null,
+    navChainFrom: null,
+    navChainAt: 0,
     recordOptions: defaultRecordOptions(data.recordOptions)
   });
   if (data.recordTabId) {
@@ -1761,6 +1765,8 @@ async function saveDraft(payload) {
       draft: [],
       recordingGroups: [{ id: "group-1", title: "گروه ضبط", steps: [] }],
       lastNavUrl: null,
+      navChainFrom: null,
+      navChainAt: 0,
       recordTabId: recordTabId || null,
       recordTargetTaskId: id,
       recordTargetTitle: title,
@@ -1781,6 +1787,8 @@ async function saveDraft(payload) {
       recordingGroups: [],
       recordTabId: null,
       lastNavUrl: null,
+      navChainFrom: null,
+      navChainAt: 0,
       recordTargetTaskId: null,
       recordTargetTitle: null
     });
@@ -2406,10 +2414,36 @@ function isTrackableNavUrl(url) {
   return /^https?:\/\//i.test(url);
 }
 
+/**
+ * How long after a recorded step a navigation still counts as "that step's own doing".
+ *
+ * A click on a link or a submit button navigates BY ITSELF when the process is replayed, so a
+ * GoToUrl recorded after it makes the operator see two actions for one gesture — and the second one
+ * is redundant, because the player already waits for the navigation a click causes.
+ */
+const NAV_CAUSED_BY_STEP_MS = 5000;
+
+/**
+ * How long one navigation "chain" (click → 301 → 302 → landing page) stays the same navigation.
+ *
+ * A redirect issues more than one `webNavigation.onCommitted`, but the operator performed ONE
+ * gesture, so the whole chain must collapse into that gesture rather than into a GoToUrl at every
+ * hop. The chain ends when a new step is recorded or the window lapses.
+ */
+const NAV_CHAIN_MS = 15000;
+
+/** Actions that navigate the page on their own when replayed, so their navigation needs no step. */
+const NAVIGATING_STEP_TYPES = new Set(["click", "dblclick"]);
+
+function stepNavigatesOnItsOwn(step) {
+  return !!step && NAVIGATING_STEP_TYPES.has(String(step.actionType || "").toLowerCase());
+}
+
 async function appendNavStep(url, tabId) {
-  const { recording, lastNavUrl, playing, recordingGroups } = await chrome.storage.local.get([
-    "recording", "lastNavUrl", "playing", "recordingGroups"
-  ]);
+  const { recording, lastNavUrl, playing, recordingGroups, navChainFrom, navChainAt } =
+    await chrome.storage.local.get([
+      "recording", "lastNavUrl", "playing", "recordingGroups", "navChainFrom", "navChainAt"
+    ]);
   if (!recording || playing) return;
   if (!isTrackableNavUrl(url)) return;
   if (lastNavUrl === url) return;
@@ -2417,6 +2451,37 @@ async function appendNavStep(url, tabId) {
   let groups = Array.isArray(recordingGroups) ? recordingGroups.slice() : [];
   if (!groups.length) {
     groups.push({ id: "group-1", title: "گروه ضبط", steps: [] });
+  }
+  const lastGroup = groups[groups.length - 1];
+  const steps = Array.isArray(lastGroup.steps) ? lastGroup.steps : [];
+  const lastStep = steps[steps.length - 1] || null;
+
+  const now = Date.now();
+  const lastAt = Date.parse(lastStep?.recordedAt || "") || 0;
+  const chainAt = Number(navChainAt) || 0;
+
+  // (a) A redirect hop of the chain already attributed to a step: still that same navigation.
+  const sameChain = !!navChainFrom && !!lastStep
+    && String(lastStep.recordedAt) === String(navChainFrom)
+    && chainAt > 0
+    && now - chainAt <= NAV_CHAIN_MS;
+
+  // (b) The navigation follows a step that navigates by itself — the operator clicked once.
+  // Suppressing the GoToUrl here is what keeps one gesture from becoming two actions.
+  const causedByStep = !sameChain
+    && stepNavigatesOnItsOwn(lastStep)
+    && lastAt > 0
+    && now - lastAt <= NAV_CAUSED_BY_STEP_MS;
+
+  if (sameChain || causedByStep) {
+    // `lastNavUrl` is still recorded, so the landing page is not appended later by a repeated
+    // commit; the chain anchor keeps the following redirect hops with the same step.
+    await chrome.storage.local.set({
+      lastNavUrl: url,
+      navChainFrom: lastStep.recordedAt,
+      navChainAt: sameChain ? chainAt : now
+    });
+    return;
   }
 
   const item = {
@@ -2430,12 +2495,14 @@ async function appendNavStep(url, tabId) {
     recordedAt: new Date().toISOString()
   };
   item.title = buildRecordedActionTitle(item);
-  const last = groups[groups.length - 1];
-  last.steps = (last.steps || []).concat(item);
+  lastGroup.steps = steps.concat(item);
   await chrome.storage.local.set({
     recordingGroups: groups,
     draft: flattenGroupSteps(groups),
-    lastNavUrl: url
+    lastNavUrl: url,
+    // A navigation that became a real step ends any chain: the next commit is a new event.
+    navChainFrom: null,
+    navChainAt: 0
   });
   await broadcastDraftUpdated();
 }
