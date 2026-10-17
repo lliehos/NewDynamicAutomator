@@ -194,6 +194,26 @@
     return document.body;
   }
 
+  /**
+   * Human label for the right-clicked element.
+   *
+   * `elementLabel` lives in content/recorder.js, which loads earlier in the same isolated world, and
+   * already falls back from aria/label/placeholder through the element's own text to the nearest
+   * meaningful label. Calling it here keeps ONE definition of "what is this element called": the
+   * node the context menu builds must be named exactly like the node the recorder would produce.
+   */
+  function contextElementLabel(el) {
+    try {
+      if (typeof elementLabel === "function") {
+        const label = elementLabel(el);
+        if (label) return label;
+      }
+    } catch { /* cross-script access failed; use the minimal fallback below */ }
+    const own = String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+    const attr = (name) => String(el.getAttribute(name) || "").replace(/\s+/g, " ").trim();
+    return (attr("aria-label") || attr("title") || attr("placeholder") || attr("alt") || own).slice(0, 48);
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type !== "captureContextSelector") return;
     try {
@@ -216,6 +236,9 @@
         matchCount,
         unique: matchCount === 1,
         tag: el.tagName?.toLowerCase() || "",
+        // The element's own text, aria/label association, or nearest meaningful label. Used as the
+        // created node's title so the diagram says WHICH element the step is about.
+        label: contextElementLabel(el),
         url: location.href,
         // True when the target came from a right-drag box: the element is then the common
         // ancestor of a group rather than the thing under the pointer, and callers may want to

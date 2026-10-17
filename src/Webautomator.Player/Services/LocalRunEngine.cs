@@ -361,18 +361,30 @@ public sealed class LocalRunEngine
                 if (State.Stopped) return;
 
                 // A loop back to a node we have already been through many times means the graph's
-                // exit condition never became true; stop rather than spin forever.
-                visited.TryGetValue(currentId, out var hits);
-                if (hits > graph.LoopBackLimit)
+                // exit condition never became true; stop rather than spin forever. The budget lives
+                // on the CONDITION node (the loop's exit test); other nodes use the process-wide
+                // fallback, which is the historical start-node value (default 100).
+                var node = graph.NodeById(currentId);
+                if (node is null) return;
+
+                var loopLimit = graph.LoopBackLimit;
+                if (string.Equals(node.Kind, "condition", StringComparison.OrdinalIgnoreCase)
+                    && node.Extra.TryGetValue("loopBackLimit", out var limitEl)
+                    && limitEl.TryGetInt32(out var conditionLimit)
+                    && conditionLimit > 0)
                 {
-                    State.LastError = $"تعداد تکرار از حد مجاز ({graph.LoopBackLimit}) گذشت.";
+                    loopLimit = Math.Clamp(conditionLimit, 1, 1000);
+                }
+
+                visited.TryGetValue(currentId, out var hits);
+                if (hits > loopLimit)
+                {
+                    State.LastError = $"تعداد تکرار از حد مجاز ({loopLimit}) گذشت.";
                     Log("error", State.LastError);
                     return;
                 }
                 visited[currentId] = hits + 1;
 
-                var node = graph.NodeById(currentId);
-                if (node is null) return;
                 if (node.IsActive == false)
                 {
                     Log("info", $"نود غیرفعال رد شد: {node.Title ?? node.Id}");

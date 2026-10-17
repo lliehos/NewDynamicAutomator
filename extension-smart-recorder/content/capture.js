@@ -25,6 +25,91 @@ function allowed() {
   return true;
 }
 
+function cleanLabel(s, maxLen) {
+  const t = String(s || "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  const max = maxLen == null ? 48 : maxLen;
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
+/**
+ * Human name for an element: its own text, accessible name, associated <label>, or the nearest
+ * meaningful nearby label. The server uses this for the node title, so the learner's diagram says
+ * WHICH element a step is about — «ورود» rather than «button».
+ */
+function elementLabel(el) {
+  if (!(el instanceof Element)) return "";
+  const target = el.closest(
+    "button, a, [role='button'], [role='link'], [role='tab'], label, summary, input, textarea, select, [contenteditable='true']"
+  ) || el;
+  const attr = (name) => cleanLabel(target.getAttribute(name) || "");
+
+  const labelledBy = target.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const parts = String(labelledBy).split(/\s+/).filter(Boolean)
+      .map((id) => document.getElementById(id))
+      .filter(Boolean)
+      .map((n) => cleanLabel(n.innerText || n.textContent || ""))
+      .filter(Boolean);
+    if (parts.length) return parts.join(" ");
+  }
+  const aria = attr("aria-label");
+  if (aria) return aria;
+  const titled = attr("title");
+  if (titled) return titled;
+
+  if (target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement) {
+    if (target.id) {
+      try {
+        const lab = document.querySelector(`label[for="${CSS.escape(target.id)}"]`);
+        const lt = cleanLabel(lab?.innerText || lab?.textContent || "");
+        if (lt) return lt;
+      } catch { /* ignore */ }
+    }
+    const wrapLab = target.closest("label");
+    if (wrapLab) {
+      const clone = wrapLab.cloneNode(true);
+      clone.querySelectorAll("input, textarea, select, button").forEach((n) => n.remove());
+      const lt = cleanLabel(clone.innerText || clone.textContent || "");
+      if (lt) return lt;
+    }
+    const ph = attr("placeholder");
+    if (ph) return ph;
+  }
+
+  const own = cleanLabel(target.innerText || target.textContent || "");
+  if (own) return own;
+
+  let sib = target.previousElementSibling;
+  for (let i = 0; i < 3 && sib; i++, sib = sib.previousElementSibling) {
+    if (/^(LABEL|SPAN|P|DIV|STRONG|B|LEGEND|TH|TD|DT)$/i.test(sib.tagName)) {
+      const t = cleanLabel(sib.innerText || sib.textContent || "");
+      if (t) return t;
+    }
+  }
+  const parent = target.parentElement;
+  if (parent) {
+    const kids = Array.from(parent.children);
+    const idx = kids.indexOf(target);
+    for (let i = idx - 1; i >= Math.max(0, idx - 3); i--) {
+      const n = kids[i];
+      if (!n || /^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/i.test(n.tagName)) continue;
+      const t = cleanLabel(n.innerText || n.textContent || "");
+      if (t) return t;
+    }
+    const legend = target.closest("fieldset")?.querySelector(":scope > legend");
+    const lt = cleanLabel(legend?.innerText || legend?.textContent || "");
+    if (lt) return lt;
+  }
+
+  const alt = attr("alt");
+  if (alt) return alt;
+  if (target.id) return cleanLabel(String(target.id).replace(/[_-]+/g, " "));
+  return "";
+}
+
 function describeElement(el) {
   if (!(el instanceof Element)) return null;
   const rect = el.getBoundingClientRect();
@@ -43,6 +128,8 @@ function describeElement(el) {
     role: el.getAttribute("role") || null,
     classes: String(el.className || "").slice(0, 200),
     cssPath: cssPath(el),
+    // The readable name the graph factory uses as the node title.
+    label: elementLabel(el),
     text,
     value: ("value" in el) ? String(el.value ?? "").slice(0, 500) : null,
     href: el.getAttribute("href") || null,

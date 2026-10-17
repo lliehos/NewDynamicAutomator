@@ -2009,7 +2009,7 @@
       "stepGapMs": "Gap between steps (ms)",
       "stepGapMsHint": "Pause after each step before moving to the next one (0 = no delay).",
       "loopBackLimit": "Max loop-back visits",
-      "loopBackLimitHint": "When an edge points back to an earlier node (e.g. condition → step → same condition), each node may run at most this many times. If the exit condition is still not met, the run stops with a clear message.",
+      "loopBackLimitHint": "This condition is evaluated at most this many times in one run; if its exit branch never becomes true, the run stops with a clear message (default 100). Older graphs that carry the value on the start node use it as the default.",
       "runType": "Run type",
       "runOnServerOn": "Run on server",
       "runOnServerOff": "Run locally",

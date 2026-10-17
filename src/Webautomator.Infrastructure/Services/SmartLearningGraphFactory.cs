@@ -401,6 +401,11 @@ internal static class SmartLearningGraphFactory
     /// <summary>Short, human-readable label; falls back through the evidence the capture holds.</summary>
     private static string Title(string kind, JsonElement target)
     {
+        // The recorder now sends the element's readable name separately: its own text is often
+        // empty (icon-only buttons) or enormous (a whole card), while the label resolves the
+        // associated <label>, aria name, or the nearest meaningful text.
+        var label = Truncate(ReadString(target, "label"), 60);
+        if (!string.IsNullOrWhiteSpace(label)) return label!;
         var text = Truncate(ReadString(target, "text"), 60);
         if (!string.IsNullOrWhiteSpace(text)) return text!;
         var name = ReadString(target, "name");

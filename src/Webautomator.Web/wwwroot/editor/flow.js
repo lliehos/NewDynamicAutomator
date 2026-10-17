@@ -2991,8 +2991,6 @@
     const titleDisabled = canModify && !structLocked ? "" : "disabled";
     const start = processStart();
     const rst = start?.repeatSourceType || graph.repeatSourceType || "None";
-    // Default is a SERVER run, matching the historical behaviour and the server's own default.
-    const runOnServer = start?.runOnServer !== false && graph.runOnServer !== false;
     const master = (graph.dataSources || []).find((d) => Number(d.id) === Number(masterDataSourceId()));
     const count = (graph.dataSources || []).length;
     return `
@@ -3002,21 +3000,6 @@
         <label>${t("editor.insp.stepGapMs")}</label>
         <input type="number" min="0" step="50" data-task-k="stepDelayMs" value="${Number(start?.stepDelayMs ?? graph.stepDelayMs) || 0}" ${disabled} />
         <p class="palette-hint" style="margin:4px 0 0">${t("editor.insp.stepGapMsHint")}</p>
-      </div>
-      <div class="insp-field">
-        <label>${t("editor.insp.loopBackLimit")}</label>
-        <input type="number" min="1" max="1000" step="1" data-task-k="loopBackLimit" value="${Number(start?.loopBackLimit ?? graph.loopBackLimit) || 100}" ${disabled} />
-        <p class="palette-hint" style="margin:4px 0 0">${t("editor.insp.loopBackLimitHint")}</p>
-      </div>
-      <div class="insp-field">
-        <label>${t("editor.insp.runType")}</label>
-        <label class="da-switch" for="proc-run-on-server">
-          <input type="checkbox" id="proc-run-on-server" data-task-k="runOnServer"
-                 ${runOnServer ? "checked" : ""} ${disabled} />
-          <span class="da-switch-ui" aria-hidden="true"></span>
-          <span class="da-switch-text">${esc(t(runOnServer ? "editor.insp.runOnServerOn" : "editor.insp.runOnServerOff"))}</span>
-        </label>
-        <p class="palette-hint" style="margin:4px 0 0">${esc(t(runOnServer ? "editor.insp.runOnServerOnHint" : "editor.insp.runOnServerOffHint"))}</p>
       </div>
       <div class="insp-field">
         <label>${t("editor.insp.selectorLabel")}</label>
@@ -3058,13 +3041,6 @@
           graph.stepDelayMs = num;
           const start = processStart();
           if (start) start.stepDelayMs = num;
-        } else if (k === "loopBackLimit") {
-          // Caps how many times the engine may re-enter one node, so a "wait until true"
-          // loop cannot spin forever. Mirrored on the graph for payloads without a start node.
-          const num = clampLoopBackLimit(inp.value);
-          graph.loopBackLimit = num;
-          const start = processStart();
-          if (start) start.loopBackLimit = num;
         } else if (k === "highlightColor") {
           const raw = String(inp.value || "").trim();
           if (inp.type === "text" && !/^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(raw)) {
@@ -3077,18 +3053,6 @@
           inspector.querySelectorAll('[data-task-k="highlightColor"]').forEach((el) => {
             if (el !== inp) el.value = color;
           });
-        } else if (k === "runOnServer") {
-          // Where the run happens. Stored on the root start node (the same place the other
-          // process-level settings live) and mirrored on the graph for payloads without a start.
-          const on = inp.checked;
-          graph.runOnServer = on;
-          const start = processStart();
-          if (start) start.runOnServer = on;
-          // The title/hint pair is state, not a label, so the panel is rebuilt to swap the wording.
-          renderInspector();
-          syncNodeValidity();
-          render();
-          return;
         }
       };
       inp.addEventListener("change", apply);
@@ -3328,22 +3292,6 @@
 
   function processStart() {
     return graph.nodes.find((n) => n.kind === "start" && !n.groupNodeId) || null;
-  }
-
-  /**
-   * Where a run started from the diagram should execute.
-   *
-   * Read from the process's own switch (process properties → «نوع اجرا»), which lives on the root
-   * start node with the graph as the mirror — the same pattern the other process-level settings use.
-   * A server run is the default, matching both the historical behaviour and the server's own default.
-   *
-   * This is deliberately NOT a per-surface decision: the process list, the diagram's run button and
-   * the element context menus all ask this one question, so they cannot disagree about the same
-   * process.
-   */
-  function resolveRunOnServerForPlay() {
-    const start = processStart();
-    return start?.runOnServer !== false && graph.runOnServer !== false;
   }
 
   function scopeStart(gid) {
@@ -6808,13 +6756,8 @@
                 : "task",
         tabId: hasTab ? rawTab : null,
         openNewTab: scope?.openNewTab === true,
-        // Where the run happens comes from the process's own switch (process properties → «نوع اجرا»),
-        // NOT from this surface. A server run is the default: having the process open here IS the
-        // concurrency guarantee it provides (an edit during the run is refused, and the run stops if the
-        // process is changed). Switching it off makes this a LOCAL run, which is also the only kind
-        // available when the admin's master switch forbids server runs. Single source of truth:
-        // read it off the root start node, with the graph mirror as the fallback for a graph with no start.
-        runOnServer: resolveRunOnServerForPlay(),
+        // The run TYPE is chosen on the process list's row switch (the work-machine design), not
+        // inside the diagram; an editor-launched run therefore uses the server default.
         task: cached,
         graph: cached.graph
       };
@@ -6964,21 +6907,43 @@
       isActionNode(n) && (n.groupNodeId || null) === (scopeId || null)
     );
 
+    // Name the node after the element it was built from. "کلیک روی المان" says the type but not the
+    // target, and a diagram full of them forces the author to open each node to tell them apart.
+    // The label arrives from the extension's elementLabel() (own text, aria/label association, or
+    // the nearest meaningful label).
+    const rawLabel = String(msg.elementLabel || "").replace(/\s+/g, " ").trim();
+    const labelText = rawLabel.length > 48 ? `${rawLabel.slice(0, 47)}…` : rawLabel;
+    const baseTitle = actionTypeLabel(actionType) || actionType;
+    const nodeTitle = labelText ? `${baseTitle} — «${labelText}»` : baseTitle;
+
     // Place the node below the chain so it does not land on top of existing nodes.
     const lastStep = siblings[siblings.length - 1] || null;
     const node = createStepNode({
       groupNodeId: scopeId || null,
       actionType: isCondition ? "None" : actionType,
-      title: actionTypeLabel(actionType) || actionType,
+      title: nodeTitle,
       x: lastStep ? lastStep.x : 120,
       y: lastStep ? lastStep.y + 90 : 120
     });
+    // Which field carries the selector depends on what the action does with the element. Most act
+    // ON it; InsertContent and GoToUrl READ their value from it and have no target element, so the
+    // selector belongs to the value side.
+    const readsValueFromElement = actionType === "InsertContent" || actionType === "GoToUrl";
     if (isCondition) {
       node.kind = "condition";
       node.conditionType = actionType;
       node.selectorValue = selector;
+      node.loopBackLimit = DEFAULT_LOOP_BACK_LIMIT;
+    } else if (readsValueFromElement) {
+      node.contentSourceType = "Elements";
+      node.equalSelectorValue = selector;
+      node.equalSelectorIsDynamic = false;
+      if (actionType === "InsertContent") node.valueFromSource = true;
     } else {
       node.selectorValue = selector;
+      // ScrollPage's selector only applies in "to element" mode; without this the node would
+      // scroll by an amount and ignore the element the user right-clicked.
+      if (actionType === "ScrollPage") node.scrollType = "ToElement";
     }
     // The selector came from a live element, so record whether it resolved uniquely: a selector
     // matching several elements would click an arbitrary one, and the author must be able to see
@@ -7685,15 +7650,6 @@
           if (k === "ignorePlayError" && n.kind === "start" && !n.groupNodeId) {
             graph.ignorePlayError = inp.checked;
           }
-          // Where the run happens. Kept on the start node (with the graph as a mirror for payloads
-          // with no start) and the panel is rebuilt because the label/hint are STATE, not a caption.
-          if (k === "runOnServer" && n.kind === "start" && !n.groupNodeId) {
-            graph.runOnServer = inp.checked;
-            renderInspector();
-            syncNodeValidity();
-            render();
-            return;
-          }
           if (k === "isActive" && isActionNode(n)) {
             clearTimeout(window.__daInspSwitchT);
             window.__daInspSwitchT = setTimeout(() => {
@@ -7721,9 +7677,9 @@
           n.stepDelayMs = num;
           if (n.kind === "start" && !n.groupNodeId) graph.stepDelayMs = num;
         } else if (k === "loopBackLimit") {
-          const num = clampLoopBackLimit(inp.value);
-          n.loopBackLimit = num;
-          if (n.kind === "start" && !n.groupNodeId) graph.loopBackLimit = num;
+          // A condition's own budget: how many times the engine may re-evaluate this loop's exit
+          // test before the run stops with a clear message.
+          n.loopBackLimit = clampLoopBackLimit(inp.value);
         } else if (k === "repeatFromIndex" || k === "repeatToIndex") {
           // Stored as entered, including blank: blank means "no bound on this end", which is
           // different from 1 and from the last row (those pin the range once the source changes).
@@ -10467,6 +10423,16 @@
       }
     }
 
+    // The loop's own ceiling. It lives HERE because a loop is defined by its exit test: this
+    // condition is evaluated once per round, so its budget is the round count. The old start-node
+    // value is still honoured as the fallback for graphs saved before this moved.
+    const loopBackLimit = clampLoopBackLimit(n.loopBackLimit ?? graph.loopBackLimit);
+    html += `<div class="insp-section-title">تنظیمات حلقه</div>
+      <div class="insp-field"><label>${esc(t("editor.insp.loopBackLimit") || "حداکثر بازگشت حلقه")}</label>
+        <input type="number" min="1" max="1000" step="1" data-k="loopBackLimit" value="${esc(loopBackLimit)}" />
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.6">${esc(t("editor.insp.loopBackLimitHint") || "این شرط حداکثر این تعداد بار ارزیابی می‌شود؛ اگر شاخهٔ خروج تا آن زمان برقرار نشود، اجرا با پیام روشن متوقف می‌شود.")}</p>
+      </div>`;
+
     // The row switches render at the blocks they qualify (above), not here.
 
     html += `<div class="insp-section-title">خروجی‌ها</div>` +
@@ -10502,7 +10468,6 @@
     n.highlightColor = normalizeHighlightColor(n.highlightColor);
     const loopCount = n.loopCount || 1;
     const stepDelayMs = Math.max(0, Number(n.stepDelayMs) || 0);
-    const loopBackLimit = clampLoopBackLimit(n.loopBackLimit);
     const ignorePlayError = n.ignorePlayError !== false;
     const highlightColor = n.highlightColor;
     const masterId = ensureDefaultDataSource({ forceForRepeat: rst === "DataSource" });
@@ -10513,12 +10478,9 @@
       ? `<p class="palette-hint" style="margin:6px 0 0;color:#ea5455">برای تکرار بر اساس منبع، حداقل یک منبع اضافه کنید.</p>`
       : "";
     /**
-     * Where this process runs. Lives on the ROOT start node because that is where the process-level
-     * settings already are (step gap, loop limit, repeat), so clicking the start node shows it and
-     * the process-properties panel (nothing selected) shows the same field from `processPropsHtml`.
+     * Where this process runs lives on the process list's row switch (the work-machine design).
+     * The start node keeps only the run-shape settings here.
      */
-    const runOnServer = n.runOnServer !== false && graph.runOnServer !== false;
-
     return `
       <p class="palette-hint" style="margin:0 0 10px;line-height:1.7">
         فرآیند یا <b>یک‌بار</b> اجرا می‌شود، یا به <b>تعداد ثابت</b>، یا به تعداد ردیف‌های
@@ -10526,32 +10488,10 @@
       </p>
       <div class="insp-section-title">تنظیمات اجرا</div>
       <div class="insp-field">
-        <label>نوع اجرا</label>
-        <label class="da-switch" for="start-run-on-server">
-          <input type="checkbox" id="start-run-on-server" data-k="runOnServer" ${runOnServer ? "checked" : ""} />
-          <span class="da-switch-ui" aria-hidden="true"></span>
-          <span class="da-switch-text">${runOnServer ? "اجرا روی سرور" : "اجرای محلی"}</span>
-        </label>
-        <p class="palette-hint" style="margin:6px 0 0;line-height:1.6">
-          ${runOnServer
-            ? "روشن: نشست اجرا روی سرور ثبت می‌شود (مدیر اجرا را می‌بیند) و ویرایش در حین اجرا مسدود است."
-            : "خاموش: اجرا روی همین سیستم انجام می‌شود و چیزی روی سرور ثبت نمی‌شود؛ داده یک‌بار خوانده و تغییرات محلی می‌شوند. برای برگرداندن نتیجه، سینک دستی لازم است."}
-        </p>
-      </div>
-      <div class="insp-field">
         <label>فاصله بین مراحل (ms)</label>
         <input type="number" min="0" step="50" data-k="stepDelayMs" value="${esc(stepDelayMs)}" />
         <p class="palette-hint" style="margin:4px 0 0;line-height:1.6">
           بعد از اتمام هر مرحله، قبل از شروع مرحلهٔ بعدی این مدت صبر می‌شود (نه قبل از اولی).
-        </p>
-      </div>
-      <div class="insp-field">
-        <label>حداکثر بازگشت حلقه</label>
-        <input type="number" min="1" max="1000" step="1" data-k="loopBackLimit" value="${esc(loopBackLimit)}" />
-        <p class="palette-hint" style="margin:4px 0 0;line-height:1.6">
-          وقتی یالی به نود قبلی برمی‌گردد (مثل «شرط → مرحله → همان شرط»)، هر نود حداکثر این
-          تعداد بار دوباره اجرا می‌شود. اگر شرط خروج تا آن زمان برقرار نشود، اجرا با پیام روشن
-          متوقف می‌شود — نه بی‌صدا.
         </p>
       </div>
       <div class="insp-field">
@@ -12065,6 +12005,7 @@
       node.conditionType = "FindElement";
       node.equalityType = "Equal";
       node.constantEqualValue = "";
+      node.loopBackLimit = DEFAULT_LOOP_BACK_LIMIT;
     }
     if (kind === "end") {
       // Centre the disc on the drop point — the default places the top-left corner there, which

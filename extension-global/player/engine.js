@@ -1237,13 +1237,14 @@ const HISTORY_SETTLE_MS = 600;
  * fast as the page allows — hammering the target site and flooding the log, while also
  * giving the condition no time to become true.
  */
-async function paceLoopBack(graph, nextId, visitCounts, loopBackLimit) {
+async function paceLoopBack(graph, nextId, visitCounts, loopBackLimits) {
   if (!nextId) return;
   const already = visitCounts.get(nextId) || 0;
   if (already <= 0) return;
   const node = findGraphNode(graph, nextId);
   const label = node?.title || node?.conditionType || node?.actionType || nextId;
-  appendPlayLog("info", `↩ بازگشت به «${label}» — تکرار ${already + 1} از حداکثر ${loopBackLimit}`);
+  const limit = loopBackLimitFor(node, loopBackLimits);
+  appendPlayLog("info", `↩ بازگشت به «${label}» — تکرار ${already + 1} از حداکثر ${limit}`);
   // Never let the diagram's own inter-step gap shrink a loop below the floor.
   const gap = resolveStepDelayMs(graph);
   const remaining = LOOP_BACK_MIN_PAUSE_MS - gap;
@@ -2287,24 +2288,52 @@ function flowEdge(edges, fromId, preferredKinds) {
   return null;
 }
 
+/** Bounds the per-condition loop budget; must agree with the editor's clamp. */
+const LOOP_BACK_MIN = 1;
+const LOOP_BACK_MAX = 1000;
+const LOOP_BACK_DEFAULT = 100;
+
+function clampLoopBackLimit(value, fallback) {
+  const f = Number(fallback);
+  const fb = Number.isFinite(f) && f > 0
+    ? Math.min(LOOP_BACK_MAX, Math.max(LOOP_BACK_MIN, Math.floor(f)))
+    : LOOP_BACK_DEFAULT;
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return fb;
+  return Math.min(LOOP_BACK_MAX, Math.max(LOOP_BACK_MIN, Math.floor(raw)));
+}
+
 /**
- * How many times a single node may be re-entered during one flow walk.
+ * The per-walk loop-back budgets.
  *
- * A diagram may legitimately loop back (condition → step → same condition, "wait until
- * true"), so a node cannot be limited to a single execution. But an unbounded loop would
- * hang the browser with no way out, so each node gets a budget. The value comes from the
- * root start node (`loopBackLimit`) and is clamped to a sane range; anything larger would
- * make the run effectively unkillable.
+ * The setting lives on CONDITION nodes now: the condition is where a loop's exit test is written,
+ * so "how many rounds may this loop take" belongs to it. A condition without its own value falls
+ * back to the historical root-start / graph value, then 100, so existing graphs keep the limit they
+ * were saved with.
+ *
+ * The other nodes of the loop (condition --fail--> step --> same condition) are revisited once per
+ * round too. They get the LARGEST configured condition budget, otherwise a condition set to 500
+ * would still be cut off at the step's old 100 before its own budget was reached.
  */
-function resolveLoopBackLimit(graph) {
-  // Only the process-level start carries this setting — a group start has its own repeat options
-  // and its inspector never shows "حداکثر بازگشت حلقه". Falling back to any start node would let a
-  // stale value on a grouped start silently become the process-wide loop budget (and even override
-  // the graph-level value). Mirrors the editor, which reads only the root start.
+function resolveLoopBackLimits(graph) {
   const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
-  const raw = Number(start?.loopBackLimit ?? graph?.loopBackLimit);
-  if (!Number.isFinite(raw) || raw <= 0) return 100;
-  return Math.min(1000, Math.max(1, Math.floor(raw)));
+  const legacy = clampLoopBackLimit(start?.loopBackLimit ?? graph?.loopBackLimit);
+  let max = legacy;
+  for (const n of graph?.nodes || []) {
+    if (n.kind !== "condition") continue;
+    const v = clampLoopBackLimit(n.loopBackLimit, legacy);
+    if (v > max) max = v;
+  }
+  return { defaultLimit: legacy, maxLimit: max };
+}
+
+/** The visit budget this node gets in one walk. */
+function loopBackLimitFor(node, limits) {
+  const fallback = limits?.defaultLimit ?? LOOP_BACK_DEFAULT;
+  if (node?.kind === "condition") {
+    return clampLoopBackLimit(node.loopBackLimit, fallback);
+  }
+  return limits?.maxLimit ?? fallback;
 }
 
 /**
@@ -2312,7 +2341,7 @@ function resolveLoopBackLimit(graph) {
  * start → next, action → next, condition → success|fail, group → inner then next.
  *
  * Re-entering a node is allowed (a loop-back edge is a supported shape), but each node has
- * a visit budget — see resolveLoopBackLimit. Exceeding it means the loop never satisfied its
+ * a visit budget — see resolveLoopBackLimits. Exceeding it means the loop never satisfied its
  * exit condition, which stops the run with a message naming the node rather than silently
  * ending it as a "duplicate loop" would.
  */
@@ -2352,7 +2381,7 @@ const MAX_GROUP_DEPTH = 50;
  * the only thing standing between a bad graph and a crash.
  *
  * Re-entering a node is allowed (a loop-back edge is a supported shape) and bounded by a per-node
- * visit budget — see resolveLoopBackLimit. The budget is now counted in ONE map for the whole walk
+ * visit budget — see resolveLoopBackLimits. The budget is now counted in ONE map for the whole walk
  * rather than per invocation, which is what finally makes a group-cycle detectable: previously each
  * descent started a fresh counter, so a cycle was invisible to it.
  *
@@ -2363,10 +2392,11 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
   const edges = graph.edges || [];
   let activeTabId = tabId;
   let stepOrdinal = 0;
-  const loopBackLimit = resolveLoopBackLimit(graph);
 
   // ONE visit budget for the entire walk, so a cycle that crosses a group boundary is still seen.
   const visitCounts = new Map();
+  // Per-condition budgets (with the old start/graph value as the fallback), resolved once.
+  const loopBackLimits = resolveLoopBackLimits(graph);
   // Total node steps, a second independent backstop against a walk that never settles.
   let guard = 0;
 
@@ -2423,7 +2453,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         frame.cur = afterId;
         if (!afterId) continue;   // chain ends here; the next iteration pops this level
         await delayAfterNode(graph, afterId);
-        await paceLoopBack(graph, afterId, visitCounts, loopBackLimit);
+        await paceLoopBack(graph, afterId, visitCounts, loopBackLimits);
         continue;
       }
       const gi = frame.pendingGroupIndex++;
@@ -2465,24 +2495,24 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       continue;
     }
 
-    const visits = (visitCounts.get(cur) || 0) + 1;
-    visitCounts.set(cur, visits);
-    if (visits > loopBackLimit) {
-      const stuck = nodes.get(cur);
-      const label = stuck?.title || stuck?.conditionType || stuck?.actionType || cur;
-      appendPlayLog(
-        "error",
-        `«${label}» بیش از ${loopBackLimit} بار اجرا شد و شرط خروج آن برقرار نشد — اجرا متوقف شد. ` +
-        `(سقف تکرار را از نود شروع → «حداکثر بازگشت حلقه» تغییر دهید)`
-      );
-      playStatus.lastError = `حداکثر بازگشت حلقه در نود «${label}» رد شد`;
-      break;
-    }
-
     const node = nodes.get(cur);
     if (!node) {
       stack.pop();
       continue;
+    }
+
+    const loopBackLimit = loopBackLimitFor(node, loopBackLimits);
+    const visits = (visitCounts.get(cur) || 0) + 1;
+    visitCounts.set(cur, visits);
+    if (visits > loopBackLimit) {
+      const label = node.title || node.conditionType || node.actionType || cur;
+      appendPlayLog(
+        "error",
+        `«${label}» بیش از ${loopBackLimit} بار اجرا شد و شرط خروج آن برقرار نشد — اجرا متوقف شد. ` +
+        `(سقف تکرار را از نود شرط → «حداکثر بازگشت حلقه» تغییر دهید)`
+      );
+      playStatus.lastError = `حداکثر بازگشت حلقه در نود «${label}» رد شد`;
+      break;
     }
 
     if (node.kind === "end") {
@@ -2543,7 +2573,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       const nextId = flowEdge(edges, node.id, ["next"])?.to || null;
       // Delay after the step finished, before the next node.
       await delayAfterNode(graph, nextId);
-      await paceLoopBack(graph, nextId, visitCounts, loopBackLimit);
+      await paceLoopBack(graph, nextId, visitCounts, loopBackLimits);
       frame.cur = nextId;
       continue;
     }
@@ -2672,7 +2702,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
 
       const nextId = e.to || null;
       await delayAfterNode(graph, nextId);
-      await paceLoopBack(graph, nextId, visitCounts, loopBackLimit);
+      await paceLoopBack(graph, nextId, visitCounts, loopBackLimits);
       frame.cur = nextId;
       continue;
     }
@@ -2699,7 +2729,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         appendPlayLog("warn", `گروه «${node.title || node.id}» ورودی ندارد`);
         const afterId = flowEdge(edges, node.id, ["next"])?.to || null;
         await delayAfterNode(graph, afterId);
-        await paceLoopBack(graph, afterId, visitCounts, loopBackLimit);
+        await paceLoopBack(graph, afterId, visitCounts, loopBackLimits);
         frame.cur = afterId;
         continue;
       }

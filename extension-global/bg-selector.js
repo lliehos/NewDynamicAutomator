@@ -173,15 +173,21 @@ const BUILD_ITEMS = [
   ["Hover", "build.hover"],
   ["Hold", "build.hold"],
   ["InputContent", "build.inputContent"],
+  ["LoadContent", "build.loadContent"],
+  // InsertContent is «ذخیره در منبع»: the right-clicked element is the VALUE, and the destination
+  // cell is picked in the editor. Omitting it here was the gap the owner reported.
+  ["InsertContent", "build.insertContent"],
   ["ClearContent", "build.clearContent"],
   ["SelectOption", "build.selectOption"],
+  ["ScrollPage", "build.scrollPage"],
   ["RemoveElements", "build.removeElements"],
   ["GoToUrl", "build.goToUrl"],
   ["FindElement", "build.findElement"],
   ["NotFindElement", "build.notFindElement"],
   ["ElementVisible", "build.visible"],
   ["ElementHidden", "build.hidden"],
-  ["ElementValue", "build.elementValue"]
+  ["ElementValue", "build.elementValue"],
+  ["FindElements", "build.findElements"]
 ];
 const BUILD_MENU_IDS = new Set(BUILD_ITEMS.map(([id]) => id));
 
@@ -248,8 +254,11 @@ const CTX_LABELS = {
     "build.hover": "نگه‌داشتن نشانگر روی المان",
     "build.hold": "فشردن و نگه‌داشتن المان",
     "build.inputContent": "پر کردن فیلد المان",
+    "build.loadContent": "بارگذاری از منبع در المان",
+    "build.insertContent": "ذخیره در منبع",
     "build.clearContent": "پاک کردن متن فیلد",
     "build.selectOption": "انتخاب گزینه از لیست",
+    "build.scrollPage": "اسکرول تا المان",
     "build.removeElements": "حذف المان‌های صفحه",
     "build.goToUrl": "رفتن به آدرس",
     "build.findElement": "شرط: وجود المان",
@@ -257,6 +266,7 @@ const CTX_LABELS = {
     "build.visible": "شرط: نمایان بودن المان",
     "build.hidden": "شرط: پنهان بودن المان",
     "build.elementValue": "شرط: مقدار المان",
+    "build.findElements": "شرط: تعداد المان‌های صفحه",
     "build.noEditor": "ابتدا ادیتور فرآیند را باز کنید.",
     "build.manyEditors": "بیش از یک ادیتور باز است؛ فقط یکی را باز بگذارید.",
     "build.locked": "این فرآیند قفل است و نود جدید نمی‌پذیرد.",
@@ -281,8 +291,11 @@ const CTX_LABELS = {
     "build.hover": "Hover the element",
     "build.hold": "Press and hold the element",
     "build.inputContent": "Fill the element's field",
+    "build.loadContent": "Load a source cell into the element",
+    "build.insertContent": "Save to a data source",
     "build.clearContent": "Clear the field's text",
     "build.selectOption": "Select an option from the list",
+    "build.scrollPage": "Scroll to the element",
     "build.removeElements": "Remove page elements",
     "build.goToUrl": "Go to URL",
     "build.findElement": "Condition: element exists",
@@ -290,6 +303,7 @@ const CTX_LABELS = {
     "build.visible": "Condition: element is visible",
     "build.hidden": "Condition: element is hidden",
     "build.elementValue": "Condition: element value",
+    "build.findElements": "Condition: page element count",
     "build.noEditor": "Open the process editor first.",
     "build.manyEditors": "More than one editor is open; keep only one.",
     "build.locked": "This process is locked and cannot take a new node.",
@@ -675,6 +689,9 @@ async function handleBuildElement(info, tab, target) {
     type: "da-build-node",
     actionType: target.actionType,
     selector: cap.captured.selector,
+    // Human name of the element, so the node created in the diagram says WHICH element it is about
+    // (e.g. «ورود») instead of only repeating the action type.
+    elementLabel: cap.captured.label || "",
     framePathJson: cap.captured.framePathJson || null,
     url: cap.captured.url || null,
     matchCount: cap.captured.matchCount ?? null,
