@@ -9535,12 +9535,31 @@
       ["ProcessLoop", t("editor.row.processLoop") || "ردیف اجرای فرآیند"],
       ["SpecificRow", t("editor.row.fixedIndex") || "شمارهٔ ثابت"]
     ];
+    // A one-line dropdown cannot carry six different meanings. The hint under the picker explains
+    // the SELECTED option, so an author never has to guess how "process row" differs from
+    // "iteration number" or from "combined".
+    const hintByPointer = {
+      CurrentLoop: t("editor.row.hintCurrentLoop")
+        || "ردیف همان سطحی که این نود در آن است. داخل گروه با هر تکرار گروه عوض می‌شود و هر دور فرآیند از نو شروع می‌شود؛ بیرون از گروه، همان ردیف حلقهٔ فرآیند است.",
+      ParentLoop: t("editor.row.hintParentLoop")
+        || "ردیف یک سطح بالاتر. داخل گروه تودرتو، ردیفی که گروه بیرونی روی آن است را می‌دهد؛ در سطح اول با ردیف حلقهٔ فرآیند یکی است.",
+      TotalLoop: t("editor.row.hintTotalLoop")
+        || "شمارهٔ ترتیبی دور فرآیند: ۱، ۲، ۳… در تمام تکرارهای گروه در همان دور ثابت می‌ماند و کاری به مقدار ردیف منبع ندارد.",
+      CombinedLoop: t("editor.row.hintCombinedLoop")
+        || "شمارندهٔ پیوستهٔ کل اجرا: (شمارهٔ دور − ۱) × تعداد تکرار گروه + اندیس گروه + ۱. برای ۱۰ دور فرآیند و گروه ۱۰تایی، ۱ تا ۱۰۰ می‌دهد؛ با گروه‌های تودرتو هم ضرب ادامه پیدا می‌کند.",
+      ProcessLoop: t("editor.row.hintProcessLoop")
+        || "ردیف حلقهٔ فرآیند (بیرونی) در هر عمقی از گروه‌ها. برخلاف «حلقهٔ فعلی» با تکرار گروه عوض نمی‌شود؛ اگر تکرار از ردیف ۵ شروع شود، مقدارش ۶ است.",
+      SpecificRow: t("editor.row.hintFixedIndex")
+        || "همان عددی که می‌نویسید عیناً در سلکتور گذاشته می‌شود — بدون تغییر و بدون بریده‌شدن به تعداد ردیف منبع."
+    };
+    const pointerHint = hintByPointer[pointer] || "";
     return `
       <div class="insp-section-title">${esc(title || "ایندکس حلقه")}</div>
       <div class="insp-field"><label>نوع ایندکس</label>
         <select data-k="${typeKey}">
           ${rows.map(([v, label]) => `<option value="${v}" ${pointer === v ? "selected" : ""}>${esc(label)}</option>`).join("")}
         </select>
+        ${pointerHint ? `<p class="palette-hint" style="margin:4px 0 0;line-height:1.7">${esc(pointerHint)}</p>` : ""}
       </div>
       ${pointer === "SpecificRow" ? `
         <div class="insp-field"><label>${esc(t("editor.row.fixedIndex") || "شمارهٔ ثابت")}</label>
