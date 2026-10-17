@@ -5,9 +5,10 @@
  * on first paint. This keeps the headline numbers live afterwards: they are re-read from the poll
  * and only touched when the page actually has a slot for them.
  *
- * The history chart is deliberately NOT redrawn by the poll: it is a view of a time range, and
- * moving its columns under the pointer made the page unreadable (see docs/monitoring.md). Only a
- * full page load redraws it.
+ * The history chart is live as well. It is a view of a time range, which is why it is redrawn from
+ * the polled buckets rather than re-fetched as a page: the bucket count and the axis are fixed by
+ * the server, so the columns move in place without the layout shifting under the pointer. An
+ * unchanged series is not redrawn at all.
  */
 (function () {
   "use strict";
@@ -61,9 +62,13 @@
    * Redraw the history chart from a poll's history array.
    *
    * The maxima are computed over the returned window exactly like the server does, so the bars
-   * keep their proportions when the window slides. The chart was given a data-mon-chart marker in
-   * the view; when the page rendered the empty state (no samples yet) there is nothing to draw
-   * into, and the next full page load picks the chart up.
+   * keep their proportions when the window slides. The payload is compared first: an unchanged
+   * series never rebuilds the DOM, which is what keeps a chart that the operator is reading from
+   * twitching under the pointer when nothing has actually happened.
+   *
+   * The "no samples yet" note and the chart are both in the markup and this toggles between them,
+   * so a page opened before the first sample starts drawing as soon as one arrives, without a
+   * reload.
    */
   function renderHistory(history) {
     var rows = Array.isArray(history) ? history : [];
@@ -73,7 +78,18 @@
 
     var netChart = document.querySelector("[data-mon-chart='net']");
     if (!netChart) return;
-    if (!rows.length) return;
+    var empty = document.querySelector("[data-mon-history-empty]");
+    var legend = document.querySelector("[data-mon-history-legend]");
+
+    if (!rows.length) {
+      netChart.hidden = true;
+      if (legend) legend.hidden = true;
+      if (empty) empty.hidden = false;
+      return;
+    }
+    netChart.hidden = false;
+    if (legend) legend.hidden = false;
+    if (empty) empty.hidden = true;
 
     var maxNet = 1;
     rows.forEach(function (p) {

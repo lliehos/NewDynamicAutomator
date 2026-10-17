@@ -52,7 +52,10 @@
     <span class="admin-field-hint">@L["admin.monitoring.stopAllHint"]</span>
   </div>
   <label class="admin-settings-switch" for="mon-stop-all">
-    <input type="checkbox" id="mon-stop-all" data-stop-all
+    @* data-da-switch="off": this track is drawn by the markup below (like every other
+       .admin-settings-switch), so the global checkbox upgrade must not restyle the raw input
+       as a second switch inside the same label. *@
+    <input type="checkbox" id="mon-stop-all" data-stop-all data-da-switch="off"
            data-confirm="@L["admin.monitoring.stopAllConfirm"]"
            @(s.StopAllServerRuns ? "checked" : null) />
     <span class="admin-settings-switch-track" aria-hidden="true"></span>
@@ -174,35 +177,30 @@
     <span class="admin-field-hint">@L.T("admin.monitoring.historyHint", ("n", windowLabel))</span>
   </div>
 
-  @if (s.History.Count == 0)
-  {
-    @* An empty chart is explained rather than drawn as a flat line, because a flat line reads as
-       "idle" when the truth is "no samples yet". *@
-    <div class="admin-mon-empty">
-      <i class="ti ti-clock-hour-4" aria-hidden="true"></i>
-      <div>@L["admin.monitoring.noHistory"]</div>
-    </div>
-  }
-  else
-  {
-    <div class="admin-mon-legend">
-      <span class="admin-mon-legend-item is-in"><i></i>@L["admin.monitoring.inbound"]</span>
-      <span class="admin-mon-legend-item is-out"><i></i>@L["admin.monitoring.outbound"]</span>
-    </div>
-    <div class="admin-mon-chart" data-mon-chart="net" aria-hidden="true">
-      @foreach (var p in s.History)
-      {
-        var netInH = Pct(p.BytesIn, maxNet);
-        var netOutH = Pct(p.BytesOut, maxNet);
-        @* Two stacked bars per sample: inbound over outbound, so the pair reads as one traffic
-           column while keeping the two directions distinguishable. *@
-        <div class="admin-mon-chart-col" title="@p.AtUtc.ToString("MM-dd HH:mm") — ↓@Bytes(p.BytesIn) ↑@Bytes(p.BytesOut)">
-          <span class="admin-mon-chart-in" style="height:@netInH%"></span>
-          <span class="admin-mon-chart-out" style="height:@netOutH%"></span>
-        </div>
-      }
-    </div>
-  }
+  @* The chart and the "no samples yet" note are BOTH rendered, and the poll decides which one is
+     visible. Rendering only the note while the series is empty meant a dashboard opened before the
+     first sample had no chart node to draw into, so its columns stayed empty until a reload. *@
+  <div class="admin-mon-empty" data-mon-history-empty @(s.History.Count > 0 ? "hidden" : null)>
+    <i class="ti ti-clock-hour-4" aria-hidden="true"></i>
+    <div>@L["admin.monitoring.noHistory"]</div>
+  </div>
+  <div class="admin-mon-legend" data-mon-history-legend @(s.History.Count == 0 ? "hidden" : null)>
+    <span class="admin-mon-legend-item is-in"><i></i>@L["admin.monitoring.inbound"]</span>
+    <span class="admin-mon-legend-item is-out"><i></i>@L["admin.monitoring.outbound"]</span>
+  </div>
+  <div class="admin-mon-chart" data-mon-chart="net" aria-hidden="true" @(s.History.Count == 0 ? "hidden" : null)>
+    @foreach (var p in s.History)
+    {
+      var netInH = Pct(p.BytesIn, maxNet);
+      var netOutH = Pct(p.BytesOut, maxNet);
+      @* Two stacked bars per sample: inbound over outbound, so the pair reads as one traffic
+         column while keeping the two directions distinguishable. *@
+      <div class="admin-mon-chart-col" title="@p.AtUtc.ToString("MM-dd HH:mm") — ↓@Bytes(p.BytesIn) ↑@Bytes(p.BytesOut)">
+        <span class="admin-mon-chart-in" style="height:@netInH%"></span>
+        <span class="admin-mon-chart-out" style="height:@netOutH%"></span>
+      </div>
+    }
+  </div>
 </section>
 
 @* ---- Connected users: the traffic each one accounts for, and the two controls on them ---- *@

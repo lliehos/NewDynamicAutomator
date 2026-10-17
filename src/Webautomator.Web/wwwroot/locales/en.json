@@ -538,7 +538,8 @@
       "selectedCount": "{count} selected",
       "noneSelected": "No rows selected",
       "deleteSelected": "Delete selected",
-      "deleteSelectedConfirm": "Delete {count} selected row(s)? This cannot be undone."
+      "deleteSelectedConfirm": "Delete {count} selected row(s)? This cannot be undone.",
+      "delete": "Delete"
     },
     "ui": {
       "active": "Active",
@@ -1132,7 +1133,8 @@
       "roles": {
         "User": "User",
         "ProcessManager": "Process manager",
-        "Admin": "Administrator"
+        "Admin": "Administrator",
+        "Monitor": "Monitor"
       },
       "active": "Active",
       "presence": "Presence",
@@ -1265,6 +1267,7 @@
   },
   "sources": {
     "viewTable": "View table",
+    "syncPlaying": "This process is running right now; the change is applied when the run ends.",
     "downloadExcel": "Download Excel",
     "saveServerSoon": "In library",
     "saveServerSoonToast": "Sources are stored in your library and survive process deletion.",

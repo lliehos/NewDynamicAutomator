@@ -82,7 +82,18 @@ public class MonitoringController : Controller
             onlineUsers = s.OnlineUsers,
             distinctIpCount = s.DistinctIpCount,
             windowHours = s.WindowHours,
-            stopAllServerRuns = s.StopAllServerRuns
+            stopAllServerRuns = s.StopAllServerRuns,
+            // The chart is part of the live view: it is already collapsed into a fixed number of
+            // buckets by the service, so re-reading it costs a few hundred bytes and the page can
+            // redraw it in place. Without this the columns only ever moved on a full reload.
+            history = s.History.Select(p => new
+            {
+                atUtc = p.AtUtc,
+                bytesIn = p.BytesIn,
+                bytesOut = p.BytesOut,
+                onlineUsers = p.OnlineUsers,
+                liveSessions = p.LiveSessions
+            })
         });
     }
 
