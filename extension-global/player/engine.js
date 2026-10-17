@@ -2342,15 +2342,6 @@ function loopBackLimitFor(node, limits) {
 }
 
 /**
- * Walk the flow diagram from entryId:
- * start → next, action → next, condition → success|fail, group → inner then next.
- *
- * Re-entering a node is allowed (a loop-back edge is a supported shape), but each node has
- * a visit budget — see resolveLoopBackLimits. Exceeding it means the loop never satisfied its
- * exit condition, which stops the run with a message naming the node rather than silently
- * ending it as a "duplicate loop" would.
- */
-/**
  * How deep groups may nest before the walk refuses to descend any further.
  *
  * Descending into a group calls executeFlow again, so the group nesting depth IS the recursion
