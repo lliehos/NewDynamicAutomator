@@ -2,14 +2,12 @@
  * Live refresh and the controls on the monitoring dashboard.
  *
  * The page renders a full reading server-side so it is useful with JavaScript disabled and correct
- * on first paint. This keeps it LIVE afterwards: the headline numbers AND the two history charts
- * are redrawn from every poll, because the owner asked for an auto-updating history diagram — a
- * chart frozen at page load reads as a dead dashboard even while the numbers keep moving.
+ * on first paint. This keeps the headline numbers live afterwards: they are re-read from the poll
+ * and only touched when the page actually has a slot for them.
  *
- * The charts are re-rendered from the same `history` array the server used (same maxima, same
- * percentages), and only when the data actually changed, so a poll with no new sample does not
- * touch the DOM at all. The redraw swaps the chart's columns in place; the rest of the page (the
- * range buttons, the legends) is untouched.
+ * The history chart is deliberately NOT redrawn by the poll: it is a view of a time range, and
+ * moving its columns under the pointer made the page unreadable (see docs/monitoring.md). Only a
+ * full page load redraws it.
  */
 (function () {
   "use strict";
@@ -30,18 +28,6 @@
 
   function rate(perSec) {
     return !perSec || perSec <= 0 ? "0 B/s" : bytes(perSec) + "/s";
-  }
-
-  /** Seconds since start, shaped as "2d 03:14:07" (or "03:14:07" under a day). */
-  function uptime(seconds) {
-    var s = Math.max(0, Math.floor(Number(seconds) || 0));
-    var days = Math.floor(s / 86400);
-    var h = Math.floor((s % 86400) / 3600);
-    var m = Math.floor((s % 3600) / 60);
-    var sec = s % 60;
-    function two(n) { return (n < 10 ? "0" : "") + n; }
-    var clock = two(h) + ":" + two(m) + ":" + two(sec);
-    return days > 0 ? days + "d " + clock : clock;
   }
 
   function set(name, text) {
@@ -72,12 +58,12 @@
   }
 
   /**
-   * Redraw the two history charts from a poll's history array.
+   * Redraw the history chart from a poll's history array.
    *
    * The maxima are computed over the returned window exactly like the server does, so the bars
-   * keep their proportions when the window slides. The charts were given data-mon-chart markers in
+   * keep their proportions when the window slides. The chart was given a data-mon-chart marker in
    * the view; when the page rendered the empty state (no samples yet) there is nothing to draw
-   * into, and the next full page load picks the charts up.
+   * into, and the next full page load picks the chart up.
    */
   function renderHistory(history) {
     var rows = Array.isArray(history) ? history : [];
@@ -86,32 +72,24 @@
     lastHistoryJson = json;
 
     var netChart = document.querySelector("[data-mon-chart='net']");
-    var diskChart = document.querySelector("[data-mon-chart='disk']");
-    if (!netChart && !diskChart) return;
+    if (!netChart) return;
     if (!rows.length) return;
 
-    var maxNet = 1, maxDisk = 1;
+    var maxNet = 1;
     rows.forEach(function (p) {
       var net = (Number(p.bytesIn) || 0) + (Number(p.bytesOut) || 0);
-      var disk = (Number(p.diskRead) || 0) + (Number(p.diskWrite) || 0);
       if (net > maxNet) maxNet = net;
-      if (disk > maxDisk) maxDisk = disk;
     });
 
-    var netHtml = "", diskHtml = "";
+    var netHtml = "";
     rows.forEach(function (p) {
       var t = stamp(p.atUtc);
       var bytesIn = Number(p.bytesIn) || 0;
       var bytesOut = Number(p.bytesOut) || 0;
-      var diskRead = Number(p.diskRead) || 0;
-      var diskWrite = Number(p.diskWrite) || 0;
       netHtml += column(t + " — ↓" + bytes(bytesIn) + " ↑" + bytes(bytesOut),
         pct(bytesIn, maxNet), pct(bytesOut, maxNet));
-      diskHtml += column(t + " — R:" + bytes(diskRead) + " W:" + bytes(diskWrite),
-        pct(diskRead, maxDisk), pct(diskWrite, maxDisk));
     });
-    if (netChart) netChart.innerHTML = netHtml;
-    if (diskChart) diskChart.innerHTML = diskHtml;
+    netChart.innerHTML = netHtml;
   }
 
   function tick() {
@@ -131,15 +109,6 @@
       set("onlineUsers", d.onlineUsers);
       set("distinctIps", d.distinctIpCount);
       set("dbPing", (Math.round(d.databasePingMs * 10) / 10) + " ms");
-      set("workingSet", bytes(d.processWorkingSetBytes));
-      set("privateBytes", bytes(d.processPrivateBytes));
-      set("managedHeap", bytes(d.managedHeapBytes));
-      set("gen2", d.gen2Collections);
-      set("threads", d.threadCount);
-      set("cpus", d.logicalProcessors);
-      set("cpuSeconds", Math.round(d.processorSeconds));
-      set("uptime", uptime(d.processUptimeSeconds));
-      if (d.availablePhysicalBytes > 0) set("availMem", bytes(d.availablePhysicalBytes));
       renderHistory(d.history);
       var captured = new Date(d.capturedAtUtc + "Z");
       set("capturedAt", captured.toISOString().replace("T", " ").slice(0, 19) + " UTC");

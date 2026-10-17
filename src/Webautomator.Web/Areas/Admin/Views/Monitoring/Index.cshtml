@@ -167,7 +167,7 @@
   </div>
 </section>
 
-@* ---- History: network + disk over the chosen window ---- *@
+@* ---- History: the application's own network traffic over the chosen window ---- *@
 <section class="admin-dash-section">
   <div class="admin-dash-section-head">
     <h2><i class="ti ti-chart-histogram" aria-hidden="true"></i>@L["admin.monitoring.history"]</h2>
@@ -199,20 +199,6 @@
         <div class="admin-mon-chart-col" title="@p.AtUtc.ToString("MM-dd HH:mm") — ↓@Bytes(p.BytesIn) ↑@Bytes(p.BytesOut)">
           <span class="admin-mon-chart-in" style="height:@netInH%"></span>
           <span class="admin-mon-chart-out" style="height:@netOutH%"></span>
-        </div>
-      }
-    </div>
-
-    <div class="admin-mon-legend mt-3">
-      <span class="admin-mon-legend-item is-in">@L["admin.monitoring.read"]</span>
-      <span class="admin-mon-legend-item is-out">@L["admin.monitoring.write"]</span>
-    </div>
-    <div class="admin-mon-chart" data-mon-chart="disk">
-      @foreach (var p in s.History)
-      {
-        <div class="admin-mon-chart-col" title="@p.AtUtc.ToString("MM-dd HH:mm") — R:@Bytes(p.DiskRead) W:@Bytes(p.DiskWrite)">
-          <span class="admin-mon-chart-in" style="height:@Pct(p.DiskRead, maxDisk)%"></span>
-          <span class="admin-mon-chart-out" style="height:@Pct(p.DiskWrite, maxDisk)%"></span>
         </div>
       }
     </div>

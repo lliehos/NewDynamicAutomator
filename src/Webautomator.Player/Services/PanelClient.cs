@@ -475,7 +475,9 @@ public sealed class PanelClient : IDisposable
                     ? i
                     : ReadInt(cell, "Index");
                 var value = ReadString(cell, "cellValue") ?? ReadString(cell, "CellValue") ?? "";
-                cells.Add(new LocalCellWrite(dataSourceId, index, key, value));
+                // This list is the run's starting copy of the source, not a pending write: the value
+                // read here IS the baseline the sync merge compares against later.
+                cells.Add(new LocalCellWrite(dataSourceId, index, key, value, value));
             }
             return cells;
         }
