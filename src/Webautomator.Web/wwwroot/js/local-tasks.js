@@ -270,7 +270,7 @@
   }
 
   /**
-   * Build the `.mrbt` payload for a process.
+   * Build the `.watm` payload for a process.
    *
    * A file is intentionally self-contained: it carries the process's structure and nothing about
    * where that structure came from. The template link is deliberately NOT exported, because a file
@@ -344,8 +344,9 @@
     let fileName;
     try {
       if (window.DaSecureStore) {
-        body = await DaSecureStore.packMrbt(payload);
-        fileName = `${safeFileName(full.title)}.mrbt`;
+        const pack = DaSecureStore.packWatm || DaSecureStore.packMrbt;
+        body = await pack(payload);
+        fileName = `${safeFileName(full.title)}.watm`;
       } else {
         body = JSON.stringify(payload, null, 2);
         fileName = `${safeFileName(full.title)}.json`;
@@ -370,7 +371,8 @@
     let data = raw;
     if (typeof raw === "string") {
       if (window.DaSecureStore) {
-        data = await DaSecureStore.unpackMrbt(raw);
+        const unpack = DaSecureStore.unpackWatm || DaSecureStore.unpackMrbt;
+        data = await unpack(raw);
       } else {
         data = JSON.parse(raw);
       }
@@ -390,6 +392,51 @@
   }
 
   /**
+   * Push an imported graph into the process on the SERVER.
+   *
+   * A server-backed process keeps its structure in the database; the browser only holds a cache of
+   * it. Importing therefore used to write the graph to the local cache alone, and the very next
+   * list refresh — or opening the editor, which always reads the server — replaced it with the old
+   * structure. The import looked successful and changed nothing.
+   *
+   * The same endpoint and the same contract as the editor's save are used, including the base
+   * revision for conflict detection, so an import can never silently overwrite an edit made
+   * elsewhere. `forceSave` is deliberately NOT sent: importing over a run that is in progress has
+   * to stop the run first, and that is the operator's decision, not a side effect of a file drop.
+   */
+  async function pushImportedCanvasToServer(row, graph) {
+    const id = String(row.id).trim();
+    const base = row?.canvasCache?.updatedAtUtc || row?.updatedAtUtc || null;
+    const body = { ...graph };
+    if (base) body.baseUpdatedAtUtc = base;
+    let res;
+    try {
+      res = await fetch(`/api/tasks/${encodeURIComponent(id)}/canvas`, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+    } catch (e) {
+      throw new Error(t("tasks.importOffline") || "ارتباط با سرور برقرار نشد؛ فایل بارگذاری نشد.");
+    }
+    const resBody = await res.json().catch(() => ({}));
+    if (res.status === 409) {
+      if (resBody.code === "playing") {
+        const who = resBody.playerUserName ? ` (${resBody.playerUserName})` : "";
+        throw new Error((t("tasks.importPlaying")
+          || "این فرآیند همین حالا در حال اجراست{who}؛ اول اجرا را متوقف کنید.").replace("{who}", who));
+      }
+      throw new Error(t("tasks.importConflict")
+        || "فرآیند جای دیگری تغییر کرده است؛ صفحه را تازه کنید و دوباره بارگذاری کنید.");
+    }
+    if (!res.ok) {
+      throw new Error(resBody.message || `${t("tasks.importFailed") || "بارگذاری ناموفق بود"} (HTTP ${res.status})`);
+    }
+    return resBody;
+  }
+
+  /**
    * Replace a process's content with an imported file.
    *
    * The import replaces the STRUCTURE wholesale, which means the process stops being a projection
@@ -397,8 +444,13 @@
    * left hanging — keeping `templateId` would claim an attachment the very next cascade would
    * overwrite, undoing the import without telling anyone. Callers must warn the user first when the
    * target is a child; see `confirmImportDetaches`.
+   *
+   * ORDER MATTERS: for a server-backed process the server is written FIRST. Writing the local cache
+   * first made a failed push leave a process that looked imported in this browser and was unchanged
+   * everywhere else, which is the worst of both states. Nothing local is touched until the server
+   * has accepted the file.
    */
-  function applyImportToTask(taskId, imported) {
+  async function applyImportToTask(taskId, imported) {
     const tasks = readTasks();
     const idx = findTaskIndex(tasks, taskId);
     if (idx < 0) throw new Error("فرآیند پیدا نشد.");
@@ -407,6 +459,17 @@
     graph.taskId = current.id;
     graph.title = (imported.title || current.title || "فرآیند").trim() || current.title;
     graph.canModify = true;
+    // Server-side canvas JSON must not carry session/concurrency meta (same rule as the editor).
+    delete graph.baseUpdatedAtUtc;
+    delete graph.updatedAtUtc;
+    delete graph.editorSessionId;
+
+    let savedUpdatedAtUtc = null;
+    if (isServerBackedTaskId(current.id)) {
+      const saved = await pushImportedCanvasToServer(current, graph);
+      savedUpdatedAtUtc = saved?.updatedAtUtc || null;
+    }
+
     const counts = taskCounts({ graph });
     tasks[idx] = {
       ...current,
@@ -416,8 +479,13 @@
       stepCount: counts.steps,
       dataSourceCount: counts.sources,
       sharedUsers: Array.isArray(imported.sharedUsers) ? imported.sharedUsers : (current.sharedUsers || []),
-      graph
+      graph,
+      // The graph just written IS the server's current revision, so the run path can use it without
+      // reading it back — and a later save from this browser conflicts correctly rather than
+      // appearing to lose the import.
+      canvasCache: { graph, updatedAtUtc: savedUpdatedAtUtc || null }
     };
+    if (savedUpdatedAtUtc) tasks[idx].updatedAtUtc = savedUpdatedAtUtc;
     // Detach: the imported graph is this process's own structure now, so any template link would
     // be a claim the next cascade would silently overwrite.
     if (tasks[idx].templateId != null) {
@@ -429,6 +497,8 @@
     }
     writeTasks(tasks);
     render(tasks);
+    // Server mode: re-read the list so the row's counts/revisions are the server's, not our guess.
+    if (isServerBackedTaskId(current.id)) scheduleRender();
     notifyHome(t("tasks.imported", { title: tasks[idx].title }) || `فرآیند «${tasks[idx].title}» از فایل به‌روز شد.`, "success");
   }
 
@@ -617,7 +687,7 @@
         : ""}
       <label class="ds-icon-btn da-import-btn" title="${t("tasks.importMrbt")}" aria-label="${t("tasks.importMrbt")}">
         ${ICO_UP}
-        <input type="file" accept=".mrbt,application/octet-stream,application/json,.json" data-da-import="${tid}" hidden />
+        <input type="file" accept=".watm,.mrbt,application/octet-stream,application/json,.json" data-da-import="${tid}" hidden />
       </label>
       ${task.canShare
         ? iconBtn("", t("tasks.share"), ICO_SHARE, `data-da-share="${tid}"`)
@@ -862,7 +932,7 @@
             ? t("tasks.importDetachConfirm", { name: file.name, template: row.templateTitle || "—" })
             : t("tasks.importConfirm", { name: file.name });
           if (!confirm(lead)) return;
-          applyImportToTask(id, imported);
+          await applyImportToTask(id, imported);
         } catch (e) {
           notifyHome(e.message || "خطا در بارگذاری فایل", "error");
         }

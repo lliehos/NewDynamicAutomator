@@ -269,12 +269,12 @@
     localStorage.setItem(profileKey(u), enc);
   }
 
-  async function packMrbt(payload) {
-    return ensureCrypto().encodeMrbtFile(payload);
+  async function packWatm(payload) {
+    return ensureCrypto().encodeWatmFile(payload);
   }
 
-  async function unpackMrbt(text) {
-    return ensureCrypto().decodeMrbtFile(text);
+  async function unpackWatm(text) {
+    return ensureCrypto().decodeWatmFile(text);
   }
 
   // Auto-bootstrap
@@ -297,7 +297,10 @@
     writeProfile,
     bootstrap,
     whenReady,
-    packMrbt,
-    unpackMrbt
+    packWatm,
+    unpackWatm,
+    // Aliases for callers written before the container was renamed from .mrbt.
+    packMrbt: packWatm,
+    unpackMrbt: unpackWatm
   };
 })(typeof window !== "undefined" ? window : globalThis);

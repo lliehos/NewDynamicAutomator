@@ -1,8 +1,12 @@
 /**
- * Webautomator crypto + .mrbt codec (AES-256-GCM via Web Crypto).
+ * Webautomator crypto + .watm codec (AES-256-GCM via Web Crypto).
  *
  * Tonight: one GLOBAL key for all users (DaCrypto.GLOBAL_KEY_MATERIAL).
- * Changing that material invalidates every stored blob and .mrbt file.
+ * Changing that material invalidates every stored blob and .watm file.
+ *
+ * The file header used to read `MRBT/1`; the container was renamed with the product, so files are
+ * written as `WATM/1`. Files still bearing the old header are accepted on read: renaming a format
+ * must not orphan the exports an operator already has on disk.
  *
  * FUTURE (not implemented — design only):
  * - After a paid plan: server issues UserPlanKey with expiresAt (e.g. 30 days).
@@ -17,11 +21,14 @@
  *   recovery / interchange path — that is the intended dual-wrap model.
  */
 (function (global) {
-  const MAGIC = "MRBT";
+  const MAGIC = "WATM";
+  /** Header of the previous product name. Read-only: legacy files still import. */
+  const LEGACY_MAGIC = "MRBT";
   const VERSION = 1;
   const KEY_KIND_GLOBAL = 0;
   /** Global key for current MVP — replace/rotate only when intentional data reset is OK. */
   const GLOBAL_KEY_MATERIAL = "Webautomator/Suras/GlobalKey/v1/CHANGE-IN-PROD-2026";
+  /** localStorage prefix — NOT renamed: changing it would orphan every local blob in place. */
   const LS_PREFIX = "mrbt1:";
 
   function b64FromBytes(bytes) {
@@ -73,11 +80,11 @@
 
   async function decryptBytes(blob) {
     const data = blob instanceof Uint8Array ? blob : new Uint8Array(blob);
-    if (data.length < 15) throw new Error("MRBT_CORRUPT");
+    if (data.length < 15) throw new Error("WATM_CORRUPT");
     const ver = data[0];
     const kind = data[1];
-    if (ver !== VERSION) throw new Error("MRBT_VERSION");
-    if (kind !== KEY_KIND_GLOBAL) throw new Error("MRBT_KEY_KIND");
+    if (ver !== VERSION) throw new Error("WATM_VERSION");
+    if (kind !== KEY_KIND_GLOBAL) throw new Error("WATM_KEY_KIND");
     const iv = data.slice(2, 14);
     const ct = data.slice(14);
     const key = await getGlobalKey();
@@ -85,7 +92,7 @@
       const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
       return new Uint8Array(plain);
     } catch {
-      throw new Error("MRBT_DECRYPT"); // wrong key / tampered
+      throw new Error("WATM_DECRYPT"); // wrong key / tampered
     }
   }
 
@@ -100,7 +107,7 @@
     const s = String(stored);
     if (!s.startsWith(LS_PREFIX)) {
       // Legacy plaintext JSON — caller may migrate.
-      throw new Error("MRBT_PLAIN");
+      throw new Error("WATM_PLAIN");
     }
     const packed = bytesFromB64(s.slice(LS_PREFIX.length));
     const plain = await decryptBytes(packed);
@@ -111,24 +118,26 @@
     return typeof stored === "string" && stored.startsWith(LS_PREFIX);
   }
 
-  /** Build .mrbt file text (UTF-8). */
-  async function encodeMrbtFile(payloadObj) {
+  /** Build .watm file text (UTF-8). */
+  async function encodeWatmFile(payloadObj) {
     const packed = await encryptBytes(utf8Encode(JSON.stringify(payloadObj)));
     return `${MAGIC}/${VERSION}\n${b64FromBytes(packed)}\n`;
   }
 
-  /** Parse .mrbt file text or legacy JSON string → object. */
-  async function decodeMrbtFile(text) {
+  /** Parse .watm (or legacy .mrbt) file text or legacy JSON string → object. */
+  async function decodeWatmFile(text) {
     const raw = String(text || "").replace(/^\uFEFF/, "").trim();
-    if (!raw) throw new Error("MRBT_EMPTY");
+    if (!raw) throw new Error("WATM_EMPTY");
     if (raw.startsWith("{") || raw.startsWith("[")) {
-      // Legacy JSON import still accepted once, then re-saved as .mrbt.
+      // Legacy JSON import still accepted once, then re-saved as .watm.
       return JSON.parse(raw);
     }
     const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    if (!lines.length || !lines[0].startsWith(`${MAGIC}/`)) throw new Error("MRBT_MAGIC");
-    const ver = Number(lines[0].split("/")[1] || 0);
-    if (ver !== VERSION) throw new Error("MRBT_VERSION");
+    const header = lines[0] || "";
+    const magic = header.split("/")[0];
+    if (magic !== MAGIC && magic !== LEGACY_MAGIC) throw new Error("WATM_MAGIC");
+    const ver = Number(header.split("/")[1] || 0);
+    if (ver !== VERSION) throw new Error("WATM_VERSION");
     const b64 = lines.slice(1).join("");
     const plain = await decryptBytes(bytesFromB64(b64));
     return JSON.parse(utf8Decode(plain));
@@ -136,14 +145,19 @@
 
   global.DaCrypto = {
     MAGIC,
+    LEGACY_MAGIC,
     VERSION,
     LS_PREFIX,
     GLOBAL_KEY_MATERIAL,
     encryptJson,
     decryptJson,
     looksEncrypted,
-    encodeMrbtFile,
-    decodeMrbtFile,
+    encodeWatmFile,
+    decodeWatmFile,
+    // Old names kept as aliases: the extension bundles its own copy of this file and a page can
+    // still be running a cached older caller while the new codec is loaded.
+    encodeMrbtFile: encodeWatmFile,
+    decodeMrbtFile: decodeWatmFile,
     encryptBytes,
     decryptBytes
   };

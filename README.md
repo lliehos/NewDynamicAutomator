@@ -4,7 +4,7 @@
 
 وضعیت و قراردادها: [docs/STATUS.md](docs/STATUS.md)  
 **راهنمای جامع راه‌اندازی (Enterprise / on-prem):** [docs/setup-guide.md](docs/setup-guide.md) — در وب: `/Home/SetupGuide`  
-رمزنگاری محلی و `.mrbt`: [docs/encryption-and-mrbt.md](docs/encryption-and-mrbt.md)
+رمزنگاری محلی و `.watm`: [docs/encryption-and-watm.md](docs/encryption-and-watm.md)
 
 ## اجرا (local-first)
 
@@ -24,7 +24,7 @@ dotnet run --project src/Webautomator.Web --launch-profile https
 src/Webautomator.Web/Areas/Panel   پنل احرازشده
 src/Webautomator.Web/Views/Home    لندینگ عمومی
 wwwroot/locales                        fa.json / en.json
-wwwroot/js/da-crypto.js                AES-GCM + .mrbt
+wwwroot/js/da-crypto.js                AES-GCM + .watm
 wwwroot/js/da-secure-store.js          localStorage رمزشده
 wwwroot/editor/flow.js                 طراح دیاگرام
 extension-global|extension-smart-recorder   افزونه Global + Smart
