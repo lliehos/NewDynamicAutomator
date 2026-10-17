@@ -1881,6 +1881,17 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   // every other run behaving exactly as before.
   await armAlertDialogsIfNeeded(graph, tabId);
 
+  // Where this run is managed, chosen PER RUN by the portal's run-type menu (or the editor, whose
+  // runs are always server runs — the diagram being open is the operator's concurrency guarantee).
+  // Absent field = server run: that keeps every existing caller (editor context menus, FAB restarts
+  // of server runs, condition checks) exactly as it was. No stored per-process switch exists anymore,
+  // so a run can never disagree with a switch about its own mode.
+  //
+  // DECLARED HERE, before the first use below: `lastPlayRequest` records the mode, and a `const`
+  // declared further down would be in its temporal dead zone at that point — reading it threw
+  // "Cannot access 'runOnServer' before initialization" and the run died before any step.
+  const runOnServer = opts?.runOnServer !== false;
+
   const lastPlayRequest = {
     taskId: String(graph.taskId || taskId || ""),
     runMode: runMode === RunMode.Learn ? RunMode.Learn : RunMode.Play,
@@ -1957,12 +1968,6 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   await chrome.storage.local.set({ playing: true, playTabId: tabId, playPaused: false });
   // Every run starts with an empty write log, so a previous run's local writes are never re-synced.
   resetLocalRunWrites();
-  // Where this run is managed, chosen PER RUN by the portal's run-type menu (or the editor, whose
-  // runs are always server runs — the diagram being open is the operator's concurrency guarantee).
-  // Absent field = server run: that keeps every existing caller (editor context menus, FAB restarts
-  // of server runs, condition checks) exactly as it was. No stored per-process switch exists anymore,
-  // so a run can never disagree with a switch about its own mode.
-  const runOnServer = opts?.runOnServer !== false;
   playStatus.runOnServer = runOnServer;
   // The watch runs for a LOCAL run too. A local run registers nothing with the server, but an
   // administrator can still put a stop to it - the stop-all switch, or closing the session itself -
