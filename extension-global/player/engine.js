@@ -5199,18 +5199,33 @@ async function portalFetch(path, opts) {
   }
 }
 
+/**
+ * Register / unregister this run on the portal.
+ *
+ * The credential matters: `RegisterPlay` is `[AllowAnonymous]` so an unauthenticated client can still
+ * report a run, and the dashboard hangs each run on the account that registered it. Sent without a
+ * token, EVERY run from the extension landed on the "unauthenticated" row of the monitoring table —
+ * the operator saw a run count next to an anonymous aggregate while the real account running it
+ * showed none, and "stop this user's runs" could not reach those runs either. `portalAuthHeaders()`
+ * is the same source the abort poll already uses (the portal cookie, then the stored token), and it
+ * yields no header at all when there is no identity, which keeps the anonymous fallback intact.
+ */
 async function registerPlayOnServer(taskId) {
   const userName = (await chrome.storage.local.get("da_local_user").catch(() => ({}))).da_local_user
     || null;
+  const headers = await portalAuthHeaders();
   await portalFetch("/Panel/Tasks/RegisterPlay", {
     method: "POST",
+    headers,
     body: JSON.stringify({ taskId: String(taskId), userName })
   });
 }
 
 async function unregisterPlayOnServer(taskId) {
+  const headers = await portalAuthHeaders();
   await portalFetch("/Panel/Tasks/UnregisterPlay", {
     method: "POST",
+    headers,
     body: JSON.stringify({ taskId: String(taskId) })
   });
 }

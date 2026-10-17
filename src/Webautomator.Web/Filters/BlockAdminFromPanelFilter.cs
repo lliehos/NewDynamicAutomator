@@ -28,6 +28,14 @@ public sealed class BlockAdminFromPanelFilter : IAsyncActionFilter
 
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
+        // Machinery endpoints (the extension's play bookkeeping) are not Panel SURFACES: blocking them
+        // would redirect the owner's run registration to /Admin and leave that run untracked.
+        if (SkipOwnerPanelBlock.AppliesTo(context))
+        {
+            await next();
+            return;
+        }
+
         var user = context.HttpContext.User;
         if (user.Identity?.IsAuthenticated == true && IsOwnerAccount(user))
         {

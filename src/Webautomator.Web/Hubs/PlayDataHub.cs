@@ -3,6 +3,7 @@ using Webautomator.Infrastructure.Services;
 using Webautomator.Web.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using System.Security.Claims;
 
 namespace Webautomator.Web.Hubs;
 
@@ -59,14 +60,22 @@ public class PlayDataHub : Hub
 
         var key = taskId.Trim();
         await Groups.AddToGroupAsync(Context.ConnectionId, TaskGroup(key));
-        _plays.Register(key, userName, null, Context.ConnectionId);
+        // The connection may be authenticated (the panel connects with the access token on the query
+        // string). Registering it as anonymous would put a signed-in user's run on the dashboard's
+        // "unauthenticated" row, where none of the per-user controls can reach it.
+        var uid = int.TryParse(Context.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var parsedUid)
+            && parsedUid > 0
+            ? parsedUid
+            : (int?)null;
+        var identityName = string.IsNullOrWhiteSpace(userName) ? Context.User?.Identity?.Name : userName;
+        _plays.Register(key, identityName, uid, Context.ConnectionId);
         await Clients.Group(TaskGroup(key)).SendAsync("playState", new
         {
             taskId = key,
             playing = true,
-            userName
+            userName = identityName
         });
-        await NotifyCatalog(key, true, userName);
+        await NotifyCatalog(key, true, identityName);
     }
 
     public async Task UnregisterPlay(string taskId)

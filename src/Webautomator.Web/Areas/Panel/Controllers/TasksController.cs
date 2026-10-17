@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Webautomator.Contracts.DataSources;
 using Webautomator.Domain;
 using Webautomator.Infrastructure.Services;
+using Webautomator.Web.Filters;
 using Webautomator.Web.Hubs;
 using Webautomator.Web.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -219,6 +220,7 @@ public class TasksController : Controller
     [HttpPost]
     [AllowAnonymous]
     [IgnoreAntiforgeryToken]
+    [SkipOwnerPanelBlock]
     public async Task<IActionResult> NotifyCellEvent([FromBody] DataSourceCellEventDto? ev, CancellationToken ct)
     {
         if (ev is null || string.IsNullOrWhiteSpace(ev.TaskId) || ev.DataSourceId == 0)
@@ -249,6 +251,7 @@ public class TasksController : Controller
     [HttpPost]
     [AllowAnonymous]
     [IgnoreAntiforgeryToken]
+    [SkipOwnerPanelBlock]
     public async Task<IActionResult> RegisterPlay([FromBody] PlayRegisterDto? body, CancellationToken ct)
     {
         var taskId = (body?.TaskId ?? "").Trim();
@@ -284,6 +287,7 @@ public class TasksController : Controller
     [HttpPost]
     [AllowAnonymous]
     [IgnoreAntiforgeryToken]
+    [SkipOwnerPanelBlock]
     public async Task<IActionResult> UnregisterPlay([FromBody] PlayRegisterDto? body, CancellationToken ct)
     {
         var taskId = (body?.TaskId ?? "").Trim();
@@ -300,6 +304,7 @@ public class TasksController : Controller
 
     [HttpGet]
     [AllowAnonymous]
+    [SkipOwnerPanelBlock]
     public async Task<IActionResult> PlayAbort(string taskId, CancellationToken ct)
     {
         taskId = (taskId ?? "").Trim();
