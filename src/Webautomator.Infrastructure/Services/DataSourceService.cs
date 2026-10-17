@@ -33,6 +33,32 @@ public class DataSourceService
         _log = log;
     }
 
+    /// <summary>
+    /// Whether a failure is the kind the retry strategy exists to absorb.
+    /// </summary>
+    /// <remarks>
+    /// The transactional methods below catch failures to return a friendly response, which would
+    /// also swallow the transient ones and defeat <c>EnableRetryOnFailure</c>. Those are rethrown
+    /// instead: a dropped connection, a database that is still waking up, or a network timeout is
+    /// retried as a whole unit. Everything else is a real answer and is reported where it happened.
+    /// </remarks>
+    static bool IsTransientDbError(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is TimeoutException) return true;
+            if (e is Microsoft.Data.SqlClient.SqlException sql)
+            {
+                // -2 timeout; 20/64/233 connection dropped; 10053/10054/10060 transport;
+                // 40197/40501/40613/49918/49919/49920 Azure SQL throttling / paused / unavailable.
+                if (sql.Number is -2 or 20 or 64 or 233 or 10053 or 10054 or 10060
+                    or 40197 or 40501 or 40613 or 49918 or 49919 or 49920)
+                    return true;
+            }
+        }
+        return false;
+    }
+
     public Task<List<int>> GetLinkedProcessIdsAsync(int dataSourceId, CancellationToken ct = default)
         => _db.ProcessDataSources.AsNoTracking()
             .Where(l => l.DataSourceId == dataSourceId)
@@ -580,162 +606,193 @@ public class DataSourceService
             };
         }
 
-        var d = await GetAccessibleAsync(userId, id, write: true, ct);
-        if (d is null)
+        // A transient failure has to be retried as one UNIT — the access check, the entitlement
+        // check, the row lock and the write. `EnableRetryOnFailure`'s strategy only retries code
+        // that runs through it, and a user-initiated transaction otherwise throws: EF cannot retry
+        // half of a transaction.
+        var strategy = _db.Database.CreateExecutionStrategy();
+        PatchDataSourceCellResponse? committed = null;
+        var response = await strategy.ExecuteAsync(async () =>
         {
-            return new PatchDataSourceCellResponse { Ok = false, Message = "forbidden" };
-        }
+            // A retry starts from a clean slate: the previous attempt's tracked changes were rolled
+            // back with its transaction and must not be replayed on top of the next attempt.
+            _db.ChangeTracker.Clear();
 
-        var value = req.CellValue ?? "";
-        var expectedRev = req.ExpectedCellRevision;
-        var insertMode = NormalizeInsertMode(req.InsertMode);
-
-        // A cell write that lands on a NEW row is exactly how "insert into the source" grows the
-        // table, so the row/byte ceiling has to be checked here too — otherwise the action could
-        // add rows one cell at a time past the cap the create/reload/add-rows paths enforce.
-        var (_, currentRows) = await GetDerivedCountersAsync(id, ct);
-        currentRows = Math.Max(currentRows, d.RowCount);
-        if (req.RowIndex >= currentRows)
-        {
-            // Whoever owns the source carries its ceiling. For a public source that is the creator
-            // (the ProcessManager who shared it), not the writer: charging a user's small plan for
-            // growing a team source would make the shared source unusable the moment anyone used it.
-            var entitlements = await ResolveEntitlements(d.OwnerUserId == userId ? userId : d.OwnerUserId, ct);
-            var projectedRows = req.RowIndex + 1;
-            var storedBytes = await _db.DataSourceCells.AsNoTracking()
-                .Where(c => c.DataSourceId == id)
-                .SumAsync(c => (long?)c.CellValue.Length) ?? 0L;
-            // Values are stored as text; measuring the UTF-8 size is what the ceiling is stated in.
-            var projectedBytes = storedBytes + Encoding.UTF8.GetByteCount(value);
-            var error = EntitlementService.CheckSourceLimits(entitlements, projectedRows, projectedBytes);
-            if (error is not null)
+            var d = await GetAccessibleAsync(userId, id, write: true, ct);
+            if (d is null)
             {
-                return new PatchDataSourceCellResponse
-                {
-                    Ok = false,
-                    Code = SourceLimitExceededException.Code,
-                    Message = error,
-                    DataRevision = d.DataRevision
-                };
-            }
-        }
-
-        // One shot, no server-side retry loop: the caller (player/editor) owns retry policy.
-        // Retrying here while holding a transaction would keep a row lock alive and make
-        // concurrent writers on *different* cells of the same source queue up.
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-        try
-        {
-            var ds = await _db.DataSources.FirstOrDefaultAsync(x => x.Id == id, ct);
-            if (ds is null)
-            {
-                await tx.RollbackAsync(ct);
                 return new PatchDataSourceCellResponse { Ok = false, Message = "forbidden" };
             }
 
-            var locked = await _db.DataSourceCells
-                .FromSqlInterpolated(
-                    $"SELECT * FROM DataSourceCells WITH (UPDLOCK, ROWLOCK) WHERE DataSourceId = {id} AND RowIndex = {req.RowIndex} AND ColumnKey = {key}")
-                .AsTracking()
-                .FirstOrDefaultAsync(ct);
+            var value = req.CellValue ?? "";
+            var expectedRev = req.ExpectedCellRevision;
+            var insertMode = NormalizeInsertMode(req.InsertMode);
 
-            if (locked is not null
-                && expectedRev is long exp
-                && locked.CellRevision != exp)
+            // A cell write that lands on a NEW row is exactly how "insert into the source" grows the
+            // table, so the row/byte ceiling has to be checked here too — otherwise the action could
+            // add rows one cell at a time past the cap the create/reload/add-rows paths enforce.
+            var (_, currentRows) = await GetDerivedCountersAsync(id, ct);
+            currentRows = Math.Max(currentRows, d.RowCount);
+            if (req.RowIndex >= currentRows)
             {
-                await tx.RollbackAsync(ct);
-                var conflictingEditor = await ResolveEditorNameAsync(locked.LastEditorUserId, ct);
-                return new PatchDataSourceCellResponse
+                // Whoever owns the source carries its ceiling. For a public source that is the creator
+                // (the ProcessManager who shared it), not the writer: charging a user's small plan for
+                // growing a team source would make the shared source unusable the moment anyone used it.
+                var entitlements = await ResolveEntitlements(d.OwnerUserId == userId ? userId : d.OwnerUserId, ct);
+                var projectedRows = req.RowIndex + 1;
+                var storedBytes = await _db.DataSourceCells.AsNoTracking()
+                    .Where(c => c.DataSourceId == id)
+                    .SumAsync(c => (long?)c.CellValue.Length) ?? 0L;
+                // Values are stored as text; measuring the UTF-8 size is what the ceiling is stated in.
+                var projectedBytes = storedBytes + Encoding.UTF8.GetByteCount(value);
+                var error = EntitlementService.CheckSourceLimits(entitlements, projectedRows, projectedBytes);
+                if (error is not null)
                 {
-                    Ok = false,
-                    Conflict = true,
-                    Message = "سلول توسط کاربر دیگری تغییر کرده است.",
-                    DataRevision = ds.DataRevision,
-                    CurrentDataRevision = ds.DataRevision,
-                    CurrentCellRevision = locked.CellRevision,
-                    CurrentCellValue = locked.CellValue,
-                    CurrentCellUserId = locked.LastEditorUserId,
-                    CurrentCellUserName = conflictingEditor,
-                    CurrentCellUpdatedAtUtc = locked.UpdatedAtUtc
-                };
+                    return new PatchDataSourceCellResponse
+                    {
+                        Ok = false,
+                        Code = SourceLimitExceededException.Code,
+                        Message = error,
+                        DataRevision = d.DataRevision
+                    };
+                }
             }
 
-            // Prepend/Append compose the incoming value with the one already in the cell — inside the
-            // same row lock the write takes. Reading it outside the transaction would let two writers
-            // both start from the same old value and lose one another's addition.
-            if (insertMode != InsertModeReplace)
-                value = ComposeInsertValue(locked?.CellValue, value, insertMode, req.InsertSeparator);
-
-            if (locked is null)
+            // One attempt, one transaction: the strategy re-enters this whole lambda on a transient
+            // failure, and never while the previous attempt's lock is still held (its transaction is
+            // disposed first). The caller (player/editor) still owns its own retry policy for
+            // application-level conflicts.
+            await using var tx = await _db.Database.BeginTransactionAsync(ct);
+            try
             {
-                // A concurrent writer may have inserted the same cell between our lock attempt and now.
-                var exists = await _db.DataSourceCells.AsNoTracking()
-                    .AnyAsync(c => c.DataSourceId == id && c.RowIndex == req.RowIndex && c.ColumnKey == key, ct);
-                if (exists)
+                var ds = await _db.DataSources.FirstOrDefaultAsync(x => x.Id == id, ct);
+                if (ds is null)
                 {
                     await tx.RollbackAsync(ct);
+                    return new PatchDataSourceCellResponse { Ok = false, Message = "forbidden" };
+                }
+
+                var locked = await _db.DataSourceCells
+                    .FromSqlInterpolated(
+                        $"SELECT * FROM DataSourceCells WITH (UPDLOCK, ROWLOCK) WHERE DataSourceId = {id} AND RowIndex = {req.RowIndex} AND ColumnKey = {key}")
+                    .AsTracking()
+                    .FirstOrDefaultAsync(ct);
+
+                if (locked is not null
+                    && expectedRev is long exp
+                    && locked.CellRevision != exp)
+                {
+                    await tx.RollbackAsync(ct);
+                    var conflictingEditor = await ResolveEditorNameAsync(locked.LastEditorUserId, ct);
                     return new PatchDataSourceCellResponse
                     {
                         Ok = false,
                         Conflict = true,
-                        Message = "سلول همزمان توسط نویسنده دیگری ایجاد شد."
+                        Message = "سلول توسط کاربر دیگری تغییر کرده است.",
+                        DataRevision = ds.DataRevision,
+                        CurrentDataRevision = ds.DataRevision,
+                        CurrentCellRevision = locked.CellRevision,
+                        CurrentCellValue = locked.CellValue,
+                        CurrentCellUserId = locked.LastEditorUserId,
+                        CurrentCellUserName = conflictingEditor,
+                        CurrentCellUpdatedAtUtc = locked.UpdatedAtUtc
                     };
                 }
 
-                locked = new DataSourceCell
+                // Prepend/Append compose the incoming value with the one already in the cell — inside the
+                // same row lock the write takes. Reading it outside the transaction would let two writers
+                // both start from the same old value and lose one another's addition.
+                if (insertMode != InsertModeReplace)
+                    value = ComposeInsertValue(locked?.CellValue, value, insertMode, req.InsertSeparator);
+
+                if (locked is null)
                 {
-                    DataSourceId = id,
-                    RowIndex = req.RowIndex,
-                    ColumnKey = key,
+                    // A concurrent writer may have inserted the same cell between our lock attempt and now.
+                    var exists = await _db.DataSourceCells.AsNoTracking()
+                        .AnyAsync(c => c.DataSourceId == id && c.RowIndex == req.RowIndex && c.ColumnKey == key, ct);
+                    if (exists)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return new PatchDataSourceCellResponse
+                        {
+                            Ok = false,
+                            Conflict = true,
+                            Message = "سلول همزمان توسط نویسنده دیگری ایجاد شد."
+                        };
+                    }
+
+                    locked = new DataSourceCell
+                    {
+                        DataSourceId = id,
+                        RowIndex = req.RowIndex,
+                        ColumnKey = key,
+                        CellValue = value,
+                        CellRevision = 1,
+                        LastEditorUserId = userId > 0 ? userId : null,
+                        UpdatedAtUtc = DateTime.UtcNow
+                    };
+                    _db.DataSourceCells.Add(locked);
+                }
+                else
+                {
+                    locked.CellValue = value;
+                    locked.CellRevision++;
+                    // Provenance travels with the value: the tooltip must name whoever wrote the number
+                    // the user is looking at, not the source's owner.
+                    locked.LastEditorUserId = userId > 0 ? userId : null;
+                    locked.UpdatedAtUtc = DateTime.UtcNow;
+                }
+
+                // Do NOT touch the DataSources row on the hot path: writing DataRevision/RowCount/
+                // UpdatedAtUtc here would take a second lock on the parent row and serialise every
+                // writer of this source, even when they edit entirely different cells.
+                // DataRevision is derived from MAX(CellRevision) and RowCount from MAX(RowIndex).
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+
+                // Captured here, but the metadata reads happen AFTER the strategy returns: a transient
+                // failure on those reads must never re-run the write (Append would duplicate text).
+                committed = new PatchDataSourceCellResponse
+                {
+                    Ok = true,
+                    CellRevision = locked.CellRevision,
                     CellValue = value,
-                    CellRevision = 1,
-                    LastEditorUserId = userId > 0 ? userId : null,
-                    UpdatedAtUtc = DateTime.UtcNow
+                    LastEditorUserId = locked.LastEditorUserId,
+                    UpdatedAtUtc = locked.UpdatedAtUtc
                 };
-                _db.DataSourceCells.Add(locked);
+                return committed;
             }
-            else
+            catch (Exception ex) when (!IsTransientDbError(ex))
             {
-                locked.CellValue = value;
-                locked.CellRevision++;
-                // Provenance travels with the value: the tooltip must name whoever wrote the number
-                // the user is looking at, not the source's owner.
-                locked.LastEditorUserId = userId > 0 ? userId : null;
-                locked.UpdatedAtUtc = DateTime.UtcNow;
+                try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+                _log.LogDebug(ex, "PatchCell failed ds={Ds} r={Row} c={Col}", id, req.RowIndex, key);
+                return new PatchDataSourceCellResponse
+                {
+                    Ok = false,
+                    Message = "نوشتن سلول انجام نشد — دوباره تلاش کنید."
+                };
             }
+        });
 
-            // Do NOT touch the DataSources row on the hot path: writing DataRevision/RowCount/
-            // UpdatedAtUtc here would take a second lock on the parent row and serialise every
-            // writer of this source, even when they edit entirely different cells.
-            // DataRevision is derived from MAX(CellRevision) and RowCount from MAX(RowIndex).
-            await _db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-
-            // Parent row is untouched on purpose, so report the derived source revision.
-            var (derivedRevision, _) = await GetDerivedCountersAsync(id, ct);
-            var editorName = await ResolveEditorNameAsync(locked.LastEditorUserId, ct);
-
-            return new PatchDataSourceCellResponse
-            {
-                Ok = true,
-                DataRevision = Math.Max(derivedRevision, locked.CellRevision),
-                CellRevision = locked.CellRevision,
-                CellValue = value,
-                LastEditorUserId = locked.LastEditorUserId,
-                LastEditorUserName = editorName,
-                UpdatedAtUtc = locked.UpdatedAtUtc
-            };
-        }
-        catch (Exception ex)
+        if (response.Ok && committed is not null)
         {
-            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
-            _log.LogDebug(ex, "PatchCell failed ds={Ds} r={Row} c={Col}", id, req.RowIndex, key);
-            return new PatchDataSourceCellResponse
+            try
             {
-                Ok = false,
-                Message = "نوشتن سلول انجام نشد — دوباره تلاش کنید."
-            };
+                // Parent row is untouched on purpose, so report the derived source revision.
+                var (derivedRevision, _) = await GetDerivedCountersAsync(id, ct);
+                var editorName = await ResolveEditorNameAsync(committed.LastEditorUserId, ct);
+                response.DataRevision = Math.Max(derivedRevision, committed.CellRevision);
+                response.LastEditorUserName = editorName;
+            }
+            catch (Exception ex)
+            {
+                // The write is already committed; losing the tooltip metadata must not turn a
+                // successful save into an error.
+                _log.LogDebug(ex, "PatchCell metadata read failed ds={Ds}", id);
+                response.DataRevision = committed.CellRevision;
+            }
         }
+        return response;
     }
 
     /// <summary>Derived counters — avoids writing the parent row on every cell write.</summary>
@@ -1696,72 +1753,85 @@ public class DataSourceService
     public async Task<DataSourceStructureResponse> DeleteRowAsync(
         int userId, int id, int rowIndex, CancellationToken ct = default)
     {
-        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
-        if (entity is null)
-            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
-
-        var columns = DeserializeColumns(entity.ColumnsJson);
-        var (_, rowCount) = await GetDerivedCountersAsync(id, ct);
-        rowCount = Math.Max(rowCount, entity.RowCount);
-        if (rowIndex < 0 || rowIndex >= rowCount)
+        // The row shift has to be retried as one unit: a transient failure that happens halfway
+        // through leaves a rolled-back transaction, so re-running the whole block is correct,
+        // whereas re-running half of it would decrement twice.
+        var strategy = _db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
-            return new DataSourceStructureResponse
+            _db.ChangeTracker.Clear();
+
+            var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+            if (entity is null)
+                return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
+
+            var columns = DeserializeColumns(entity.ColumnsJson);
+            var (_, rowCount) = await GetDerivedCountersAsync(id, ct);
+            rowCount = Math.Max(rowCount, entity.RowCount);
+            if (rowIndex < 0 || rowIndex >= rowCount)
             {
-                Ok = false,
-                Code = "row-not-found",
-                DataSourceId = id,
-                Message = $"ردیف {rowIndex} در این منبع وجود ندارد (تعداد ردیف‌ها: {rowCount})."
-            };
-        }
+                return new DataSourceStructureResponse
+                {
+                    Ok = false,
+                    Code = "row-not-found",
+                    DataSourceId = id,
+                    Message = $"ردیف {rowIndex} در این منبع وجود ندارد (تعداد ردیف‌ها: {rowCount})."
+                };
+            }
 
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-        try
-        {
-            var toRemove = await _db.DataSourceCells
-                .Where(c => c.DataSourceId == id && c.RowIndex == rowIndex)
-                .ToListAsync(ct);
-            if (toRemove.Count > 0) _db.DataSourceCells.RemoveRange(toRemove);
-
-            // Shift the rows after it up by one, from the gap upward so no two rows collide on the
-            // (DataSourceId, RowIndex, ColumnKey) key.
-            var after = await _db.DataSourceCells
-                .Where(c => c.DataSourceId == id && c.RowIndex > rowIndex)
-                .OrderBy(c => c.RowIndex)
-                .ToListAsync(ct);
-            foreach (var cell in after) cell.RowIndex -= 1;
-
-            var newRowCount = rowCount - 1;
-            entity.RowCount = newRowCount;
-            entity.DataRevision += 1;
-            entity.UpdatedAtUtc = DateTime.UtcNow;
-            StampDataEditor(entity, userId);
-            await _db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-
-            await RefreshLinkedProcessSnapshotsAsync(entity, ct);
-            return new DataSourceStructureResponse
+            await using var tx = await _db.Database.BeginTransactionAsync(ct);
+            try
             {
-                Ok = true,
-                DataSourceId = entity.Id,
-                Columns = columns,
-                ColumnKeys = columns.Select(c => c.Key).ToList(),
-                ColumnCount = columns.Count,
-                RowCount = newRowCount,
-                DataRevision = entity.DataRevision
-            };
-        }
-        catch (Exception ex)
-        {
-            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
-            _log.LogWarning(ex, "Delete row {Row} from source {Ds} failed", rowIndex, id);
-            return new DataSourceStructureResponse
+                var toRemove = await _db.DataSourceCells
+                    .Where(c => c.DataSourceId == id && c.RowIndex == rowIndex)
+                    .ToListAsync(ct);
+                if (toRemove.Count > 0) _db.DataSourceCells.RemoveRange(toRemove);
+
+                // Shift the rows after it up by one, from the gap upward so no two rows collide on the
+                // (DataSourceId, RowIndex, ColumnKey) key.
+                var after = await _db.DataSourceCells
+                    .Where(c => c.DataSourceId == id && c.RowIndex > rowIndex)
+                    .OrderBy(c => c.RowIndex)
+                    .ToListAsync(ct);
+                foreach (var cell in after) cell.RowIndex -= 1;
+
+                var newRowCount = rowCount - 1;
+                entity.RowCount = newRowCount;
+                entity.DataRevision += 1;
+                entity.UpdatedAtUtc = DateTime.UtcNow;
+                StampDataEditor(entity, userId);
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+
+                // The commit is the point of no return: a transient failure while re-stamping linked
+                // graphs must not make the strategy run the row shift a second time.
+                try { await RefreshLinkedProcessSnapshotsAsync(entity, ct); }
+                catch (Exception ex) { _log.LogWarning(ex, "Refresh linked snapshots for source {Ds} failed", id); }
+
+                return new DataSourceStructureResponse
+                {
+                    Ok = true,
+                    DataSourceId = entity.Id,
+                    Columns = columns,
+                    ColumnKeys = columns.Select(c => c.Key).ToList(),
+                    ColumnCount = columns.Count,
+                    RowCount = newRowCount,
+                    DataRevision = entity.DataRevision
+                };
+            }
+            catch (Exception ex) when (!IsTransientDbError(ex))
             {
-                Ok = false,
-                Code = "error",
-                DataSourceId = id,
-                Message = "حذف ردیف انجام نشد — دوباره تلاش کنید."
-            };
-        }
+                try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+                _log.LogWarning(ex, "Delete row {Row} from source {Ds} failed", rowIndex, id);
+                return new DataSourceStructureResponse
+                {
+                    Ok = false,
+                    Code = "error",
+                    DataSourceId = id,
+                    Message = "حذف ردیف انجام نشد — دوباره تلاش کنید."
+                };
+            }
+        });
     }
 
     /// <summary>
@@ -1775,52 +1845,62 @@ public class DataSourceService
     public async Task<DataSourceStructureResponse> ClearRowsAsync(
         int userId, int id, CancellationToken ct = default)
     {
-        var entity = await GetAccessibleAsync(userId, id, write: true, ct);
-        if (entity is null)
-            return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
-
-        var columns = DeserializeColumns(entity.ColumnsJson);
-
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-        try
+        // Same rule as the other structural writes: the clear + SaveChanges is one retriable unit,
+        // and the post-commit graph refresh is best-effort so a transient there cannot re-run it.
+        var strategy = _db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
-            var cells = await _db.DataSourceCells
-                .Where(c => c.DataSourceId == id)
-                .ToListAsync(ct);
-            if (cells.Count > 0) _db.DataSourceCells.RemoveRange(cells);
+            _db.ChangeTracker.Clear();
 
-            entity.RowCount = 0;
-            entity.CellsJson = "[]";
-            if (cells.Count > 0) entity.DataRevision += 1;
-            entity.UpdatedAtUtc = DateTime.UtcNow;
-            StampDataEditor(entity, userId);
-            await _db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
+            var entity = await GetAccessibleAsync(userId, id, write: true, ct);
+            if (entity is null)
+                return new DataSourceStructureResponse { Ok = false, Code = "forbidden", Message = "دسترسی به این منبع ندارید." };
 
-            await RefreshLinkedProcessSnapshotsAsync(entity, ct);
-            return new DataSourceStructureResponse
+            var columns = DeserializeColumns(entity.ColumnsJson);
+
+            await using var tx = await _db.Database.BeginTransactionAsync(ct);
+            try
             {
-                Ok = true,
-                DataSourceId = entity.Id,
-                Columns = columns,
-                ColumnKeys = columns.Select(c => c.Key).ToList(),
-                ColumnCount = columns.Count,
-                RowCount = 0,
-                DataRevision = entity.DataRevision
-            };
-        }
-        catch (Exception ex)
-        {
-            try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
-            _log.LogWarning(ex, "Clear rows of source {Ds} failed", id);
-            return new DataSourceStructureResponse
+                var cells = await _db.DataSourceCells
+                    .Where(c => c.DataSourceId == id)
+                    .ToListAsync(ct);
+                if (cells.Count > 0) _db.DataSourceCells.RemoveRange(cells);
+
+                entity.RowCount = 0;
+                entity.CellsJson = "[]";
+                if (cells.Count > 0) entity.DataRevision += 1;
+                entity.UpdatedAtUtc = DateTime.UtcNow;
+                StampDataEditor(entity, userId);
+                await _db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+
+                try { await RefreshLinkedProcessSnapshotsAsync(entity, ct); }
+                catch (Exception ex) { _log.LogWarning(ex, "Refresh linked snapshots for source {Ds} failed", id); }
+
+                return new DataSourceStructureResponse
+                {
+                    Ok = true,
+                    DataSourceId = entity.Id,
+                    Columns = columns,
+                    ColumnKeys = columns.Select(c => c.Key).ToList(),
+                    ColumnCount = columns.Count,
+                    RowCount = 0,
+                    DataRevision = entity.DataRevision
+                };
+            }
+            catch (Exception ex) when (!IsTransientDbError(ex))
             {
-                Ok = false,
-                Code = "error",
-                DataSourceId = id,
-                Message = "پاک‌سازی داده انجام نشد — دوباره تلاش کنید."
-            };
-        }
+                try { await tx.RollbackAsync(ct); } catch { /* ignore */ }
+                _log.LogWarning(ex, "Clear rows of source {Ds} failed", id);
+                return new DataSourceStructureResponse
+                {
+                    Ok = false,
+                    Code = "error",
+                    DataSourceId = id,
+                    Message = "پاک‌سازی داده انجام نشد — دوباره تلاش کنید."
+                };
+            }
+        });
     }
 
     /// <summary>Re-stamp every linked process graph with this source's current shape.</summary>

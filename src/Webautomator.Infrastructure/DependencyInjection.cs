@@ -25,7 +25,32 @@ public static class DependencyInjection
         var cs = config.GetConnectionString("Default")
                  ?? throw new InvalidOperationException("Connection string 'Default' is missing.");
 
-        services.AddDbContext<AppDbContext>(o => o.UseSqlServer(cs));
+        // Resilience, without overriding the operator's own choices.
+        //
+        // A published deployment commonly fails the FIRST request after a quiet period and works on
+        // refresh: either the network dropped the pooled connection while it sat idle, or the
+        // database was suspended/auto-paused and the connect attempt hit it before it woke up. The
+        // app talks to the database on every page — the landing page included (licence and
+        // SystemSettings) — so the first page load is exactly where that failure shows up.
+        //
+        // Idle Connection Resiliency (Connect Retry*) re-opens a pooled connection the network
+        // silently killed; the longer connect timeout gives a waking database room to answer.
+        // Values already present in the connection string win, so an operator who tuned them keeps
+        // their tuning.
+        var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(cs);
+        if (!builder.ContainsKey("Connect Retry Count")) builder.ConnectRetryCount = 3;
+        if (!builder.ContainsKey("Connect Retry Interval")) builder.ConnectRetryInterval = 2;
+        if (!builder.ContainsKey("Connect Timeout")) builder.ConnectTimeout = 30;
+
+        // SaveChanges and queries are executed through this strategy: a transient SQL error is
+        // retried instead of surfacing as "database error" on the first click. Code that opens its
+        // own transaction MUST run through `Database.CreateExecutionStrategy()` — see
+        // DataSourceService's cell/structure writes.
+        services.AddDbContext<AppDbContext>(o => o.UseSqlServer(builder.ConnectionString, sql =>
+            sql.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(15),
+                errorNumbersToAdd: null)));
         services.Configure<WebautomatorOptions>(config.GetSection(WebautomatorOptions.SectionName));
         services.Configure<OfflineUpdateOptions>(config.GetSection(OfflineUpdateOptions.SectionName));
         services.AddHttpClient();
