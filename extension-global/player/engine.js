@@ -47,13 +47,45 @@ function dynUsesLoopIndex(node, dynFlag) {
  */
 function dynIndexText(node, graph, valueKey, dynFlag, fallbackRow) {
   const keys = dynIndexKeys(valueKey);
+  const pointer = String(node?.[keys.type] || "CurrentLoop");
+  // «شمارهٔ ثابت» is a literal the author typed for this selector, not a row lookup. It goes into
+  // the selector exactly as entered — and is deliberately NOT clamped to a source's row count,
+  // which used to turn a page index of 10 into 2 on a three-row source.
+  if (pointer === "SpecificRow") {
+    const fixed = Number(node?.[keys.value]);
+    if (Number.isFinite(fixed)) return String(fixed);
+    // No usable literal: fall through so a damaged node still resolves something.
+  }
+  // "TotalLoop" is the run ORDINAL (1, 2, 3 …): the walker already threads it 1-based (`li + 1`),
+  // so it is the one pointer that must NOT be shifted again. Every other pointer names a 0-based
+  // row/index, which the selector needs in 1-based CSS form (`:nth-child`).
+  if (pointer === "TotalLoop") {
+    const ordinal = node?._rowScope?.loopIndex;
+    // `ordinal != null` guards the Number(null) === 0 trap: a missing scope must fall through to
+    // the row fallback, not build `:nth-child(0)`.
+    if (ordinal != null && Number.isFinite(Number(ordinal))) return String(Number(ordinal));
+  }
+  // "CombinedLoop" is the nested-run counter: process iteration × each enclosing group's total,
+  // plus each group's own iteration ordinal. This is what a page list needs when every process
+  // pass consumes the NEXT block of page items (1..P×N instead of restarting at 1).
+  if (pointer === "CombinedLoop") {
+    const base = node?._rowScope?.combinedIndex;
+    if (base != null && Number.isFinite(Number(base))) return String(Number(base) + 1);
+    // No walk scope (should not happen once the walker is involved): fall through to the row.
+  }
   const raw = resolveRowPointer(node, graph, node?._rowScope || {}, { type: keys.type, specific: keys.value });
   // `raw != null` is not redundant: Number(null) is 0, and a resolver that cannot answer returns
   // null — reading that as index 0 would silently build the selector for the wrong row.
-  if (raw != null && Number.isFinite(Number(raw))) return String(Number(raw));
-  // A resolver reached from a path that does not walk through the action runner has no scope on the
-  // node; the row it was handed is then the closest thing to "the current loop index".
-  return Number.isFinite(Number(fallbackRow)) ? String(Number(fallbackRow)) : "";
+  const resolved = (raw != null && Number.isFinite(Number(raw)))
+    ? Number(raw)
+    // A resolver reached from a path that does not walk through the action runner has no scope on
+    // the node; the row it was handed is then the closest thing to "the current loop index".
+    : (Number.isFinite(Number(fallbackRow)) ? Number(fallbackRow) : null);
+  if (resolved == null) return "";
+  // Every loop and row index inside the engine is 0-based, but the selector is the one place that
+  // number becomes something CSS reads — and `:nth-child()` / `:nth-of-type()` count from 1. The
+  // model stays 0-based; only the substituted text is shifted, so the first item is `1`.
+  return String(resolved + 1);
 }
 /**
  * The action spec table lives in `action-specs.js`, which BOTH this file and the editor page load.
@@ -2056,10 +2088,22 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
             // A single-condition check honours the node's own row pointer too; there is no group
             // stack here, so the loop row doubles as the parent/process row. Its selector may pin
             // a row of its own as well.
-            const scopedCtx = { groupRow: rowIndex, parentRow: rowIndex, processRow: rowIndex, loopIndex: li };
+            const scopedCtx = {
+              groupRow: rowIndex,
+              parentRow: rowIndex,
+              processRow: rowIndex,
+              loopIndex: li + 1,
+              combinedIndex: li
+            };
             const scopedCondRow = resolveRowPointer(step, graph, scopedCtx) ?? rowIndex;
-            const scopedSelRow = resolveRowPointer(step, graph, { ...scopedCtx, groupRow: scopedCondRow }, SELECTOR_ROW_KEYS);
-            const scopedCondNode = scopedSelRow != null ? { ...step, _selectorRow: scopedSelRow } : step;
+            const scopedSelRow = resolveRowPointer(step, graph, scopedCtx, SELECTOR_ROW_KEYS);
+            // Same scope the walker gives a condition: its loop-index selector must be able to name
+            // the parent/process/overall loop even in a single-condition test.
+            const scopedCondNode = {
+              ...step,
+              ...(scopedSelRow != null ? { _selectorRow: scopedSelRow } : {}),
+              _rowScope: scopedCtx
+            };
             pass = await Promise.race([
               evaluateCondition(activeTabId, scopedCondNode, graph, scopedCondRow),
               sleep(evalMs).then(() => {
@@ -2102,7 +2146,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
           });
         } else if (isActionNode(step)) {
           appendPlayLog("info", `اجرای تک‌اقدام «${step.title || step.actionType || step.id}» (بدون ادامهٔ دیاگرام)`);
-          const outcome = await runOneAction(activeTabId, graph, { ...step, _processRow: rowIndex }, rowIndex, li + 1, iters.total, 1, 1);
+          const outcome = await runOneAction(activeTabId, graph, { ...step, _processRow: rowIndex, _ordinalBase: li }, rowIndex, li + 1, iters.total, 1, 1);
           if (outcome.tabId) activeTabId = outcome.tabId;
           if (!outcome.ok) {
             const decision = handleStepFailureForLoop(graph, outcome.error, {
@@ -2339,6 +2383,9 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     // re-binds `row` for the level below, but the process row never changes — that is what lets a
     // row pointer set to "ProcessLoop" name the outer row from any nesting depth.
     outerRow: Number.isFinite(Number(opts && opts._processRow)) ? Number(opts._processRow) : rowIndex,
+    // 0-based position of this process iteration in the whole run. "Combined index" multiplies
+    // into it (p × N1 + i1) × N2 + i2 …, so it must stay a plain ordinal, never a row value.
+    ordinalBase: Number.isFinite(Number(loopIndex)) ? Math.max(0, Number(loopIndex) - 1) : 0,
     insideGroupId: (opts && opts._insideGroupId) || null,
     // Remaining group iterations at this level: [] means this is a plain (non-group) level.
     pendingGroupRows: null,
@@ -2398,6 +2445,9 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         row: effectiveRow,
         // The process row travels down UNCHANGED through every nesting level.
         outerRow: frame.outerRow,
+        // Combined index base for this level: parent base × this group's total + the iteration's
+        // ORDINAL (gi), not its row value — a group repeating rows 5..7 must still count 1,2,3.
+        ordinalBase: frame.ordinalBase * Math.max(1, Number(frame.pendingGroupTotal) || 1) + gi,
         insideGroupId: frame.groupNodeId,
         pendingGroupRows: null,
         pendingGroupIndex: 0,
@@ -2466,7 +2516,13 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       // the outer group's row from inside a nested group. Same marker trick as _processRow.
       const parentRowForNode = stack.length >= 2 ? stack[stack.length - 2].row : frame.row;
       const outcome = await runOneAction(
-        activeTabId, graph, { ...node, _processRow: processRow, _parentRow: parentRowForNode },
+        activeTabId, graph, {
+          ...node,
+          _processRow: processRow,
+          _parentRow: parentRowForNode,
+          // 0-based combined position (process × groups) for the selector's "combined" mode.
+          _ordinalBase: Number.isFinite(Number(frame.ordinalBase)) ? Number(frame.ordinalBase) : null
+        },
         frame.row, loopIndex, loopTotal, stepOrdinal, playStatus.stepTotal
       );
       if (outcome.tabId) {
@@ -2502,15 +2558,23 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         groupRow: frame.row,
         parentRow: condParentRow,
         processRow: Number.isFinite(Number(frame.outerRow)) ? Number(frame.outerRow) : rowIndex,
-        loopIndex
+        loopIndex,
+        // 0-based combined position (process × groups) for the selector's "combined" mode.
+        combinedIndex: Number.isFinite(Number(frame.ordinalBase)) ? Number(frame.ordinalBase) : null
       };
       // A source-reading condition honours its own row pointer; without one the basis is the
       // PROCESS loop's current row (same rule as actions — not the level's own row).
       const condRow = resolveRowPointer(node, graph, condCtx)
         ?? (Number.isFinite(Number(condCtx.processRow)) ? Number(condCtx.processRow) : frame.row);
-      // ...and its dynamic selector may pin a row of its own.
-      const condSelectorRow = resolveRowPointer(node, graph, { ...condCtx, groupRow: condRow }, SELECTOR_ROW_KEYS);
-      const condNode = condSelectorRow != null ? { ...node, _selectorRow: condSelectorRow } : node;
+      // ...and its dynamic selector may pin a row of its own. Its loop-index mode needs the same
+      // scope numbers the actions get, otherwise "parent / group / process" all collapse into the
+      // one row handed to the condition.
+      const condSelectorRow = resolveRowPointer(node, graph, condCtx, SELECTOR_ROW_KEYS);
+      const condNode = {
+        ...node,
+        ...(condSelectorRow != null ? { _selectorRow: condSelectorRow } : {}),
+        _rowScope: condCtx
+      };
       try {
         pass = await evaluateCondition(activeTabId, condNode, graph, condRow);
       } catch (err) {
@@ -2647,7 +2711,10 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         groupRow: frame.row,
         parentRow: stack.length >= 2 ? stack[stack.length - 2].row : frame.row,
         processRow: Number.isFinite(Number(frame.outerRow)) ? Number(frame.outerRow) : rowIndex,
-        loopIndex
+        loopIndex,
+        // The group's own selector is resolved at entry, so its "combined" position is the
+        // position of the level that contains it.
+        combinedIndex: Number.isFinite(Number(frame.ordinalBase)) ? Number(frame.ordinalBase) : null
       });
       // Turn this frame into the group's driver: it now owns the remaining iterations and the
       // entry node for each. The frame's `cur` is cleared so the driver branch runs next.
@@ -2693,9 +2760,13 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
   // The node's own row pointer, if it has one: the value reads and cell writes THIS node makes
   // happen on that row. Resolved here, at the single entry point, so the walker, a single-step
   // run and any future caller all agree.
+  // The row of the LEVEL this node sits on — the loop's row, before this node's own pointer is
+  // applied. "CurrentLoop" for the node, for its selector and for a loop-index selector all mean
+  // THIS row; the node's own pointer only rebinds the row its values are read/written on.
+  const levelRow = rowIndex;
   const stepProcessRow = processStatusRow(step, rowIndex);
   const ownRow = resolveRowPointer(step, graph, {
-    groupRow: rowIndex,
+    groupRow: levelRow,
     parentRow: step?._parentRow,
     processRow: stepProcessRow,
     loopIndex
@@ -2709,25 +2780,29 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
 
   // The dynamic selector's OWN pointer (the second switch) overrides the row only for this node's
   // selector resolution; without it the selector keeps following the node's row, exactly as it did
-  // before the selector switch existed.
+  // before the selector switch existed. Its "CurrentLoop" means the loop's row, not the row the
+  // node's own pointer may have rebound — otherwise the two switches would contradict each other.
   const selectorRow = resolveRowPointer(step, graph, {
-    groupRow: rowIndex,
+    groupRow: levelRow,
     parentRow: step?._parentRow,
-    processRow: processStatusRow(step, rowIndex),
+    processRow: stepProcessRow,
     loopIndex
   }, SELECTOR_ROW_KEYS);
   if (selectorRow != null) step = { ...step, _selectorRow: selectorRow };
 
   // The scope numbers a loop-index-driven selector needs ("the current / parent / overall loop
   // index"). Same marker trick as `_selectorRow`: the selector resolver cannot see the walker's
-  // stack, so the numbers travel on the node.
+  // stack, so the numbers travel on the node. `groupRow` is the LEVEL row (pre-pointer), so
+  // "current loop" and "group run row" cannot silently become the node's own pinned row.
   step = {
     ...step,
     _rowScope: {
-      groupRow: rowIndex,
+      groupRow: levelRow,
       parentRow: step?._parentRow,
-      processRow: processStatusRow(step, rowIndex),
-      loopIndex
+      processRow: stepProcessRow,
+      loopIndex,
+      // 1-based when substituted (see dynIndexText); null outside a walk that carries it.
+      combinedIndex: Number.isFinite(Number(step?._ordinalBase)) ? Number(step._ordinalBase) : null
     }
   };
 

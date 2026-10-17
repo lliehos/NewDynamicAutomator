@@ -9044,7 +9044,7 @@
           <select data-k="rowIndexType">
             <option value="FirstRow" ${n.rowIndexType === "FirstRow" ? "selected" : ""}>${esc(t("editor.row.firstRow") || "ردیف اول")}</option>
             <option value="LastRow" ${n.rowIndexType === "LastRow" ? "selected" : ""}>${esc(t("editor.row.lastRow") || "ردیف آخر")}</option>
-            <option value="CurrentLoop" ${(n.rowIndexType || "CurrentLoop") === "CurrentLoop" ? "selected" : ""}>${esc(t("editor.row.groupLoop") || "ردیف اجرای گروه")}</option>
+            <option value="CurrentLoop" ${(n.rowIndexType || "CurrentLoop") === "CurrentLoop" ? "selected" : ""}>${esc(t("editor.row.currentLoop") || "ردیف حلقهٔ فعلی")}</option>
             <option value="ProcessLoop" ${n.rowIndexType === "ProcessLoop" ? "selected" : ""}>${esc(t("editor.row.processLoop") || "ردیف اجرای فرآیند")}</option>
             <option value="SpecificRow" ${n.rowIndexType === "SpecificRow" ? "selected" : ""}>${esc(t("editor.row.specificRow") || "ردیف ثابت (مقدار مشخص)")}</option>
           </select>
@@ -9519,16 +9519,21 @@
   function dynIndexPointerHtml(n, keys, title) {
     const typeKey = keys.type;
     const valueKey = keys.value;
-    const pointer = String(n[typeKey] || "CurrentLoop");
+    // Legacy graphs may carry `GroupLoop` («ردیف اجرای گروه»). It always resolved to the same row
+    // as `CurrentLoop`, so the duplicate option is gone from the list; folding it in here means a
+    // stored graph shows — and saves — the surviving choice instead of an option that no longer
+    // exists in the dropdown.
+    let pointer = String(n[typeKey] || "CurrentLoop");
+    if (pointer === "GroupLoop") pointer = "CurrentLoop";
     n[typeKey] = pointer;
     const fixed = n[valueKey] == null ? "" : String(n[valueKey]);
     const rows = [
       ["CurrentLoop", t("editor.row.currentLoop") || "ردیف حلقهٔ فعلی"],
       ["ParentLoop", t("editor.row.parentLoop") || "ردیف حلقهٔ والد"],
-      ["TotalLoop", t("editor.row.totalLoop") || "اندیس کل حلقه"],
-      ["GroupLoop", t("editor.row.groupLoop") || "ردیف اجرای گروه"],
+      ["TotalLoop", t("editor.row.totalLoopOrdinal") || "شمارهٔ دور حلقه (۱، ۲، ۳…)"],
+      ["CombinedLoop", t("editor.row.combinedLoop") || "شمارهٔ تجمعی (فرآیند × گروه)"],
       ["ProcessLoop", t("editor.row.processLoop") || "ردیف اجرای فرآیند"],
-      ["SpecificRow", t("editor.row.specificIndex") || "شمارهٔ ثابت"]
+      ["SpecificRow", t("editor.row.fixedIndex") || "شمارهٔ ثابت"]
     ];
     return `
       <div class="insp-section-title">${esc(title || "ایندکس حلقه")}</div>
@@ -9538,11 +9543,13 @@
         </select>
       </div>
       ${pointer === "SpecificRow" ? `
-        <div class="insp-field"><label>${esc(t("editor.row.specificIndex") || "شمارهٔ ثابت")}</label>
+        <div class="insp-field"><label>${esc(t("editor.row.fixedIndex") || "شمارهٔ ثابت")}</label>
           <input type="number" min="0" data-k="${valueKey}" value="${esc(fixed)}" />
         </div>` : ""}
       <p class="palette-hint" style="margin:0 0 4px;line-height:1.6">
-        عددِ همین ایندکس (از صفر) جای «${esc(DYN_SEL_PLACEHOLDER)}» در سلکتور قرار می‌گیرد — بدون نیاز به منبع داده.
+        عددِ همین ایندکس جای «${esc(DYN_SEL_PLACEHOLDER)}» در سلکتور قرار می‌گیرد — بدون نیاز به منبع داده.
+        شمارش از ۱ است (آیتم اول = ۱، مثل <code>:nth-child</code>)؛ «شمارهٔ ثابت» عیناً همان عدد نوشته می‌شود.<br/>
+        «شمارهٔ تجمعی» = شمارهٔ دور فرآیند × تکرار گروه‌های تودرتو (۱ تا P×N؛ در هر دور فرآیند از ۱ شروع نمی‌شود).
       </p>`;
   }
 
