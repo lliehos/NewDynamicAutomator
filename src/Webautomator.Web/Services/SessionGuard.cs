@@ -77,6 +77,21 @@ public sealed class SessionGuard
         var stored = await StoredVersionAsync(userId, ct);
         if (stored is null || stored.Value == tokenVersion) return SessionVerdict.Valid;
 
+        // A cached value BELOW the token's version is not a stale token — it is a stale CACHE.
+        //
+        // Signing in with the single-session rule on bumps the stored version and mints a token that
+        // carries the NEW value, while this cache still holds the pre-sign-in one. Comparing the two
+        // rejected every request of a brand-new session until the TTL lapsed: the operator signed in
+        // correctly, was bounced back to the sign-in form, and the panel started working a few seconds
+        // later "by itself". Re-reading on mismatch settles it — and costs nothing in the normal case,
+        // because a valid token never reaches this line.
+        if (stored.Value < tokenVersion)
+        {
+            var fresh = await StoredVersionAsync(userId, ct, bypassCache: true);
+            if (fresh is null || fresh.Value == tokenVersion) return SessionVerdict.Valid;
+            stored = fresh;
+        }
+
         Prune();
         return _closed.ContainsKey(userId) ? SessionVerdict.Closed : SessionVerdict.Superseded;
     }
@@ -140,10 +155,10 @@ public sealed class SessionGuard
         return bumped;
     }
 
-    private async Task<int?> StoredVersionAsync(int userId, CancellationToken ct)
+    private async Task<int?> StoredVersionAsync(int userId, CancellationToken ct, bool bypassCache = false)
     {
         var key = VersionKeyPrefix + userId;
-        if (_cache.TryGetValue(key, out int cached)) return cached;
+        if (!bypassCache && _cache.TryGetValue(key, out int cached)) return cached;
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
