@@ -5363,6 +5363,10 @@
     // selector from one. A group earns it when anything INSIDE it (any depth) depends on a source,
     // so folding work into a group cannot hide where the source reads/writes actually live.
     if (nodeDependsOnSource(n)) g.appendChild(makeSourceBadge(w, sourceBadgeTipText(n)));
+    // The wait badge goes on the opposite corner: a node can both depend on a source and wait for
+    // an element, and the two facts must stay readable side by side.
+    const waitBudget = nodeWaitBudget(n);
+    if (waitBudget > 0) g.appendChild(makeWaitBadge(w, h, waitBudget, n.kind));
     // Buttons first (lower paint layer); titles appended after so they sit above.
     // Child mode: the graph shape belongs to the mother, so no clone affordance.
     if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify && !structLocked) {
@@ -5619,6 +5623,74 @@
     badge.appendChild(el("path", { d: "M2.6 4.2v4.6c0 .8 1.5 1.4 3.4 1.4s3.4-.6 3.4-1.4V4.2" }));
     badge.appendChild(el("path", { d: "M2.6 6.5c0 .8 1.5 1.4 3.4 1.4s3.4-.6 3.4-1.4" }));
     return badge;
+  }
+
+  /**
+   * Tiny element-wait badge, drawn OUTSIDE the node's bottom-right corner.
+   *
+   * A clock on a soft plate, the mirror image of the source badge: it marks every node whose
+   * «انتظار تا ظاهر شدن المان» switch is on, so a diagram answers "will the run pause here
+   * waiting for an element?" without opening the inspector. It sits in the opposite corner from
+   * the source badge because the two say different things about the same node.
+   *
+   * The wait is a BUDGET: the engine re-tries the element every 200 ms until it runs out, so the
+   * tooltip names the ceiling rather than a fixed pause.
+   */
+  function makeWaitBadge(w, h, waitMs, kind) {
+    // A rectangle's bottom-right corner IS its box corner. A condition is a diamond, so the
+    // bounding box's corner is empty space far from the shape; its badge rides on the middle of
+    // the lower-right edge instead, which reads as "attached to this node" rather than floating.
+    const cx = kind === "condition" ? w * 0.75 + 5 : w + 2;
+    const cy = kind === "condition" ? h * 0.75 + 5 : h + 8.5;
+    const badge = el("g", {
+      class: "node-wait-badge",
+      transform: `translate(${Math.round(cx - 6)},${Math.round(cy - 6.5)})`
+    });
+    const ms = Number(waitMs) > 0 ? Math.round(Number(waitMs)) : 1000;
+    const tip = document.createElementNS(ns, "title");
+    tip.textContent = kind === "group"
+      ? `داخل این گروه انتظار تا ظاهر شدن المان روشن است — حداکثر ${ms} میلی‌ثانیه`
+      : `انتظار تا ظاهر شدن المان روشن است — حداکثر ${ms} میلی‌ثانیه`;
+    badge.appendChild(tip);
+    badge.appendChild(el("circle", { cx: 6, cy: 6.5, r: 7.5 }));
+    // Hands: an hour mark up from the centre, then the minute hand toward four o'clock.
+    badge.appendChild(el("path", { d: "M6 3.4v3.4l2.6 1.5" }));
+    return badge;
+  }
+
+  /**
+   * The element-wait budget a node carries, or 0 when every wait switch on it is off.
+   *
+   * Both selector instances count (target and compare), because either one can make the run
+   * pause for an element. A GROUP reports the largest budget found anywhere inside it — at any
+   * nesting depth — because the waiting really happens within the group and folding work into a
+   * container must not hide it. Start/end carry no element lookup of their own, so they never
+   * raise the badge even when a recorder stamped the flags on them.
+   */
+  function nodeWaitBudget(n, seen) {
+    if (!n) return 0;
+    if (n.kind === "start" || n.kind === "end") return 0;
+    const budgets = [];
+    if (n.selectorWaitEnabled === true) {
+      const v = Number(n.selectorWaitMs);
+      budgets.push(Number.isFinite(v) && v > 0 ? Math.max(200, v) : 1000);
+    }
+    if (n.equalSelectorWaitEnabled === true) {
+      const v = Number(n.equalSelectorWaitMs);
+      budgets.push(Number.isFinite(v) && v > 0 ? Math.max(200, v) : 1000);
+    }
+    if (budgets.length) return Math.max(...budgets);
+    if (n.kind !== "group") return 0;
+    // `seen` keeps the walk finite on a damaged graph whose groups are each other's ancestors.
+    const visited = seen || new Set();
+    if (visited.has(n.id)) return 0;
+    visited.add(n.id);
+    let best = 0;
+    (graph.nodes || []).forEach((kid) => {
+      if (kid.groupNodeId !== n.id) return;
+      best = Math.max(best, nodeWaitBudget(kid, visited));
+    });
+    return best;
   }
 
   function deepClonePlain(obj) {
@@ -8627,7 +8699,23 @@
     const g = world.querySelector(`g.node[data-id="${CSS.escape(String(n.id))}"]`);
     if (g) applyNodeValidityClass(g, n);
     syncNodeSourceBadge(n);
+    syncNodeWaitBadge(n);
     syncAncestorGroupValidity(n);
+  }
+
+  /** Add/remove the element-wait badge on one rendered node <g>, in place. */
+  function applyWaitBadge(gEl, n) {
+    if (!gEl || !n) return;
+    const existing = gEl.querySelector(":scope > .node-wait-badge");
+    const budget = nodeWaitBudget(n);
+    if (budget <= 0) {
+      if (existing) existing.remove();
+      return;
+    }
+    // A changed budget lives in the tooltip, so the badge is rebuilt rather than kept as-is.
+    if (existing) existing.remove();
+    const sz = sizeOf(n);
+    gEl.appendChild(makeWaitBadge(sz.w, sz.h, budget, n.kind));
   }
 
   /** Add/remove the source badge on one rendered node <g>, in place. */
@@ -8667,6 +8755,26 @@
       const group = nodeById(gid);
       if (!group) break;
       applySourceBadge(world.querySelector(`g.node[data-id="${CSS.escape(String(group.id))}"]`), group);
+      gid = group.groupNodeId || null;
+    }
+  }
+
+  /**
+   * Add/remove one node's element-wait badge in place — including its ancestor groups, whose
+   * badge lights up as soon as anything inside them starts waiting. Called from the same place
+   * the source badge is refreshed, so turning the inspector's wait switch on or off shows on the
+   * diagram immediately instead of only after the next full redraw.
+   */
+  function syncNodeWaitBadge(n) {
+    if (!n) return;
+    applyWaitBadge(world.querySelector(`g.node[data-id="${CSS.escape(String(n.id))}"]`), n);
+    let gid = n.groupNodeId || null;
+    const seen = new Set();
+    while (gid && !seen.has(gid)) {
+      seen.add(gid);
+      const group = nodeById(gid);
+      if (!group) break;
+      applyWaitBadge(world.querySelector(`g.node[data-id="${CSS.escape(String(group.id))}"]`), group);
       gid = group.groupNodeId || null;
     }
   }
