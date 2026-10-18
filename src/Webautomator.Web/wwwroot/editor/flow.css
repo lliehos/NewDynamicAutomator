@@ -831,6 +831,8 @@ rect.flow-marquee{pointer-events:none}
 /* A public source lent to this process: its badge is the only visible sign that the row's detach and
    rename controls are deliberately absent, so it must read as "shared", not as decoration. */
 .ds-badge-public{display:inline-flex;align-items:center;font-size:10px;font-weight:700;color:#0f766e;background:#e6f6f4;border-radius:999px;padding:1px 7px;margin-inline-start:6px}
+/* A source that exists only in this browser: the exception worth noticing, so it keeps a label. */
+.ds-badge-local{display:inline-flex;align-items:center;font-size:10px;font-weight:700;color:#b45309;background:#fff7e6;border-radius:999px;padding:1px 7px;margin-inline-start:6px;cursor:help}
 .ds-list li.ds-is-public{background:#f4fbfa}
 .ds-icon-btn{
   display:inline-flex;align-items:center;justify-content:center;
@@ -843,8 +845,6 @@ rect.flow-marquee{pointer-events:none}
 .ds-icon-btn.is-danger:hover{background:#fce4e4;color:#ea5455}
 .ds-icon-btn.is-busy{opacity:.45;pointer-events:none}
 .ds-icon-btn.js-ds-rename{width:26px;height:26px;color:var(--webautomator-primary)}
-.ds-icon-btn.is-server{color:var(--webautomator-primary);opacity:1;cursor:default}
-.ds-icon-btn.is-local{color:#a8aaae;opacity:.85;cursor:default}
 .ds-meta,.ds-list .ds-meta{
   color:#a8aaae;
   font-size:10px;

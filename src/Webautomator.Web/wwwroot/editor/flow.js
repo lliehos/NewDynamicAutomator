@@ -1504,12 +1504,18 @@
         : (canModify
           ? dsIconBtn("js-ds-master", t("editor.ds.setMaster"), DS_ICO_STAR_OUT, `data-id="${sid}"`)
           : "");
-      const cloudTitle = onServer ? t("editor.ds.onServer") : t("editor.ds.onLocal");
-      const cloudIco = onServer ? DS_ICO_CLOUD : DS_ICO_LOCAL;
-      const cloudCls = onServer ? "js-ds-cloud is-server" : "js-ds-cloud is-local";
+      /**
+       * NO cloud/local icon here. It was a DISABLED button whose whole effect was a status line, and
+       * on a normal editing session it was always the cloud — so it said nothing the row did not
+       * already imply, and it looked like a broken control. "On the server" is the ordinary case and
+       * needs no label; the exceptional one (a source that exists only in this browser) keeps a
+       * small text badge, because THAT is what the author needs to notice.
+       */
+      const localBadge = onServer
+        ? ""
+        : `<span class="ds-badge-local" title="${esc(t("editor.ds.onLocalHint"))}">${esc(t("editor.ds.onLocalBadge"))}</span>`;
       const actions = `
         ${dsIconBtn("js-ds-view", t("editor.ds.viewTable"), DS_ICO_DATA, `data-id="${sid}"`)}
-        ${dsIconBtn(cloudCls, cloudTitle, cloudIco, `data-id="${sid}" data-on-server="${onServer ? "1" : "0"}" disabled`)}
         ${masterBtn}
         ${canEditRow ? dsIconBtn("js-ds-del is-danger", t("editor.ds.detach"), DS_ICO_DEL, `data-id="${sid}"`) : ""}
       `;
@@ -1519,7 +1525,7 @@
       return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}${isPublic ? " ds-is-public" : ""}">
         <div class="ds-row-top">
           <div class="ds-title-row">
-            <span class="ds-title">${esc(label)}${publicBadge}</span>
+            <span class="ds-title">${esc(label)}${publicBadge}${localBadge}</span>
             ${canEditRow ? dsIconBtn("js-ds-rename", t("editor.ds.rename"), DS_ICO_RENAME, `data-id="${sid}"`) : ""}
           </div>
           <div class="ds-actions">${actions}</div>
@@ -1530,12 +1536,6 @@
 
     listEl.querySelectorAll(".js-ds-view").forEach((btn) => {
       btn.addEventListener("click", () => openDsViewer(Number(btn.dataset.id)));
-    });
-    listEl.querySelectorAll(".js-ds-cloud").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const onServer = btn.dataset.onServer === "1";
-        setStatus(onServer ? t("editor.ds.onServerHint") : t("editor.ds.onLocalHint"), "info");
-      });
     });
     listEl.querySelectorAll(".js-ds-rename").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
@@ -1582,8 +1582,10 @@
   // node use the table glyph like every other data view. The Excel export left the row as well — it
   // now lives inside the viewer modal, where the copy on screen can be named.
   const DS_ICO_DATA = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 4h16a1 1 0 0 1 1 1v3H3V5a1 1 0 0 1 1-1zm-1 6h18v3H3v-3zm0 5h18v3H3v-3zm0 5h18v.5a.5.5 0 0 1-.5.5h-17a.5.5 0 0 1-.5-.5V20z"/></svg>`;
-  const DS_ICO_CLOUD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17.5 19H8a5 5 0 0 1-.7-9.95A6.5 6.5 0 0 1 20 12.5a3.5 3.5 0 0 1-2.5 6.5z"/></svg>`;
-  const DS_ICO_LOCAL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 6h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zm0 2v5h16V8H4z"/></svg>`;
+  // Retired with the cloud glyph: "on the server" is the ordinary state of a source, and a disabled
+  // button that only printed a sentence read as a broken control (see renderDataSources).
+  const DS_ICO_CLOUD = `<!-- retired -->`;
+  const DS_ICO_LOCAL = `<!-- retired -->`;
   const DS_ICO_STAR = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
   const DS_ICO_STAR_OUT = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.7" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
   const DS_ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;

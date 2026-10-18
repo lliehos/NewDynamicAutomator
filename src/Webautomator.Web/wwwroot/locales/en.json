@@ -1906,6 +1906,7 @@
       "onLocal": "Local only (not on server yet)",
       "onServerHint": "This source is stored in the server library.",
       "onLocalHint": "This source is defined in this process graph and is not yet saved to the server library.",
+      "onLocalBadge": "Local",
       "detach": "Detach from process",
       "detached": "Source detached from this process (kept in library).",
       "publicBadge": "Shared",
