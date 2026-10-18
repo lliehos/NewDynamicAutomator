@@ -1165,6 +1165,17 @@ html.light-style {
   background: #e7e5ee;
 }
 
+/* A template CHILD inherits its run mode from the mother: the switch is shown (so the row still
+   answers "where does this run?") but reads as a value, not as a control. */
+.da-runswitch.is-inherited {
+  cursor: default;
+  opacity: 0.78;
+}
+
+.da-runswitch.is-inherited .da-runswitch-text {
+  font-style: italic;
+}
+
 /* Explanatory line inside the run-type menu (a process already running, or server runs switched
    off). It is not a menu item, so it must not look clickable. */
 .da-play-target-note {

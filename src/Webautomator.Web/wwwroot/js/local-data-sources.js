@@ -57,8 +57,9 @@
    */
   const SOURCE_PAGE_SIZE = 500;
 
-  const ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
-  const ICO_DL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.4-3.4 1.4 1.4L12 17l-4.8-5.8 1.4-1.4L11 13.2V3h1zM5 19h14v2H5v-2z"/></svg>`;
+  // Retired: the eye said nothing about WHAT is being shown (local copy or server rows), so the view
+  // action now uses the table glyph, and the Excel export moved into the viewer modal where the
+  // copy on screen can be named. Kept as comments so a future edit does not re-invent them.
   const ICO_CLOUD = `<!-- retired: the "in library" cloud icon no longer has a meaning on a source row -->`;
   /** Two arrows in a circle — "this source and the server disagree; send the local values up". */
   const ICO_SYNC = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 4V1L8 5l4 4V6a6 6 0 0 1 6 6h2a8 8 0 0 0-8-8zm0 14a6 6 0 0 1-6-6H4a8 8 0 0 0 8 8v3l4-4-4-4v3z"/></svg>`;
@@ -915,12 +916,17 @@
       btn.classList.add("is-busy");
     }
     try {
-      // Always export the server's current content, never the page-load snapshot.
+      // Which copy is exported follows the view: the LOCAL view exports the browser copy (that is the
+      // data the run used), the server view exports the server's current rows.
       let fresh;
-      try {
-        fresh = await fetchSourceContent(sourceId);
-      } catch {
-        fresh = cached;
+      if (viewerState.localCopy) {
+        fresh = buildLocalView() || viewerState.lastSource || cached;
+      } else {
+        try {
+          fresh = await fetchSourceContent(sourceId);
+        } catch {
+          fresh = cached;
+        }
       }
       const ds = fresh || cached;
       if (!ds) {
@@ -2603,12 +2609,11 @@
             `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}" data-mode="local"`)
           + iconBtn("js-view-server is-data-server", t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_DATA,
             `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}" data-mode="server"`)
-        : iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}"`))
+        : iconBtn("js-view", t("sources.viewTable"), ICO_DATA, `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}"`))
       : "";
     return `
       ${Number(sid) > 0 && canShape ? iconBtn("js-rename", t("sources.rename"), ICO_RENAME, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
       ${viewBtn}
-      ${row.taskId != null ? iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`) : ""}
       ${master}
       ${publicToggle}
       ${attachBtn}
@@ -2636,9 +2641,6 @@
       // explicit because on a diverged source "the grid" is otherwise ambiguous.
       btn.addEventListener("click", () =>
         openViewer(btn.dataset.task ?? null, btn.dataset.id, btn.dataset.mode === "local" ? "local" : "server"));
-    });
-    root.querySelectorAll(".js-dl").forEach((btn) => {
-      btn.addEventListener("click", () => downloadSource(btn.dataset.task, btn.dataset.id, btn));
     });
     root.querySelectorAll(".js-public").forEach((btn) => {
       btn.addEventListener("click", () => togglePublic(btn.dataset.id, btn.dataset.public === "1"));
@@ -2802,6 +2804,11 @@
   document.getElementById("da-portal-ds-reset")?.addEventListener("click", () => {
     if (viewerState.sourceId == null) return;
     resetLocalFromServer();
+  });
+  // Excel export lives here now: it exports the copy being LOOKED AT (local or server).
+  document.getElementById("da-portal-ds-download")?.addEventListener("click", (ev) => {
+    if (viewerState.sourceId == null) return;
+    downloadSource(viewerState.taskId, viewerState.sourceId, ev.currentTarget);
   });
   // Paging is pure rendering: the data is already loaded, so this only re-slices the rows.
   document.getElementById("da-portal-ds-prev")?.addEventListener("click", () => {

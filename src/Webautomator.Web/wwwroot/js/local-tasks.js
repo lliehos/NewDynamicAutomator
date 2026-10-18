@@ -205,10 +205,12 @@
   // process" rather than as the plain duplicate the clone button already means.
   const ICO_COPY = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 3h7l5 5v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm7 1.5V8h3.5L14 4.5zM4 7h1v13h10v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/></svg>`;
   const ICO_DEL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>`;
-  const ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
+  // Retired: the eye only said "look" — nothing about WHICH copy of the data opens — so every data
+  // view (process row and modal) uses ICO_DATA. Excel export moved into the viewer modal, so the
+  // spreadsheet-file glyph is gone from the row as well.
+  const ICO_DATA = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 4h16a1 1 0 0 1 1 1v3H3V5a1 1 0 0 1 1-1zm-1 6h18v3H3v-3zm0 5h18v3H3v-3zm0 5h18v.5a.5.5 0 0 1-.5.5h-17a.5.5 0 0 1-.5-.5V20z"/></svg>`;
   /** Circular arrows — "push the local result up to the server". */
   const ICO_SYNC = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 4a8 8 0 0 1 7.4 5H17a6 6 0 0 0-10.6-1.3L8.5 9.8H3V4.3l2.2 2.2A8 8 0 0 1 12 4zm0 16a8 8 0 0 1-7.4-5H7a6 6 0 0 0 10.6 1.3l-2.1-2.1H21v5.5l-2.2-2.2A8 8 0 0 1 12 20z"/></svg>`;
-  const ICO_XLSX = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm1 7V3.5L19.5 9H15zM8.2 18l2.3-3.2L8.3 12h1.7l1.4 2.1L12.8 12H14.4l-2.2 2.8L14.5 18h-1.7l-1.5-2.2L9.9 18H8.2z"/></svg>`;
   const ICO_INFO = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 3.2a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8zM13.4 17h-2.8v-1.3l.7-.3V10.8l-.7-.3V9.2h2.1v6.2l.7.3V17z"/></svg>`;
   // The template a row came from / was made into. A sheet with a stack behind it, so it reads as
   // "this process is derived from something" rather than as another document action.
@@ -514,6 +516,28 @@
     copy.createdBy = owner;
     copy.ownerUser = owner;
     copy.sharedUsers = [];
+    // An EXACT copy: where it runs (server or this machine) travels with it, because a copy is a
+    // starting point that must behave like the original — inheriting the mother's mode for a child
+    // and the user's own choice otherwise. Everything else that describes a RUN does not travel: a
+    // new process that already reported someone else's results, or claimed unsynced local writes it
+    // never made, would be a lie in the list, in the data viewer and on the next sync.
+    copy.runOnServer = task.runOnServer !== false;
+    copy.localRunPendingSync = false;
+    copy.lastLocalRunAt = null;
+    delete copy.locallyRunSources;
+    delete copy.localSourceCopies;
+    delete copy.localSourcesLoaded;
+    delete copy.localSourceRevisions;
+    delete copy.localValuesStamp;
+    // The canvas cache is keyed to the ORIGINAL's server revision; a copy has its own id and its own
+    // revision, so a stale cache here would make the first run believe it already had the server's
+    // copy of a process that has never been read.
+    copy.canvasCache = null;
+    copy.lastPlayedAt = null;
+    copy.lastPlayedAtUtc = null;
+    copy.lastPlayedBy = "";
+    copy.lastPlayedByUserName = "";
+    copy.playCount = 0;
     if (copy.graph) {
       copy.graph = deepClone(copy.graph);
       copy.graph.taskId = id;
@@ -562,6 +586,23 @@
         return;
       }
       const created = await res.json();
+      // The run mode is CLIENT-LOCAL and per user, so the server's copy cannot carry it: seed the new
+      // id with the SOURCE's choice, or the copy would silently default to "run on server" while the
+      // process it was copied from runs on this machine.
+      const newId = String(created?.id ?? "").trim();
+      if (newId) {
+        const local = readTasks();
+        const at = findTaskIndex(local, newId);
+        const seed = {
+          runOnServer: task ? task.runOnServer !== false : true,
+          localRunPendingSync: false,
+          canvasCache: null
+        };
+        if (at >= 0) local[at] = { ...local[at], ...seed };
+        else local.push({ id: newId, title: created?.title || "", ...seed });
+        // Silent: the render below has to come from the SERVER's row shape, not from this stub.
+        writeTasks(local, { silent: true });
+      }
       // Re-read the list from the server so the new row appears with the same shape as the rest
       // (permissions, counts, last-run) rather than a hand-built entry that could drift.
       scheduleRender();
@@ -661,8 +702,7 @@
       ? iconBtn("is-smart", t("tasks.smart"), ICO_SMART, `data-da-action="start-smart-record" data-task-id="${tid}" data-task-title="${ttitle}"`)
       : "";
     const dataBtns = hasData
-      ? `${iconBtn("is-view", t("tasks.viewData"), ICO_VIEW, `data-da-view-data="${tid}"`)}
-         ${iconBtn("is-xlsx", t("tasks.downloadExcel"), ICO_XLSX, `data-da-dl-excel="${tid}"`)}`
+      ? iconBtn("is-view", t("tasks.viewData"), ICO_DATA, `data-da-view-data="${tid}"`)
       : "";
     /**
      * A live "open the source template" button for a CHILD, so the relationship is one click away
@@ -731,14 +771,46 @@
   function runOnServerSwitch(task, tid) {
     const allowed = serverRunAllowedSync();
     const on = allowed && task.runOnServer !== false;
-    const title = !allowed
-      ? t("tasks.serverRunRestricted")
-      : (on ? t("tasks.runOnServerOn") : t("tasks.runOnServerOff"));
-    return `<label class="da-runswitch${allowed ? "" : " is-locked"}" title="${escapeHtml(title)}">
-      <input type="checkbox" class="da-runswitch-input" data-da-runserver="${tid}" ${on ? "checked" : ""} ${allowed ? "" : "aria-disabled=\"true\""} />
+    // A template CHILD does not own its run mode: it follows the mother. Rendering it locked (with
+    // the reason in the tooltip) is honest — a clickable switch that always snapped back would look
+    // like a bug.
+    const isChild = isTemplateChild(task);
+    const editable = allowed && !isChild;
+    const title = isChild
+      ? (t("tasks.runOnServerChildLocked") || "حالت اجرای فرآیندهای ساخته‌شده از این قالب را فرآیند مادر تعیین می‌کند.")
+      : !allowed
+        ? t("tasks.serverRunRestricted")
+        : (on ? t("tasks.runOnServerOn") : t("tasks.runOnServerOff"));
+    return `<label class="da-runswitch${allowed ? "" : " is-locked"}${isChild ? " is-inherited" : ""}" title="${escapeHtml(title)}">
+      <input type="checkbox" class="da-runswitch-input" data-da-runserver="${tid}" ${on ? "checked" : ""} ${editable ? "" : "disabled aria-disabled=\"true\""} />
       <span class="da-runswitch-ui" aria-hidden="true"></span>
       <span class="da-runswitch-text">${escapeHtml(t("tasks.runOnServer"))}</span>
     </label>`;
+  }
+
+  /**
+   * Is this process a template CHILD — a projection of a mother process?
+   *
+   * A child owns only its runs, not its structure: the cascade rewrites its graph from the mother.
+   * Its run mode is therefore inherited too, which is why the switch is locked for it.
+   */
+  function isTemplateChild(task) {
+    if (!task || task.isTemplateSource) return false;
+    const hasTemplate = task.templateId != null && task.templateId !== "";
+    const hasMother = task.sourceProcessId != null && task.sourceProcessId !== "";
+    return hasTemplate || hasMother;
+  }
+
+  /** All locally cached processes that belong to `mother`'s family. */
+  function childTasksOf(tasks, mother) {
+    const mid = String(mother?.id ?? "");
+    const mtpl = mother?.templateId != null ? String(mother.templateId) : null;
+    return tasks.filter((x) => {
+      if (!mid || taskIdEq(x.id, mid) || !isTemplateChild(x)) return false;
+      if (x.sourceProcessId != null && x.sourceProcessId !== "" && taskIdEq(x.sourceProcessId, mid)) return true;
+      // Fall back to the template id, which is the link the server itself uses.
+      return mtpl != null && x.templateId != null && String(x.templateId) === mtpl;
+    });
   }
 
   /**
@@ -749,15 +821,24 @@
    * about to lose the server-side visibility and concurrency guard they may be relying on.
    */
   async function setRunOnServer(taskId, on) {
-    if (on && !serverRunAllowedSync()) {
-      notifyHome(t("tasks.serverRunRestricted")
-        || "اجرای روی سرور توسط مدیر محدود شده است؛ از اجرای محلی استفاده کنید.", "warn");
-      render();
-      return;
-    }
     const tasks = readTasks();
     const idx = findTaskIndex(tasks, taskId);
     if (idx < 0) return;
+    // The switch is per USER (it lives only in this browser's store) and, for a child, per FAMILY:
+    // the mother decides. Refusing here — not only in the markup — means a stale page or a script
+    // cannot leave a child on a mode its mother contradicts.
+    if (isTemplateChild(tasks[idx])) {
+      notifyHome(t("tasks.runOnServerChildLocked")
+        || "حالت اجرای فرآیندهای ساخته‌شده از این قالب را فرآیند مادر تعیین می‌کند.", "warn");
+      render(tasks);
+      return;
+    }
+    if (on && !serverRunAllowedSync()) {
+      notifyHome(t("tasks.serverRunRestricted")
+        || "اجرای روی سرور توسط مدیر محدود شده است؛ از اجرای محلی استفاده کنید.", "warn");
+      render(tasks);
+      return;
+    }
     if (on) {
       // Turning server runs ON says "from now on the server is the truth for this process". Unsynced
       // local results would then sit in a browser nobody will run from again, so the user is sent to
@@ -799,10 +880,33 @@
         return;
       }
     }
-    tasks[idx] = { ...tasks[idx], runOnServer: on !== false };
+    const motherOn = on !== false;
+    // The mother decides where the WHOLE family runs. A child shares the mother's data model, so a
+    // mixed mode would leave some children reading local copies that were never created for them.
+    const children = childTasksOf(tasks, tasks[idx]);
+    let blockedChildren = 0;
+    tasks[idx] = { ...tasks[idx], runOnServer: motherOn };
+    children.forEach((child) => {
+      const i = findTaskIndex(tasks, child.id);
+      if (i < 0) return;
+      const pending = child.localRunPendingSync === true
+        || (Array.isArray(child.locallyRunSources) && child.locallyRunSources.length > 0);
+      if (motherOn && pending) blockedChildren += 1;
+      tasks[i] = { ...tasks[i], runOnServer: motherOn };
+    });
     writeTasks(tasks);
     render(tasks);
-    notifyHome(on !== false ? t("tasks.runOnServerNowOn") : t("tasks.runOnServerNowOff"), "success");
+    notifyHome(motherOn ? t("tasks.runOnServerNowOn") : t("tasks.runOnServerNowOff"), "success");
+    if (children.length) {
+      notifyHome(t("tasks.runOnServerChildren", { n: children.length })
+        || `${children.length} فرآیند فرزند هم با فرآیند مادر هم‌تراز شد.`, "info");
+    }
+    // A child that now runs on the server may still hold unsynced local results: say so instead of
+    // letting them quietly stop being the copy that runs.
+    if (blockedChildren > 0) {
+      notifyHome(t("tasks.runOnServerChildrenPending", { n: blockedChildren })
+        || `${blockedChildren} فرآیند فرزند دادهٔ محلیِ سینک‌نشده دارد؛ از فهرست منابع آن را همگام‌سازی کنید.`, "warn");
+    }
   }
 
   /**
@@ -1004,9 +1108,6 @@
     });
     root?.querySelectorAll("[data-da-view-data]").forEach((btn) => {
       btn.addEventListener("click", () => viewProcessData(btn.getAttribute("data-da-view-data"), btn));
-    });
-    root?.querySelectorAll("[data-da-dl-excel]").forEach((btn) => {
-      btn.addEventListener("click", () => downloadProcessExcel(btn.getAttribute("data-da-dl-excel"), btn));
     });
     // Turn a process into a template. The post and the notifying live in local-templates.js, so the
     // table stays out of the template rules and only has to hand over the id and the title.
@@ -2571,9 +2672,13 @@ function dataSourceSafeFileName(ds) {
       }
       // Export the server's current content, never the page-load snapshot: the canvas payload is a
       // summary with no cell values, so downloading from it could hand the user stale numbers.
+      // EXCEPT in local mode: the run used the browser copy, so that copy is what is exported (and
+      // no server request may be made for a local run).
       let ds = hit.ds;
       const sourceId = Number(ds.id);
-      if (Number.isFinite(sourceId) && sourceId > 0) {
+      if (processViewerState.localMode && processViewerState.source) {
+        ds = overlayLocalWrites(deepClone(processViewerState.source), sourceId) || ds;
+      } else if (Number.isFinite(sourceId) && sourceId > 0) {
         try {
           ds = await fetchProcessSourceContent(sourceId);
         } catch { /* fall back to the snapshot below */ }
@@ -3979,6 +4084,13 @@ function dataSourceSafeFileName(ds) {
     });
     document.getElementById("da-portal-ds-clear")?.addEventListener("click", () => {
       if (processViewerState.source) clearProcessViewerData();
+    });
+    // Excel export moved here from the process row: it exports the data being LOOKED AT, and in the
+    // local view that is the browser's copy — a row button could not tell the two apart.
+    document.getElementById("da-portal-ds-download")?.addEventListener("click", (ev) => {
+      const btn = ev.currentTarget;
+      if (processViewerState.taskId == null) return;
+      downloadProcessExcel(processViewerState.taskId, btn);
     });
 
     table.addEventListener("dblclick", (e) => {
