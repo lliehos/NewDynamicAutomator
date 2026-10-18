@@ -872,6 +872,15 @@ rect.flow-marquee{pointer-events:none}
 .ds-actions .ds-icon-btn.is-data-server:hover{background:rgba(40,199,111,.12)}
 .ds-actions .ds-icon-btn.is-data-local{color:#a8aaae}
 .ds-actions .ds-icon-btn.is-data-local:hover{background:rgba(168,170,174,.16)}
+/* The copy the OPEN viewer holds, said in words inside its header. Same colours as the two buttons,
+   so "is this the server's data or mine?" is answered by the modal itself. */
+.ds-view-mode{display:inline-flex;align-items:center;font-size:.72rem;font-weight:600;line-height:1;
+  padding:4px 9px;border-radius:999px;white-space:nowrap}
+.ds-view-mode.is-server{color:#1fae5f;background:rgba(40,199,111,.12);box-shadow:inset 0 0 0 1px rgba(40,199,111,.35)}
+.ds-view-mode.is-local{color:#7f8185;background:rgba(168,170,174,.16);box-shadow:inset 0 0 0 1px rgba(168,170,174,.4)}
+/* The button that opened the open modal: ringed, so the pair never reads as two equal choices. */
+.ds-icon-btn.is-data-local.is-active{background:rgba(168,170,174,.18);box-shadow:inset 0 0 0 2px currentColor}
+.ds-icon-btn.is-data-server.is-active{background:rgba(40,199,111,.14);box-shadow:inset 0 0 0 2px currentColor}
 /* A control that is blocked until the data is settled (e.g. «عمومی کردن» while a source still owes
    the server its local changes): greyed out, not hidden — the tooltip explains why. */
 .ds-actions .ds-icon-btn:disabled,

@@ -1520,10 +1520,15 @@
        * else sees). One button could only show one of them and which one it showed was a guess.
        */
       const divergent = sourceNeedsSync(sid);
+      // The open viewer's copy keeps its ring through every repaint (the list is rebuilt on each
+      // canvas refresh), so the state is part of the row render.
+      const viewing = dsViewerState.sourceId != null && Number(dsViewerState.sourceId) === sid;
+      const activeLocal = viewing && dsViewerState.mode === "local" ? " is-active" : "";
+      const activeServer = viewing && dsViewerState.mode !== "local" ? " is-active" : "";
       const viewBtns = divergent
-        ? dsIconBtn("js-ds-view is-data-local", t("editor.ds.viewLocal") || "نمایش اطلاعات محلی", DS_ICO_DATA,
+        ? dsIconBtn(`js-ds-view is-data-local${activeLocal}`, t("editor.ds.viewLocal") || "نمایش اطلاعات محلی", DS_ICO_DATA,
             `data-id="${sid}" data-mode="local"`)
-          + dsIconBtn("js-ds-view is-data-server", t("editor.ds.viewServer") || "نمایش اطلاعات سرور", DS_ICO_DATA,
+          + dsIconBtn(`js-ds-view is-data-server${activeServer}`, t("editor.ds.viewServer") || "نمایش اطلاعات سرور", DS_ICO_DATA,
             `data-id="${sid}" data-mode="server"`)
         : dsIconBtn("js-ds-view", t("editor.ds.viewTable"), DS_ICO_DATA, `data-id="${sid}"`);
       const syncBadge = divergent
@@ -1862,9 +1867,10 @@
     // so both are offered instead of one ambiguous button.
     const rec = localProcessRecord();
     if (rec?.localRunPendingSync === true && !!localCopyRecord(sourceId)) return true;
-    // The process is set to run on this machine, so its private sources belong to the browser from
-    // the start — offering the local view only after a write made the button look inert.
-    return rec?.runOnServer === false && Number(sourceId) > 0;
+    // A copy that exists IS the second copy, whatever the flags say. After a sync the copy is
+    // deleted, so the pair collapses back to the single server button — the only case in which
+    // "which copy?" is a real question is while this browser actually holds one.
+    return !!localCopyRecord(sourceId);
   }
 
   /** The stored browser copy of a source, if this process has one. */
@@ -2268,6 +2274,7 @@
   async function reloadDsViewer() {
     const ds = await loadDataSourceForViewer(dsViewerState.sourceId, dsViewerState.mode);
     if (ds) renderDsViewerTable(ds);
+    paintDsViewModeChip(dsViewerState.mode === "local");
     return ds;
   }
 
@@ -2670,6 +2677,7 @@
     renderDsViewerTable(ds);
     const modal = document.getElementById("ds-viewer");
     if (modal) modal.hidden = false;
+    paintDsViewModeChip(dsViewerState.mode === "local");
     if (dsViewerState.mode === "local") {
       // No live feed for a browser-side copy: nothing was written to the server, so joining the hub
       // would let the server patch a grid it does not own.
@@ -2686,10 +2694,37 @@
     dsViewerState.sourceId = null;
     dsViewerState.source = null;
     setDsViewerLive(false);
+    paintDsViewModeChip(null);
     if (dsViewerState.connection) {
       try { await dsViewerState.connection.stop(); } catch { /* ignore */ }
       dsViewerState.connection = null;
     }
+  }
+
+  /**
+   * Say which copy the open viewer holds: green = the server's rows, grey = this browser's copy.
+   *
+   * The two data icons on the row are only usable if the modal and the pressed icon agree, so the
+   * chip repeats the colour in words and the pressed button keeps a ring.
+   */
+  function paintDsViewModeChip(localMode) {
+    const open = dsViewerState.sourceId != null;
+    const chip = document.getElementById("ds-viewer-mode");
+    if (chip) {
+      chip.hidden = !open;
+      if (open) {
+        const local = !!localMode;
+        chip.className = `ds-view-mode ${local ? "is-local" : "is-server"}`;
+        chip.textContent = local
+          ? (t("sources.modeLocal") || "دادهٔ محلی این مرورگر")
+          : (t("sources.modeServer") || "دادهٔ سرور");
+      }
+    }
+    document.querySelectorAll("#ds-list .js-ds-view").forEach((btn) => {
+      const same = open && Number(btn.dataset.id) === Number(dsViewerState.sourceId);
+      const btnLocal = btn.dataset.mode === "local";
+      btn.classList.toggle("is-active", same && btnLocal === !!localMode);
+    });
   }
 
   /**

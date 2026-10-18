@@ -50,6 +50,39 @@
     });
   }
 
+  /**
+   * The pending writes, asked for from the extension itself.
+   *
+   * `readTasks()` is this page's mirror: it is only as fresh as the last publish, and a publish is
+   * exactly what a sync is trying to catch up with. The bridge answers from the store the RUN writes
+   * and also says WHY there is nothing to send (no extension / no record / no writes), which is the
+   * difference between "sync is broken" and "this browser never ran it".
+   */
+  function requestSyncPayload(filter, timeoutMs = 1500) {
+    return new Promise((resolve) => {
+      const requestId = `sp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      let settled = false;
+      const onAnswer = (ev) => {
+        const d = ev?.detail;
+        if (!d || d.requestId !== requestId) return;
+        settled = true;
+        window.removeEventListener("da-sync-payload", onAnswer);
+        resolve(d);
+      };
+      window.addEventListener("da-sync-payload", onAnswer);
+      try {
+        window.dispatchEvent(new CustomEvent("da-request-sync-payload", {
+          detail: { requestId, taskId: filter?.taskId ?? null, sourceId: filter?.sourceId ?? null }
+        }));
+      } catch { /* no extension */ }
+      setTimeout(() => {
+        if (settled) return;
+        window.removeEventListener("da-sync-payload", onAnswer);
+        resolve(null);
+      }, timeoutMs);
+    });
+  }
+
   function writeTasks(tasks, opts) {
     const silent = !!(opts && opts.silent);
     if (silent) suppressLocalTasksRender = true;
@@ -733,14 +766,20 @@
      */
     const isPending = task.localRunPendingSync === true
       || (Array.isArray(task.locallyRunSources) && task.locallyRunSources.length > 0);
-    // A locally-running process keeps its values in this browser, even before the first write: both
-    // views must be there from the start, or the local button looks like it does nothing.
-    const runsLocally = task.runOnServer === false;
+    // Two buttons exist only while this browser HOLDS a copy of the process's data. After a sync the
+    // copy is deleted (it now lives on the server), so the pair collapses to the one server button
+    // by itself — and the next local run re-creates the copy and the pair.
+    const hasLocalCopy = !!(task.localSourceCopies && Object.keys(task.localSourceCopies).length);
+    // The open viewer's copy keeps its ring across list repaints, so it is part of the render.
+    const viewing = processViewerState.taskId != null
+      && String(processViewerState.taskId) === String(task.id);
+    const activeLocal = viewing && processViewerState.localMode ? " is-active" : "";
+    const activeServer = viewing && !processViewerState.localMode ? " is-active" : "";
     const dataBtns = hasData
-      ? ((isPending || runsLocally)
-        ? iconBtn("is-view is-data-local", t("sources.viewLocal") || "نمایش اطلاعات محلی", ICO_DATA,
+      ? ((isPending || hasLocalCopy)
+        ? iconBtn(`is-view is-data-local${activeLocal}`, t("sources.viewLocal") || "نمایش اطلاعات محلی", ICO_DATA,
             `data-da-view-data="${tid}" data-mode="local"`)
-          + iconBtn("is-view is-data-server", t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_DATA,
+          + iconBtn(`is-view is-data-server${activeServer}`, t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_DATA,
             `data-da-view-data="${tid}" data-mode="server"`)
         : iconBtn("is-view", t("tasks.viewData"), ICO_DATA, `data-da-view-data="${tid}"`))
       : "";
@@ -966,16 +1005,30 @@
     // ONE sync for the whole process: the row's button must settle every source the run touched,
     // not just the one that happens to be open somewhere. The payload is the pending-write log,
     // which is keyed by source id already.
-    const cells = Array.isArray(task.locallyRunSources) ? task.locallyRunSources : [];
+    //
+    // ASK the extension instead of reading this page's mirror: the mirror is only as fresh as the
+    // last publish, and a publish is precisely what the sync is trying to catch up with. When the
+    // extension answers, its list is the truth; when it does not answer, the mirror is the best
+    // available copy.
+    const answer = await requestSyncPayload({ taskId });
+    const cells = answer?.ok
+      ? (Array.isArray(answer.cells) ? answer.cells : [])
+      : (Array.isArray(task.locallyRunSources) ? task.locallyRunSources : []);
     const sourceIds = [...new Set(cells
       .map((c) => Number(c?.dataSourceId))
       .filter((n) => Number.isFinite(n) && n > 0))];
     if (!cells.length) {
       // Nothing to send: do NOT clear the badge. Clearing it made the row look "synced" while the
       // server had received nothing at all — the worst possible answer, because it hides the fact
-      // that the local result still needs to be produced or found.
-      notifyHome(t("tasks.syncNothingKept")
-        || "در این مرورگر نتیجهٔ محلیِ قابل ارسالی برای این فرآیند نیست (شاید اجرا روی سیستم دیگری بوده). بَج «نیاز به همگام‌سازی» دست‌نخورده ماند؛ برای ساختن نتیجه، فرآیند را محلی اجرا کنید یا از فهرست منابع نمای محلی را باز کنید.", "warn");
+      // that the local result still needs to be produced or found. Name the actual reason too:
+      // "no extension" and "the run happened elsewhere" are different problems.
+      const why = !answer
+        ? (t("tasks.syncNoExtension") || "افزونهٔ اجرا به این صفحه پاسخ نداد؛ مطمئن شوید افزونه فعال و به همین سرور وصل است، بعد دوباره تلاش کنید.")
+        : (answer.reason === "no-writes"
+          ? (t("tasks.syncNoWrites") || "افزونه این فرآیند را می‌شناسد ولی هیچ نوشتن محلی برایش ثبت نکرده است (اجرا احتمالاً چیزی ننوشته یا روی حالت «سرور» بوده).")
+          : (t("tasks.syncNothingKept")
+            || "در این مرورگر نتیجهٔ محلیِ قابل ارسالی برای این فرآیند نیست (شاید اجرا روی سیستم دیگری بوده). بَج «نیاز به همگام‌سازی» دست‌نخورده ماند؛ برای ساختن نتیجه، فرآیند را محلی اجرا کنید یا از فهرست منابع نمای محلی را باز کنید."));
+      notifyHome(why, "warn");
       render(tasks);
       return;
     }
@@ -1010,17 +1063,44 @@
         throw new Error(body.message || t("tasks.syncFail"));
       }
       const result = await res.json().catch(() => ({}));
+      const applied = Number(result?.applied) || 0;
+      const unchanged = Number(result?.unchanged) || 0;
+      const skipped = Number(result?.skipped) || 0;
+      const conflicts = Array.isArray(result?.conflicts) ? result.conflicts.length : 0;
+      // Did the server actually take the values? `applied` counts writes and `unchanged` counts
+      // cells that already held them — both mean "the server now agrees with this browser". Every
+      // other outcome (conflicts kept the server's value, skipped cells could not be addressed)
+      // means the payload was REFUSED, and clearing the badge then was the "I pressed sync, the
+      // badge vanished and the server still shows the old data" report.
+      const accepted = applied + unchanged > 0;
       const idx = findTaskIndex(tasks, taskId);
-      if (idx >= 0) {
-        // The server consumed the payload: clear the LOG as well as the flag. Clearing only the flag
-        // left `locallyRunSources` behind, so the badge (and these two data buttons) came straight
-        // back on the next render and the row claimed a divergence that no longer existed.
-        tasks[idx] = { ...tasks[idx], localRunPendingSync: false, locallyRunSources: null };
+      if (idx >= 0 && accepted) {
+        // The server consumed the payload: clear the LOG as well as the flag, and delete this
+        // browser's copies of the sources that were just sent. A copy left behind would keep
+        // offering a "local view" of data that no longer exists locally; the next local run copies
+        // the sources again, which is exactly what should bring the two buttons back.
+        const copies = { ...(tasks[idx].localSourceCopies || {}) };
+        const loadedFlags = { ...(tasks[idx].localSourcesLoaded || {}) };
+        for (const sid of sourceIds) {
+          delete copies[String(sid)];
+          delete loadedFlags[String(sid)];
+        }
+        tasks[idx] = {
+          ...tasks[idx],
+          localRunPendingSync: false,
+          locallyRunSources: null,
+          localSourceCopies: Object.keys(copies).length ? copies : null,
+          localSourcesLoaded: Object.keys(loadedFlags).length ? loadedFlags : null
+        };
         writeTasks(tasks);
         render(tasks);
+      } else if (!accepted) {
+        // Keep the log: the values are still only here, so the choice (retry after the server
+        // changes, or rebuild this copy from the server) is still the user's to make.
+        notifyHome(t("tasks.syncRefused", { applied, conflicts, skipped })
+          || `سرور هیچ سلولی را از این ارسال نپذیرفت (${conflicts} تعارض · ${skipped} نامعتبر) — نسخهٔ سرور حفظ شد و «نیاز به همگام‌سازی» باقی ماند. اگر نسخهٔ سرور درست است، این منبع را از سرور بازسازی کنید؛ وگرنه دوباره سینک کنید.`, "error");
+        return;
       }
-      const applied = Number(result?.applied) || 0;
-      const conflicts = Array.isArray(result?.conflicts) ? result.conflicts.length : 0;
       notifyHome(
         conflicts
           ? (t("tasks.syncDoneAllConflicts", { n: sourceIds.length, applied, conflicts })
@@ -1549,10 +1629,14 @@ function dataSourceSafeFileName(ds) {
    */
   function processLocalContext(taskId) {
     const row = findTask(readTasks(), String(taskId ?? ""));
-    if (!row) return { local: false, pending: false };
+    if (!row) return { local: false, pending: false, hasCopy: false };
     const pending = row.localRunPendingSync === true
       || (Array.isArray(row.locallyRunSources) && row.locallyRunSources.length > 0);
-    return { local: row.runOnServer === false, pending };
+    // "Local" means a browser copy EXISTS — not merely that the switch is set to run here. After a
+    // sync the copy is deleted, and defaulting to a local view then would draw server rows under a
+    // "this is your local copy" banner: the exact confusion the two-button pair exists to remove.
+    const hasCopy = !!(row.localSourceCopies && Object.keys(row.localSourceCopies).length);
+    return { local: pending || hasCopy, pending, hasCopy };
   }
 
   /** The browser's hydrated copy of one source for a process, if this browser holds one. */
@@ -2165,6 +2249,37 @@ function dataSourceSafeFileName(ds) {
     }
   }
 
+  /**
+   * Say WHICH copy the open viewer shows, in its header chip and on the row button that opened it.
+   *
+   * Green is the server's copy and grey is this browser's, everywhere in the product; without this
+   * chip the grid itself gave no clue which of the two the user was looking at, and the answer to
+   * "did my sync land?" depended on remembering which icon was pressed.
+   */
+  function paintProcessViewModeChip(localMode) {
+    const open = processViewerState.taskId != null;
+    const local = !!localMode;
+    const chip = document.getElementById("da-portal-ds-mode");
+    if (chip) {
+      chip.hidden = !open;
+      if (open) {
+        chip.className = `ds-view-mode ${local ? "is-local" : "is-server"}`;
+        chip.textContent = local
+          ? (t("sources.modeLocal") || "دادهٔ محلی این مرورگر")
+          : (t("sources.modeServer") || "دادهٔ سرور");
+        chip.title = local
+          ? (t("sources.localDifferNote") || "")
+          : (t("sources.modeServerHint") || "ردیف‌های روی صفحه همان چیزی است که روی سرور ذخیره شده است.");
+      }
+    }
+    document.querySelectorAll(".da-task-actions .is-data-local, .da-task-actions .is-data-server")
+      .forEach((btn) => {
+        const same = open && String(btn.dataset.daViewData) === String(processViewerState.taskId);
+        const btnLocal = btn.classList.contains("is-data-local");
+        btn.classList.toggle("is-active", same && btnLocal === local);
+      });
+  }
+
   async function closeProcessViewer() {
     const modal = document.getElementById("da-portal-ds-viewer");
     if (modal) modal.hidden = true;
@@ -2178,6 +2293,7 @@ function dataSourceSafeFileName(ds) {
     processViewerState.localMode = false;
     setProcessLocalNote(false);
     setProcessLiveStatus(false);
+    paintProcessViewModeChip(false);
     if (processViewerState.connection) {
       try { await processViewerState.connection.stop(); } catch { /* ignore */ }
       processViewerState.connection = null;
@@ -2754,12 +2870,21 @@ function dataSourceSafeFileName(ds) {
       const ctx = processLocalContext(taskId);
       const isPublicSource = hit.ds.isPublic === true || hit.ds.IsPublic === true;
       const wantLocal = mode === "local" ? true : mode === "server" ? false : ctx.local;
-      const localMode = !isPublicSource && wantLocal;
+      let localMode = !isPublicSource && wantLocal;
+      let snapshot = localMode ? localProcessSnapshot(taskId, hit.ds.id) : null;
+      // No copy in this browser means there is no local view to show. Saying so and drawing the
+      // server's rows is the honest answer; drawing server rows under a "local copy" banner is what
+      // made the same button look like it sometimes showed one thing and sometimes the other.
+      if (localMode && !snapshot) {
+        localMode = false;
+        notifyHome(t("sources.localCopyMissing")
+          || "نسخهٔ محلی این منبع روی این سیستم نیست؛ ردیف‌های نمایش‌داده‌شده از سرور خوانده می‌شوند.", "warn");
+      }
       processViewerState.localMode = localMode;
+      paintProcessViewModeChip(localMode);
       // The banner still appears for a server-run process holding unsynced local results: the grid
       // below is the server's, but the user should know a local copy is waiting to be settled.
-      setProcessLocalNote(!isPublicSource && (ctx.local || ctx.pending));
-      const snapshot = localMode ? localProcessSnapshot(taskId, hit.ds.id) : null;
+      setProcessLocalNote(!isPublicSource && localMode);
       // The stored copy already holds the run's writes; re-applying the pending log costs nothing and
       // rescues a record written before a write landed (or by an older extension build).
       if (localMode && snapshot) overlayLocalWrites(snapshot, hit.ds.id);

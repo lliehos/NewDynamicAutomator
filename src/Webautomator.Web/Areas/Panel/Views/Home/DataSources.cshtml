@@ -63,6 +63,10 @@
         <p class="ds-viewer-sub" id="da-portal-ds-sub"></p>
       </div>
         <div class="ds-viewer-head-actions">
+          <!-- Which copy the grid below is: the server's rows or this browser's. Same colour contract
+               as the row buttons (green = server, grey = local), so the icon that opened the modal
+               and the modal itself can never tell two different stories. -->
+          <span class="ds-view-mode" id="da-portal-ds-mode" hidden></span>
           <span class="ds-viewer-live" id="da-portal-ds-live" title="اتصال زنده">● آفلاین</span>
           <span class="ds-viewer-actor text-muted small" id="da-portal-ds-actor" hidden></span>
           <!-- Icon-only controls: they carry a tooltip and take one 30px square each, so the row can

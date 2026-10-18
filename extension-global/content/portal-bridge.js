@@ -405,6 +405,55 @@
     pushPageTasksToExtension();
     pullFromExtension();
   });
+
+  /**
+   * Answer the portal with the exact sync payload of one process (or one source).
+   *
+   * The page used to read its mirror, which is only as fresh as the last publish — so a sync could
+   * be attempted with nothing while the run's writes sat here, and the page had no way to tell the
+   * difference between "no extension", "no record" and "no writes". This answers from chrome.storage
+   * (where the RUN writes) and says which of the three it is.
+   */
+  window.addEventListener("da-request-sync-payload", (ev) => {
+    const detail = ev?.detail || {};
+    const requestId = String(detail.requestId || "");
+    const wantTask = detail.taskId == null || detail.taskId === "" ? null : String(detail.taskId);
+    const wantSource = detail.sourceId == null || detail.sourceId === "" ? null : Number(detail.sourceId);
+    const reply = (payload) => {
+      try {
+        window.dispatchEvent(new CustomEvent("da-sync-payload", {
+          detail: { requestId, taskId: wantTask, sourceId: wantSource, ...payload }
+        }));
+      } catch { /* ignore */ }
+    };
+    const key = `localTasks__${currentUser()}`;
+    chrome.storage.local.get([key, "localTasks"]).then((st) => {
+      const own = Array.isArray(st?.[key]) ? st[key] : null;
+      const list = own || (Array.isArray(st?.localTasks) ? st.localTasks : []);
+      if (!list.length) { reply({ ok: false, reason: "no-records", cells: [] }); return; }
+      // A source-only request (the sources list does not know which process ran) searches every
+      // record, because the pending write is what identifies the process.
+      const holder = wantTask != null
+        ? list.find((t) => String(t.id) === wantTask)
+        : list.find((t) => (Array.isArray(t?.locallyRunSources) ? t.locallyRunSources : [])
+            .some((c) => Number(c?.dataSourceId) === wantSource));
+      if (!holder) { reply({ ok: false, reason: "no-record", cells: [] }); return; }
+      const all = Array.isArray(holder.locallyRunSources) ? holder.locallyRunSources : [];
+      const cells = wantSource != null
+        ? all.filter((c) => Number(c?.dataSourceId) === wantSource)
+        : all;
+      reply({
+        ok: true,
+        taskId: String(holder.id),
+        cells,
+        total: all.length,
+        localRunAt: holder.lastLocalRunAt || null,
+        pending: holder.localRunPendingSync === true,
+        copies: Object.keys(holder.localSourceCopies || {}),
+        reason: cells.length ? null : (all.length ? "other-source" : "no-writes")
+      });
+    }).catch(() => reply({ ok: false, reason: "storage-failed", cells: [] }));
+  });
   window.addEventListener("da-local-tasks", (ev) => {
     const d = ev.detail;
     if (!d?.tasks) return;

@@ -70,6 +70,38 @@
     });
   }
 
+  /**
+   * The pending writes, asked for from the extension itself.
+   *
+   * `readTasks()` is this page's mirror and only as fresh as the last publish; the bridge answers
+   * from the store the RUN writes, and a source-only request also finds the process that holds the
+   * write — a library row has no process of its own to ask about.
+   */
+  function requestSyncPayload(filter, timeoutMs = 1500) {
+    return new Promise((resolve) => {
+      const requestId = `ss-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      let settled = false;
+      const onAnswer = (ev) => {
+        const d = ev?.detail;
+        if (!d || d.requestId !== requestId) return;
+        settled = true;
+        window.removeEventListener("da-sync-payload", onAnswer);
+        resolve(d);
+      };
+      window.addEventListener("da-sync-payload", onAnswer);
+      try {
+        window.dispatchEvent(new CustomEvent("da-request-sync-payload", {
+          detail: { requestId, taskId: filter?.taskId ?? null, sourceId: filter?.sourceId ?? null }
+        }));
+      } catch { /* no extension */ }
+      setTimeout(() => {
+        if (settled) return;
+        window.removeEventListener("da-sync-payload", onAnswer);
+        resolve(null);
+      }, timeoutMs);
+    });
+  }
+
   function escapeHtml(s) {
     return String(s ?? "").replace(/[&<>"'`]/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
@@ -248,42 +280,81 @@
     try {
       // Ask the extension what the run actually wrote before reading this page's copy of it.
       await refreshLocalTasksFromExtension();
-      // Collect this source's pending cells from every task that recorded some.
       const tasks = readTasks();
       let applied = 0, unchanged = 0, conflicts = 0, skipped = 0, syncedTasks = 0;
-      for (const task of tasks) {
-        const cells = (Array.isArray(task.locallyRunSources) ? task.locallyRunSources : [])
-          .filter((c) => Number(c?.dataSourceId) === sid);
-        if (!cells.length) continue;
-        const res = await fetch(`/api/tasks/${encodeURIComponent(task.id)}/sync-local-run`, {
+      // The extension's own answer outranks this page's mirror: the mirror is only as fresh as the
+      // last publish, and the publish is what a sync is trying to catch up with. A source-only
+      // request also finds the process that holds the write, which the library row cannot know.
+      const ownerId = pendingWritesForSource(sid)?.task?.id ?? null;
+      const answer = await requestSyncPayload({ taskId: ownerId, sourceId: sid });
+      const jobs = [];
+      if (answer?.ok && Array.isArray(answer.cells) && answer.cells.length) {
+        jobs.push({ id: String(answer.taskId), cells: answer.cells, localRunAt: answer.localRunAt || null });
+      } else {
+        for (const task of tasks) {
+          const cells = (Array.isArray(task.locallyRunSources) ? task.locallyRunSources : [])
+            .filter((c) => Number(c?.dataSourceId) === sid);
+          if (!cells.length) continue;
+          jobs.push({ id: String(task.id), cells, localRunAt: task.lastLocalRunAt || null });
+        }
+      }
+      for (const job of jobs) {
+        const res = await fetch(`/api/tasks/${encodeURIComponent(job.id)}/sync-local-run`, {
           method: "POST",
           credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ localRunAt: task.lastLocalRunAt || null, cells })
+          body: JSON.stringify({ localRunAt: job.localRunAt, cells: job.cells })
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.message || t("sources.syncFail") || "همگام‌سازی ناموفق بود.");
-        applied += Number(body.applied) || 0;
-        unchanged += Number(body.unchanged) || 0;
+        const rowApplied = Number(body.applied) || 0;
+        const rowUnchanged = Number(body.unchanged) || 0;
+        applied += rowApplied;
+        unchanged += rowUnchanged;
         skipped += Number(body.skipped) || 0;
         conflicts += Array.isArray(body.conflicts) ? body.conflicts.length : 0;
         syncedTasks += 1;
+        // Only a payload the server actually TOOK may be dropped from the pending list. Before this
+        // the log was cleared for any HTTP 200 — so a sync in which every cell lost to the server's
+        // copy reported success, cleared the badge and changed nothing, which reads as "sync does
+        // not work".
+        if (rowApplied + rowUnchanged === 0) continue;
         // Drop just this source's cells from the task's pending list; keep any other source's.
-        const idx = tasks.findIndex((x) => String(x.id) === String(task.id));
+        const idx = tasks.findIndex((x) => String(x.id) === String(job.id));
         if (idx >= 0) {
           const rest = (tasks[idx].locallyRunSources || []).filter((c) => Number(c?.dataSourceId) !== sid);
+          // The browser copy goes with the payload: the value now lives on the server, and a copy
+          // left behind would keep offering a "local view" of data that is no longer local. A new
+          // local run copies the source again, which is what re-creates the pair when it is needed.
+          const copies = { ...(tasks[idx].localSourceCopies || {}) };
+          delete copies[String(sid)];
           tasks[idx] = {
             ...tasks[idx],
             locallyRunSources: rest.length ? rest : null,
-            localRunPendingSync: rest.length ? tasks[idx].localRunPendingSync : false
+            localRunPendingSync: rest.length ? tasks[idx].localRunPendingSync : false,
+            localSourceCopies: Object.keys(copies).length ? copies : null,
+            // The revision stamp is invalid once the copy is gone; the next run must reload it.
+            localSourcesLoaded: (() => {
+              const flags = { ...(tasks[idx].localSourcesLoaded || {}) };
+              delete flags[String(sid)];
+              return Object.keys(flags).length ? flags : null;
+            })()
           };
         }
       }
       if (syncedTasks === 0) {
         // Nothing was sent, so nothing may be presented as synced: the badge stays and the server's
-        // flag is left alone. Use the local view of the source to see what this browser does hold.
-        notify(t("sources.syncNothingKept")
-          || "تغییر محلیِ قابل ارسالی برای این منبع در این مرورگر نیست؛ بَج دست‌نخورده ماند.", "warn");
+        // flag is left alone. Say which of the two reasons it is.
+        const why = !answer
+          ? (t("sources.syncNoExtension") || "افزونهٔ اجرا به این صفحه پاسخ نداد؛ آن را فعال کنید و دوباره تلاش کنید.")
+          : (t("sources.syncNothingKept")
+            || "تغییر محلیِ قابل ارسالی برای این منبع در این مرورگر نیست؛ بَج دست‌نخورده ماند.");
+        notify(why, "warn");
+      } else if (applied + unchanged === 0) {
+        notify(t("sources.syncRefused", { applied, conflicts, skipped })
+          || `سرور هیچ سلولی را نپذیرفت (${conflicts} تعارض · ${skipped} نامعتبر) — نسخهٔ سرور حفظ شد و «نیاز به همگام‌سازی» باقی ماند.`, "error");
+        writeTasks(tasks);
+        await renderAsync();
       } else {
         writeTasks(tasks);
         // The server now holds the merged value of every cell, so the BROWSER copy is rebuilt from it.
@@ -1050,39 +1121,24 @@
   }
 
   /**
-   * Process ids configured to run on this machine (`runOnServer === false`).
+   * Does this browser hold its OWN copy of the source?
    *
-   * Used only for the VIEW buttons: on such a process the browser copy is the copy that matters, so
-   * both views must be reachable even before the first write — otherwise the local view appears only
-   * after a run has already produced values, which reads as "the local data button does nothing".
+   * This — not "the process is set to run locally" — is what the two data buttons mean. A synced
+   * source has no browser copy any more (the sync deletes it), so the pair collapses back to the one
+   * server button and cannot be pressed to see a copy that no longer exists.
    */
-  let localRunTaskCache = new Set();
-  function localRunTaskIds() {
-    return localRunTaskCache;
+  function sourceHasLocalCopy(sourceId) {
+    const sid = String(Number(sourceId));
+    if (sid === "NaN") return false;
+    return readTasks().some((t) => {
+      const rec = t?.localSourceCopies?.[sid];
+      return rec && Array.isArray(rec.cells);
+    });
   }
-  /**
-   * The local-run process that uses this source, if any.
-   *
-   * A library row carries no `taskId` (the source is shared, the process is not), so the only way to
-   * know that the copy on screen belongs to this machine is to look for a locally-running process
-   * that attached the source. Without this the row's local button was decided by pending writes
-   * alone, i.e. it appeared only AFTER a run — which is why it looked inert beforehand.
-   */
-  function localRunTaskForSource(sourceId) {
-    const sid = Number(sourceId);
-    if (!Number.isFinite(sid) || sid <= 0) return null;
-    for (const task of readTasks()) {
-      if (!task || task.runOnServer !== false) continue;
-      const list = Array.isArray(task.graph?.dataSources) ? task.graph.dataSources : [];
-      if (list.some((ds) => Number(ds?.id) === sid) || task.graph?.masterDataSourceId === sid) return task;
-    }
-    return null;
-  }
+
   function recomputeLocalDivergence() {
     const ids = new Set();
-    const runIds = new Set();
     for (const task of readTasks()) {
-      if (task && task.runOnServer === false) runIds.add(String(task.id));
       const writes = Array.isArray(task?.locallyRunSources) ? task.locallyRunSources : [];
       for (const w of writes) {
         const sid = Number(w?.dataSourceId);
@@ -1090,7 +1146,6 @@
       }
     }
     localDivergentCache = ids;
-    localRunTaskCache = runIds;
     return ids;
   }
 
@@ -1372,7 +1427,39 @@
     const sync = document.getElementById("da-portal-ds-sync");
     const pending = viewerState.localCopy ? pendingWritesForSource(viewerState.sourceId) : null;
     if (sync) sync.hidden = !(pending && (pending.writes?.length || 0) > 0);
+    paintViewModeChrome();
     setLocalViewTimer(viewerState.localCopy);
+  }
+
+  /**
+   * Say WHICH copy is on screen, in the header chip and on the row button that opened it.
+   *
+   * Two identical-looking data icons are only usable if the open modal and the pressed icon agree on
+   * the answer: the server's copy is green and the browser's is grey, here as everywhere else. The
+   * pressed button keeps a ring so the pair never reads as two equal choices while one is open.
+   */
+  function paintViewModeChrome() {
+    const open = viewerState.sourceId != null;
+    const local = !!viewerState.localCopy;
+    const chip = document.getElementById("da-portal-ds-mode");
+    if (chip) {
+      chip.hidden = !open;
+      if (open) {
+        chip.className = `ds-view-mode ${local ? "is-local" : "is-server"}`;
+        chip.textContent = local
+          ? (t("sources.modeLocal") || "دادهٔ محلی این مرورگر")
+          : (t("sources.modeServer") || "دادهٔ سرور");
+        chip.title = local
+          ? (t("sources.localDifferNote") || "")
+          : (t("sources.modeServerHint") || "ردیف‌های روی صفحه همان چیزی است که روی سرور ذخیره شده است.");
+      }
+    }
+    document.querySelectorAll("#da-source-rows .js-view-local, #da-source-rows .js-view-server")
+      .forEach((btn) => {
+        const same = open && Number(btn.dataset.id) === Number(viewerState.sourceId);
+        const btnLocal = btn.dataset.mode === "local";
+        btn.classList.toggle("is-active", same && (btnLocal === local));
+      });
   }
 
   /**
@@ -2135,11 +2222,7 @@
       const copies = x?.localSourceCopies;
       return copies && copies[sid] && Array.isArray(copies[sid].cells);
     });
-    if (owner) return owner.id;
-    // No stored copy yet: a locally-running process that uses this source can still adopt it, which
-    // is what turns the first click on a local view into a stored local copy instead of a server read.
-    const localRun = localRunTaskForSource(viewerState.sourceId);
-    return localRun ? localRun.id : null;
+    return owner ? owner.id : null;
   }
 
   /** Column keys of a source snapshot, whichever of the two shapes it carries. */
@@ -2506,7 +2589,7 @@
     // Public sources stay server-backed even for a local run, so they never take the banner.
     const publicSource = viewerListRow()?.ds?.isPublic === true;
     const autoLocal = !publicSource
-      && (!!pendingWritesForSource(sourceId) || viewerProcessRunsLocally() || localRunTaskForSource(sourceId) != null);
+      && (!!pendingWritesForSource(sourceId) || sourceHasLocalCopy(sourceId));
     const localCopy = forced === "local" ? true : forced === "server" ? false : autoLocal;
     viewerState.localCopy = localCopy;
     setLocalNote(localCopy);
@@ -2713,6 +2796,7 @@
     viewerState.forceMode = null;
     setLocalNote(false);
     setLocalViewTimer(false);
+    paintViewModeChrome();
     const resetBtn = document.getElementById("da-portal-ds-reset");
     if (resetBtn) resetBtn.hidden = true;
     editingCell = null;
@@ -2745,11 +2829,9 @@
     // making it public would publish the server's stale rows as if they were everyone's truth, so
     // the data has to be settled first (sync it, or reset the local copy from the server).
     const divergent = row.ds.needsSync === true || localDivergentSourceIds().has(sid);
-    // A source of a locally-running process is a two-view source even with nothing pending yet —
-    // for a library row that process is found through the source, since the row has no taskId.
-    const dualView = divergent
-      || (row.taskId != null && localRunTaskIds().has(String(row.taskId)))
-      || localRunTaskForSource(sid) != null;
+    // Two copies exist only while this browser HOLDS a copy. After a successful sync the copy is
+    // deleted, so the pair collapses to the single server button on its own.
+    const dualView = divergent || sourceHasLocalCopy(sid);
     const publicToggle = row.fromLibrary && Number(sid) > 0
       ? iconBtn(
           `js-public${divergent ? " is-locked" : ""}`,
@@ -2779,11 +2861,16 @@
     // The reload action lives INSIDE the viewer now: replacing the file is about the data being
     // looked at, and which copy it replaces follows the view — local view rewrites the browser copy,
     // server view rewrites the server's.
+    // The copy the OPEN viewer is showing keeps its ring across list repaints: the row is rebuilt
+    // whenever local tasks change, so this has to be part of the render, not a class added once.
+    const viewing = viewerState.sourceId != null && Number(viewerState.sourceId) === sid;
+    const activeLocal = viewing && viewerState.localCopy ? " is-active" : "";
+    const activeServer = viewing && !viewerState.localCopy ? " is-active" : "";
     const viewBtn = Number(sid) > 0
       ? (dualView
-        ? iconBtn("js-view-local is-data-local", t("sources.viewLocal") || "نمایش اطلاعات محلی", ICO_DATA,
+        ? iconBtn(`js-view-local is-data-local${activeLocal}`, t("sources.viewLocal") || "نمایش اطلاعات محلی", ICO_DATA,
             `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}" data-mode="local"`)
-          + iconBtn("js-view-server is-data-server", t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_DATA,
+          + iconBtn(`js-view-server is-data-server${activeServer}`, t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_DATA,
             `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}" data-mode="server"`)
         : iconBtn("js-view", t("sources.viewTable"), ICO_DATA, `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}"`))
       : "";
