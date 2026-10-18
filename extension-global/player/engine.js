@@ -4666,10 +4666,67 @@ function recordLocalWrite(ds, rowIndex, columnKey, text) {
     cellValue: text == null ? "" : String(text),
     baseValue
   });
+  // Publish the divergence as it happens, not only when the run ends: a long run otherwise showed
+  // no "needs sync" mark for minutes, and a crash mid-run lost the fact that the source had changed.
+  scheduleLocalRunProgress();
+}
+
+/** Timer that publishes the pending writes while a local run is still going. */
+let localProgressTimer = null;
+/** Sources already reported for this run, so the report is one small call per source, not per write. */
+const localProgressReported = new Set();
+
+/**
+ * Debounced publish of this run's pending writes.
+ *
+ * Writes into the task record (so the processes/sources lists show "needs sync" immediately) and
+ * reports the touched source ids to the server once each. Both are cheap and bounded: the task store
+ * is local, and the report is a metadata POST with ids only — no cell values travel until the user
+ * presses Sync.
+ */
+function scheduleLocalRunProgress() {
+  if (playStatus.runOnServer !== false) return;
+  if (localProgressTimer) return;
+  localProgressTimer = setTimeout(() => {
+    localProgressTimer = null;
+    flushLocalRunProgress().catch(() => {});
+  }, 1200);
+}
+
+async function flushLocalRunProgress() {
+  const taskId = String(playStatus.taskId || "").trim();
+  if (!taskId) return;
+  const cells = collectLocalRunWrites();
+  if (!cells.length) return;
+  try {
+    const tasks = await loadUserTasks();
+    const idx = tasks.findIndex((t) => String(t.id) === taskId);
+    if (idx >= 0) {
+      tasks[idx] = { ...tasks[idx], localRunPendingSync: true, locallyRunSources: cells };
+      await saveUserTasks(tasks);
+    }
+  } catch { /* the end-of-run write is the fallback */ }
+  try {
+    const ids = [...new Set(cells.map((c) => Number(c?.dataSourceId)).filter((n) => Number.isFinite(n) && n > 0))]
+      .filter((id) => !localProgressReported.has(id));
+    if (ids.length) {
+      ids.forEach((id) => localProgressReported.add(id));
+      portalFetch(`/api/tasks/${encodeURIComponent(taskId)}/local-run-changes`, {
+        method: "POST",
+        body: JSON.stringify({ dataSourceIds: ids })
+      }).catch(() => {});
+    }
+  } catch { /* the local flag above is what this browser reads */ }
+  try { chrome.runtime.sendMessage({ type: "localRunPendingSync", taskId }); } catch { /* portal closed */ }
 }
 
 function resetLocalRunWrites() {
   localRunWrites = new Map();
+  localProgressReported.clear();
+  if (localProgressTimer) {
+    clearTimeout(localProgressTimer);
+    localProgressTimer = null;
+  }
 }
 
 function collectLocalRunWrites() {

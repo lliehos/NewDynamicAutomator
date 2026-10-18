@@ -1380,6 +1380,7 @@
     "resetLocal": "Reset data from server",
     "resetLocalConfirm": "Re-read the server's data into the local copy? Unsynced local changes are replaced (the server is not changed).",
     "resetLocalDone": "The local copy was rebuilt from the server's data.",
+    "publicBlockedBySync": "Settle this source's local data first (sync it, or reset the local copy from the server).",
     "reloadLocalConfirm": "Load \"{file}\" into the local copy of \"{title}\" only? The server is not changed.",
     "reloadLocalDone": "The new file was loaded into the local copy; the server is unchanged.",
     "syncLocalPendingHint": "Local-run changes are held in this browser and have not reached the server yet."

@@ -1178,22 +1178,60 @@
     localTimer: null
   };
 
-  /** The browser's copy of the open source, newest first (process snapshot, then the grid). */
-  function localCopySnapshot() {
-    const ownerId = localGridOwnerTaskId();
-    if (ownerId != null) {
-      const row = readTasks().find((t) => String(t.id) === String(ownerId));
-      for (const g of [row?.graph, row?.canvasCache?.graph].filter(Boolean)) {
-        const snap = (g.dataSources || []).find((d) => Number(d.id) === Number(viewerState.sourceId));
-        if (snap && Array.isArray(snap.cells)) return snap;
-      }
+  /**
+   * The stored browser copy of one source.
+   *
+   * A dedicated record on the owning process (`localSourceCopies[sourceId]`) rather than the process
+   * GRAPH: the graph carries only the cells a run happened to load/touch, so rendering it showed a
+   * single partial row and then nothing. This record is the full copy the local view and the next
+   * local run both use.
+   */
+  function readLocalCopyRecord(taskId, sourceId) {
+    if (taskId == null) return null;
+    const task = readTasks().find((t) => String(t.id) === String(taskId));
+    const rec = task?.localSourceCopies?.[String(Number(sourceId))];
+    if (!rec || !Array.isArray(rec.cells)) return null;
+    return { ...rec, id: Number(sourceId) };
+  }
+
+  /** The grid the LOCAL view renders: the stored copy with the pending writes applied on top. */
+  function buildLocalView() {
+    const sourceId = Number(viewerState.sourceId);
+    if (!Number.isFinite(sourceId)) return null;
+    const stored = readLocalCopyRecord(localGridOwnerTaskId(), sourceId);
+    if (!stored) {
+      // No stored copy yet: fall back to whatever is on screen, as long as it is this source.
+      return Number(viewerState.lastSource?.id) === sourceId ? viewerState.lastSource : null;
     }
-    return viewerState.lastSource;
+    const view = {
+      ...stored,
+      cells: (stored.cells || []).map((c) => ({ ...c })),
+      columns: Array.isArray(stored.columns) ? stored.columns.map((c) => ({ ...c })) : [],
+      columnKeys: Array.isArray(stored.columnKeys) ? stored.columnKeys.slice() : []
+    };
+    applyPendingWrites(view, sourceId);
+    return view;
+  }
+
+  /**
+   * Make sure a stored copy exists for the open source, reading the server ONCE if this browser has
+   * never built one. Everything afterwards is local.
+   */
+  async function ensureLocalCopy() {
+    const sourceId = Number(viewerState.sourceId);
+    if (!Number.isFinite(sourceId)) return null;
+    const ownerId = localGridOwnerTaskId();
+    if (!readLocalCopyRecord(ownerId, sourceId)) {
+      const fresh = await fetchSourceContent(sourceId);
+      fresh.id = sourceId;
+      persistLocalGridCopy(fresh);
+    }
+    return buildLocalView();
   }
 
   /**
    * A local grid has no live feed: the run's writes never reach the server, so the hub cannot patch
-   * this table. A slow timer repaints it from the browser's own copy instead — cheap (localStorage
+   * this table. A slow timer repaints it from the stored browser copy instead — cheap (localStorage
    * only, no requests), and frequent enough that a running local process is visibly filling rows.
    */
   function setLocalViewTimer(on) {
@@ -1204,13 +1242,13 @@
     if (!on) return;
     viewerState.localTimer = setInterval(() => {
       if (!viewerState.localCopy || viewerState.sourceId == null) return;
-      const snap = localCopySnapshot();
-      if (!snap) return;
       // Do not fight the inline editor: it is a DOM edit on top of the grid, and a repaint would
       // throw away the half-typed value.
       if (editingCell) return;
-      viewerState.lastSource = snap;
-      renderViewerTable(snap);
+      const view = buildLocalView();
+      if (!view) return;
+      viewerState.lastSource = view;
+      renderViewerTable(view);
     }, 2000);
   }
 
@@ -1706,9 +1744,11 @@
     // The write belongs to the process that owns this copy: the one with pending writes for the
     // source, or — for a process merely set to run locally — that process itself.
     const pending = pendingWritesForSource(sourceId);
-    const tasks = pending ? pending.tasks : readTasks();
     const ownerId = pending ? pending.task.id : viewerState.taskId;
     if (ownerId != null) {
+      // Re-read INSIDE the write: the pending list may have grown while this edit was being typed,
+      // and saving an older snapshot of the store would silently roll those writes back.
+      const tasks = readTasks();
       const owned = tasks.map((task) => {
         if (String(task.id) !== String(ownerId)) return task;
         const list = (Array.isArray(task.locallyRunSources) ? task.locallyRunSources : []).slice();
@@ -1726,7 +1766,9 @@
         });
         return { ...task, locallyRunSources: list, localRunPendingSync: true };
       });
-      writeTasks(owned);
+      writeTasks(owned, { silent: true });
+      // Keep the stored browser copy in step, or the 2s repaint would bring the old value back.
+      if (source) persistLocalGridCopy(source);
       viewerState.localDirty = true;
       viewerState.localCopy = true;
       setLocalNote(true);
@@ -1992,28 +2034,46 @@
     });
   }
 
-  /** Mirror the displayed copy onto the owning process's local snapshot, so it survives a re-open. */
+  /**
+   * Store the displayed copy as the browser copy of this source.
+   *
+   * Two places on purpose: a dedicated record (`localSourceCopies[sourceId]`) is what the local view
+   * and the timer render — a COMPLETE copy — while the process graph entry is what a local run reads.
+   * Keeping the graph in step means the next run starts from the same values the user just saw.
+   */
   function persistLocalGridCopy(ds) {
     const taskId = localGridOwnerTaskId();
     if (taskId == null || !ds) return;
+    const sourceId = Number(ds.id ?? viewerState.sourceId);
+    if (!Number.isFinite(sourceId)) return;
     const tasks = readTasks();
     const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
     if (idx < 0) return;
     const task = tasks[idx];
-    let touched = false;
+    const record = {
+      cells: Array.isArray(ds.cells) ? ds.cells : [],
+      columns: Array.isArray(ds.columns) ? ds.columns : [],
+      columnKeys: Array.isArray(ds.columnKeys) ? ds.columnKeys : [],
+      rowCount: Number(ds.rowCount) || 0,
+      columnCount: Number(ds.columnCount) || (Array.isArray(ds.columnKeys) ? ds.columnKeys.length : 0),
+      fileName: ds.fileName || null,
+      title: ds.title || null,
+      savedAtUtc: new Date().toISOString()
+    };
+    const copies = { ...(task.localSourceCopies || {}) };
+    copies[String(sourceId)] = record;
+    // The graph entry stays the run's input, so it gets the same values.
     [task.graph, task.canvasCache?.graph].filter(Boolean).forEach((g) => {
-      const snap = (g.dataSources || []).find((d) => Number(d.id) === Number(viewerState.sourceId));
+      const snap = (g.dataSources || []).find((d) => Number(d.id) === sourceId);
       if (!snap) return;
-      snap.cells = ds.cells;
-      snap.columns = ds.columns;
-      snap.columnKeys = ds.columnKeys;
-      snap.rowCount = ds.rowCount;
-      snap.columnCount = ds.columnCount;
-      touched = true;
+      snap.cells = record.cells;
+      snap.columns = record.columns;
+      snap.columnKeys = record.columnKeys;
+      snap.rowCount = record.rowCount;
+      snap.columnCount = record.columnCount;
     });
-    if (!touched) return;
-    tasks[idx] = { ...task };
-    writeTasks(tasks);
+    tasks[idx] = { ...task, localSourceCopies: copies };
+    writeTasks(tasks, { silent: true });
   }
 
   /**
@@ -2273,12 +2333,46 @@
     return `c${n}`;
   }
 
-  /** Reload the open source from the server and repaint the grid (keeps the zoom/scroll owner). */
+  /**
+   * Repaint the open source.
+   *
+   * The MODE is decided first, without a request: the SERVER view (or an ordinary, undiverged source)
+   * reads the server's rows, while the LOCAL view renders the browser copy that this page stores for
+   * the source. Reading the server into the local view was the bug that showed one partial row and
+   * then lost it — the copy on screen must be the copy this browser actually holds.
+   */
   async function refreshViewer(opts) {
     const sourceId = viewerState.sourceId;
     if (sourceId == null) return;
     // A caller that already shows its own overlay passes busy:false so the counter stays balanced.
     const busy = opts?.busy !== false;
+    const forced = viewerState.forceMode;
+    // Public sources stay server-backed even for a local run, so they never take the banner.
+    const publicSource = viewerListRow()?.ds?.isPublic === true;
+    const autoLocal = !publicSource
+      && (!!pendingWritesForSource(sourceId) || viewerProcessRunsLocally());
+    const localCopy = forced === "local" ? true : forced === "server" ? false : autoLocal;
+    viewerState.localCopy = localCopy;
+    setLocalNote(localCopy);
+
+    if (localCopy) {
+      try {
+        const view = await ensureLocalCopy();
+        if (view) {
+          viewerState.localDirty = (pendingWritesForSource(sourceId)?.writes?.length || 0) > 0;
+          viewerState.cellRevisions = null;
+          viewerState.cellMeta = null;
+          viewerState.lastSource = view;
+          renderViewerTable(view);
+        }
+      } catch { /* keep whatever is on screen */ }
+      finally {
+        syncViewerModeChrome();
+        if (busy) setGridBusy(false);
+      }
+      return;
+    }
+
     if (busy) setGridBusy(true, "sources.loadingGrid");
     try {
       // One walk supplies the cells, the per-cell revisions the inline editor checks against, and
@@ -2286,20 +2380,7 @@
       const fresh = await fetchSourceContent(sourceId);
       viewerState.cellRevisions = fresh.cellRevisions || null;
       viewerState.cellMeta = fresh.cellMeta || null;
-      // A local run's unsynced values are overlaid on the server rows: the grid then shows what this
-      // browser would run on (server + local changes), and the banner says so. The SERVER view the
-      // operator explicitly opened must stay the server's own rows, so it skips the overlay.
-      const forced = viewerState.forceMode;
-      const pendingCount = forced === "server" ? 0 : applyPendingWrites(fresh, sourceId);
-      viewerState.localDirty = pendingCount > 0 && forced !== "server";
-      // Public sources stay server-backed even for a local run, so they never take the banner.
-      const publicSource = viewerListRow()?.ds?.isPublic === true;
-      viewerState.localCopy = forced === "local"
-        ? true
-        : forced === "server"
-          ? false
-          : (!publicSource && (pendingCount > 0 || viewerProcessRunsLocally()));
-      setLocalNote(viewerState.localCopy);
+      viewerState.localDirty = false;
       viewerState.lastSource = fresh;
       renderViewerTable(fresh);
       syncViewerModeChrome();
@@ -2483,13 +2564,18 @@
     const canShape = row.ds.canEditStructure !== false;
     const isPublic = row.ds.isPublic === true;
     // Only a library row can be made public/private: the toggle needs an owner, and an ad-hoc
-    // in-process source has none.
+    // in-process source has none. A source whose local data still diverges cannot be shared yet —
+    // making it public would publish the server's stale rows as if they were everyone's truth, so
+    // the data has to be settled first (sync it, or reset the local copy from the server).
+    const divergent = row.ds.needsSync === true || localDivergentSourceIds().has(sid);
     const publicToggle = row.fromLibrary && Number(sid) > 0
       ? iconBtn(
-          "js-public",
-          isPublic ? (t("sources.makePrivate") || "خصوصی کردن") : (t("sources.makePublic") || "عمومی کردن"),
+          `js-public${divergent ? " is-locked" : ""}`,
+          divergent
+            ? (t("sources.publicBlockedBySync") || "ابتدا دادهٔ محلی این منبع را با سرور تعیین تکلیف کنید (همگام‌سازی یا ریست از سرور)")
+            : (isPublic ? (t("sources.makePrivate") || "خصوصی کردن") : (t("sources.makePublic") || "عمومی کردن")),
           ICO_GLOBE,
-          `data-id="${sid}" data-public="${isPublic ? "0" : "1"}"`)
+          `data-id="${sid}" data-public="${isPublic ? "0" : "1"}"${divergent ? " disabled" : ""}`)
       : "";
     // The add-a-public-source-to-my-process action that used to live in the diagram editor; the
     // sources list is where a source is picked, so the button lives next to the source now.
@@ -2504,7 +2590,6 @@
     // report, which a local run may never have managed to send) and this browser's pending-write log
     // (which the server cannot see at all). The divergence belongs to the source, so the affordance
     // lives on its row, next to the "needs sync" badge that explains it.
-    const divergent = row.ds.needsSync === true || localDivergentSourceIds().has(sid);
     const syncBtn = divergent
       ? iconBtn("js-sync is-sync", t("sources.syncNow") || "همگام‌سازی با سرور", ICO_RELOAD,
           `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`)

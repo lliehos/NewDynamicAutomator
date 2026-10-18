@@ -870,6 +870,12 @@ rect.flow-marquee{pointer-events:none}
 .ds-actions .ds-icon-btn.is-data-server:hover{background:rgba(40,199,111,.12)}
 .ds-actions .ds-icon-btn.is-data-local{color:#a8aaae}
 .ds-actions .ds-icon-btn.is-data-local:hover{background:rgba(168,170,174,.16)}
+/* A control that is blocked until the data is settled (e.g. «عمومی کردن» while a source still owes
+   the server its local changes): greyed out, not hidden — the tooltip explains why. */
+.ds-actions .ds-icon-btn:disabled,
+.ds-actions .ds-icon-btn.is-locked{opacity:.45;cursor:not-allowed}
+.ds-actions .ds-icon-btn:disabled:hover,
+.ds-actions .ds-icon-btn.is-locked:hover{background:transparent}
 .ds-viewer[hidden]{display:none!important}
 .ds-viewer{
   position:fixed;
