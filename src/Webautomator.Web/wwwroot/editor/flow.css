@@ -833,6 +833,8 @@ rect.flow-marquee{pointer-events:none}
 .ds-badge-public{display:inline-flex;align-items:center;font-size:10px;font-weight:700;color:#0f766e;background:#e6f6f4;border-radius:999px;padding:1px 7px;margin-inline-start:6px}
 /* A source that exists only in this browser: the exception worth noticing, so it keeps a label. */
 .ds-badge-local{display:inline-flex;align-items:center;font-size:10px;font-weight:700;color:#b45309;background:#fff7e6;border-radius:999px;padding:1px 7px;margin-inline-start:6px;cursor:help}
+/* Local run results that have not reached the server yet: the source has two different copies. */
+.ds-badge-sync{display:inline-flex;align-items:center;font-size:10px;font-weight:700;color:#7a5b10;background:#fff7e6;border:1px solid #f0c36d;border-radius:999px;padding:1px 7px;margin-inline-start:6px;cursor:help}
 .ds-list li.ds-is-public{background:#f4fbfa}
 .ds-icon-btn{
   display:inline-flex;align-items:center;justify-content:center;

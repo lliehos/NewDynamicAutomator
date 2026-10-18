@@ -2255,9 +2255,10 @@
     ["saveDataSourceId", "saveColumnName"]
   ];
 
-  /** Reload the open source from the server and repaint the viewer table. */
+  /** Reload the open source in the copy being shown: the browser's view re-reads it, the server's
+   *  view asks the server. */
   async function reloadDsViewer() {
-    const ds = await loadDataSourceForViewer(dsViewerState.sourceId);
+    const ds = await loadDataSourceForViewer(dsViewerState.sourceId, dsViewerState.mode);
     if (ds) renderDsViewerTable(ds);
     return ds;
   }
