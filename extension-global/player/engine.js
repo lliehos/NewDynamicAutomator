@@ -4587,8 +4587,11 @@ async function ensureLocalSourceValues(taskId, graph) {
  * deliberate exception: it belongs to everyone, so it stays server-backed even in a local run —
  * reading it locally would show one machine's stale view of data other people are writing.
  *
- * Falls back to the server when the local copy has no value at all, so a source that could not be
- * loaded still reads correctly rather than coming back empty.
+ * A source whose copy was never loaded (the load failed) still falls back to the server, so one
+ * unreadable source cannot turn a whole run into empty values. But once a copy EXISTS, a missing
+ * cell is answered from that copy — empty — instead of one server round trip per lookup: the run is
+ * meant to work on the data it started from, and a request per cell is the traffic local mode exists
+ * to avoid.
  */
 async function readCellForRun(ds, graph, rowIndex, columnKey) {
   if (playStatus.runOnServer !== false || isPublicSource(ds, graph)) {
@@ -4596,16 +4599,17 @@ async function readCellForRun(ds, graph, rowIndex, columnKey) {
   }
   const col = String(columnKey || "").trim();
   const row = Number(rowIndex) || 0;
-  const hit = (ds?.cells || []).find((c) =>
+  const cells = Array.isArray(ds?.cells) ? ds.cells : null;
+  if (!cells) {
+    // Never loaded on this machine: one read keeps behaviour correct instead of a false empty.
+    return await readServerCell(Number(ds?.id), rowIndex, columnKey);
+  }
+  const hit = cells.find((c) =>
     (c.key === col || c.Key === col || c.columnName === col)
     && Number(c.index ?? c.Index ?? c.rowIndex) === row
   );
-  if (hit) {
-    const v = hit.cellValue !== undefined ? hit.cellValue : hit.CellValue;
-    return { ok: true, body: { cellValue: v == null ? "" : String(v), local: true } };
-  }
-  // Nothing cached: one server read keeps behaviour correct instead of returning a False empty.
-  return await readServerCell(Number(ds?.id), rowIndex, columnKey);
+  const v = hit ? (hit.cellValue !== undefined ? hit.cellValue : hit.CellValue) : "";
+  return { ok: true, body: { cellValue: v == null ? "" : String(v), local: true } };
 }
 
 /**
@@ -4818,6 +4822,9 @@ async function readDataSourceMetaFromServer(dataSourceId) {
 async function ensureDataSourceRowCountMeta(ds) {
   const id = Number(ds?.id);
   if (!id || Number(ds.rowCount) > 0) return;
+  // A local run already holds this source's copy: zero rows means the copy IS empty, not "unknown",
+  // so asking the server would be a request spent to learn nothing.
+  if (playStatus.runOnServer === false && !isPublicSource(ds, null) && Array.isArray(ds?.cells)) return;
   const res = await readDataSourceMetaFromServer(id);
   if (!res?.ok || !res.body) return;
   ds.rowCount = Number(res.body.rowCount ?? res.body.RowCount) || ds.rowCount || 0;
@@ -5070,6 +5077,23 @@ async function readSourceColumnForCheck(ds, columnKey) {
   const id = Number(ds?.id);
   const col = String(columnKey || "").trim();
   if (!id || !col) return null;
+  // A local run of a private source scans the copy it loaded: the scan is a memory walk. Paging the
+  // server for every evaluation of a whole-column condition is exactly the traffic local mode is
+  // there to avoid (and on a 500-row source it is 500 rows per condition check).
+  if (playStatus.runOnServer === false && !isPublicSource(ds, null) && Array.isArray(ds?.cells)) {
+    const want = col.toLowerCase();
+    const byRow = new Map();
+    ds.cells.forEach((c) => {
+      const key = String(c.key ?? c.Key ?? c.columnName ?? "").trim();
+      if (key.toLowerCase() !== want) return;
+      byRow.set(Number(c.index ?? c.Index ?? c.rowIndex) || 0, String(c.cellValue ?? c.CellValue ?? ""));
+    });
+    const rows = Number(ds.rowCount) || 0;
+    const end = Math.max(rows, byRow.size ? Math.max(...byRow.keys()) + 1 : 0);
+    const values = [];
+    for (let r = 0; r < end; r++) values.push(byRow.has(r) ? byRow.get(r) : "");
+    return values;
+  }
   let rowCount = Number(ds.rowCount) || 0;
   if (rowCount <= 0) {
     const meta = await readDataSourceMetaFromServer(id);
@@ -5139,6 +5163,12 @@ async function readSourceRowForCheck(ds, rowIndex) {
   const id = Number(ds?.id);
   const row = Number(rowIndex) || 0;
   if (!id) return null;
+  // Same rule as the column scan: a local run answers from its own copy, no server page.
+  if (playStatus.runOnServer === false && !isPublicSource(ds, null) && Array.isArray(ds?.cells)) {
+    return ds.cells
+      .filter((c) => Number(c.index ?? c.Index ?? c.rowIndex) === row)
+      .map((c) => String(c.cellValue ?? c.CellValue ?? ""));
+  }
   try {
     const res = await callBackground({ type: "readDataSourceRow", dataSourceId: id, rowIndex: row });
     if (!res?.ok || !res.body) {
