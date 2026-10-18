@@ -758,6 +758,30 @@
     const tasks = readTasks();
     const idx = findTaskIndex(tasks, taskId);
     if (idx < 0) return;
+    if (on) {
+      // Turning server runs ON says "from now on the server is the truth for this process". Unsynced
+      // local results would then sit in a browser nobody will run from again, so the user is sent to
+      // resolve them first — sync them, or reset the local copy from the server — instead of the
+      // switch silently orphaning them.
+      const task = tasks[idx];
+      const pendingCells = Array.isArray(task.locallyRunSources) ? task.locallyRunSources.length : 0;
+      if (task.localRunPendingSync === true || pendingCells > 0) {
+        const msg = t("tasks.syncBeforeServerBlocked", { n: pendingCells })
+          || `این فرآیند ${pendingCells} تغییر محلیِ سینک‌نشده دارد. پیش از روشن‌کردن «اجرای روی سرور»، از فهرست منابع با دکمهٔ «همگام‌سازی با سرور» آن‌ها را منتقل کنید یا با «ریست دیتا از سرور» نسخهٔ محلی را از دادهٔ سرور بازسازی کنید.`;
+        if (window.DaNotify?.confirm) {
+          await DaNotify.confirm(msg, {
+            title: t("tasks.syncBeforeServerTitle") || "تعیین تکلیف دادهٔ محلی",
+            okText: t("common.ok") || "باشه",
+            cancelText: t("common.cancel") || "انصراف"
+          });
+        } else {
+          window.alert(msg);
+        }
+        // Either way the switch stays OFF: the run mode may not move on before the data is settled.
+        render(tasks);
+        return;
+      }
+    }
     if (!on) {
       const msg = t("tasks.runOnServerOffConfirm")
         || "اجرا و منابع این فرآیند به سیستم خودتان منتقل می‌شود و روی سرور ثبت نمی‌شود. ادامه می‌دهید؟";
@@ -2494,12 +2518,16 @@ function dataSourceSafeFileName(ds) {
       }
       processViewerState.taskId = taskId;
       // A public/shared source stays server-backed even for a local run, so only a private source of
-      // a locally-run process is shown from the browser's copy.
+      // a locally-run process is shown from the browser's copy. A SERVER-run process keeps its old
+      // behaviour (live server rows + hub) even when unsynced local results exist — those belong to
+      // the sources list, where the two data icons resolve them.
       const ctx = processLocalContext(taskId);
       const isPublicSource = hit.ds.isPublic === true || hit.ds.IsPublic === true;
-      const localMode = !isPublicSource && (ctx.local || ctx.pending);
+      const localMode = !isPublicSource && ctx.local;
       processViewerState.localMode = localMode;
-      setProcessLocalNote(localMode);
+      // The banner still appears for a server-run process holding unsynced local results: the grid
+      // below is the server's, but the user should know a local copy is waiting to be settled.
+      setProcessLocalNote(!isPublicSource && (ctx.local || ctx.pending));
       const snapshot = localMode ? localProcessSnapshot(taskId, hit.ds.id) : null;
       renderProcessViewerTable(snapshot || hit.ds);
       const modal = document.getElementById("da-portal-ds-viewer");

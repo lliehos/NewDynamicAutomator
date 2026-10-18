@@ -2524,7 +2524,6 @@
       ${Number(sid) > 0 && canShape ? iconBtn("js-rename", t("sources.rename"), ICO_RENAME, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
       ${viewBtn}
       ${row.taskId != null ? iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`) : ""}
-      ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-id="${sid}"`)}
       ${master}
       ${publicToggle}
       ${attachBtn}
@@ -2555,9 +2554,6 @@
     });
     root.querySelectorAll(".js-dl").forEach((btn) => {
       btn.addEventListener("click", () => downloadSource(btn.dataset.task, btn.dataset.id, btn));
-    });
-    root.querySelectorAll(".js-cloud").forEach((btn) => {
-      btn.addEventListener("click", () => notify(t("sources.saveServerSoonToast") || t("sources.libraryHint"), "info"));
     });
     root.querySelectorAll(".js-public").forEach((btn) => {
       btn.addEventListener("click", () => togglePublic(btn.dataset.id, btn.dataset.public === "1"));

@@ -1527,6 +1527,8 @@
     "localHydrateLoading": "Checking source revisions for the local run…",
     "localHydrateFail": "Local preload failed for {n} source(s); they will be read from the server during the run.",
     "localHydratePending": "{n} unsynced local change(s) were re-applied on top of the fresh server data; use \"Sync with server\" when the run finishes.",
+    "syncBeforeServerTitle": "Settle the local data first",
+    "syncBeforeServerBlocked": "This process has {n} unsynced local change(s). Before switching server runs on, send them with \"Sync with server\" or rebuild the local copy from the server with \"Reset data from server\" in the sources list.",
     "recordChildDisabled": "This process was created from a template, so it cannot be recorded. Edit the mother process to change its structure.",
     "editLocked": "Structure locked — this process inherits its steps from the template ({name}). Edit the mother process to change them.",
     "templateInfoUnavailable": "Template details are not available.",
