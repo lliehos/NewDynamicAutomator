@@ -202,16 +202,28 @@
         </div>
         <div class="ds-viewer-head-actions">
           <span class="ds-viewer-live" id="ds-viewer-live" data-i18n="editor.ds.offline">@L["editor.ds.offline"]</span>
-          <!-- Excel export lives here now (it was a per-row button on the start node's source list):
-               the file then matches the copy the grid is showing. -->
+          <!-- Icon-only, like every other data viewer in the product: each control carries a tooltip
+               and takes one square, so the head never wraps and no button is a word. -->
           <button type="button" class="ds-icon-btn" id="ds-viewer-download"
                   title="@L["editor.ds.downloadExcel"]" aria-label="@L["editor.ds.downloadExcel"]"
                   data-i18n-title="editor.ds.downloadExcel" data-i18n-aria="editor.ds.downloadExcel">
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 3h2v8.2l2.9-2.9 1.4 1.4-5.3 5.3-5.3-5.3 1.4-1.4 2.9 2.9V3zM5 16.6h14v2H5v-2z"/></svg>
           </button>
-          <button type="button" class="btn-flow btn-ghost" id="ds-viewer-clear" data-i18n="editor.ds.clearData">@L["editor.ds.clearData"]</button>
-          <button type="button" class="btn-flow btn-ghost" id="ds-viewer-refresh" data-i18n="editor.ds.refresh">@L["editor.ds.refresh"]</button>
-          <button type="button" class="btn-flow btn-ghost" data-ds-viewer-close="1" data-i18n="editor.ds.close">@L["editor.ds.close"]</button>
+          <button type="button" class="ds-icon-btn" id="ds-viewer-clear"
+                  title="@L["editor.ds.clearData"]" aria-label="@L["editor.ds.clearData"]"
+                  data-i18n-title="editor.ds.clearData" data-i18n-aria="editor.ds.clearData">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16.2 3.3c.6-.6 1.6-.6 2.2 0l2.3 2.3c.6.6.6 1.6 0 2.2l-9.3 9.2q-.3.3-.7.5l-1.7 1.4q-.9.5-1.8-.2l-2.6-2.6q-.6-.9-.2-1.8l1.4-1.7q.2-.4.5-.7zM8.4 15.2l-3-3-.9 1.1 2.6 2.6z"/><path fill="currentColor" d="M3 19.6h18v2H3z"/></svg>
+          </button>
+          <button type="button" class="ds-icon-btn" id="ds-viewer-refresh"
+                  title="@L["editor.ds.refresh"]" aria-label="@L["editor.ds.refresh"]"
+                  data-i18n-title="editor.ds.refresh" data-i18n-aria="editor.ds.refresh">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5a7 7 0 0 1 6.5 4.4l1.9-1.1V13h-4.7l1.8-1A5 5 0 1 0 12 17v2a7 7 0 1 1 0-14z"/></svg>
+          </button>
+          <button type="button" class="ds-icon-btn" data-ds-viewer-close="1"
+                  title="@L["editor.ds.close"]" aria-label="@L["editor.ds.close"]"
+                  data-i18n-title="editor.ds.close" data-i18n-aria="editor.ds.close">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M18.3 5.7L12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
+          </button>
         </div>
       </div>
       <div class="ds-viewer-legend">

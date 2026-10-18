@@ -92,11 +92,20 @@
                   data-i18n-title="sources.reloadFile" data-i18n-aria="sources.reloadFile">
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3l4.5 4.5-1.4 1.4L13 6.8V15h-2V6.8L8.9 8.9 7.5 7.5 12 3zM5 17h14v2H5v-2z"/></svg>
           </button>
-          <!-- Local view only: rebuild the browser copy from the server's rows (never empties it). -->
+          <!-- Local view only, and only while this browser still owes the server writes: the PRIMARY
+               action there is sending them UP. It is the mirror of the "reset from server" button
+               below, and the two share no shape on purpose — confusing them loses a run's result. -->
+          <button type="button" class="ds-icon-btn" id="da-portal-ds-sync" hidden
+                  title="ارسال نتیجهٔ محلی به سرور" aria-label="ارسال نتیجهٔ محلی به سرور"
+                  data-i18n-title="sources.syncNowTitle" data-i18n-aria="sources.syncNowTitle">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 4h2v9.2l2.3-2.3 1.4 1.4L12 17l-4.7-4.7 1.4-1.4L11 13.2V4zM5 19h14v2H5v-2z"/></svg>
+          </button>
+          <!-- The opposite direction: throw the local copy away and rebuild it from the server. -->
           <button type="button" class="ds-icon-btn" id="da-portal-ds-reset" hidden
-                  title="ریست دیتا از سرور" aria-label="ریست دیتا از سرور"
-                  data-i18n-title="sources.resetLocal" data-i18n-aria="sources.resetLocal">
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17.5 18H8a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 19 11.5a3.5 3.5 0 0 1-1.5 6.5zM11 8.5l1.5 1.5-1.4 1.4L13 13.3V9h1v6h-1l2-2 1.4-1.4L13 8.5h-2z"/></svg>
+                  title="بازسازی نسخهٔ محلی از سرور (نتیجهٔ اجرای محلی از بین می‌رود)"
+                  aria-label="بازسازی نسخهٔ محلی از سرور"
+                  data-i18n-title="sources.resetLocalTitle" data-i18n-aria="sources.resetLocalTitle">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5V2L7 6l5 4V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>
           </button>
           <button type="button" class="ds-icon-btn" data-portal-ds-close="1"
                   title="بستن" aria-label="بستن"

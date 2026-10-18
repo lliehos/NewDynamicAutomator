@@ -18,6 +18,10 @@
   // A rate reads better with an explicit "/s"; "0 B/s" only when genuinely idle.
   string Rate(long perSec) => perSec <= 0 ? "0 B/s" : $"{Bytes(perSec)}/s";
 
+  // The chart's tooltip is a measurement, not a summary: a bucket with no traffic in one direction
+  // has to say "0 B" rather than a dash, which reads as "unknown".
+  string ChartBytes(long value) => value <= 0 ? "0 B" : Bytes(value);
+
   string Pct(long value, long max) =>
       (max <= 0 ? 0 : Math.Clamp(100.0 * value / max, 0, 100))
       .ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
@@ -31,7 +35,10 @@
     if (value <= 0) return 1;
     var magnitude = Math.Pow(10, Math.Floor(Math.Log10(value)));
     var norm = value / magnitude;
-    var step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+    // A finer set than the classic 1/2/5: with 5-only steps a peak of 5.3 MB was scaled to 10 MB, so
+    // the tallest bar filled barely half the box and looked wrong next to its own value.
+    double[] steps = { 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10 };
+    var step = steps.First(s2 => norm <= s2 + 1e-9);
     return (long)Math.Max(1, step * magnitude);
   }
 
@@ -217,7 +224,7 @@
       @* Two stacked bars per sample: inbound over outbound, so the pair reads as one traffic
          column while keeping the two directions distinguishable. A bucket with nothing in it renders
          no bar at all — a placeholder sliver would make an idle hour look like traffic. *@
-      <div class="admin-mon-chart-col" title="@p.AtUtc.ToString("MM-dd HH:mm") — ↓@Bytes(p.BytesIn) ↑@Bytes(p.BytesOut)">
+      <div class="admin-mon-chart-col" title="@p.AtUtc.ToString("MM-dd HH:mm") — @L["admin.monitoring.inbound"]: @ChartBytes(p.BytesIn) · @L["admin.monitoring.outbound"]: @ChartBytes(p.BytesOut)">
         <span class="admin-mon-chart-in" style="height:@netInH%"></span>
         <span class="admin-mon-chart-out" style="height:@netOutH%"></span>
       </div>

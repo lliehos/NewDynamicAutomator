@@ -51,13 +51,30 @@
     return (Math.round(clamped * 10) / 10).toString();
   }
 
-  /** Same rounded ceiling the server uses (1, 2 or 5 × 10^n), so the redraw cannot re-scale the bars. */
+  /** Same rounded ceiling the server uses (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10 × 10^n). */
   function niceMax(value) {
     if (!(value > 0)) return 1;
     var magnitude = Math.pow(10, Math.floor(Math.log10(value)));
     var norm = value / magnitude;
-    var step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
-    return Math.max(1, step * magnitude);
+    var steps = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+    for (var i = 0; i < steps.length; i++) {
+      if (norm <= steps[i] + 1e-9) return Math.max(1, steps[i] * magnitude);
+    }
+    return Math.max(1, 10 * magnitude);
+  }
+
+  /** Same as <see cref="bytes"/> but prints 0 for nothing: a chart tooltip is a measurement. */
+  function chartBytes(value) {
+    return value > 0 ? bytes(value) : "0 B";
+  }
+
+  /** The page's own words for the two directions, so the tooltip is not two bare arrows. */
+  function dirLabel(key, fallback) {
+    if (window.DaI18n && typeof DaI18n.t === "function") {
+      var v = DaI18n.t("admin.monitoring." + key);
+      if (v && v !== "admin.monitoring." + key) return v;
+    }
+    return fallback;
   }
 
   function column(title, inHeight, outHeight) {
@@ -113,11 +130,13 @@
     if (maxEl) maxEl.textContent = bytes(maxNet);
 
     var netHtml = "";
+    var labelIn = dirLabel("inbound", "in");
+    var labelOut = dirLabel("outbound", "out");
     rows.forEach(function (p) {
       var t = stamp(p.atUtc);
       var bytesIn = Number(p.bytesIn) || 0;
       var bytesOut = Number(p.bytesOut) || 0;
-      netHtml += column(t + " — ↓" + bytes(bytesIn) + " ↑" + bytes(bytesOut),
+      netHtml += column(t + " — " + labelIn + ": " + chartBytes(bytesIn) + " · " + labelOut + ": " + chartBytes(bytesOut),
         pct(bytesIn, maxNet), pct(bytesOut, maxNet));
     });
     netChart.innerHTML = netHtml;

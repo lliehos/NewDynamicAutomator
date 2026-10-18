@@ -257,6 +257,18 @@
         notify(t("sources.syncNothing") || "تغییر محلی‌ای برای این منبع ثبت نشده است.", "info");
       } else {
         writeTasks(tasks);
+        // The server now holds the merged value of every cell, so the BROWSER copy is rebuilt from it.
+        // Without this the two views kept disagreeing after a "successful" sync, and the local view
+        // still showed the values the server had just refused (a conflict keeps the server's value).
+        try {
+          const fresh = await fetchSourceContent(sid);
+          fresh.id = sid;
+          persistLocalGridCopy(fresh);
+          if (Number(viewerState.sourceId) === sid) {
+            viewerState.lastSource = fresh;
+            viewerState.localDirty = false;
+          }
+        } catch { /* keep the old record; reopening the view re-reads it */ }
         notify(
           conflicts > 0
             ? (t("sources.syncedConflicts", { applied, conflicts }) || `همگام‌سازی انجام شد — ${applied} سلول نوشته شد · ${conflicts} سلول روی سرور تازه‌تر بود.`)
@@ -636,13 +648,16 @@
   async function resetLocalFromServer() {
     const sourceId = Number(viewerState.sourceId);
     if (!Number.isFinite(sourceId) || sourceId <= 0) return;
+    // The direction is spelled out, because the opposite direction (send local results UP) is the
+    // action an operator usually wants here and the two used to be one easy-to-confuse glyph.
     const msg = t("sources.resetLocalConfirm")
-      || "دادهٔ سرور دوباره برای نسخهٔ محلی خوانده شود؟ تغییرات محلیِ همگام‌نشده جایگزین می‌شوند (دادهٔ سرور تغییری نمی‌کند).";
+      || "دادهٔ سرور دوباره برای نسخهٔ محلی خوانده می‌شود و نتیجهٔ اجرای محلیِ سینک‌نشده از بین می‌رود (دادهٔ سرور تغییری نمی‌کند). ادامه می‌دهید؟";
     const ask = window.DaNotify?.confirm
       ? await DaNotify.confirm(msg, {
-          title: t("sources.resetLocal") || "ریست از سرور",
-          okText: t("common.yes") || "بله",
-          cancelText: t("common.no") || "خیر"
+          title: t("sources.resetLocal") || "بازسازی نسخهٔ محلی از سرور",
+          okText: t("sources.resetLocalOk") || "جایگزین کن",
+          cancelText: t("common.cancel") || "انصراف",
+          danger: true
         })
       : window.confirm(msg);
     if (!ask) return;
@@ -1273,6 +1288,10 @@
   function syncViewerModeChrome() {
     const reset = document.getElementById("da-portal-ds-reset");
     if (reset) reset.hidden = !viewerState.localCopy;
+    // The sync button exists only when there is something to send: a local copy this browser still
+    // owes the server. Showing it on a clean source would offer a no-op.
+    const sync = document.getElementById("da-portal-ds-sync");
+    if (sync) sync.hidden = !(viewerState.localCopy && pendingWritesFor(viewerState.sourceId).length > 0);
     setLocalViewTimer(viewerState.localCopy);
   }
 
@@ -2842,6 +2861,13 @@
   document.getElementById("da-portal-ds-reset")?.addEventListener("click", () => {
     if (viewerState.sourceId == null) return;
     resetLocalFromServer();
+  });
+  // The other direction, and the one this screen is usually opened for: send the local result up.
+  document.getElementById("da-portal-ds-sync")?.addEventListener("click", async (ev) => {
+    if (viewerState.sourceId == null) return;
+    const label = viewerSource()?.title || "";
+    await syncSourceWithServer(viewerState.sourceId, label, ev.currentTarget);
+    await refreshViewer();
   });
   // Excel export lives here now: it exports the copy being LOOKED AT (local or server).
   document.getElementById("da-portal-ds-download")?.addEventListener("click", (ev) => {
