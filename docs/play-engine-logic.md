@@ -297,8 +297,8 @@ effectiveRow = moveLoop ? gRow : parentRow
 | فاصلهٔ بین مراحل | `resolveStepDelayMs`: نود شروع **ریشه** `stepDelayMs` → `graph.stepDelayMs` → ۰ | `delayAfterNode` **بعد از** اقدام/شرط/گروه |
 | مکث `WaitTime` | `step.contentSourceType` → `resolveStepParamAsync` | `outcome.waitMs` → `sleepInterruptible` |
 | انتظار ناوبری | `resolveNavigationWaitMs`: `waitForLoad===false` → ۰؛ وگرنه `waitMaxMs` یا **۱۵۰۰۰** | `GoToUrl`/`Navigate`/`NewPage` |
-| انتظار المان | `selectorWaitEnabled` + `selectorWaitMs` (پیش‌فرض ۱۰۰۰) | `waitForElement` در `runStep` |
-| انتظار المان (اقدام خاص) | `WaitForElement.waitMaxMs` | حلقهٔ انتظار مستقل |
+| انتظار المان | `selectorWaitEnabled` + `selectorWaitMs` (حداقل ۲۰۰، پیش‌فرض ۱۰۰۰) | `executeInFrameWithWait`: هر ۲۰۰ms حل زنجیرهٔ فریم + انتخاب المان تا پایان بودجه |
+| انتظار المان (شرط/تکرار گروه) | همان سوئیچ روی سلکتور | `elementExistsInTab` / `readElementText` / شمارش شرط و تکرار گروه، همه با retry فریم |
 
 **نکات:**
 
@@ -367,7 +367,7 @@ resolve می‌شود.
 
 ### `waitForElement(sel, timeoutMs, stateReq)`
 
-هر ۱۰۰ms `querySelectorAll` می‌زند و `elementMatchesState` را چک می‌کند:
+در مسیر اقدام‌ها، خودِ موتور بودجه را مدیریت می‌کند: `executeInFrameWithWait` هر ۲۰۰ms زنجیرهٔ فریم را دوباره حل می‌کند و یک‌بار `playExecuteInjected` را با بودجهٔ ۰ صدا می‌زند؛ فقط «پیدا نشد» تکرار می‌شود. تابع درون‌صفحه‌ای هم (وقتی بودجهٔ مستقیم بگیرد) هر ۱۰۰ms `querySelectorAll` می‌زند و `elementMatchesState` را چک می‌کند:
 
 - **مرئی:** `display!=none`، `visibility!=hidden`، `opacity!=0`، عرض و ارتفاع > ۰
 - **فعال:** `disabled!=true`، `aria-disabled!=true`

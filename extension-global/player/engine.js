@@ -1231,6 +1231,27 @@ const ALERT_SETTLE_MS = 400;
 const HISTORY_SETTLE_MS = 600;
 
 /**
+ * Element-wait contract.
+ *
+ * The switch is a BUDGET, not one long in-page sleep: the engine re-tries "resolve the frame
+ * chain + select the element" every ELEMENT_WAIT_POLL_MS until the budget runs out. Re-trying the
+ * whole lookup (not just the DOM query) is what makes a late IFRAME work — the frame itself may
+ * not exist at the first attempt. The editor clamps the field to the same minimum.
+ */
+const ELEMENT_WAIT_MIN_MS = 200;
+const ELEMENT_WAIT_POLL_MS = 200;
+
+/** Wait budget for a node's selector. On with a blank/invalid value means one second. */
+function selectorWaitBudget(node, { equal = false } = {}) {
+  const enabled = equal
+    ? node?.equalSelectorWaitEnabled === true
+    : node?.selectorWaitEnabled === true;
+  if (!enabled) return 0;
+  const raw = Number(equal ? node?.equalSelectorWaitMs : node?.selectorWaitMs);
+  return Math.max(ELEMENT_WAIT_MIN_MS, Number.isFinite(raw) && raw > 0 ? raw : 1000);
+}
+
+/**
  * Called just before moving to `nextId`. When that node has already run in this walk, the
  * edge being followed is a loop-back, so this logs the iteration and enforces a floor on the
  * pause. Without the floor a "wait until the condition is true" loop would re-evaluate as
@@ -2087,9 +2108,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
                 appendPlayLog("warn", `تب #${activeTabId} برای اسکریپت آماده نشد`);
               }
             }
-            const waitBudget = step.selectorWaitEnabled === true
-              ? Math.max(0, Number(step.selectorWaitMs) || 1000)
-              : 0;
+            const waitBudget = selectorWaitBudget(step);
             const evalMs = Math.max(5000, waitBudget + 4000);
             // A single-condition check honours the node's own row pointer too; there is no group
             // stack here, so the loop row doubles as the parent/process row. Its selector may pin
@@ -2998,9 +3017,7 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
         || node.selectorValue || "";
       const negate = ct === "NotFindElement" || ct === "ElementHidden";
       if (!selector) return negate;
-      const waitMs = node.selectorWaitEnabled === true
-        ? Math.max(0, Number(node.selectorWaitMs) || 1000)
-        : 0;
+      const waitMs = selectorWaitBudget(node);
       // Visibility is the only difference from a plain existence check: "found" must
       // also be rendered and on-screen, which is what makes this useful for a page that
       // keeps a hidden copy of a node it swaps in later.
@@ -3021,13 +3038,22 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
     if (ct === "FindElements") {
       const selector = (await resolveDynamicSelectorAsync(node, graph, rowIndex))
         || node.selectorValue || "";
-      const count = selector
-        ? await elementCountInTab(tabId, selector, parseFramePath(node.framePathJson), selectorStateReqs(node))
-        : 0;
       const expected = Number(
         node.constantEqualValue ?? node.constantValue ?? node.navigation
       ) || 0;
-      return compareConditionValues(count, expected, node.equalityType || "equal");
+      const eq = node.equalityType || "equal";
+      if (!selector) return compareConditionValues(0, expected, eq);
+      // A count condition with the wait switch on polls until the comparison is TRUE (not merely
+      // until one element exists): "wait until 3 rows are there" is what the author means, and a
+      // one-shot count made the switch inert for exactly this condition type.
+      const deadline = Date.now() + selectorWaitBudget(node);
+      for (;;) {
+        const count = await elementCountInTab(
+          tabId, selector, parseFramePath(node.framePathJson), selectorStateReqs(node));
+        if (compareConditionValues(count, expected, eq)) return true;
+        if (Date.now() >= deadline) return false;
+        await sleep(ELEMENT_WAIT_POLL_MS);
+      }
     }
 
     if (ct === "ElementValue" || ct === "SourceValue") {
@@ -3289,31 +3315,38 @@ async function elementExistsInTab(tabId, selector, framePath, waitTimeoutMs = 0,
   const req = stateReq || {};
   try {
     await pingTabScriptable(tabId);
-    const frameId = await resolveFramePath(tabId, framePath || []);
     const maxMs = Math.max(0, Number(waitTimeoutMs) || 0);
     const deadline = Date.now() + maxMs;
     let injectFails = 0;
     for (;;) {
+      // The frame chain is resolved on EVERY attempt. Resolving it once made a late iframe a
+      // permanent miss: the wait never even started for a document that was still loading.
+      let frameId = null;
       try {
-        const [{ result } = {}] = await chrome.scripting.executeScript({
-          target: { tabId, frameIds: [frameId] },
-          func: pageFindMatchingElement,
-          args: [selector, req]
-        });
-        injectFails = 0;
-        if (result?.badSelector) return false;
-        if (result?.found) return true;
-      } catch (err) {
-        injectFails += 1;
-        console.warn("[DA Player] elementExistsInTab inject failed", tabId, err?.message || err);
-        if (injectFails === 1) {
-          await pingTabScriptable(tabId);
-          continue;
+        frameId = await resolveFramePath(tabId, framePath || []);
+      } catch { frameId = null; }
+      if (frameId != null) {
+        try {
+          const [{ result } = {}] = await chrome.scripting.executeScript({
+            target: { tabId, frameIds: [frameId] },
+            func: pageFindMatchingElement,
+            args: [selector, req]
+          });
+          injectFails = 0;
+          if (result?.badSelector) return false;
+          if (result?.found) return true;
+        } catch (err) {
+          injectFails += 1;
+          console.warn("[DA Player] elementExistsInTab inject failed", tabId, err?.message || err);
+          if (injectFails === 1) {
+            await pingTabScriptable(tabId);
+            continue;
+          }
+          return false;
         }
-        return false;
       }
       if (Date.now() >= deadline) return false;
-      await sleep(100);
+      await sleep(ELEMENT_WAIT_POLL_MS);
     }
   } catch (err) {
     console.warn("[DA Player] elementExistsInTab", err?.message || err);
@@ -3448,43 +3481,48 @@ async function readElementText(tabId, node, graph, rowIndex) {
   const req = selectorStateReqs(node);
   try {
     await pingTabScriptable(tabId);
-    const frameId = await resolveFramePath(tabId, parseFramePath(node.framePathJson));
-    const waitMs = node.selectorWaitEnabled === true
-      ? Math.max(0, Number(node.selectorWaitMs) || 1000)
-      : 0;
+    const waitMs = selectorWaitBudget(node);
     const deadline = Date.now() + waitMs;
     for (;;) {
-      const [{ result } = {}] = await chrome.scripting.executeScript({
-        target: { tabId, frameIds: [frameId] },
-        func: (sel, need) => {
-          let nodes;
-          try { nodes = Array.from(document.querySelectorAll(sel)); } catch { return ""; }
-          for (const el of nodes) {
-            if (!(el instanceof Element)) continue;
-            if (need.requireVisible || need.requireClickable) {
-              const st = getComputedStyle(el);
-              const r = el.getBoundingClientRect();
-              if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) continue;
-              if (!(r.width > 0 && r.height > 0)) continue;
-            }
-            if (need.requireEnabled) {
-              if (el.disabled === true) continue;
-              if (el.getAttribute("aria-disabled") === "true") continue;
-            }
-            if (need.requireClickable) {
-              const st = getComputedStyle(el);
-              if (st.pointerEvents === "none") continue;
-            }
-            if (el.value != null) return String(el.value);
-            return (el.textContent || "").trim();
-          }
-          return null;
-        },
-        args: [selector, req]
-      });
-      if (result != null) return String(result);
+      let frameId = null;
+      try {
+        frameId = await resolveFramePath(tabId, parseFramePath(node.framePathJson));
+      } catch { frameId = null; }
+      if (frameId != null) {
+        try {
+          const [{ result } = {}] = await chrome.scripting.executeScript({
+            target: { tabId, frameIds: [frameId] },
+            func: (sel, need) => {
+              let nodes;
+              try { nodes = Array.from(document.querySelectorAll(sel)); } catch { return ""; }
+              for (const el of nodes) {
+                if (!(el instanceof Element)) continue;
+                if (need.requireVisible || need.requireClickable) {
+                  const st = getComputedStyle(el);
+                  const r = el.getBoundingClientRect();
+                  if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) continue;
+                  if (!(r.width > 0 && r.height > 0)) continue;
+                }
+                if (need.requireEnabled) {
+                  if (el.disabled === true) continue;
+                  if (el.getAttribute("aria-disabled") === "true") continue;
+                }
+                if (need.requireClickable) {
+                  const st = getComputedStyle(el);
+                  if (st.pointerEvents === "none") continue;
+                }
+                if (el.value != null) return String(el.value);
+                return (el.textContent || "").trim();
+              }
+              return null;
+            },
+            args: [selector, req]
+          });
+          if (result != null) return String(result);
+        } catch { /* this attempt missed; retry until the deadline */ }
+      }
       if (Date.now() >= deadline) return "";
-      await sleep(100);
+      await sleep(ELEMENT_WAIT_POLL_MS);
     }
   } catch {
     return "";
@@ -3763,23 +3801,9 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     valueForAction = step.constantValue || "";
   }
 
-  let frameId;
-  try {
-    frameId = await resolveFramePath(tabId, framePath);
-  } catch (err) {
-    return onUnexpected(runMode, {
-      taskId,
-      stepId: step.entityId,
-      reason: "frame_resolve_failed",
-      expectedSelector: resolvedSelector,
-      actualUrl: null,
-      framePathJson: step.framePathJson || JSON.stringify(framePath)
-    }, err.message);
-  }
-
-  const waitTimeoutMs = step.selectorWaitEnabled === true
-    ? Math.max(0, Number(step.selectorWaitMs) || 1000)
-    : 0;
+  // Frame lookup and element selection are BOTH retried inside the budget — a late iframe is as
+  // much "the element is not there yet" as a late node in the current document.
+  const waitTimeoutMs = selectorWaitBudget(step);
   const stateReq = selectorStateReqs(step);
   const payload = {
     actionType,
@@ -3797,7 +3821,6 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     clickMode: step.clickMode || "Synthetic",
     removeAllMatches: step.removeAllMatches !== false,
     highlightColor: resolveHighlightColor(graph),
-    waitTimeoutMs,
     requireVisible: !!stateReq.requireVisible,
     requireEnabled: !!stateReq.requireEnabled,
     requireClickable: !!stateReq.requireClickable
@@ -3809,10 +3832,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   // executeInFrame. The two engines had drifted — the content script never learned every action —
   // so whether a step worked depended on which path won the race. The injected engine is the
   // complete one and needs no content script to be present, so it is now the only path.
-  const result = await (async () => {
-    await clearTabPlayHighlights(tabId);
-    return executeInFrame(tabId, frameId, payload);
-  })();
+  const result = await executeInFrameWithWait(tabId, framePath, payload, waitTimeoutMs);
 
   if (!result || !result.ok) {
     return onUnexpected(runMode, {
@@ -3876,18 +3896,7 @@ async function runLoadContentStep(tabId, taskId, step, runMode, graph, rowIndex,
       expectedSelector: "", actualUrl: null, framePathJson: step.framePathJson
     }, "سلکتور المان مقصد خالی است");
   }
-  let frameId;
-  try {
-    frameId = await resolveFramePath(tabId, framePath || []);
-  } catch (err) {
-    return onUnexpected(runMode, {
-      taskId, stepId: step.entityId, reason: "frame_resolve_failed",
-      expectedSelector: resolvedSelector, actualUrl: null, framePathJson: step.framePathJson
-    }, err.message);
-  }
-  const waitTimeoutMs = step.selectorWaitEnabled === true
-    ? Math.max(0, Number(step.selectorWaitMs) || 1000)
-    : 0;
+  const waitTimeoutMs = selectorWaitBudget(step);
   const stateReq = selectorStateReqs(step);
   const payload = {
     // The page-side branch is InputContent's: both write a value into a field, so LoadContent
@@ -3898,16 +3907,12 @@ async function runLoadContentStep(tabId, taskId, step, runMode, graph, rowIndex,
     typeMode: step.typeMode || "Instant",
     typeDelayMs: Math.max(0, Number(step.typeDelayMs) || 0),
     highlightColor: resolveHighlightColor(graph),
-    waitTimeoutMs,
     requireVisible: !!stateReq.requireVisible,
     requireEnabled: !!stateReq.requireEnabled,
     requireClickable: !!stateReq.requireClickable
   };
-  // Same single-path rule as runStep above — see the comment there.
-  const result = await (async () => {
-    await clearTabPlayHighlights(tabId);
-    return executeInFrame(tabId, frameId, payload);
-  })();
+  // Same single-path rule and same frame-aware wait as runStep above.
+  const result = await executeInFrameWithWait(tabId, framePath || [], payload, waitTimeoutMs);
   if (!result || !result.ok) {
     return onUnexpected(runMode, {
       taskId, stepId: step.entityId,
@@ -4333,12 +4338,6 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
       attrDynDs: "equalAttributeDataSourceId"
     });
     if (!valueSel) return "";
-    let frameId;
-    try {
-      frameId = await resolveFramePath(tabId, opts.framePath || []);
-    } catch {
-      frameId = 0;
-    }
     const eqReq = selectorStateReqs(step, { equal: true });
     const payload = {
       // Internal verb: read an element's text as a VALUE. It is not an ActionType — reading a
@@ -4346,16 +4345,13 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
       actionType: "ReadElementValue",
       selectorValue: valueSel,
       constantValue: "",
-      waitTimeoutMs: step.equalSelectorWaitEnabled === true
-        ? Math.max(0, Number(step.equalSelectorWaitMs) || 1000)
-        : 0,
       requireVisible: !!eqReq.requireVisible,
       requireEnabled: !!eqReq.requireEnabled,
       requireClickable: !!eqReq.requireClickable
     };
-    await clearTabPlayHighlights(tabId);
-    // Same single-path rule as runStep — see the comment there.
-    const result = await executeInFrame(tabId, frameId, payload);
+    // The value selector's own wait switch gets the same frame-aware retry as a target selector.
+    const result = await executeInFrameWithWait(
+      tabId, opts.framePath || [], payload, selectorWaitBudget(step, { equal: true }));
     return result?.text != null ? String(result.text) : "";
   }
   return resolveStepParam(step, graph, rowIndex, opts);
@@ -5962,25 +5958,31 @@ async function expandGroupByRepeatSource(tabId, groupOrStart, graph, ctx = {}) {
       appendPlayLog("warn", "سلکتور تکرار المان خالی است؛ یک‌بار اجرا می‌شود.");
       return { type: "Elements", indices: [0], total: 1, label: "المان (بدون سلکتور)" };
     }
+    // The group-start selector offers the same wait switch as any other selector. Counting once
+    // made it inert for a list that appears late; honour the budget here too, re-resolving the
+    // frame chain on every attempt.
+    const framePath = parseFramePath(node.framePathJson || node.framePath);
+    const deadline = Date.now() + selectorWaitBudget(node);
     let count = 0;
-    try {
-      const framePath = parseFramePath(node.framePathJson || node.framePath);
-      const frameId = await resolveFramePath(tabId, framePath);
-      const [{ result }] = await chrome.scripting.executeScript({
-        target: { tabId, frameIds: [frameId] },
-        func: (sel) => {
-          try {
-            return document.querySelectorAll(sel).length;
-          } catch {
-            return 0;
-          }
-        },
-        args: [css]
-      });
-      count = Number(result) || 0;
-    } catch (err) {
-      appendPlayLog("warn", `شمارش المان‌ها ناموفق: ${err?.message || err}`);
+    for (;;) {
       count = 0;
+      try {
+        const frameId = await resolveFramePath(tabId, framePath);
+        const [{ result }] = await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [frameId] },
+          func: (sel) => {
+            try {
+              return document.querySelectorAll(sel).length;
+            } catch {
+              return 0;
+            }
+          },
+          args: [css]
+        });
+        count = Number(result) || 0;
+      } catch { /* frame not ready yet — retry until the budget ends */ }
+      if (count > 0 || Date.now() >= deadline) break;
+      await sleep(ELEMENT_WAIT_POLL_MS);
     }
     if (!count) {
       appendPlayLog("warn", "هیچ المانی برای تکرار گروه پیدا نشد؛ یک‌بار اجرا می‌شود.");
@@ -6097,6 +6099,42 @@ async function executeInFrame(tabId, frameId, payload) {
     return result || { ok: false, error: tv("run.noResult"), reason: "inject_empty" };
   } catch (err) {
     return { ok: false, error: err.message, reason: "inject_failed" };
+  }
+}
+
+/** Misses that mean "the target is not there yet" and performed no action, so retrying is safe. */
+function isRetryableElementMiss(result) {
+  const reason = String(result?.reason || "");
+  return reason === "element_not_found" || reason === "frame_resolve_failed";
+}
+
+/**
+ * Run one selector action with the node's wait budget.
+ *
+ * Each attempt re-resolves the frame chain and performs ONE element lookup (the injected call is
+ * given a zero budget so it cannot sleep inside the page). When the element — or its frame — is
+ * not there yet, the attempt is repeated every ELEMENT_WAIT_POLL_MS until the deadline. Only a
+ * miss is retried: an action that actually ran and failed is returned as-is, so a click can never
+ * be dispatched twice by the wait.
+ */
+async function executeInFrameWithWait(tabId, framePath, payload, waitTimeoutMs) {
+  const deadline = Date.now() + Math.max(0, Number(waitTimeoutMs) || 0);
+  await clearTabPlayHighlights(tabId);
+  let last = null;
+  for (;;) {
+    let frameId;
+    try {
+      frameId = await resolveFramePath(tabId, framePath || []);
+    } catch (err) {
+      last = { ok: false, error: err?.message || String(err), reason: "frame_resolve_failed" };
+      if (Date.now() >= deadline) return last;
+      await sleep(ELEMENT_WAIT_POLL_MS);
+      continue;
+    }
+    last = await executeInFrame(tabId, frameId, { ...payload, waitTimeoutMs: 0 });
+    if (!last || last.ok || !isRetryableElementMiss(last)) return last;
+    if (Date.now() >= deadline) return last;
+    await sleep(ELEMENT_WAIT_POLL_MS);
   }
 }
 

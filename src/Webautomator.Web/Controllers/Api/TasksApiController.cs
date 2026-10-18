@@ -687,11 +687,14 @@ public class TaskDataSourcesApiController : ControllerBase
 {
     private readonly DataSourceService _sources;
     private readonly CatalogLiveService _catalog;
+    private readonly IHubContext<CanvasHub> _canvasHub;
 
-    public TaskDataSourcesApiController(DataSourceService sources, CatalogLiveService catalog)
+    public TaskDataSourcesApiController(
+        DataSourceService sources, CatalogLiveService catalog, IHubContext<CanvasHub> canvasHub)
     {
         _sources = sources;
         _catalog = catalog;
+        _canvasHub = canvasHub;
     }
 
     private int UserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -714,6 +717,18 @@ public class TaskDataSourcesApiController : ControllerBase
                 }),
                 _ => BadRequest(new { message = error })
             };
+
+        // Attach can re-wire orphaned column bindings in the stored graph and bumps the process
+        // stamp, so an editor open on this process MUST hear about it even when the attach came
+        // from the processes/sources list. Reason makes it a source change, not an edit conflict.
+        await _canvasHub.Clients.Group(CanvasHub.TaskGroup(taskId)).SendAsync("canvasChanged", new
+        {
+            taskId,
+            dataSourceId,
+            reason = "datasource_attached",
+            userId = UserId,
+            userName = User.Identity?.Name
+        }, ct);
         await _catalog.SourceChangedAsync(taskId, new { id = dataSourceId }, "attached", User.Identity?.Name, ct);
         return Ok(new { ok = true });
     }
@@ -724,6 +739,17 @@ public class TaskDataSourcesApiController : ControllerBase
         var (ok, error) = await _sources.DetachAsync(UserId, taskId, dataSourceId, ct);
         if (!ok)
             return error == "forbidden" ? Forbid() : BadRequest(new { message = error });
+
+        // Detach scrubs the source id from the stored graph and moves the default source; an open
+        // editor has to adopt that instead of offering to replace its canvas.
+        await _canvasHub.Clients.Group(CanvasHub.TaskGroup(taskId)).SendAsync("canvasChanged", new
+        {
+            taskId,
+            dataSourceId,
+            reason = "datasource_detached",
+            userId = UserId,
+            userName = User.Identity?.Name
+        }, ct);
         await _catalog.SourceChangedAsync(taskId, new { id = dataSourceId }, "detached", User.Identity?.Name, ct);
         return Ok(new { ok = true });
     }
@@ -1134,6 +1160,9 @@ public class DataSourcesApiController : ControllerBase
     public async Task<IActionResult> SetAccess(
         int id, [FromBody] Webautomator.Contracts.DataSources.SetDataSourceAccessRequest req, CancellationToken ct)
     {
+        // Access can attach AND detach processes. Both rewrite their stored graphs, so the set of
+        // processes to tell afterwards is the union of the links before and after the call.
+        var beforeLinked = await _sources.GetLinkedProcessIdsAsync(id, ct);
         var (ok, error, attached, detached) = await _sources.SetAccessAsync(UserId, id, req, ct);
         if (!ok)
             return error switch
@@ -1142,6 +1171,23 @@ public class DataSourcesApiController : ControllerBase
                 "forbidden" => Forbid(),
                 _ => BadRequest(new { message = error })
             };
+
+        if (attached > 0 || detached > 0)
+        {
+            var afterLinked = await _sources.GetLinkedProcessIdsAsync(id, ct);
+            foreach (var processId in beforeLinked.Union(afterLinked).Distinct())
+            {
+                await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
+                {
+                    taskId = processId,
+                    dataSourceId = id,
+                    reason = "datasource_access_changed",
+                    userId = UserId,
+                    userName = User.Identity?.Name
+                }, ct);
+            }
+        }
+
         await _catalog.LibrarySourceChangedAsync(new { id, access = true }, "access", User.Identity?.Name, UserId, ct);
         return Ok(new { ok = true, id, attached, detached });
     }
@@ -1176,8 +1222,23 @@ public class DataSourcesApiController : ControllerBase
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
+        // Deleting a library source detaches it from every linked process and scrubs its id from
+        // their stored graphs. Those processes' stamps move, so their open editors must adopt the
+        // change instead of being told their canvas was edited.
+        var linked = await _sources.GetLinkedProcessIdsAsync(id, ct);
         var ok = await _sources.DeleteLibraryAsync(UserId, id, ct);
         if (!ok) return NotFound();
+        foreach (var processId in linked)
+        {
+            await _canvasHub.Clients.Group(CanvasHub.TaskGroup(processId)).SendAsync("canvasChanged", new
+            {
+                taskId = processId,
+                dataSourceId = id,
+                reason = "datasource_detached",
+                userId = UserId,
+                userName = User.Identity?.Name
+            }, ct);
+        }
         await _catalog.LibrarySourceChangedAsync(new { id }, "deleted", User.Identity?.Name, UserId, ct);
         return Ok(new { ok = true });
     }

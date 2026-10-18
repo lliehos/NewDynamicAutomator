@@ -826,13 +826,25 @@ public class TaskService
         // Sync embedded canvas sources into the user library + process links (detach ≠ delete library).
         var synced = await _dataSources.SyncFromCanvasAsync(process, canvasJson, userId, ct);
 
-        process.GraphJson = synced;
-        if (!string.IsNullOrWhiteSpace(title))
-            process.Title = title.Trim();
-        process.UpdatedAtUtc = DateTime.UtcNow;
-        process.LastEditorUserId = userId > 0 ? userId : process.LastEditorUserId;
-        await _db.SaveChangesAsync(ct);
-        return (true, null, DateTime.SpecifyKind(process.UpdatedAtUtc, DateTimeKind.Utc));
+        // A save that changes nothing must not move the concurrency stamp. Two clients open on the
+        // same process would otherwise see "changed elsewhere" after one of them pressed Save
+        // without editing anything (and the source sync above can normalize the JSON text once).
+        var graphChanged = !string.Equals(process.GraphJson, synced, StringComparison.Ordinal);
+        var newTitle = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
+        var titleChanged = newTitle is not null
+            && !string.Equals(process.Title, newTitle, StringComparison.Ordinal);
+
+        if (graphChanged || titleChanged)
+        {
+            process.GraphJson = synced;
+            if (titleChanged) process.Title = newTitle!;
+            process.UpdatedAtUtc = DateTime.UtcNow;
+            process.LastEditorUserId = userId > 0 ? userId : process.LastEditorUserId;
+            await _db.SaveChangesAsync(ct);
+        }
+
+        var stamp = process.UpdatedAtUtc == default ? process.CreatedAtUtc : process.UpdatedAtUtc;
+        return (true, null, DateTime.SpecifyKind(stamp, DateTimeKind.Utc));
     }
 
     private async Task<int> CountUnknownSourcesInCanvasAsync(string canvasJson, CancellationToken ct)

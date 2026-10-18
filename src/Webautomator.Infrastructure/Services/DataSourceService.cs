@@ -2400,19 +2400,54 @@ public class DataSourceService
             }
             else if (entity.OwnerUserId == ownerId || entity.OwnerUserId == actingUserId)
             {
-                entity.Title = Trunc(parsed.title, 200) ?? entity.Title;
-                entity.FileName = Trunc(parsed.fileName, 260) ?? entity.FileName;
-                entity.ColumnCount = parsed.columnCount;
                 // Cells live in DataSourceCells — never replace entire grid from canvas snapshot (concurrency).
+                //
+                // Only touch the row when the canvas actually says something different. Saving the
+                // PROCESS used to rewrite every linked source's metadata (and bump UpdatedAtUtc) on
+                // every save, which turned a no-op save into one UPDATE per source and, because the
+                // whole canvas was serialized back, made a large source slow.
+                var changed = false;
+                var title = Trunc(parsed.title, 200);
+                if (title is not null && title != entity.Title)
+                {
+                    entity.Title = title;
+                    changed = true;
+                }
+                var fileName = Trunc(parsed.fileName, 260);
+                if (fileName is not null && fileName != entity.FileName)
+                {
+                    entity.FileName = fileName;
+                    changed = true;
+                }
                 if (parsed.columns.Count > 0)
                 {
-                    entity.ColumnsJson = JsonSerializer.Serialize(parsed.columns, JsonOpts);
-                    entity.ColumnCount = parsed.columns.Count;
+                    var columnsJson = JsonSerializer.Serialize(parsed.columns, JsonOpts);
+                    if (columnsJson != entity.ColumnsJson)
+                    {
+                        entity.ColumnsJson = columnsJson;
+                        changed = true;
+                    }
+                    if (entity.ColumnCount != parsed.columns.Count)
+                    {
+                        entity.ColumnCount = parsed.columns.Count;
+                        changed = true;
+                    }
+                }
+                else if (parsed.columnCount > 0 && entity.ColumnCount != parsed.columnCount)
+                {
+                    entity.ColumnCount = parsed.columnCount;
+                    changed = true;
                 }
                 if (parsed.rowCount > entity.RowCount)
+                {
                     entity.RowCount = parsed.rowCount;
-                entity.UpdatedAtUtc = DateTime.UtcNow;
-                StampDataEditor(entity, actingUserId);
+                    changed = true;
+                }
+                if (changed)
+                {
+                    entity.UpdatedAtUtc = DateTime.UtcNow;
+                    StampDataEditor(entity, actingUserId);
+                }
                 dsObj["id"] = entity.Id;
             }
 
@@ -2476,6 +2511,16 @@ public class DataSourceService
 
         foreach (var orphan in links.Where(l => !keepIds.Contains(l.DataSourceId)).ToList())
             _db.ProcessDataSources.Remove(orphan);
+
+        // The cell VALUES are now owned by the library (DataSourceCells). Persisting them inside
+        // GraphJson as well duplicated the whole grid on every save: a process using a large source
+        // wrote megabytes on each save and the canvas read grew with the data. Unknown sources have
+        // already been materialized above, so nothing here still needs the snapshot.
+        foreach (var dsObj in arr.OfType<JsonObject>())
+        {
+            dsObj.Remove("cells");
+            dsObj.Remove("Cells");
+        }
 
         await _db.SaveChangesAsync(ct);
         return obj.ToJsonString(JsonOpts);

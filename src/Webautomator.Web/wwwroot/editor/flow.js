@@ -812,6 +812,9 @@
               }
             };
             applyLocalGraph(serverItem);
+            for (const ds of graph.dataSources || []) {
+              if (Number(ds.id) > 0) persistedSourceIds.add(String(ds.id));
+            }
             loadedUpdatedAtUtc = serverItem.updatedAtUtc
               || data.updatedAtUtc
               || data.UpdatedAtUtc
@@ -871,6 +874,13 @@
   function saveBtnSpinnerHtml() { return `<span class="btn-save-spinner" aria-hidden="true"></span><span>${t("editor.ribbon.saving")}</span>`; }
   function saveBtnLabelHtml() { return `${SAVE_ICON_SVG}<span>${t("editor.ribbon.save")}</span>`; }
   let saving = false;
+  /**
+   * Ids of sources the server already owns. Their cell values live in the library and must not be
+   * shipped inside the canvas: `ds.cells` is only an editor cache. A source whose POST failed keeps
+   * a temporary id and is NOT in this set, so its initial content still travels with the save and
+   * `SyncFromCanvas` can materialize it (the fallback that existed before).
+   */
+  const persistedSourceIds = new Set();
   /** Server canvas timestamp from last successful load/save (optimistic concurrency). */
   let loadedUpdatedAtUtc = null;
   /** True after GET /canvas — localStorage cache is for Player only, not editor source of truth. */
@@ -899,6 +909,9 @@
     "datasource_renamed",
     "datasource_reloaded",
     "datasource_cell_patched",
+    "datasource_attached",
+    "datasource_detached",
+    "datasource_access_changed",
     "row_added",
     "row_deleted",
     "rows_cleared",
@@ -1008,15 +1021,85 @@
    * editor (and announced a new version) — for every cell the engine wrote during a run. Only the
    * source's copy, and for a shape change the save baseline, move.
    */
+  /** Node properties that hold a source id (the pair with a column name, see ColumnBindings). */
+  const SOURCE_BINDING_ID_PROPS = [
+    "dataSourceId", "sourceId", "selectorDataSourceId", "equalSelectorDataSourceId",
+    "attributeDataSourceId", "equalAttributeDataSourceId", "saveDataSourceId"
+  ];
+
+  /**
+   * Take a source attach/detach made elsewhere into this editor without replacing the canvas.
+   *
+   * Attaching can re-bind orphaned columns and detaching clears the source ids and moves the
+   * default, so the stored graph really changed. But the user's own drawing did not, and asking
+   * them to replace it (the old behaviour) made a data-source change look like a lost edit. The
+   * server copy is adopted for the source list and the binding ids only; nodes the user added
+   * locally and has not saved yet are left alone.
+   */
+  async function adoptDataSourceLinksFromServer() {
+    if (isLocalMode || !/^\d+$/.test(String(taskId))) return;
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/canvas`, { credentials: "same-origin" });
+      if (!res.ok) return;
+      const remote = await res.json();
+      const remoteAt = remote.updatedAtUtc || remote.UpdatedAtUtc;
+      if (remoteAt) loadedUpdatedAtUtc = remoteAt;
+
+      const remoteNodes = new Map(
+        (remote.nodes || remote.Nodes || []).map((n) => [String(n.id ?? n.Id), n])
+      );
+      for (const n of graph.nodes || []) {
+        const rn = remoteNodes.get(String(n.id));
+        if (!rn) continue;
+        for (const prop of SOURCE_BINDING_ID_PROPS) {
+          if (rn[prop] == null) delete n[prop];
+          else n[prop] = rn[prop];
+        }
+      }
+
+      const remoteList = remote.dataSources || remote.DataSources;
+      if (Array.isArray(remoteList)) {
+        // Sources added in this editor but never saved (temporary ids) are not on the server yet.
+        const unsaved = (graph.dataSources || [])
+          .filter((d) => !persistedSourceIds.has(String(d.id)))
+          .filter((d) => !remoteList.some((r) => String(r.id) === String(d.id)));
+        graph.dataSources = remoteList.concat(unsaved);
+        for (const d of remoteList) {
+          if (Number(d.id) > 0) persistedSourceIds.add(String(d.id));
+        }
+      }
+      graph.dataSourceId = remote.dataSourceId ?? remote.DataSourceId ?? null;
+      repaintDataSources();
+      render();
+    } catch { /* the next canvas read reconciles */ }
+  }
+
+  /** Source-link changes: the process's source list / bindings changed, not the drawing. */
+  const SOURCE_LINK_REASONS = new Set([
+    "datasource_attached", "datasource_detached", "datasource_access_changed"
+  ]);
+
   async function applySourceChange(payload, reason) {
+    if (SOURCE_LINK_REASONS.has(reason)) {
+      await adoptDataSourceLinksFromServer();
+      return;
+    }
     const dsId = payload.dataSourceId ?? payload.DataSourceId;
     const payloadTitle = payload.title || payload.Title;
     const ds = dsId != null ? findDataSourceById(dsId) : null;
     if (ds && payloadTitle) ds.title = payloadTitle;
     if (SOURCE_SHAPE_REASONS.has(reason)) refreshSourceShapeInMemory(dsId);
     else if (ds && payloadTitle) repaintDataSources();
+    // A rename made elsewhere also rewrote node bindings in the stored graph. Mirror it here or
+    // the next save from this editor would hand the old column key back.
+    if (reason === "column_renamed") {
+      const from = payload.renamedFromKey || payload.RenamedFromKey;
+      const to = payload.renamedColumnKey || payload.RenamedColumnKey;
+      if (from && to) patchLocalColumnBindings(dsId, from, to);
+    }
     // A shape change re-stamps the process graph on the server; a cell write never touches it.
-    if (reason !== "datasource_cell_patched") refreshSaveBaseline();
+    // Await it so a save issued right after the event does not race the new baseline.
+    if (reason !== "datasource_cell_patched") await refreshSaveBaseline();
   }
 
   async function ensureCanvasHub() {
@@ -1033,6 +1116,11 @@
         .withAutomaticReconnect([0, 1000, 3000, 8000])
         .configureLogging(signalR.LogLevel.None)
         .build();
+
+      // Events missed while the socket was down (sleep, network blip, background tab) would leave
+      // the save baseline behind and make the next save look like somebody else's edit. Re-read it
+      // on reconnect instead of waiting for a conflict to discover it.
+      conn.onreconnected(() => { refreshSaveBaseline(); });
 
       conn.on("canvasChanged", async (payload) => {
         if (!payload) return;
@@ -1170,8 +1258,20 @@
       if (!isLocalMode && /^\d+$/.test(String(taskId))) {
         // Do not persist session/concurrency meta into canvas JSON.
         const { baseUpdatedAtUtc: _b, editorSessionId: _e, updatedAtUtc: _u, ...canvasBody } = graph;
+        // Cell VALUES belong to the data-source endpoints, not to the canvas. The viewer caches the
+        // rows it loaded in `ds.cells`, and sending them here made every save ship (and the server
+        // store) the entire grid — very slow for a large source. Keep the snapshot only for sources
+        // that do not exist yet (negative/temporary id), where it is the initial content.
+        const dataSources = Array.isArray(canvasBody.dataSources)
+          ? canvasBody.dataSources.map((ds) => {
+              if (!ds || typeof ds !== "object" || !persistedSourceIds.has(String(ds.id))) return ds;
+              const { cells: _c, Cells: _C, ...rest } = ds;
+              return rest;
+            })
+          : canvasBody.dataSources;
         const payload = {
           ...canvasBody,
+          dataSources,
           baseUpdatedAtUtc: loadedUpdatedAtUtc,
           editorSessionId
         };
@@ -2620,6 +2720,7 @@
         });
         if (createRes.ok) {
           const created = await createRes.json();
+          if (Number(created.id) > 0) persistedSourceIds.add(String(created.id));
           entry = {
             ...entry,
             id: created.id,
@@ -2957,6 +3058,7 @@
         const body = await res.json().catch(() => ({}));
         throw new Error(body.message || t("editor.ds.attachFail"));
       }
+      persistedSourceIds.add(String(sid));
       graph.dataSources = (graph.dataSources || []).concat([{
         id: sid,
         title: meta.title,
@@ -7958,7 +8060,9 @@
           return;
         }
         if (k === "selectorWaitMs" || k === "equalSelectorWaitMs") {
-          n[k] = Math.max(0, Number(inp.value) || 0);
+          // The engine retries in 200 ms steps, so a smaller value could not even cover one retry.
+          const raw = Number(inp.value);
+          n[k] = Number.isFinite(raw) && raw > 0 ? Math.max(200, raw) : 1000;
           syncNodeValidity(n);
           return;
         }
@@ -9572,6 +9676,7 @@
     if (n[attrDynFlag] == null) n[attrDynFlag] = false;
     if (n[waitFlag] == null) n[waitFlag] = false;
     if (n[waitMsKey] == null || n[waitMsKey] === "") n[waitMsKey] = 1000;
+    else if (!(Number(n[waitMsKey]) >= 200)) n[waitMsKey] = 200;
     if (n[reqVisibleKey] == null) n[reqVisibleKey] = false;
     if (n[reqEnabledKey] == null) n[reqEnabledKey] = false;
     if (n[reqClickableKey] == null) n[reqClickableKey] = false;
@@ -9582,7 +9687,7 @@
     const reqVisible = n[reqVisibleKey] === true;
     const reqEnabled = n[reqEnabledKey] === true;
     const reqClickable = n[reqClickableKey] === true;
-    const waitMs = Math.max(0, Number(n[waitMsKey]) || 0);
+    const waitMs = Math.max(200, Number(n[waitMsKey]) || 1000);
     const selectedDs = n[dynDs] || "";
     const dsId = selectedDs || resolveSelectorDsId(n, dynDs);
     const dsOpts = processDataSourceOptions(selectedDs || dsId);
@@ -9674,12 +9779,12 @@
           </label>
           <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">
             خاموش: یک‌بار جستجو؛ اگر نبود، خطا (نات‌فاوند).
-            روشن: تا سقف زیر صبر می‌کند؛ بعد از آن نات‌فاوند.
+            روشن: هر ۲۰۰ میلی‌ثانیه انتخاب المان (و فریم آن) را تکرار می‌کند تا سقف زیر؛ بعد از آن نات‌فاوند.
           </p>
           ${waitOn ? `
             <div class="insp-sel-wait-ms">
               <label>حداکثر انتظار (ms)</label>
-              <input type="number" min="0" step="100" data-k="${waitMsKey}" value="${esc(waitMs)}" />
+              <input type="number" min="200" step="100" data-k="${waitMsKey}" value="${esc(waitMs)}" />
             </div>
           ` : ""}
         </div>
