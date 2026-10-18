@@ -5366,7 +5366,7 @@
     // The wait badge goes on the opposite corner: a node can both depend on a source and wait for
     // an element, and the two facts must stay readable side by side.
     const waitBudget = nodeWaitBudget(n);
-    if (waitBudget > 0) g.appendChild(makeWaitBadge(w, h, waitBudget, n.kind));
+    if (waitBudget > 0) g.appendChild(makeWaitBadge(w, h, waitBudget));
     // Buttons first (lower paint layer); titles appended after so they sit above.
     // Child mode: the graph shape belongs to the mother, so no clone affordance.
     if ((n.kind === "group" || n.kind === "condition" || isActionNode(n)) && canModify && !structLocked) {
@@ -5636,13 +5636,14 @@
    * The wait is a BUDGET: the engine re-tries the element every 200 ms until it runs out, so the
    * tooltip names the ceiling rather than a fixed pause.
    */
-  function makeWaitBadge(w, h, waitMs, kind) {
-    // The clock HANGS ON the node's outline rather than floating below it: its centre sits just
-    // outside the edge, so the plate overlaps the border by a couple of pixels and reads as
-    // attached. A condition is a diamond, so the bounding box's corner is empty space far from the
-    // shape; its badge rides on the middle of the lower-right edge instead.
-    const cx = kind === "condition" ? w * 0.75 + 1.5 : w + 1.5;
-    const cy = kind === "condition" ? h * 0.75 + 1.5 : h + 4;
+  function makeWaitBadge(w, h, waitMs) {
+    // The MIRROR of the source badge: that one hangs on the top-right corner (circle centre at
+    // `w + 1, -3.5`), so this one hangs on the bottom-right corner at the same x, flipped down and
+    // nudged a little higher so the plate visibly touches the node's outline instead of floating
+    // below it. The same spot is used for every shape — a condition's diamond is narrower, but its
+    // right edge still reaches `w` there, so the clock rides the outline on all three kinds.
+    const cx = w + 1;
+    const cy = h + 2.5;
     const badge = el("g", {
       class: "node-wait-badge",
       transform: `translate(${Math.round(cx - 6)},${Math.round(cy - 6.5)})`
@@ -8749,7 +8750,7 @@
     // A changed budget lives in the tooltip, so the badge is rebuilt rather than kept as-is.
     if (existing) existing.remove();
     const sz = sizeOf(n);
-    gEl.appendChild(makeWaitBadge(sz.w, sz.h, budget, n.kind));
+    gEl.appendChild(makeWaitBadge(sz.w, sz.h, budget));
   }
 
   /** Add/remove the source badge on one rendered node <g>, in place. */
