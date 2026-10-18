@@ -407,6 +407,45 @@
     });
   }
 
+  /** Open the OS file picker and resolve the chosen spreadsheet, or null when cancelled. */
+  function pickSourceFile() {
+    const pick = document.createElement("input");
+    pick.type = "file";
+    pick.accept = ".xlsx,.xlsm,.csv";
+    pick.hidden = true;
+    document.body.appendChild(pick);
+    return new Promise((resolve) => {
+      pick.addEventListener("change", () => resolve(pick.files?.[0] || null), { once: true });
+      pick.click();
+      // The element is removed by the caller once the promise settles, so a cancelled picker (which
+      // may never fire `change`) cannot leave a stray input in the page.
+      setTimeout(() => { if (!pick.files?.length) { pick.remove(); resolve(null); } }, 120000);
+    });
+  }
+
+  /**
+   * Parse a spreadsheet SERVER-SIDE without writing anything.
+   *
+   * `/Panel/Tasks/ParseExcel` only converts the upload into columns+cells; it stores nothing. That is
+   * what makes it usable for a LOCAL reload too: the parse is a read, and where the values land is
+   * decided by the caller.
+   */
+  async function parseSourceFile(file) {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/Panel/Tasks/ParseExcel", {
+      method: "POST",
+      credentials: "same-origin",
+      body: fd
+    });
+    if (!res.ok) throw new Error(t("sources.reloadParseFail") || "فایل اکسل خوانده نشد.");
+    const parsed = await res.json();
+    if (!parsed || !Array.isArray(parsed.columns) || !parsed.columns.length) {
+      throw new Error(t("sources.reloadNoColumns") || "فایل اکسل ستون معتبری ندارد.");
+    }
+    return parsed;
+  }
+
   /**
    * Replace the file behind a library source without changing its id, title or process links.
    *
@@ -415,38 +454,26 @@
    * steps before anything is written; the user can still go ahead deliberately.
    */
   async function reloadLibrarySource(sourceId, currentTitle) {
-    const pick = document.createElement("input");
-    pick.type = "file";
-    pick.accept = ".xlsx,.xlsm,.csv";
-    pick.hidden = true;
-    document.body.appendChild(pick);
-    const file = await new Promise((resolve) => {
-      pick.addEventListener("change", () => resolve(pick.files?.[0] || null), { once: true });
-      pick.click();
-    });
-    pick.remove();
+    const file = await pickSourceFile();
     if (!file) return;
 
     let parsed;
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/Panel/Tasks/ParseExcel", {
-        method: "POST",
-        credentials: "same-origin",
-        body: fd
-      });
-      if (!res.ok) throw new Error(t("sources.reloadParseFail") || "فایل اکسل خوانده نشد.");
-      parsed = await res.json();
+      parsed = await parseSourceFile(file);
     } catch (e) {
       notify(e.message || t("sources.reloadParseFail") || "فایل اکسل خوانده نشد.", "error");
       return;
     }
-    if (!parsed || !Array.isArray(parsed.columns) || !parsed.columns.length) {
-      notify(t("sources.reloadNoColumns") || "فایل اکسل ستون معتبری ندارد.", "error");
-      return;
-    }
+    await reloadSourceWithParsedFile(sourceId, currentTitle, file, parsed);
+  }
 
+  /**
+   * Replace a source's content on the SERVER with an already parsed file.
+   *
+   * Split out of `reloadLibrarySource` so the viewer's own button can reuse the exact same flow
+   * (compatibility analysis first, then the replace) with a file it has already read.
+   */
+  async function reloadSourceWithParsedFile(sourceId, currentTitle, file, parsed) {
     const payload = {
       fileName: file.name,
       columns: parsed.columns,
@@ -501,6 +528,97 @@
     } catch (e) {
       notify(e.message || t("sources.reloadFail") || "بارگذاری مجدد انجام نشد.", "error");
     }
+  }
+
+  /**
+   * Drop this browser's pending run writes for one source.
+   *
+   * Their addresses describe the shape the run loaded. Once that shape is replaced (a new file
+   * loaded locally, a cleared local grid) those cells no longer exist locally, so keeping them
+   * would only make the next sync write into rows this copy cannot see.
+   */
+  function dropPendingWritesForSource(sourceId) {
+    const sid = Number(sourceId);
+    if (!Number.isFinite(sid)) return;
+    const tasks = readTasks();
+    let changed = false;
+    const next = tasks.map((task) => {
+      const writes = Array.isArray(task?.locallyRunSources) ? task.locallyRunSources : [];
+      if (!writes.some((w) => Number(w?.dataSourceId) === sid)) return task;
+      const kept = writes.filter((w) => Number(w?.dataSourceId) !== sid);
+      changed = true;
+      return { ...task, locallyRunSources: kept.length ? kept : null, localRunPendingSync: kept.length > 0 };
+    });
+    if (changed) writeTasks(next);
+  }
+
+  /**
+   * Load a replacement file into the BROWSER copy of the open source.
+   *
+   * The values are applied to the grid this browser loaded (and to the process snapshot that a local
+   * run reads), so the run will use the new file — while the server keeps the file it has. That is
+   * the whole contract of the local view: look at it, edit it, and only the sync button ever moves
+   * values to the server.
+   */
+  function applyLocalReload(sourceId, parsed, fileName) {
+    const ds = viewerState.lastSource || viewerSource();
+    if (!ds) return;
+    ds.columns = parsed.columns || [];
+    ds.columnKeys = parsed.columnKeys || (parsed.columns || []).map((c) => c.key);
+    ds.cells = (parsed.cells || []).map((c) => ({ ...c }));
+    ds.columnCount = parsed.columnCount ?? ds.columnKeys.length;
+    ds.rowCount = parsed.rowCount ?? Math.max(0, ds.cells.length);
+    if (fileName) ds.fileName = fileName;
+    viewerState.lastSource = ds;
+    viewerState.page = 0;
+    viewerState.cellRevisions = null;
+    viewerState.cellMeta = null;
+    // The old addresses are gone with the old shape.
+    dropPendingWritesForSource(sourceId);
+    viewerState.localDirty = false;
+    viewerState.localCopy = true;
+    setLocalNote(true);
+    persistLocalGridCopy(ds);
+    renderViewerTable(ds);
+    notify(t("sources.reloadLocalDone")
+      || "فایل جدید در نسخهٔ محلی بارگذاری شد؛ اطلاعات سرور تغییر نکرد.", "success");
+  }
+
+  /**
+   * The viewer's «بارگذاری مجدد فایل» button.
+   *
+   * One entry point, two destinations: in the local view the parsed file replaces this browser's
+   * copy, and in the server view it goes through the normal analyse-then-reload path so the server's
+   * data is what changes. Keeping the button here (instead of on the row) also means it always acts
+   * on the copy the operator is actually looking at.
+   */
+  async function reloadFromModal() {
+    const sourceId = Number(viewerState.sourceId);
+    if (!Number.isFinite(sourceId) || sourceId <= 0) return;
+    const title = viewerState.lastSource?.title || viewerSource()?.title || "";
+    const file = await pickSourceFile();
+    if (!file) return;
+    let parsed;
+    try {
+      parsed = await parseSourceFile(file);
+    } catch (e) {
+      notify(e.message || t("sources.reloadParseFail") || "فایل اکسل خوانده نشد.", "error");
+      return;
+    }
+    if (viewerState.localCopy) {
+      const ask = window.DaNotify?.confirm
+        ? await DaNotify.confirm(
+            t("sources.reloadLocalConfirm", { title, file: file.name })
+              || `فایل «${file.name}» فقط در نسخهٔ محلی منبع «${title}» بارگذاری شود؟ اطلاعات سرور تغییری نمی‌کند.`,
+            { title: t("sources.reloadFile") || "بارگذاری مجدد فایل", okText: t("common.yes") || "بله" })
+        : window.confirm(`فایل «${file.name}» فقط در نسخهٔ محلی بارگذاری شود؟`);
+      if (!ask) return;
+      applyLocalReload(sourceId, parsed, file.name);
+      return;
+    }
+    // Server view: reuse the full path (compatibility analysis + server replace) with the file we
+    // already have, so the user is not asked to pick it a second time.
+    await reloadSourceWithParsedFile(sourceId, title, file, parsed);
   }
 
   /** Precise warning: name every process + step that reads a column the new file dropped. */
@@ -1001,7 +1119,13 @@
      * writes, or a process that is configured to run locally. The banner and the "no live updates"
      * state both key off this, because in either case the server is not the authority on screen.
      */
-    localCopy: false
+    localCopy: false,
+    /**
+     * Which copy the operator explicitly asked for: "local" (the browser's), "server", or null for
+     * "decide from the divergence". A source with local-run results is opened twice from its row —
+     * one eye per copy — so this is the only way the two views can differ on the same source.
+     */
+    forceMode: null
   };
 
   /**
@@ -2070,12 +2194,18 @@
       viewerState.cellRevisions = fresh.cellRevisions || null;
       viewerState.cellMeta = fresh.cellMeta || null;
       // A local run's unsynced values are overlaid on the server rows: the grid then shows what this
-      // browser would run on (server + local changes), and the banner says so.
-      const pendingCount = applyPendingWrites(fresh, sourceId);
-      viewerState.localDirty = pendingCount > 0;
+      // browser would run on (server + local changes), and the banner says so. The SERVER view the
+      // operator explicitly opened must stay the server's own rows, so it skips the overlay.
+      const forced = viewerState.forceMode;
+      const pendingCount = forced === "server" ? 0 : applyPendingWrites(fresh, sourceId);
+      viewerState.localDirty = pendingCount > 0 && forced !== "server";
       // Public sources stay server-backed even for a local run, so they never take the banner.
       const publicSource = viewerListRow()?.ds?.isPublic === true;
-      viewerState.localCopy = !publicSource && (pendingCount > 0 || viewerProcessRunsLocally());
+      viewerState.localCopy = forced === "local"
+        ? true
+        : forced === "server"
+          ? false
+          : (!publicSource && (pendingCount > 0 || viewerProcessRunsLocally()));
       setLocalNote(viewerState.localCopy);
       viewerState.lastSource = fresh;
       renderViewerTable(fresh);
@@ -2174,12 +2304,14 @@
     }
   }
 
-  async function openViewer(taskId, sourceId) {
+  async function openViewer(taskId, sourceId, mode) {
     // `undefined`/empty (a library row's button) must become a real null, or the hub would be
     // joined with the string "undefined" and the live indicator would lie.
     const tid = (taskId == null || taskId === "" || taskId === "undefined" || taskId === "null") ? null : taskId;
     viewerState.taskId = tid;
     viewerState.sourceId = Number(sourceId);
+    // Which copy this open is about; null lets the divergence decide (the old behaviour).
+    viewerState.forceMode = mode === "local" || mode === "server" ? mode : null;
     // A freshly opened source starts at its first page; keeping an old page index would show a
     // different source's rows or an out-of-range page.
     viewerState.page = 0;
@@ -2226,6 +2358,7 @@
     viewerState.page = 0;
     viewerState.localDirty = false;
     viewerState.localCopy = false;
+    viewerState.forceMode = null;
     setLocalNote(false);
     editingCell = null;
     setLiveStatus(false);
@@ -2279,10 +2412,20 @@
       ? iconBtn("js-sync is-sync", t("sources.syncNow") || "همگام‌سازی با سرور", ICO_RELOAD,
           `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`)
       : "";
+    // The reload action lives INSIDE the viewer now: replacing the file is about the data being
+    // looked at, and which copy it replaces follows the view — local view rewrites the browser copy,
+    // server view rewrites the server's.
+    const viewBtn = Number(sid) > 0
+      ? (divergent
+        ? iconBtn("js-view-local is-sync", t("sources.viewLocal") || "نمایش اطلاعات محلی", ICO_VIEW,
+            `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}" data-mode="local"`)
+          + iconBtn("js-view-server", t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_VIEW,
+            `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}" data-mode="server"`)
+        : iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}"`))
+      : "";
     return `
       ${Number(sid) > 0 && canShape ? iconBtn("js-rename", t("sources.rename"), ICO_RENAME, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
-      ${Number(sid) > 0 && canShape ? iconBtn("js-reload", t("sources.reloadFile"), ICO_RELOAD, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`) : ""}
-      ${Number(sid) > 0 ? iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}"`) : ""}
+      ${viewBtn}
       ${row.taskId != null ? iconBtn("js-dl", t("sources.downloadExcel"), ICO_DL, `data-task="${tid}" data-id="${sid}"`) : ""}
       ${iconBtn("js-cloud", t("sources.saveServerSoon"), ICO_CLOUD, `data-id="${sid}"`)}
       ${master}
@@ -2306,6 +2449,12 @@
     root.querySelectorAll(".js-view").forEach((btn) => {
       // A library row has no process: pass null so the viewer skips the live-session join.
       btn.addEventListener("click", () => openViewer(btn.dataset.task ?? null, btn.dataset.id));
+    });
+    root.querySelectorAll(".js-view-local, .js-view-server").forEach((btn) => {
+      // Two eyes on a diverged source: one for the browser's copy, one for the server's. The mode is
+      // explicit because on a diverged source "the grid" is otherwise ambiguous.
+      btn.addEventListener("click", () =>
+        openViewer(btn.dataset.task ?? null, btn.dataset.id, btn.dataset.mode === "local" ? "local" : "server"));
     });
     root.querySelectorAll(".js-dl").forEach((btn) => {
       btn.addEventListener("click", () => downloadSource(btn.dataset.task, btn.dataset.id, btn));
@@ -2460,8 +2609,16 @@
     el.addEventListener("click", () => closeViewer());
   });
   document.getElementById("da-portal-ds-refresh")?.addEventListener("click", () => {
-    if (viewerState.taskId == null || viewerState.sourceId == null) return;
+    if (viewerState.sourceId == null) return;
+    // The modal can now be opened for a LIBRARY row too (two eyes on a diverged source), so the
+    // guard must not require a process id — only a source.
     refreshViewer();
+  });
+  // Replacing the file happens where the data is shown, and follows the view: local view rewrites
+  // the browser copy, server view rewrites the server's.
+  document.getElementById("da-portal-ds-reload")?.addEventListener("click", () => {
+    if (viewerState.sourceId == null) return;
+    reloadFromModal();
   });
   // Paging is pure rendering: the data is already loaded, so this only re-slices the rows.
   document.getElementById("da-portal-ds-prev")?.addEventListener("click", () => {

@@ -1375,6 +1375,10 @@
     "cellSavedLocal": "Saved in the local copy; it reaches the server with \"Sync with server\".",
     "clearDataLocalDone": "The local copy was cleared; the server's data is untouched.",
     "localEditApplied": "Applied to the local copy — the server is untouched (sync carries cell values only).",
+    "viewLocal": "View local data",
+    "viewServer": "View server data",
+    "reloadLocalConfirm": "Load \"{file}\" into the local copy of \"{title}\" only? The server is not changed.",
+    "reloadLocalDone": "The new file was loaded into the local copy; the server is unchanged.",
     "syncLocalPendingHint": "Local-run changes are held in this browser and have not reached the server yet."
   },
   "settings": {

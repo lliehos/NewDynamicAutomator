@@ -3718,6 +3718,25 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     // process row / first / last / fixed) before dispatching here, so there is nothing left to
     // resolve and the old step-level lookup was a second, diverging answer to the same question.
     const targetRow = Number(rowIndex) || 0;
+    // A LOCAL run of a private source owns its rows: inserting or deleting is a repack of the copy
+    // this machine loaded. Sending it to the server would create/remove a row for everyone (the
+    // opposite of local mode), and its reply would then wipe the cached cells — which is what made
+    // the rest of the run write into an empty grid and leave "rows with no values" behind.
+    const rowDsLocal = (graph?.dataSources || []).find((d) => Number(d.id) === dsId);
+    if (playStatus.runOnServer === false && rowDsLocal && !isPublicSource(rowDsLocal, graph)) {
+      applyLocalRowShift(rowDsLocal, targetRow, isInsert);
+      appendPlayLog("info", isInsert
+        ? `ردیف خالی در نسخهٔ محلی منبع ${dsId} در جای ${targetRow} درج شد (سرور دست‌نخورده)`
+        : `ردیف ${targetRow} از نسخهٔ محلی منبع ${dsId} حذف شد (سرور دست‌نخورده)`);
+      // Tell this machine's viewers the grid moved — the same window event a cell write uses, with no
+      // server hop, and awaited so the next step's read cannot land on the pre-shift numbering.
+      await emitDataSourceCellEvent(
+        graph, rowDsLocal, "", targetRow,
+        isInsert ? "insert" : "delete", null, step?.title, { wait: true });
+      return isInsert
+        ? { ok: true, rowInserted: { dataSourceId: dsId, rowIndex: targetRow } }
+        : { ok: true, rowDeleted: { dataSourceId: dsId, rowIndex: targetRow } };
+    }
     const res = await callBackground({
       type: isInsert ? "insertDataSourceRow" : "deleteDataSourceRow",
       dataSourceId: dsId,
@@ -4925,6 +4944,43 @@ async function storeCapturedContent(step, graph, text, rowIndex) {
     return { ok: true, value: finalText };
   }
   return setPlayMemoryVar(step.memoryVariableName || step.constantValue, text);
+}
+
+/**
+ * Move a LOCAL source's rows for an insert or a delete, keeping every value where it belongs.
+ *
+ * The mirror of the server's own row repack: every index from the touched row down shifts by one,
+ * the new row is materialised as empty cells (one per column, exactly like the server's AddRows so
+ * the numbering cannot collapse), and `rowCount` follows. Nothing is dropped: a local run's whole
+ * point is that the copy it loaded stays authoritative for the rest of the run.
+ */
+function applyLocalRowShift(ds, atIndex, isInsert) {
+  if (!ds) return false;
+  const at = Math.max(0, Number(atIndex) || 0);
+  const cells = Array.isArray(ds.cells) ? ds.cells : (ds.cells = []);
+  const rowOf = (c) => Number(c.index ?? c.Index ?? c.rowIndex);
+  const setRow = (c, v) => {
+    if (c.index !== undefined) c.index = v;
+    else if (c.Index !== undefined) c.Index = v;
+    else c.rowIndex = v;
+  };
+  if (isInsert) {
+    cells.forEach((c) => {
+      const i = rowOf(c);
+      if (Number.isFinite(i) && i >= at) setRow(c, i + 1);
+    });
+    const keys = (ds.columnKeys || (ds.columns || []).map((c) => c.key || c.Key) || []).filter(Boolean);
+    keys.forEach((k) => cells.push({ key: String(k), index: at, cellValue: "" }));
+    ds.rowCount = Math.max((Number(ds.rowCount) || 0) + 1, at + 1);
+  } else {
+    for (let i = cells.length - 1; i >= 0; i--) {
+      const idx = rowOf(cells[i]);
+      if (idx === at) cells.splice(i, 1);
+      else if (Number.isFinite(idx) && idx > at) setRow(cells[i], idx - 1);
+    }
+    ds.rowCount = Math.max(0, (Number(ds.rowCount) || 0) - 1);
+  }
+  return true;
 }
 
 /** Normalise a step's insert mode — anything missing or unknown means a plain overwrite. */
