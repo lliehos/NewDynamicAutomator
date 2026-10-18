@@ -5492,6 +5492,15 @@ async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellV
     try {
       localSent = callBackground({ type: "broadcastDsCellEvent", event: payload }).catch(() => {});
     } catch { /* ignore */ }
+    // A LOCAL run of a private source never touches the server, so the server has nothing to
+    // announce: posting the event there would reach the play hub and patch viewers that are showing
+    // the browser's copy — exactly the stale/incoherent grid the local mode must avoid. The window
+    // event above is the whole channel for this case; public sources keep the server path.
+    const localOnly = playStatus.runOnServer === false && ds && !isPublicSource(ds, graph);
+    if (localOnly) {
+      if (opts.wait && localSent) await Promise.race([localSent, sleep(2000)]);
+      return;
+    }
     // SignalR path via portal HTTP.
     const portal = typeof portalBase === "function"
       ? await portalBase().catch(() => null)

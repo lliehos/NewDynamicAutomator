@@ -1368,7 +1368,14 @@
     "deleteColumnFail": "Could not delete the column.",
     "deletingColumn": "Deleting the column…",
     "needsSync": "Needs sync",
-    "needsSyncHint": "A local run changed this source and its values have not been sent to the server yet."
+    "needsSyncHint": "A local run changed this source and its values have not been sent to the server yet.",
+    "localDifferNote": "This data comes from this browser's local copy and may differ from the server. A local run never changes the server; use the \"Sync with server\" button in the sources list to send the results.",
+    "localLive": "● Local — no live updates",
+    "localRefreshed": "Repainted from the local copy.",
+    "cellSavedLocal": "Saved in the local copy; it reaches the server with \"Sync with server\".",
+    "clearDataLocalBlocked": "Clearing data is a server operation and is not available in local mode; sync the results first.",
+    "shapeEditLocalBlocked": "Local mode never reshapes the server's source; sync the results first.",
+    "syncLocalPendingHint": "Local-run changes are held in this browser and have not reached the server yet."
   },
   "settings": {
     "title": "Account settings",
@@ -1510,8 +1517,9 @@
     "syncMerged": "Merged with the server — {applied} cell(s) written · {unchanged} already identical.",
     "syncMergedConflicts": "Merged with the server — {applied} cell(s) written · {conflicts} cell(s) had newer server values and kept the server's version.",
     "syncSkippedNote": "{n} cell(s) could not be applied.",
-    "localHydrateLoading": "Loading sources once for the local run…",
+    "localHydrateLoading": "Loading the graph and non-public sources for the local run…",
     "localHydrateFail": "Local preload failed for {n} source(s); they will be read from the server during the run.",
+    "localHydratePending": "{n} unsynced local change(s) were re-applied on top of the fresh server data; use \"Sync with server\" when the run finishes.",
     "recordChildDisabled": "This process was created from a template, so it cannot be recorded. Edit the mother process to change its structure.",
     "editLocked": "Structure locked — this process inherits its steps from the template ({name}). Edit the mother process to change them.",
     "templateInfoUnavailable": "Template details are not available.",

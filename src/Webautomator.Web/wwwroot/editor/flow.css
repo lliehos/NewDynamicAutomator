@@ -956,6 +956,23 @@ rect.flow-marquee{pointer-events:none}
   border:2px solid #ea5455;
   background:rgba(234,84,85,.15);
 }
+/*
+ * Local-copy notice shown at the top of a data viewer whose rows come from this browser rather than
+ * the server — either because the process runs locally, or because a local run's results have not
+ * been synced yet. Amber on a soft plate so it reads as a caution, not an error: nothing is broken,
+ * the numbers simply may not be the server's.
+ */
+.ds-local-note{
+  margin:0;
+  padding:9px 16px;
+  font-size:11.5px;
+  line-height:1.7;
+  color:#7a5b10;
+  background:#fff7e6;
+  border-bottom:1px solid #f0d9a8;
+  border-inline-start:3px solid #ff9f43;
+}
+.ds-local-note[hidden]{display:none!important}
 .ds-viewer-scroll{
   flex:1 1 auto;
   min-height:0;

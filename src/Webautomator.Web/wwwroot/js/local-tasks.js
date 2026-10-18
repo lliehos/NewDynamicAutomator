@@ -1123,7 +1123,14 @@ function showProcessDetails(taskId) {
     rows.splice(1, 0, ["panel.colTemplate", escapeHtml(t("tasks.templateSourceLabel"))]);
   }
 
-  const bodyHtml = `<dl class="da-details-list">${rows.map(([key, value]) => `
+  // A process whose run is local (or whose local results are still unsynced) describes a copy of
+  // itself that lives on this machine, so the details must say the server may disagree.
+  const detailsCtx = processLocalContext(row.id);
+  const localNoteHtml = (detailsCtx.local || detailsCtx.pending)
+    ? `<p class="ds-local-note">${escapeHtml(t("sources.localDifferNote")
+        || "این اطلاعات از نسخهٔ محلی این مرورگر است و ممکن است با اطلاعات سرور متفاوت باشد.")}</p>`
+    : "";
+  const bodyHtml = `${localNoteHtml}<dl class="da-details-list">${rows.map(([key, value]) => `
     <div class="da-details-row">
       <dt>${escapeHtml(t(key))}</dt>
       <dd>${value}</dd>
@@ -1322,8 +1329,60 @@ function dataSourceSafeFileName(ds) {
     source: null, cellRevisions: null, cellMeta: null, editing: null,
     // Live overlay state: which process's play group we joined, the hub connection, and the
     // per-cell flash timers so a re-triggered cell restarts its blink instead of stacking.
-    taskId: null, connection: null, blinkTimers: new Map()
+    taskId: null, connection: null, blinkTimers: new Map(),
+    // True while the open grid is showing a LOCAL (browser-side) copy. In that mode the grid reads
+    // no rows from the server, sends no cell write to it, and is not patched by the live hub: the
+    // data belongs to the client, so only the client can update it.
+    localMode: false
   };
+
+  // Cell events reach a browser twice: once as a window event the extension broadcasts locally and
+  // once through the play hub. Applying both would shift rows twice, so an event id is honoured once.
+  const seenProcessCellEvents = new Set();
+
+  /**
+   * Is this process running from a browser-side copy?
+   *
+   * Two independent facts make the grid "local": the row's run switch is OFF (runs execute on this
+   * machine), or the browser still holds unsynced writes from an earlier local run. Both mean the
+   * values on screen may differ from the server's, which is what the viewer's banner says.
+   */
+  function processLocalContext(taskId) {
+    const row = findTask(readTasks(), String(taskId ?? ""));
+    if (!row) return { local: false, pending: false };
+    const pending = row.localRunPendingSync === true
+      || (Array.isArray(row.locallyRunSources) && row.locallyRunSources.length > 0);
+    return { local: row.runOnServer === false, pending };
+  }
+
+  /** The browser's hydrated copy of one source for a process, if this browser holds one. */
+  function localProcessSnapshot(taskId, sourceId) {
+    const row = findTask(readTasks(), String(taskId ?? ""));
+    const graphs = [row?.graph, row?.canvasCache?.graph].filter(Boolean);
+    for (const g of graphs) {
+      const hit = (g.dataSources || []).find((d) => Number(d.id) === Number(sourceId));
+      if (hit && Array.isArray(hit.cells) && hit.cells.length) return hit;
+    }
+    return null;
+  }
+
+  /**
+   * Show or hide the "may differ from the server" banner above the grid.
+   *
+   * It belongs on every info modal opened while a local copy is in play — the process viewer and a
+   * source's own viewer alike — because the numbers on screen are then whatever this browser loaded
+   * or changed last, not what the server holds.
+   */
+  function setProcessLocalNote(on, text) {
+    const el = document.getElementById("da-portal-ds-local-note");
+    if (!el) return;
+    el.hidden = !on;
+    if (on) {
+      el.textContent = text
+        || t("sources.localDifferNote")
+        || "این اطلاعات از نسخهٔ محلی این مرورگر است و ممکن است با اطلاعات سرور متفاوت باشد. برای انتقال نتیجه «همگام‌سازی با سرور» را بزنید.";
+    }
+  }
 
   /**
    * Read a source's current content straight from the server, paging until it is exhausted.
@@ -1388,57 +1447,68 @@ function dataSourceSafeFileName(ds) {
   }
 
   /**
-   * Load a source's data for a LOCAL run — but only when the server copy actually moved.
+   * Load a source's data for a LOCAL run.
    *
    * "Local" means the server is read ONCE, before the first step, and the run then works on its own
-   * copy. Re-downloading every source on every local run would defeat the entire point (traffic,
-   * and the local copy is already correct if nothing changed), so each source is checked against
-   * the revision we last cached and only the changed ones are fetched.
-   *
-   * The check is cheap by design: one small request per source asking for its CURRENT revision,
-   * compared against the revision stored alongside the cached snapshot. Only a mismatch pulls the
-   * rows. A source with no cached snapshot is always fetched — it has never been loaded.
+   * copy — but that copy must be the server's CURRENT rows. Every local start therefore re-reads
+   * every non-public source (and the graph itself), because a cached snapshot from an earlier run
+   * would silently execute yesterday's data. Only non-public sources are touched: a shared/public
+   * source stays server-backed even in a local run, so its state is shared with everyone by design.
    *
    * The cells are written ONTO the graph's own source entries, because that is the only place the
    * engine's `readCellForRun` looks for local data (`ds.cells`). Storing them anywhere else would
    * leave every local read falling back to the server, which is exactly what "local" must avoid.
    *
-   * Returns the number of sources that FAILED to load, so the caller can warn without pretending
-   * the run cannot proceed: an unloaded source simply falls back to server reads during the run.
+   * Unsynced local writes survive the reload: the browser keeps them in `task.locallyRunSources`,
+   * and they are re-applied on top of the freshly loaded rows. Dropping them here would throw away
+   * results the user has not synced yet — the sync button's whole reason for existing.
+   *
+   * Returns `{ failed, loaded, pending }`: sources that could not be loaded (the run then falls back
+   * to server reads for them), sources that were refreshed, and cells that are still local-only.
    */
   async function hydrateLocalRunSources(task) {
     const sources = (task?.graph?.dataSources || []);
-    if (!sources.length) return 0;
+    if (!sources.length) return { failed: 0, loaded: 0, pending: 0 };
 
     // Public/shared sources are deliberately NOT cached: they stay server-backed even in a local run,
-    // so they are read live and their state is shared with everyone else by design.
+    // so they are read live and their state stays shared with everyone else by design.
     const isPublic = (d) => d?.isPublic === true || d?.IsPublic === true;
     const targets = sources.filter((d) => d && d.id != null && !isPublic(d));
-    if (!targets.length) return 0;
+    if (!targets.length) return { failed: 0, loaded: 0, pending: 0 };
 
-    // Revisions live on the task, keyed by source id: `{ [id]: dataRevision }`.
+    // Writes this browser has not pushed to the server yet, grouped by source.
+    const pendingBySource = new Map();
+    for (const c of (Array.isArray(task?.locallyRunSources) ? task.locallyRunSources : [])) {
+      const sid = Number(c?.dataSourceId);
+      if (!Number.isFinite(sid) || sid <= 0) continue;
+      if (!pendingBySource.has(sid)) pendingBySource.set(sid, []);
+      pendingBySource.get(sid).push(c);
+    }
+
+    // Revisions live on the task, keyed by source id: `{ [id]: dataRevision }`. Kept as bookkeeping
+    // (and shown in diagnostics) — the reload itself no longer depends on them.
     const revisions = task.localSourceRevisions || {};
     let failed = 0;
     let loaded = 0;
+    let pending = 0;
 
     for (const ds of targets) {
       const id = Number(ds.id);
       if (!Number.isFinite(id) || id <= 0) continue;
       try {
-        // What revision does the server hold right now? The meta endpoint is small and already
-        // exists (`GET /api/datasources/{id}` → DataSourceMetaDto), so the check costs one light
-        // request per source instead of re-downloading every cell.
-        const metaRes = await fetch(`/api/datasources/${id}`, {
-          credentials: "same-origin",
-          cache: "no-store"
-        });
-        if (!metaRes.ok) throw new Error(`meta ${metaRes.status}`);
-        const meta = await metaRes.json();
-        const serverRevision = meta?.dataRevision ?? meta?.DataRevision ?? null;
-
-        // Unchanged since our snapshot AND we still hold the cells on the graph → nothing to do.
-        const alreadyLoaded = Array.isArray(ds.cells) && ds.cells.length > 0;
-        if (alreadyLoaded && serverRevision != null && revisions[id] === serverRevision) continue;
+        // What revision does the server hold right now? The meta endpoint is small and carries no
+        // cells, so asking costs one light request instead of a second full download.
+        let serverRevision = null;
+        try {
+          const metaRes = await fetch(`/api/datasources/${id}/meta`, {
+            credentials: "same-origin",
+            cache: "no-store"
+          });
+          if (metaRes.ok) {
+            const meta = await metaRes.json();
+            serverRevision = meta?.dataRevision ?? meta?.DataRevision ?? null;
+          }
+        } catch { /* the revision is informational; the content pull below is what matters */ }
 
         const content = await fetchProcessSourceContent(id);
         // Write the snapshot exactly where the engine reads it.
@@ -1449,6 +1519,15 @@ function dataSourceSafeFileName(ds) {
         ds.columnCount = content.columnCount ?? content.columns.length;
         revisions[id] = serverRevision;
         loaded += 1;
+
+        // Re-apply this browser's unsynced writes so a fresh load never discards local results.
+        const keep = pendingBySource.get(id);
+        if (keep && keep.length) {
+          keep.forEach((w) => {
+            setProcessLocalCell(ds, Number(w.rowIndex) || 0, String(w.columnKey || ""), w.cellValue ?? "");
+            pending += 1;
+          });
+        }
       } catch {
         failed += 1;
       }
@@ -1457,7 +1536,8 @@ function dataSourceSafeFileName(ds) {
     task.localSourceRevisions = revisions;
     task.localSourcesLoadedAt = Date.now();
     task.localSourcesLoadedCount = loaded;
-    return failed;
+    task.localSourcesPendingCount = pending;
+    return { failed, loaded, pending };
   }
 
   // --- Live read/write overlays (same behaviour as the sources-page viewer) --------------------
@@ -1533,6 +1613,15 @@ function dataSourceSafeFileName(ds) {
 
   function handleProcessCellEvent(ev) {
     if (!ev) return;
+    // The extension broadcasts each cell event twice (a window event for this tab and a hub relay
+    // for the others). Both can reach this page, and a structural event applied twice invents a
+    // row, so an event id is honoured exactly once.
+    const eid = ev.eventId ?? ev.EventId;
+    if (eid) {
+      if (seenProcessCellEvents.has(eid)) return;
+      seenProcessCellEvents.add(eid);
+      if (seenProcessCellEvents.size > 400) seenProcessCellEvents.clear();
+    }
     const taskId = String(ev.taskId ?? ev.TaskId ?? "");
     if (taskId && processViewerState.taskId != null && String(processViewerState.taskId) !== taskId) return;
     const sid = Number(ev.dataSourceId ?? ev.DataSourceId ?? ev.sourceId ?? ev.SourceId);
@@ -1628,6 +1717,8 @@ function dataSourceSafeFileName(ds) {
     processViewerState.cellRevisions = null;
     processViewerState.cellMeta = null;
     processViewerState.taskId = null;
+    processViewerState.localMode = false;
+    setProcessLocalNote(false);
     setProcessLiveStatus(false);
     if (processViewerState.connection) {
       try { await processViewerState.connection.stop(); } catch { /* ignore */ }
@@ -1644,6 +1735,14 @@ function dataSourceSafeFileName(ds) {
     const sourceId = Number(ds?.id);
     if (!ds || !Number.isFinite(sourceId) || sourceId <= 0) {
       notifyHome(t("sources.clearDataFail") || "پاک‌سازی داده انجام نشد.", "error");
+      return;
+    }
+    // Clearing is a SERVER operation (it deletes rows for everyone), so it has no meaning on a
+    // browser-side copy: the run's own writes are the only thing this grid may change, and they
+    // leave through the sync button.
+    if (processViewerState.localMode) {
+      notifyHome(t("sources.clearDataLocalBlocked")
+        || "در حالت اجرای محلی، پاک‌سازی داده روی سرور انجام نمی‌شود؛ ابتدا نتیجه را همگام‌سازی کنید.", "info");
       return;
     }
     const title = ds.title || dataSourceSafeFileName(ds);
@@ -1724,9 +1823,69 @@ function dataSourceSafeFileName(ds) {
     }
   }
 
+  /**
+   * Save a cell edit into the BROWSER copy while the grid is showing a local-run source.
+   *
+   * Nothing goes to the server. A local run's results travel later, on demand, through the sync
+   * button — writing here would make the change visible to everyone at once (the opposite of what
+   * a local run is for) and would create a second copy of the same edit that no merge could undo.
+   * The edit joins the pending writes with the value the cell held before it, which is exactly what
+   * the sync's merge compares against.
+   */
+  function saveProcessCellLocally(rowIndex, columnKey, value) {
+    const ds = processViewerState.source;
+    const sourceId = Number(ds?.id);
+    if (!ds || !Number.isFinite(sourceId) || sourceId <= 0) return false;
+    const previous = (() => {
+      const hit = (ds.cells || []).find((c) =>
+        (c.key === columnKey || c.Key === columnKey)
+        && Number(c.index ?? c.Index ?? c.rowIndex) === rowIndex);
+      if (!hit) return null;
+      return hit.cellValue ?? hit.CellValue ?? null;
+    })();
+    setProcessLocalCell(ds, rowIndex, columnKey, value);
+
+    const tasks = readTasks();
+    const idx = findTaskIndex(tasks, processViewerState.taskId);
+    if (idx >= 0) {
+      const task = tasks[idx];
+      // Mirror into the cached graph so the next local run and this viewer both read the new value.
+      [task.graph, task.canvasCache?.graph].filter(Boolean).forEach((g) => {
+        const snap = (g.dataSources || []).find((d) => Number(d.id) === sourceId);
+        if (snap) setProcessLocalCell(snap, rowIndex, columnKey, value);
+      });
+      const list = Array.isArray(task.locallyRunSources) ? task.locallyRunSources.slice() : [];
+      const same = (c) => Number(c?.dataSourceId) === sourceId
+        && Number(c?.rowIndex) === rowIndex
+        && String(c?.columnKey) === String(columnKey);
+      const hit = list.find(same);
+      if (hit) {
+        hit.cellValue = String(value ?? "");
+      } else {
+        list.push({
+          dataSourceId: sourceId,
+          rowIndex,
+          columnKey: String(columnKey),
+          cellValue: String(value ?? ""),
+          baseValue: previous == null ? null : String(previous)
+        });
+      }
+      tasks[idx] = { ...task, locallyRunSources: list, localRunPendingSync: true };
+      writeTasks(tasks, { silent: true });
+    }
+    setProcessCellMeta(rowIndex, columnKey, null, currentUser(), new Date().toISOString());
+    return true;
+  }
+
   async function saveProcessCell(rowIndex, columnKey, value) {
     const sourceId = processViewerState.source?.id;
     if (!sourceId) return false;
+    // Local mode: the write stays in this browser (see saveProcessCellLocally).
+    if (processViewerState.localMode && saveProcessCellLocally(rowIndex, columnKey, value)) {
+      notifyHome(t("sources.cellSavedLocal")
+        || "در نسخهٔ محلی ذخیره شد؛ با «همگام‌سازی با سرور» به سرور منتقل می‌شود.", "success");
+      return true;
+    }
     try {
       const res = await fetch(`/api/datasources/${sourceId}/cells`, {
         method: "PATCH",
@@ -1894,6 +2053,15 @@ function dataSourceSafeFileName(ds) {
     const source = processViewerState.source;
     const sourceId = source?.id;
     if (!sourceId) return;
+    // Adding/removing rows or columns and renaming a column are SERVER operations: they change the
+    // source's shape for every process, which is exactly what a local run must not do. The grid also
+    // cannot apply them to the browser copy without the server's row/revision bookkeeping, so the
+    // action is refused with an explanation rather than half-done.
+    if (processViewerState.localMode) {
+      notifyHome(t("sources.shapeEditLocalBlocked")
+        || "در حالت اجرای محلی، ساختار منبع روی سرور تغییر نمی‌کند؛ ابتدا نتیجه را همگام‌سازی کنید.", "info");
+      return;
+    }
     if (action === "col-rename") {
       await renameProcessColumn(sourceId, columnKey);
       return;
@@ -2065,10 +2233,26 @@ function dataSourceSafeFileName(ds) {
         return;
       }
       processViewerState.taskId = taskId;
-      renderProcessViewerTable(hit.ds);
+      // A public/shared source stays server-backed even for a local run, so only a private source of
+      // a locally-run process is shown from the browser's copy.
+      const ctx = processLocalContext(taskId);
+      const isPublicSource = hit.ds.isPublic === true || hit.ds.IsPublic === true;
+      const localMode = !isPublicSource && (ctx.local || ctx.pending);
+      processViewerState.localMode = localMode;
+      setProcessLocalNote(localMode);
+      const snapshot = localMode ? localProcessSnapshot(taskId, hit.ds.id) : null;
+      renderProcessViewerTable(snapshot || hit.ds);
       const modal = document.getElementById("da-portal-ds-viewer");
       if (modal) modal.hidden = false;
       else { notifyHome("نمایشگر داده در این صفحه نیست.", "error"); return; }
+      if (localMode) {
+        // The rows already come from the run's own copy. Pulling them from the server here would
+        // replace exactly the values the banner warns about, and joining the play hub would let the
+        // server patch a grid it does not own — so neither happens. Local cell events arrive through
+        // the extension's window event instead (see the `da-ds-cell-event` listener).
+        setProcessLiveStatus(false, t("sources.localLive") || "● محلی — بدون به‌روزرسانی زنده");
+        return;
+      }
       // The list/canvas snapshot is a summary without cell VALUES, so pull the real rows (and the
       // per-cell revisions the inline editor needs) before anyone tries to edit.
       await refreshProcessViewer();
@@ -2685,7 +2869,7 @@ function dataSourceSafeFileName(ds) {
   }
 
   /** Ensure the process canvas is in the local cache (player reads localStorage / extension sync). */
-  async function ensureTaskGraphCached(taskId) {
+  async function ensureTaskGraphCached(taskId, opts = {}) {
     const id = String(taskId || "").trim();
     if (!id) return null;
     const tasks = readTasks();
@@ -2731,7 +2915,10 @@ function dataSourceSafeFileName(ds) {
     // process is run from the cached copy and the start costs no traffic at all. A process that DID
     // change (or one we have never loaded) is read once, whole, and then cached against its stamp.
     if (/^\d+$/.test(id)) {
-      if (canvasCacheIsCurrent(hit)) {
+      // `force` reads the canvas again even when the stamp says our copy is current. A LOCAL run
+      // starts from the diagram exactly as the server holds it now — the cache is an optimisation
+      // for an ordinary start, not a promise about what the server currently serves.
+      if (!opts.force && canvasCacheIsCurrent(hit)) {
         hit.graph = canvasCacheOf(hit).graph;
         return hit;
       }
@@ -2831,6 +3018,14 @@ function dataSourceSafeFileName(ds) {
       return;
     }
     render((detail && detail.tasks) || readTasks());
+  });
+
+  // The extension mirrors its cell events to the page as a window event, so a LOCAL run — whose
+  // writes never reach the server and therefore never reach the play hub — still lights up the
+  // open grid and moves its rows. This is the only live channel a local run has.
+  window.addEventListener("da-ds-cell-event", (ev) => {
+    if (!processViewerState.taskId) return;
+    handleProcessCellEvent(ev.detail || {});
   });
 
   let busyTimer = null;
@@ -2990,7 +3185,10 @@ function dataSourceSafeFileName(ds) {
       setTasksBusy(true, t("tasks.preparing") || "آماده‌سازی افزونهٔ اجرا…");
       let cached = null;
       try {
-        cached = await ensureTaskGraphCached(taskId);
+        // A LOCAL run starts from a fresh load — the graph and every non-public source are re-read
+        // from the server before the first step — so the canvas cache is bypassed here. A server run
+        // keeps the cache: the server is the copy being executed, so pre-reading it proves nothing.
+        cached = await ensureTaskGraphCached(taskId, { force: !runOnServer });
         if (!cached?.graph?.nodes?.length) {
           throw new Error(t("tasks.graphNotCached") || "فرآیند در حافظهٔ محلی پیدا نشد. صفحه را رفرش کنید.");
         }
@@ -3004,11 +3202,19 @@ function dataSourceSafeFileName(ds) {
         return;
       }
       if (!runOnServer) {
-        setTasksBusy(true, t("tasks.localHydrateLoading") || "بارگذاری یک‌بارهٔ منابع برای اجرای محلی…");
-        const failed = await hydrateLocalRunSources(cached).catch(() => 0);
-        if (failed > 0) {
-          notifyHome(t("tasks.localHydrateFail", { n: failed })
-            || `بارگذاری محلی ${failed} منبع ناموفق بود؛ خواندن آن‌ها در زمان اجرا از سرور انجام می‌شود.`, "warn");
+        setTasksBusy(true, t("tasks.localHydrateLoading") || "بارگذاری گراف و منابع غیرعمومی برای اجرای محلی…");
+        const load = await hydrateLocalRunSources(cached)
+          .catch(() => ({ failed: 0, loaded: 0, pending: 0 }));
+        if (load.failed > 0) {
+          notifyHome(t("tasks.localHydrateFail", { n: load.failed })
+            || `بارگذاری محلی ${load.failed} منبع ناموفق بود؛ خواندن آن‌ها در زمان اجرا از سرور انجام می‌شود.`, "warn");
+        }
+        if (load.pending > 0) {
+          // The load refreshed the server's rows, but this browser still holds results the server
+          // has never seen. They were re-applied on top; say so, because the numbers on screen are
+          // then a merge of two copies rather than a plain copy of the server.
+          notifyHome(t("tasks.localHydratePending", { n: load.pending })
+            || `${load.pending} تغییر محلی همگام‌نشده روی دادهٔ سرور اعمال شد؛ پس از پایان اجرا «همگام‌سازی با سرور» را بزنید.`, "info");
         }
         // Persist the hydrated copy: the extension reads the page store rather than this payload,
         // and it must see the same loaded-once snapshot.
@@ -3463,7 +3669,18 @@ function dataSourceSafeFileName(ds) {
       el.addEventListener("click", () => { closeProcessViewer(); });
     });
     document.getElementById("da-portal-ds-refresh")?.addEventListener("click", () => {
-      if (processViewerState.source) refreshProcessViewer();
+      if (!processViewerState.source) return;
+      // In local mode "refresh" must not read the server: the grid is showing this browser's copy,
+      // so it is repainted from that copy (which is also what the run is using right now).
+      if (processViewerState.localMode) {
+        const snap = localProcessSnapshot(processViewerState.taskId, processViewerState.source.id);
+        if (snap) {
+          renderProcessViewerTable(snap);
+          notifyHome(t("sources.localRefreshed") || "نمایش از نسخهٔ محلی به‌روز شد.", "info");
+        }
+        return;
+      }
+      refreshProcessViewer();
     });
     document.getElementById("da-portal-ds-clear")?.addEventListener("click", () => {
       if (processViewerState.source) clearProcessViewerData();
@@ -3474,6 +3691,11 @@ function dataSourceSafeFileName(ds) {
       const th = e.target.closest("th[data-col]");
       if (th) {
         e.preventDefault();
+        if (processViewerState.localMode) {
+          notifyHome(t("sources.shapeEditLocalBlocked")
+            || "در حالت اجرای محلی، ساختار منبع روی سرور تغییر نمی‌کند؛ ابتدا نتیجه را همگام‌سازی کنید.", "info");
+          return;
+        }
         renameProcessColumn(processViewerState.source?.id, th.dataset.col);
         return;
       }

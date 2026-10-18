@@ -820,6 +820,32 @@
   }
 
   /**
+   * Source ids this browser still owes the server, from the local write log.
+   *
+   * The row's sync button cannot depend on the server flag alone: a local run reports its divergence
+   * best-effort, and an offline/failed report would leave a diverged source with no affordance at
+   * all. The pending writes are the authoritative record and they live here, in the browser.
+   *
+   * Computed once per list paint (the row renderer asks per row) and refreshed by paintRows.
+   */
+  let localDivergentCache = new Set();
+  function localDivergentSourceIds() {
+    return localDivergentCache;
+  }
+  function recomputeLocalDivergence() {
+    const ids = new Set();
+    for (const task of readTasks()) {
+      const writes = Array.isArray(task?.locallyRunSources) ? task.locallyRunSources : [];
+      for (const w of writes) {
+        const sid = Number(w?.dataSourceId);
+        if (Number.isFinite(sid) && sid > 0) ids.add(sid);
+      }
+    }
+    localDivergentCache = ids;
+    return ids;
+  }
+
+  /**
    * The local-run writes this browser still owes the server for one source, and their process.
    *
    * The values live with the client that ran the process — the server only knows a source diverged —
@@ -964,7 +990,18 @@
     /** rowIndex → columnKey → {userId, userName, updatedAtUtc} for the cell tooltip. */
     cellMeta: null,
     /** 0-based page shown by the grid; a big source renders one page at a time. */
-    page: 0
+    page: 0,
+    /**
+     * True while the grid carries this browser's unsynced local-run values for the open source. In
+     * that state the server is not allowed to repaint it: the copy on screen belongs to the client.
+     */
+    localDirty: false,
+    /**
+     * True whenever the open grid shows a browser-side copy for any reason — unsynced local-run
+     * writes, or a process that is configured to run locally. The banner and the "no live updates"
+     * state both key off this, because in either case the server is not the authority on screen.
+     */
+    localCopy: false
   };
 
   /**
@@ -993,6 +1030,60 @@
     if (!el) return;
     el.classList.toggle("is-on", !!on);
     el.textContent = text || (on ? "● زنده" : "● آفلاین");
+  }
+
+  /**
+   * Show or hide the "may differ from the server" banner above the grid.
+   *
+   * It appears whenever the rows on screen are not purely the server's: a local run wrote this
+   * source and the values are still waiting in this browser. Nothing is broken — the banner is what
+   * turns "why is this number different on my colleague's screen?" into an answered question.
+   */
+  function setLocalNote(on, text) {
+    const el = document.getElementById("da-portal-ds-local-note");
+    if (!el) return;
+    el.hidden = !on;
+    if (on) {
+      el.textContent = text
+        || t("sources.localDifferNote")
+        || "این اطلاعات از نسخهٔ محلی این مرورگر است و ممکن است با اطلاعات سرور متفاوت باشد.";
+    }
+  }
+
+  /**
+   * True when the process behind the open grid is configured to run on this machine.
+   *
+   * Its private sources are then loaded into the browser before every run, so the grid describes a
+   * copy that the server only sees on sync — the banner has to say that even before any write.
+   */
+  function viewerProcessRunsLocally() {
+    if (viewerState.taskId == null) return false;
+    const row = readTasks().find((t) => String(t.id) === String(viewerState.taskId));
+    return !!row && row.runOnServer === false;
+  }
+
+  /** The library row for the open source from the last painted list (it carries `isPublic`). */
+  function viewerListRow() {
+    const sid = Number(viewerState.sourceId);
+    if (!Number.isFinite(sid)) return null;
+    return (lastListRows || []).find((r) => Number(r?.ds?.id) === sid) || null;
+  }
+
+  /** Overlay this browser's unsynced run writes on freshly loaded server rows. */
+  function applyPendingWrites(ds, sourceId) {
+    const pending = pendingWritesForSource(sourceId);
+    if (!pending || !ds) return 0;
+    const tasks = pending.tasks;
+    let applied = 0;
+    for (const task of tasks) {
+      const writes = Array.isArray(task?.locallyRunSources) ? task.locallyRunSources : [];
+      for (const w of writes) {
+        if (Number(w?.dataSourceId) !== Number(sourceId)) continue;
+        setLocalCell(ds, Number(w.rowIndex) || 0, String(w.columnKey || ""), w.cellValue ?? "");
+        applied += 1;
+      }
+    }
+    return applied;
   }
 
   function flashCell(td, op) {
@@ -1105,8 +1196,11 @@
     }
   }
 
-  function handleCellEvent(ev) {
+  function handleCellEvent(ev, channel) {
     if (!ev) return;
+    // A diverged grid is a browser-side copy: a hub event describes the SERVER's state and would
+    // repaint it with values the run never saw. Only the local channel may touch it.
+    if (channel === "hub" && (viewerState.localDirty || viewerState.localCopy)) return;
     if (isDuplicateEvent(ev)) return;
     const taskId = String(ev.taskId ?? ev.TaskId ?? "");
     const sid = Number(ev.dataSourceId ?? ev.DataSourceId ?? ev.sourceId ?? ev.SourceId);
@@ -1235,7 +1329,7 @@
         .withAutomaticReconnect([0, 1000, 3000, 8000])
         .configureLogging(signalR.LogLevel.None)
         .build();
-      conn.on("cellEvent", handleCellEvent);
+      conn.on("cellEvent", (ev) => handleCellEvent(ev, "hub"));
       conn.onreconnecting(() => setLiveStatus(false, "● در حال اتصال…"));
       conn.onreconnected(async () => {
         await conn.invoke("JoinTask", joinId).catch(() => {});
@@ -1374,6 +1468,59 @@
   }
 
   /**
+   * Save one cell edit into the browser copy of a diverged source.
+   *
+   * The value goes into the grid's own copy AND into the pending-write log of the process that ran
+   * locally, so the three readers of this source — the grid, the next local run, and the eventual
+   * sync payload — all see the same number. `baseValue` is the value the run loaded, which is what
+   * the sync's merge compares against.
+   */
+  function saveCellLocally(rowIndex, columnKey, value, source) {
+    const sourceId = Number(viewerState.sourceId);
+    if (!Number.isFinite(sourceId) || sourceId <= 0) return false;
+    let previous = null;
+    if (source && Array.isArray(source.cells)) {
+      const hit = source.cells.find((c) =>
+        (c.key === columnKey || c.Key === columnKey)
+        && Number(c.index ?? c.Index ?? c.rowIndex) === Number(rowIndex));
+      if (hit) previous = hit.cellValue ?? hit.CellValue ?? null;
+    }
+    if (source) setLocalCell(source, rowIndex, columnKey, value);
+    // The write belongs to the process that owns this copy: the one with pending writes for the
+    // source, or — for a process merely set to run locally — that process itself.
+    const pending = pendingWritesForSource(sourceId);
+    const tasks = pending ? pending.tasks : readTasks();
+    const ownerId = pending ? pending.task.id : viewerState.taskId;
+    if (ownerId != null) {
+      const owned = tasks.map((task) => {
+        if (String(task.id) !== String(ownerId)) return task;
+        const list = (Array.isArray(task.locallyRunSources) ? task.locallyRunSources : []).slice();
+        const same = (c) => Number(c?.dataSourceId) === sourceId
+          && Number(c?.rowIndex) === Number(rowIndex)
+          && String(c?.columnKey) === String(columnKey);
+        const hit = list.find(same);
+        if (hit) hit.cellValue = String(value ?? "");
+        else list.push({
+          dataSourceId: sourceId,
+          rowIndex: Number(rowIndex),
+          columnKey: String(columnKey),
+          cellValue: String(value ?? ""),
+          baseValue: previous == null ? null : String(previous)
+        });
+        return { ...task, locallyRunSources: list, localRunPendingSync: true };
+      });
+      writeTasks(owned);
+      viewerState.localDirty = true;
+      viewerState.localCopy = true;
+      setLocalNote(true);
+    }
+    setCellMeta(rowIndex, columnKey, null, currentUser(), new Date().toISOString());
+    notify(t("sources.cellSavedLocal")
+      || "در نسخهٔ محلی ذخیره شد؛ با «همگام‌سازی با سرور» به سرور منتقل می‌شود.", "success");
+    return true;
+  }
+
+  /**
    * Write one cell. The grid sends the revision it last saw so a concurrent writer produces a 409
    * we can surface, instead of silently overwriting their value.
    */
@@ -1381,6 +1528,12 @@
     const sourceId = viewerState.sourceId;
     const source = viewerSource();
     if (sourceId == null) return false;
+    // A browser-side copy (unsynced local-run values, or a process set to run locally): the edit
+    // joins the pending writes instead of going to the server. Writing now would publish a value the
+    // run has not synced yet and split one change into two copies that no merge could reconcile.
+    if ((viewerState.localDirty || viewerState.localCopy) && saveCellLocally(rowIndex, columnKey, value, source)) {
+      return true;
+    }
     try {
       const res = await fetch(`/api/datasources/${sourceId}/cells`, {
         method: "PATCH",
@@ -1772,6 +1925,14 @@
       const fresh = await fetchSourceContent(sourceId);
       viewerState.cellRevisions = fresh.cellRevisions || null;
       viewerState.cellMeta = fresh.cellMeta || null;
+      // A local run's unsynced values are overlaid on the server rows: the grid then shows what this
+      // browser would run on (server + local changes), and the banner says so.
+      const pendingCount = applyPendingWrites(fresh, sourceId);
+      viewerState.localDirty = pendingCount > 0;
+      // Public sources stay server-backed even for a local run, so they never take the banner.
+      const publicSource = viewerListRow()?.ds?.isPublic === true;
+      viewerState.localCopy = !publicSource && (pendingCount > 0 || viewerProcessRunsLocally());
+      setLocalNote(viewerState.localCopy);
       viewerState.lastSource = fresh;
       renderViewerTable(fresh);
     } catch { /* leave the grid as-is */ }
@@ -1787,6 +1948,13 @@
     const ds = viewerSource();
     if (!ds || !Number.isFinite(sourceId) || sourceId <= 0) {
       notify(t("sources.clearDataFail") || "پاک‌سازی داده انجام نشد.", "error");
+      return;
+    }
+    // Clearing deletes rows for EVERYONE, so it is a server operation with no meaning on a
+    // browser-side copy — the local run's writes leave through the sync button instead.
+    if (viewerState.localDirty) {
+      notify(t("sources.clearDataLocalBlocked")
+        || "در حالت اجرای محلی، پاک‌سازی داده روی سرور انجام نمی‌شود؛ ابتدا نتیجه را همگام‌سازی کنید.", "info");
       return;
     }
     const title = ds.title || dataSourceSafeFileName(ds);
@@ -1837,6 +2005,10 @@
     // A freshly opened source starts at its first page; keeping an old page index would show a
     // different source's rows or an out-of-range page.
     viewerState.page = 0;
+    // Reset before the load: a failed load must not inherit the previous source's local-mode state.
+    viewerState.localDirty = false;
+    viewerState.localCopy = false;
+    setLocalNote(false);
     // Read the source straight from the server: the grid needs real cell values and the current
     // column set, which the list payload deliberately omits (it is a summary-only shape).
     setGridBusy(true, "sources.loadingGrid");
@@ -1855,6 +2027,12 @@
     }
     const modal = document.getElementById("da-portal-ds-viewer");
     if (modal) modal.hidden = false;
+    if (viewerState.localCopy) {
+      // The grid is showing a browser-side copy: neither the play hub nor a server pull may
+      // overwrite it. Local cell events still arrive through the extension's window event.
+      setLiveStatus(false, t("sources.localLive") || "● محلی — بدون به‌روزرسانی زنده");
+      return;
+    }
     setLiveStatus(false, "● اتصال…");
     await ensureHub(tid);
   }
@@ -1868,6 +2046,9 @@
     viewerState.cellRevisions = null;
     viewerState.cellMeta = null;
     viewerState.page = 0;
+    viewerState.localDirty = false;
+    viewerState.localCopy = false;
+    setLocalNote(false);
     editingCell = null;
     setLiveStatus(false);
     if (viewerState.connection) {
@@ -1910,10 +2091,13 @@
     const accessBtn = isPublic && Number(sid) > 0 && row.ds.canManageAccess === true
       ? iconBtn("js-access", t("sources.manageAccess") || "دسترسی فرآیندها", ICO_SHIELD, `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`)
       : "";
-    // Sync button: shown when a LOCAL run left this source diverged from the server. It replaces the
-    // old per-process Sync button — the divergence belongs to the source, so that is where the
-    // affordance lives, next to the "needs sync" badge that explains it.
-    const syncBtn = row.ds.needsSync === true
+    // Sync button: shown when a LOCAL run left this source diverged from the server. Two independent
+    // signals count, because either alone can be missing: the server flag (set by the run's own
+    // report, which a local run may never have managed to send) and this browser's pending-write log
+    // (which the server cannot see at all). The divergence belongs to the source, so the affordance
+    // lives on its row, next to the "needs sync" badge that explains it.
+    const divergent = row.ds.needsSync === true || localDivergentSourceIds().has(sid);
+    const syncBtn = divergent
       ? iconBtn("js-sync is-sync", t("sources.syncNow") || "همگام‌سازی با سرور", ICO_RELOAD,
           `data-id="${sid}" data-title="${escapeHtml(row.ds.title || "")}"`)
       : "";
@@ -2004,6 +2188,8 @@
     const cardsEl = document.getElementById("da-source-cards");
     const status = document.getElementById("da-sources-status");
     lastListRows = rows;
+    // One walk of the local task store per paint: which sources this browser still owes the server.
+    recomputeLocalDivergence();
     if (status) {
       const pages = Math.max(1, Math.ceil(rows.length / LIST_PAGE_SIZE));
       status.textContent = rows.length
@@ -2027,8 +2213,8 @@
           const pubBadge = r.ds.isPublic
             ? ` <span class="ds-badge-public" title="${escapeHtml(r.ds.ownerUserName || "")}">${t("sources.publicBadge") || "عمومی"}</span>`
             : "";
-          const syncBadge = r.ds.needsSync
-            ? ` <span class="ds-badge-sync" style="background:#fff7e6;border:1px solid #f0c36d;border-radius:6px;padding:1px 6px;font-size:11px;color:#7a5b10" title="${t("sources.needsSyncHint") || "اجرای محلی این منبع را تغییر داده و هنوز با سرور همگام نشده است."}">◌ ${t("sources.needsSync") || "نیاز به همگام‌سازی"}</span>`
+          const syncBadge = (r.ds.needsSync || localDivergentSourceIds().has(Number(r.ds.id)))
+            ? ` <span class="ds-badge-sync" style="background:#fff7e6;border:1px solid #f0c36d;border-radius:6px;padding:1px 6px;font-size:11px;color:#7a5b10" title="${t("sources.syncLocalPendingHint") || "اجرای محلی این منبع را تغییر داده و هنوز با سرور همگام نشده است."}">◌ ${t("sources.needsSync") || "نیاز به همگام‌سازی"}</span>`
             : "";
           return `<tr data-da-row="${escapeHtml(String(r.ds.id ?? ""))}">
             <td>
@@ -2185,7 +2371,7 @@
     }
   });
   window.addEventListener("da-ds-cell-event", (ev) => {
-    handleCellEvent(ev.detail || {});
+    handleCellEvent(ev.detail || {}, "local");
   });
 
   function scheduleRender() {
