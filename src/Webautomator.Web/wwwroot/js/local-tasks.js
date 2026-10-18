@@ -25,6 +25,31 @@
 
   let suppressLocalTasksRender = false;
 
+  /**
+   * Pull the extension's own task records into this page before acting on local state.
+   *
+   * The extension is where a run WRITES (chrome.storage), and the page only ever holds a copy that
+   * arrives when the extension pushes or when this page is opened. Pressing Sync on a stale copy sent
+   * an empty or old payload, cleared the badge and left the server untouched — the "I synced and
+   * nothing changed" report. The bridge answers `da-request-local-tasks` by writing the fresh list
+   * into this page, so one round trip is enough.
+   */
+  function refreshLocalTasksFromExtension(timeoutMs = 1200) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("da-local-tasks", onChanged);
+        resolve(readTasks());
+      };
+      const onChanged = (ev) => { if (ev?.detail?.tasks) finish(); };
+      window.addEventListener("da-local-tasks", onChanged);
+      try { window.dispatchEvent(new CustomEvent("da-request-local-tasks")); } catch { /* no extension */ }
+      setTimeout(finish, timeoutMs);
+    });
+  }
+
   function writeTasks(tasks, opts) {
     const silent = !!(opts && opts.silent);
     if (silent) suppressLocalTasksRender = true;
@@ -708,8 +733,11 @@
      */
     const isPending = task.localRunPendingSync === true
       || (Array.isArray(task.locallyRunSources) && task.locallyRunSources.length > 0);
+    // A locally-running process keeps its values in this browser, even before the first write: both
+    // views must be there from the start, or the local button looks like it does nothing.
+    const runsLocally = task.runOnServer === false;
     const dataBtns = hasData
-      ? (isPending
+      ? ((isPending || runsLocally)
         ? iconBtn("is-view is-data-local", t("sources.viewLocal") || "نمایش اطلاعات محلی", ICO_DATA,
             `data-da-view-data="${tid}" data-mode="local"`)
           + iconBtn("is-view is-data-server", t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_DATA,
@@ -930,6 +958,8 @@
    * than after, because this is not a reversible action.
    */
   async function syncLocalRun(taskId) {
+    // The extension holds what the run actually wrote; this page may be a copy behind it.
+    await refreshLocalTasksFromExtension();
     const tasks = readTasks();
     const task = findTask(tasks, taskId);
     if (!task) return;
@@ -941,15 +971,11 @@
       .map((c) => Number(c?.dataSourceId))
       .filter((n) => Number.isFinite(n) && n > 0))];
     if (!cells.length) {
-      notifyHome(t("tasks.syncNothing")
-        || "نتیجهٔ محلیِ سینک‌نشده‌ای برای این فرآیند نیست.", "info");
-      // The flag can outlive its payload (an older build cleared one and not the other), so a sync
-      // request with nothing to send also puts the badge out rather than leaving a dead button.
-      const i0 = findTaskIndex(tasks, taskId);
-      if (i0 >= 0 && task.localRunPendingSync !== false) {
-        tasks[i0] = { ...tasks[i0], localRunPendingSync: false };
-        writeTasks(tasks);
-      }
+      // Nothing to send: do NOT clear the badge. Clearing it made the row look "synced" while the
+      // server had received nothing at all — the worst possible answer, because it hides the fact
+      // that the local result still needs to be produced or found.
+      notifyHome(t("tasks.syncNothingKept")
+        || "در این مرورگر نتیجهٔ محلیِ قابل ارسالی برای این فرآیند نیست (شاید اجرا روی سیستم دیگری بوده). بَج «نیاز به همگام‌سازی» دست‌نخورده ماند؛ برای ساختن نتیجه، فرآیند را محلی اجرا کنید یا از فهرست منابع نمای محلی را باز کنید.", "warn");
       render(tasks);
       return;
     }

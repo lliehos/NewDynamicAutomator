@@ -1861,7 +1861,10 @@
     // the source: the server view and the local view can differ even before a cell write is logged,
     // so both are offered instead of one ambiguous button.
     const rec = localProcessRecord();
-    return rec?.localRunPendingSync === true && !!localCopyRecord(sourceId);
+    if (rec?.localRunPendingSync === true && !!localCopyRecord(sourceId)) return true;
+    // The process is set to run on this machine, so its private sources belong to the browser from
+    // the start — offering the local view only after a write made the button look inert.
+    return rec?.runOnServer === false && Number(sourceId) > 0;
   }
 
   /** The stored browser copy of a source, if this process has one. */

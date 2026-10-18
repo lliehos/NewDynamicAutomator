@@ -46,6 +46,30 @@
     }
   }
 
+  /**
+   * Pull the extension's own task records into this page before acting on local state.
+   *
+   * The extension is where a run WRITES; this page only holds whatever arrived on the last push.
+   * Syncing from a stale copy sent an empty payload, cleared the badge and left the server untouched
+   * — the "I synced and nothing changed" report. The content-script bridge answers
+   * `da-request-local-tasks` by writing the fresh list into this page, so one round trip is enough.
+   */
+  function refreshLocalTasksFromExtension(timeoutMs = 1200) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("da-local-tasks", onChanged);
+        resolve(readTasks());
+      };
+      const onChanged = (ev) => { if (ev?.detail?.tasks) finish(); };
+      window.addEventListener("da-local-tasks", onChanged);
+      try { window.dispatchEvent(new CustomEvent("da-request-local-tasks")); } catch { /* no extension */ }
+      setTimeout(finish, timeoutMs);
+    });
+  }
+
   function escapeHtml(s) {
     return String(s ?? "").replace(/[&<>"'`]/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" }[c]));
@@ -222,6 +246,8 @@
     if (!ask) return;
     if (btn) { btn.disabled = true; btn.classList.add("is-busy"); }
     try {
+      // Ask the extension what the run actually wrote before reading this page's copy of it.
+      await refreshLocalTasksFromExtension();
       // Collect this source's pending cells from every task that recorded some.
       const tasks = readTasks();
       let applied = 0, unchanged = 0, conflicts = 0, skipped = 0, syncedTasks = 0;
@@ -254,7 +280,10 @@
         }
       }
       if (syncedTasks === 0) {
-        notify(t("sources.syncNothing") || "تغییر محلی‌ای برای این منبع ثبت نشده است.", "info");
+        // Nothing was sent, so nothing may be presented as synced: the badge stays and the server's
+        // flag is left alone. Use the local view of the source to see what this browser does hold.
+        notify(t("sources.syncNothingKept")
+          || "تغییر محلیِ قابل ارسالی برای این منبع در این مرورگر نیست؛ بَج دست‌نخورده ماند.", "warn");
       } else {
         writeTasks(tasks);
         // The server now holds the merged value of every cell, so the BROWSER copy is rebuilt from it.
@@ -1019,9 +1048,41 @@
   function localDivergentSourceIds() {
     return localDivergentCache;
   }
+
+  /**
+   * Process ids configured to run on this machine (`runOnServer === false`).
+   *
+   * Used only for the VIEW buttons: on such a process the browser copy is the copy that matters, so
+   * both views must be reachable even before the first write — otherwise the local view appears only
+   * after a run has already produced values, which reads as "the local data button does nothing".
+   */
+  let localRunTaskCache = new Set();
+  function localRunTaskIds() {
+    return localRunTaskCache;
+  }
+  /**
+   * The local-run process that uses this source, if any.
+   *
+   * A library row carries no `taskId` (the source is shared, the process is not), so the only way to
+   * know that the copy on screen belongs to this machine is to look for a locally-running process
+   * that attached the source. Without this the row's local button was decided by pending writes
+   * alone, i.e. it appeared only AFTER a run — which is why it looked inert beforehand.
+   */
+  function localRunTaskForSource(sourceId) {
+    const sid = Number(sourceId);
+    if (!Number.isFinite(sid) || sid <= 0) return null;
+    for (const task of readTasks()) {
+      if (!task || task.runOnServer !== false) continue;
+      const list = Array.isArray(task.graph?.dataSources) ? task.graph.dataSources : [];
+      if (list.some((ds) => Number(ds?.id) === sid) || task.graph?.masterDataSourceId === sid) return task;
+    }
+    return null;
+  }
   function recomputeLocalDivergence() {
     const ids = new Set();
+    const runIds = new Set();
     for (const task of readTasks()) {
+      if (task && task.runOnServer === false) runIds.add(String(task.id));
       const writes = Array.isArray(task?.locallyRunSources) ? task.locallyRunSources : [];
       for (const w of writes) {
         const sid = Number(w?.dataSourceId);
@@ -1029,6 +1090,7 @@
       }
     }
     localDivergentCache = ids;
+    localRunTaskCache = runIds;
     return ids;
   }
 
@@ -1262,8 +1324,12 @@
       fresh.id = sourceId;
       if (ownerId != null) {
         persistLocalGridCopy(fresh);
+        viewerState.localCopyMissing = false;
       } else {
-        // No owner to attach it to: this is a view of the server's rows, labelled as such.
+        // No owner to attach it to: this is a view of the server's rows, labelled as such. The
+        // banner must say it plainly — otherwise the same button shows server rows one minute and
+        // local rows the next, and the user reads that as "the local data is wrong".
+        viewerState.localCopyMissing = true;
         viewerState.lastSource = fresh;
         return fresh;
       }
@@ -1300,8 +1366,12 @@
     if (reset) reset.hidden = !viewerState.localCopy;
     // The sync button exists only when there is something to send: a local copy this browser still
     // owes the server. Showing it on a clean source would offer a no-op.
+    // `pendingWritesForSource`, not `pendingWritesFor`: the wrong name threw here on EVERY local
+    // view, which aborted refreshViewer before the grid was drawn — the "local data button does
+    // nothing" report was this one line.
     const sync = document.getElementById("da-portal-ds-sync");
-    if (sync) sync.hidden = !(viewerState.localCopy && pendingWritesFor(viewerState.sourceId).length > 0);
+    const pending = viewerState.localCopy ? pendingWritesForSource(viewerState.sourceId) : null;
+    if (sync) sync.hidden = !(pending && (pending.writes?.length || 0) > 0);
     setLocalViewTimer(viewerState.localCopy);
   }
 
@@ -2065,7 +2135,11 @@
       const copies = x?.localSourceCopies;
       return copies && copies[sid] && Array.isArray(copies[sid].cells);
     });
-    return owner ? owner.id : null;
+    if (owner) return owner.id;
+    // No stored copy yet: a locally-running process that uses this source can still adopt it, which
+    // is what turns the first click on a local view into a stored local copy instead of a server read.
+    const localRun = localRunTaskForSource(viewerState.sourceId);
+    return localRun ? localRun.id : null;
   }
 
   /** Column keys of a source snapshot, whichever of the two shapes it carries. */
@@ -2432,7 +2506,7 @@
     // Public sources stay server-backed even for a local run, so they never take the banner.
     const publicSource = viewerListRow()?.ds?.isPublic === true;
     const autoLocal = !publicSource
-      && (!!pendingWritesForSource(sourceId) || viewerProcessRunsLocally());
+      && (!!pendingWritesForSource(sourceId) || viewerProcessRunsLocally() || localRunTaskForSource(sourceId) != null);
     const localCopy = forced === "local" ? true : forced === "server" ? false : autoLocal;
     viewerState.localCopy = localCopy;
     setLocalNote(localCopy);
@@ -2445,6 +2519,10 @@
           viewerState.cellRevisions = null;
           viewerState.cellMeta = null;
           viewerState.lastSource = view;
+          setLocalNote(true, viewerState.localCopyMissing
+            ? (t("sources.localCopyMissing")
+              || "نسخهٔ محلی این منبع روی این سیستم نیست؛ ردیف‌های زیر از سرور خوانده شده‌اند و ارسال‌شدنی نیستند.")
+            : undefined);
           renderViewerTable(view);
         }
       } catch { /* keep whatever is on screen */ }
@@ -2463,6 +2541,7 @@
       viewerState.cellRevisions = fresh.cellRevisions || null;
       viewerState.cellMeta = fresh.cellMeta || null;
       viewerState.localDirty = false;
+      viewerState.localCopyMissing = false;
       viewerState.lastSource = fresh;
       renderViewerTable(fresh);
       syncViewerModeChrome();
@@ -2666,6 +2745,11 @@
     // making it public would publish the server's stale rows as if they were everyone's truth, so
     // the data has to be settled first (sync it, or reset the local copy from the server).
     const divergent = row.ds.needsSync === true || localDivergentSourceIds().has(sid);
+    // A source of a locally-running process is a two-view source even with nothing pending yet —
+    // for a library row that process is found through the source, since the row has no taskId.
+    const dualView = divergent
+      || (row.taskId != null && localRunTaskIds().has(String(row.taskId)))
+      || localRunTaskForSource(sid) != null;
     const publicToggle = row.fromLibrary && Number(sid) > 0
       ? iconBtn(
           `js-public${divergent ? " is-locked" : ""}`,
@@ -2696,7 +2780,7 @@
     // looked at, and which copy it replaces follows the view — local view rewrites the browser copy,
     // server view rewrites the server's.
     const viewBtn = Number(sid) > 0
-      ? (divergent
+      ? (dualView
         ? iconBtn("js-view-local is-data-local", t("sources.viewLocal") || "نمایش اطلاعات محلی", ICO_DATA,
             `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}" data-mode="local"`)
           + iconBtn("js-view-server is-data-server", t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_DATA,
@@ -3082,4 +3166,8 @@
   } else {
     scheduleRender();
   }
+  // The extension owns the run records; this page only sees the mirror written on the last push.
+  // Without asking once on open, the sources list judged every row from a copy that a run finished
+  // elsewhere had never updated — so "local data" looked empty and Sync had nothing to send.
+  try { window.dispatchEvent(new CustomEvent("da-request-local-tasks")); } catch { /* no extension */ }
 })();
