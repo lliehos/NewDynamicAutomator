@@ -51,10 +51,20 @@
     return (Math.round(clamped * 10) / 10).toString();
   }
 
+  /** Same rounded ceiling the server uses (1, 2 or 5 × 10^n), so the redraw cannot re-scale the bars. */
+  function niceMax(value) {
+    if (!(value > 0)) return 1;
+    var magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+    var norm = value / magnitude;
+    var step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+    return Math.max(1, step * magnitude);
+  }
+
   function column(title, inHeight, outHeight) {
+    // A zero bucket draws nothing: the old 1px floor made an idle hour look like a row of bars.
     return '<div class="admin-mon-chart-col" title="' + title + '">'
-      + '<span class="admin-mon-chart-in" style="height:' + inHeight + '%"></span>'
-      + '<span class="admin-mon-chart-out" style="height:' + outHeight + '%"></span>'
+      + (Number(inHeight) > 0 ? '<span class="admin-mon-chart-in" style="height:' + inHeight + '%"></span>' : "")
+      + (Number(outHeight) > 0 ? '<span class="admin-mon-chart-out" style="height:' + outHeight + '%"></span>' : "")
       + "</div>";
   }
 
@@ -96,6 +106,11 @@
       var net = (Number(p.bytesIn) || 0) + (Number(p.bytesOut) || 0);
       if (net > maxNet) maxNet = net;
     });
+    // Round the ceiling the same way the server does, then print it: without a stated scale a bar's
+    // height is a shape, not a number.
+    maxNet = niceMax(maxNet);
+    var maxEl = document.querySelector("[data-mon='chartMax']");
+    if (maxEl) maxEl.textContent = bytes(maxNet);
 
     var netHtml = "";
     rows.forEach(function (p) {

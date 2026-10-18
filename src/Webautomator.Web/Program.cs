@@ -49,6 +49,28 @@ builder.Services.AddControllersWithViews(o =>
         o.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
     });
 builder.Services.AddSignalR();
+// ---- Response compression ---------------------------------------------------------------------
+// The panel ships ~4 MB of vendor JS/CSS per full page load and the dashboards poll JSON every few
+// seconds. Without compression every one of those bytes is paid again on the wire — which is exactly
+// what the monitoring page reported as "unreasonable traffic while nothing is running". The meter
+// sits OUTSIDE this middleware, so the bytes it counts are the compressed ones actually sent.
+// Fastest (not Optimal): at this size the difference is a few percent of size for a lot of CPU on
+// every request, and page latency is what the operator feels.
+builder.Services.AddResponseCompression(o =>
+{
+    o.EnableForHttps = true;   // HTTPS is the default here; without this nothing would be compressed.
+    o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+    o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+    o.MimeTypes = Microsoft.AspNetCore.ResponseCompression.ResponseCompressionDefaults.MimeTypes.Concat(new[]
+    {
+        "application/javascript", "text/javascript", "application/json",
+        "application/manifest+json", "image/svg+xml", "text/plain", "application/xml"
+    });
+});
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProviderOptions>(
+    o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProviderOptions>(
+    o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
 builder.Services.AddSingleton<Webautomator.Web.Services.PlaySessionTracker>();
 builder.Services.AddSingleton<Webautomator.Web.Services.UpdateNotifyStateService>();
 builder.Services.AddSingleton<Webautomator.Web.Services.IAppVersionService, Webautomator.Web.Services.AppVersionService>();
@@ -212,6 +234,9 @@ var https = HasHttpsEndpoint(app.Configuration);
 // static files and the error path, so the monitoring dashboard's bandwidth figure covers all the load
 // this app puts on the network rather than only the controller half of it.
 app.UseMiddleware<Webautomator.Web.Middleware.TrafficMeterMiddleware>();
+// Inside the meter on purpose: this compresses what the endpoint writes, and the meter (registered
+// above, so further out in the pipeline) counts the COMPRESSED bytes that leave the process.
+app.UseResponseCompression();
 
 if (!app.Environment.IsDevelopment())
 {

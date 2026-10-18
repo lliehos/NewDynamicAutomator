@@ -30,8 +30,13 @@ public sealed class TrafficMeterMiddleware
         if (context.Request.ContentLength is long reqLen && reqLen > 0)
         {
             requestBytes = reqLen;
-            TrafficMeter.AddIn(reqLen);
         }
+        // …plus the HEADERS, which are the whole inbound side of a page load. .NET exposes no byte
+        // counter for them, and without this estimate the dashboard's inbound figure was always 0 B/s
+        // next to a large outbound one, which reads as "the server receives nothing" — it does, it just
+        // receives cookies and user agents, not bodies.
+        requestBytes += EstimateRequestHeadBytes(context.Request);
+        TrafficMeter.AddIn(requestBytes);
 
         var original = context.Response.Body;
         await using var counter = new CountingStream(original);
@@ -57,6 +62,37 @@ public sealed class TrafficMeterMiddleware
                 context.Connection.RemoteIpAddress?.ToString(),
                 requestBytes,
                 counter.BytesWritten);
+        }
+    }
+
+    /// <summary>
+    /// Approximate the size of a request's head: the request line plus every header, as bytes on the wire
+    /// (HTTP/1.1 shape, +2 for the blank line). Character count is used as a byte count, which is exact
+    /// for the ASCII that dominates headers and slightly under-counts non-ASCII ones — an estimate is
+    /// the honest option here, and it is labelled as such in the dashboard's own wording (inbound).
+    /// </summary>
+    private static long EstimateRequestHeadBytes(HttpRequest request)
+    {
+        try
+        {
+            var total = request.Method.Length + 1
+                + (request.PathBase.Value?.Length ?? 0)
+                + (request.Path.Value?.Length ?? 0)
+                + (request.QueryString.Value?.Length ?? 0)
+                + " HTTP/1.1\r\n".Length;
+            foreach (var header in request.Headers)
+            {
+                var name = header.Key;
+                foreach (var value in header.Value)
+                {
+                    total += name.Length + 2 + (value?.Length ?? 0) + 2;   // ": " and "\r\n"
+                }
+            }
+            return total + 2;                                           // the blank line ending the head
+        }
+        catch
+        {
+            return 0;
         }
     }
 

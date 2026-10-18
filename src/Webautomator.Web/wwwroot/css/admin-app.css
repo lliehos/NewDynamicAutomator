@@ -2156,6 +2156,11 @@ a.admin-chip.is-active {
   padding: .25rem 0;
   overflow-x: auto;
 }
+/* `hidden` must win: these are laid out with display:flex, which otherwise overrides the attribute
+   and left the "no samples yet" box on screen next to a chart that was drawing fine. */
+.admin-mon-chart[hidden],
+.admin-mon-legend[hidden],
+.admin-mon-empty[hidden] { display: none !important; }
 .admin-mon-chart-col {
   flex: 1 0 auto;
   min-width: 5px;
@@ -2164,8 +2169,11 @@ a.admin-chip.is-active {
   justify-content: flex-end;
   height: 100%;
 }
-.admin-mon-chart-in { display: block; width: 100%; background: #7d71f5; border-radius: 3px 3px 0 0; min-height: 1px; }
-.admin-mon-chart-out { display: block; width: 100%; background: #a5b4fc; min-height: 1px; }
+/* No min-height: a bucket that carried no traffic has to read as empty, not as a 1px sliver that
+   made a quiet hour look like a row of small boxes. */
+.admin-mon-chart-in { display: block; width: 100%; background: #7d71f5; border-radius: 3px 3px 0 0; }
+.admin-mon-chart-out { display: block; width: 100%; background: #a5b4fc; }
+.admin-mon-chart-max { margin-inline-start: auto; font-variant-numeric: tabular-nums; }
 
 .admin-mon-empty {
   display: flex;

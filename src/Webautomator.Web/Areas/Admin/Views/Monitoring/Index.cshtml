@@ -22,8 +22,25 @@
       (max <= 0 ? 0 : Math.Clamp(100.0 * value / max, 0, 100))
       .ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
 
+  // A "nice" ceiling (1, 2 or 5 × 10^n) instead of the exact maximum: scaling to the exact peak made
+  // the tallest column always exactly 100% and every other column a rounding error, so the bars looked
+  // arbitrary. With a rounded ceiling the tallest bar is usually SHORTER than the box, which is what
+  // makes the comparison honest, and the ceiling can be printed as an axis label.
+  long NiceMax(long value)
+  {
+    if (value <= 0) return 1;
+    var magnitude = Math.Pow(10, Math.Floor(Math.Log10(value)));
+    var norm = value / magnitude;
+    var step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+    return (long)Math.Max(1, step * magnitude);
+  }
+
   var hours = s.WindowHours;
-  var maxNet = s.History.Count > 0 ? Math.Max(1, s.History.Max(p => p.BytesIn + p.BytesOut)) : 1;
+  var rawMaxNet = s.History.Count > 0 ? Math.Max(1, s.History.Max(p => p.BytesIn + p.BytesOut)) : 1;
+  var maxNet = NiceMax(rawMaxNet);
+  // Width of one column: the service collapses the window into 60 buckets of at least a minute, so the
+  // label has to follow the window or "each column is a sample" says nothing about how much time it is.
+  var bucketMinutes = Math.Max(1, (int)Math.Round(Math.Max(60, hours * 3600.0 / 60) / 60.0));
   var topUserBytes = s.ByUser.Count > 0 ? Math.Max(1, s.ByUser.Max(u => u.BytesTotal)) : 1;
   var topIpBytes = s.ByIp.Count > 0 ? Math.Max(1, s.ByIp.Max(i => i.BytesTotal)) : 1;
   var windowLabel = hours == 1 ? L["admin.monitoring.h1"]
@@ -187,6 +204,10 @@
   <div class="admin-mon-legend" data-mon-history-legend @(s.History.Count == 0 ? "hidden" : null)>
     <span class="admin-mon-legend-item is-in"><i></i>@L["admin.monitoring.inbound"]</span>
     <span class="admin-mon-legend-item is-out"><i></i>@L["admin.monitoring.outbound"]</span>
+    <span class="admin-mon-legend-max" title="@L["admin.monitoring.chartMaxHint"]">
+      @L["admin.monitoring.chartMax"]: <b data-mon="chartMax">@Bytes(maxNet)</b>
+      · @L.T("admin.monitoring.bucketWide", ("n", bucketMinutes.ToString()))
+    </span>
   </div>
   <div class="admin-mon-chart" data-mon-chart="net" aria-hidden="true" @(s.History.Count == 0 ? "hidden" : null)>
     @foreach (var p in s.History)
@@ -194,7 +215,8 @@
       var netInH = Pct(p.BytesIn, maxNet);
       var netOutH = Pct(p.BytesOut, maxNet);
       @* Two stacked bars per sample: inbound over outbound, so the pair reads as one traffic
-         column while keeping the two directions distinguishable. *@
+         column while keeping the two directions distinguishable. A bucket with nothing in it renders
+         no bar at all — a placeholder sliver would make an idle hour look like traffic. *@
       <div class="admin-mon-chart-col" title="@p.AtUtc.ToString("MM-dd HH:mm") — ↓@Bytes(p.BytesIn) ↑@Bytes(p.BytesOut)">
         <span class="admin-mon-chart-in" style="height:@netInH%"></span>
         <span class="admin-mon-chart-out" style="height:@netOutH%"></span>
@@ -290,6 +312,12 @@
     <p class="admin-field-hint admin-mon-actions-hint">
       <i class="ti ti-player-stop" aria-hidden="true"></i> @L["admin.monitoring.stopRunsHint"]
       <i class="ti ti-logout ms-3" aria-hidden="true"></i> @L["admin.monitoring.closeSessionHint"]
+    </p>
+    @* The unauthenticated row is usually the biggest one, and for a reason that has nothing to do with
+       a rogue client: page assets are served before anyone is identified. Saying so here is what turns
+       "why is traffic so high when nothing runs" into a reading the operator can act on. *@
+    <p class="admin-field-hint admin-mon-actions-hint">
+      <i class="ti ti-info-circle" aria-hidden="true"></i> @L["admin.monitoring.anonymousHint"]
     </p>
   }
 </section>
