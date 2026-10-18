@@ -1485,12 +1485,45 @@ function dataSourceSafeFileName(ds) {
   /** The browser's hydrated copy of one source for a process, if this browser holds one. */
   function localProcessSnapshot(taskId, sourceId) {
     const row = findTask(readTasks(), String(taskId ?? ""));
-    const graphs = [row?.graph, row?.canvasCache?.graph].filter(Boolean);
+    if (!row) return null;
+    // The COMPLETE copy lives in its own record, `localSourceCopies[sourceId]`: a source is an entity
+    // in its own right, not a corner of the process graph. The graph is STRUCTURE — the portal
+    // replaces it with the canvas (which carries no cells at all) — so drawing the grid from it
+    // showed a single partial row (only the cells a run happened to touch) or nothing, and any graph
+    // reload quietly threw the local data away.
+    const id = Number(sourceId);
+    const tasks = readTasks();
+    const rec = (() => {
+      const own = row.localSourceCopies?.[String(id)];
+      if (own && Array.isArray(own.cells)) return own;
+      // A source is an entity of its own: another process that loaded it holds a valid copy, and it
+      // is a better answer than asking the server for rows this browser already has.
+      let best = null;
+      for (const t2 of tasks) {
+        const r = t2?.localSourceCopies?.[String(id)];
+        if (!r || !Array.isArray(r.cells)) continue;
+        if (!best || String(r.savedAtUtc || "") > String(best.savedAtUtc || "")) best = r;
+      }
+      return best;
+    })();
+    if (rec && Array.isArray(rec.cells)) {
+      return {
+        id,
+        title: rec.title || "",
+        fileName: rec.fileName || null,
+        cells: rec.cells.map((c) => ({ ...c })),
+        columns: Array.isArray(rec.columns) ? rec.columns.map((c) => ({ ...c })) : [],
+        columnKeys: Array.isArray(rec.columnKeys) ? rec.columnKeys.slice() : [],
+        rowCount: Number(rec.rowCount) || 0,
+        columnCount: Number(rec.columnCount) || 0
+      };
+    }
+    // Legacy fallback: a process cached before those records existed kept its cells on the graph. The
+    // canvas the server hands out carries no `cells` key at all, so the PRESENCE of the array is what
+    // marks a loaded copy — an empty one is a copy the user deliberately cleared.
+    const graphs = [row.graph, row.canvasCache?.graph].filter(Boolean);
     for (const g of graphs) {
-      const hit = (g.dataSources || []).find((d) => Number(d.id) === Number(sourceId));
-      // The canvas the server hands out carries no `cells` key at all, so the PRESENCE of the array
-      // is what marks a loaded copy — an empty one is a copy the user deliberately cleared, and
-      // re-reading the server for it would undo that.
+      const hit = (g.dataSources || []).find((d) => Number(d.id) === id);
       if (hit && Array.isArray(hit.cells)) return hit;
     }
     return null;
@@ -1819,9 +1852,25 @@ function dataSourceSafeFileName(ds) {
     const idx = findTaskIndex(tasks, processViewerState.taskId);
     if (idx < 0) return;
     const task = tasks[idx];
+    const sourceId = Number(ds.id);
+    // The authoritative record first: this is what every local viewer draws, and it must never be
+    // lost to a graph reload.
+    const copies = { ...(task.localSourceCopies || {}) };
+    if (Number.isFinite(sourceId)) {
+      copies[String(sourceId)] = {
+        cells: Array.isArray(ds.cells) ? ds.cells.map((c) => ({ ...c })) : [],
+        columns: Array.isArray(ds.columns) ? ds.columns.map((c) => ({ ...c })) : [],
+        columnKeys: Array.isArray(ds.columnKeys) ? ds.columnKeys.slice() : [],
+        rowCount: Number(ds.rowCount) || 0,
+        columnCount: Number(ds.columnCount) || 0,
+        title: ds.title || task.localSourceCopies?.[String(sourceId)]?.title || null,
+        fileName: ds.fileName || task.localSourceCopies?.[String(sourceId)]?.fileName || null,
+        savedAtUtc: new Date().toISOString()
+      };
+    }
     let touched = false;
     [task.graph, task.canvasCache?.graph].filter(Boolean).forEach((g) => {
-      const snap = (g.dataSources || []).find((d) => Number(d.id) === Number(ds.id));
+      const snap = (g.dataSources || []).find((d) => Number(d.id) === sourceId);
       if (!snap) return;
       snap.cells = ds.cells;
       snap.columns = ds.columns;
@@ -1830,8 +1879,8 @@ function dataSourceSafeFileName(ds) {
       snap.columnCount = ds.columnCount;
       touched = true;
     });
-    if (!touched) return;
-    tasks[idx] = { ...task };
+    if (!touched && !Number.isFinite(sourceId)) return;
+    tasks[idx] = { ...task, localSourceCopies: copies };
     writeTasks(tasks, { silent: true });
   }
 
@@ -2030,6 +2079,8 @@ function dataSourceSafeFileName(ds) {
       if (processViewerState.editing) return;  // never repaint under a half-typed cell
       const snap = localProcessSnapshot(processViewerState.taskId, processViewerState.source.id);
       if (!snap) return;
+      // The record is the run's copy; the pending log may still be a moment ahead of it.
+      overlayLocalWrites(snap, processViewerState.source.id);
       renderProcessViewerTable(snap);
     }, 2000);
   }
@@ -2138,6 +2189,8 @@ function dataSourceSafeFileName(ds) {
       if (processViewerState.localMode) {
         overlayLocalWrites(fresh, sourceId);
         cacheLocalSnapshot(processViewerState.taskId, sourceId, fresh);
+        // …and into the per-source record, which is what every local view draws from now on.
+        persistLocalSnapshot(fresh);
       }
       renderProcessViewerTable(fresh);
     } catch { /* keep the current grid */ }
@@ -2260,6 +2313,8 @@ function dataSourceSafeFileName(ds) {
       }
       tasks[idx] = { ...task, locallyRunSources: list, localRunPendingSync: true };
       writeTasks(tasks, { silent: true });
+      // Also into the record every local view draws, so this edit survives a graph reload.
+      persistLocalSnapshot(ds);
     }
     setProcessCellMeta(rowIndex, columnKey, null, currentUser(), new Date().toISOString());
     return true;
@@ -2630,6 +2685,9 @@ function dataSourceSafeFileName(ds) {
       // below is the server's, but the user should know a local copy is waiting to be settled.
       setProcessLocalNote(!isPublicSource && (ctx.local || ctx.pending));
       const snapshot = localMode ? localProcessSnapshot(taskId, hit.ds.id) : null;
+      // The stored copy already holds the run's writes; re-applying the pending log costs nothing and
+      // rescues a record written before a write landed (or by an older extension build).
+      if (localMode && snapshot) overlayLocalWrites(snapshot, hit.ds.id);
       renderProcessViewerTable(snapshot || hit.ds);
       const modal = document.getElementById("da-portal-ds-viewer");
       if (modal) modal.hidden = false;
@@ -3177,6 +3235,10 @@ function dataSourceSafeFileName(ds) {
         ...row,
         runOnServer: prev ? prev.runOnServer : row.runOnServer,
         localRunPendingSync: prev ? prev.localRunPendingSync : row.localRunPendingSync,
+        // The per-source browser copies are client-local too — and they are the LOCAL data entity
+        // (one per source). Rebuilt from the API row they would be dropped on every list refresh,
+        // i.e. every few seconds, which is how local results used to vanish.
+        localSourceCopies: prev ? prev.localSourceCopies : row.localSourceCopies,
         // The cached canvas is client-local state as well, and it is what makes "an unchanged
         // process costs no traffic" possible. Rebuilt from the API row it would be dropped on every
         // list refresh — i.e. exactly when the next start would want it.
@@ -3421,8 +3483,26 @@ function dataSourceSafeFileName(ds) {
   // open grid and moves its rows. This is the only live channel a local run has.
   window.addEventListener("da-ds-cell-event", (ev) => {
     if (!processViewerState.taskId) return;
+    // A grid showing the SERVER's rows must never be patched by a local run's events: nothing was
+    // written to the server, so "live" updates there were showing values the server never received.
+    // The two views are independent — this channel belongs to the local one.
+    if (!processViewerState.localMode) return;
     handleProcessCellEvent(ev.detail || {});
+    // What the grid just showed must reach the per-source record, or the 2s repaint from that record
+    // would revert it. Coalesced: a run emits an event per cell.
+    if (processViewerState.source) queueProcessLocalPersist();
   });
+
+  /** Write the open local grid back into its per-source record, once per quiet moment. */
+  let processLocalPersistTimer = null;
+  function queueProcessLocalPersist() {
+    if (processLocalPersistTimer) return;
+    processLocalPersistTimer = setTimeout(() => {
+      processLocalPersistTimer = null;
+      if (!processViewerState.localMode || !processViewerState.source) return;
+      persistLocalSnapshot(processViewerState.source);
+    }, 700);
+  }
 
   let busyTimer = null;
   let busyErrorTimer = null;

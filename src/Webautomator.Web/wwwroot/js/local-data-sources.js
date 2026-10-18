@@ -1193,11 +1193,22 @@
    * local run both use.
    */
   function readLocalCopyRecord(taskId, sourceId) {
-    if (taskId == null) return null;
-    const task = readTasks().find((t) => String(t.id) === String(taskId));
-    const rec = task?.localSourceCopies?.[String(Number(sourceId))];
-    if (!rec || !Array.isArray(rec.cells)) return null;
-    return { ...rec, id: Number(sourceId) };
+    const sid = String(Number(sourceId));
+    const tasks = readTasks();
+    if (taskId != null) {
+      const task = tasks.find((t) => String(t.id) === String(taskId));
+      const rec = task?.localSourceCopies?.[sid];
+      if (rec && Array.isArray(rec.cells)) return { ...rec, id: Number(sourceId) };
+    }
+    // A source is an entity of its own: if THIS process has not loaded it, any process that did is a
+    // better answer than re-reading the server (and the newest record wins when several hold one).
+    let best = null;
+    for (const t of tasks) {
+      const rec = t?.localSourceCopies?.[sid];
+      if (!rec || !Array.isArray(rec.cells)) continue;
+      if (!best || String(rec.savedAtUtc || "") > String(best.savedAtUtc || "")) best = rec;
+    }
+    return best ? { ...best, id: Number(sourceId) } : null;
   }
 
   /** The grid the LOCAL view renders: the stored copy with the pending writes applied on top. */
@@ -1462,6 +1473,11 @@
     // A diverged grid is a browser-side copy: a hub event describes the SERVER's state and would
     // repaint it with values the run never saw. Only the local channel may touch it.
     if (channel === "hub" && (viewerState.localDirty || viewerState.localCopy)) return;
+    // …and the mirror image: while the process runs on THIS machine, nothing reaches the server, so
+    // its cell events must not repaint the SERVER view either. That grid is a still photo of what the
+    // server holds; making it move made "live" updates look meaningful when there was nothing to be
+    // live about. The two views are independent on purpose.
+    if (channel === "local" && !viewerState.localCopy && viewerProcessRunsLocally()) return;
     if (isDuplicateEvent(ev)) return;
     const taskId = String(ev.taskId ?? ev.TaskId ?? "");
     const sid = Number(ev.dataSourceId ?? ev.DataSourceId ?? ev.sourceId ?? ev.SourceId);
@@ -1482,6 +1498,8 @@
             ?.querySelector(`td[data-row="${idx}"]`);
           if (td) flashCell(td, op === "insert" ? "write" : "read");
         }
+        // A row the run inserted IS a result: it has to reach the per-source record too.
+        if (viewerState.localCopy) queueLocalViewPersist();
       }
       return;
     }
@@ -1507,6 +1525,26 @@
       flashCell(td, isWrite ? "write" : "read");
       showActor(ev);
     }
+    // The local view draws from the per-source record, so what it just displayed has to reach that
+    // record — otherwise the 2s repaint (or the next open) would show the pre-run grid again.
+    if (viewerState.localCopy) queueLocalViewPersist();
+  }
+
+  /**
+   * Write the open local grid back into its per-source record, coalesced.
+   *
+   * A run emits an event per cell; persisting the whole record on each one would rewrite the
+   * encrypted store hundreds of times a minute. One write per quiet moment is enough, because the
+   * record is only read when the grid is painted.
+   */
+  let localViewPersistTimer = null;
+  function queueLocalViewPersist() {
+    if (localViewPersistTimer) return;
+    localViewPersistTimer = setTimeout(() => {
+      localViewPersistTimer = null;
+      if (!viewerState.localCopy || !viewerState.lastSource) return;
+      persistLocalGridCopy(viewerState.lastSource);
+    }, 700);
   }
 
   function showActor(ev) {

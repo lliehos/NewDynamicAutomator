@@ -337,6 +337,9 @@
       if (old.localRunPendingSync) out.localRunPendingSync = true;
       if (old.lastLocalRunAt) out.lastLocalRunAt = old.lastLocalRunAt;
       if (old.locallyRunSources) out.locallyRunSources = old.locallyRunSources;
+      // The per-source browser copies are written by the RUN (extension side) and only read by the
+      // portal's data viewers, so the page's copy can never be the authority on them.
+      if (old.localSourceCopies) out.localSourceCopies = old.localSourceCopies;
       // The switch is a user decision; the page copy may simply not have been re-read yet.
       if (old.runOnServer === false && t.runOnServer !== false) out.runOnServer = false;
       return out;
@@ -363,6 +366,9 @@
       if (!t.graph && old.graph) out.graph = old.graph;
       if (!("localRunPendingSync" in t) && old.localRunPendingSync) out.localRunPendingSync = true;
       if (!("locallyRunSources" in t) && old.locallyRunSources) out.locallyRunSources = old.locallyRunSources;
+      // Per-source copies belong to the run: the page only reads (and edits) them, so an omitted
+      // field keeps the extension's copy instead of deleting the data the viewer draws.
+      if (!("localSourceCopies" in t) && old.localSourceCopies) out.localSourceCopies = old.localSourceCopies;
       if (!("lastLocalRunAt" in t) && old.lastLocalRunAt) out.lastLocalRunAt = old.lastLocalRunAt;
       return out;
     });

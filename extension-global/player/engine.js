@@ -1989,6 +1989,8 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   await chrome.storage.local.set({ playing: true, playTabId: tabId, playPaused: false });
   // Every run starts with an empty write log, so a previous run's local writes are never re-synced.
   resetLocalRunWrites();
+  // The graph of THIS run; the per-source records are refreshed from it as the run progresses.
+  localRunGraph = null;
   playStatus.runOnServer = runOnServer;
   // The watch runs for a LOCAL run too. A local run registers nothing with the server, but an
   // administrator can still put a stop to it - the stop-all switch, or closing the session itself -
@@ -4525,9 +4527,59 @@ async function readServerCell(dataSourceId, rowIndex, columnKey) {
  *
  * Shared sources are deliberately skipped: they stay server-backed in both modes.
  */
+let localRunGraph = null;
+
+/**
+ * The loaded copy of each private source, as its OWN record on the process.
+ *
+ * `localSourceCopies[sourceId]` is deliberately separate from `graph.dataSources[].cells`. The graph
+ * is STRUCTURE: the portal replaces it whenever it pulls the canvas (which carries no cells at all),
+ * so anything stored there is routinely lost — which is what made the local data viewer show a single
+ * partial row (only the cells a run happened to touch). Here each source is an entity of its own:
+ * keyed by source id, complete, replaced only by a fresh read of that same source, and untouched by
+ * any graph reload.
+ */
+function snapshotLocalSourceCopies(graph, task, onlyIds) {
+  const sources = Array.isArray(graph?.dataSources) ? graph.dataSources : [];
+  const previous = (task && task.localSourceCopies && typeof task.localSourceCopies === "object")
+    ? task.localSourceCopies
+    : {};
+  if (!sources.length) return previous;
+  // Optional narrow scope: refreshing every source's record on every flush would serialise megabytes
+  // per second during a long run, while only the touched sources can have changed.
+  const filter = onlyIds instanceof Set && onlyIds.size ? onlyIds : null;
+  const copies = { ...previous };
+  sources.forEach((ds) => {
+    const id = Number(ds?.id);
+    if (!Number.isFinite(id) || id <= 0) return;
+    if (filter && !filter.has(id)) return;
+    // Shared sources stay server-backed in both modes, so caching one would let this machine drift
+    // from everyone else's data — the one thing a public source must never do.
+    if (isPublicSource(ds, graph)) return;
+    if (!Array.isArray(ds.cells)) return;
+    copies[String(id)] = {
+      // Copied, not referenced: chrome.storage serialises asynchronously while the run keeps mutating
+      // `ds.cells`, and a shared array would let a later write slip into the saved snapshot.
+      cells: ds.cells.map((c) => ({ ...c })),
+      columns: Array.isArray(ds.columns) ? ds.columns.map((c) => ({ ...c })) : [],
+      columnKeys: Array.isArray(ds.columnKeys) ? ds.columnKeys.slice() : [],
+      rowCount: Number(ds.rowCount) || 0,
+      columnCount: Number(ds.columnCount)
+        || (Array.isArray(ds.columnKeys) ? ds.columnKeys.length : 0),
+      title: ds.title || null,
+      fileName: ds.fileName || null,
+      savedAtUtc: new Date().toISOString()
+    };
+  });
+  return copies;
+}
+
 async function ensureLocalSourceValues(taskId, graph) {
   const sources = Array.isArray(graph?.dataSources) ? graph.dataSources : [];
   if (!sources.length || playStatus.runOnServer !== false) return;
+  // Remember the graph this run works on, so every later persistence (progress, end of run) can
+  // refresh the per-source records without threading the graph through the whole call chain.
+  localRunGraph = graph;
 
   // Shared sources are left alone on purpose: they stay server-backed in both modes, so copying them
   // here would add traffic AND invite this machine to disagree with everyone else.
@@ -4542,9 +4594,17 @@ async function ensureLocalSourceValues(taskId, graph) {
   const stampMatches = !!stamp && String(task?.localValuesStamp || "") === stamp;
 
   if (!missing.length) {
-    // Values are already in hand; only the revision marker may need writing down.
-    if (task && stamp && !stampMatches) {
-      tasks[idx] = { ...task, localValuesStamp: stamp };
+    // Values are already in hand; only the revision marker may need writing down — and the records
+    // themselves, which a process cached by an older build does not have yet.
+    const staleRecords = !task?.localSourceCopies;
+    if (task && (stamp ? (!stampMatches || staleRecords) : true)) {
+      tasks[idx] = {
+        ...task,
+        localValuesStamp: stamp || task.localValuesStamp || "",
+        // Even a run that reads nothing refreshes the per-source records: they are what the data
+        // viewers draw, and a stale record is exactly what shows pre-run rows after a run.
+        localSourceCopies: snapshotLocalSourceCopies(graph, task)
+      };
       await saveUserTasks(tasks);
     }
     return;
@@ -4570,8 +4630,14 @@ async function ensureLocalSourceValues(taskId, graph) {
 
   if (idx >= 0) {
     // Remember the revision these values came from AND persist them, so the next local run of an
-    // unchanged process reads nothing at all.
-    tasks[idx] = { ...tasks[idx], localValuesStamp: stamp, graph };
+    // unchanged process reads nothing at all. The per-source records travel with them: they are the
+    // copy the local data viewers show, so they must describe the data the run started from.
+    tasks[idx] = {
+      ...tasks[idx],
+      localValuesStamp: stamp,
+      graph,
+      localSourceCopies: snapshotLocalSourceCopies(graph, tasks[idx])
+    };
     await saveUserTasks(tasks);
   }
   appendPlayLog("info", loaded
@@ -4639,6 +4705,14 @@ function isPublicSource(ds, graph) {
  * FIRST write only, before this run's own value replaces it in the cache.
  */
 let localRunWrites = new Map();
+/**
+ * Source ids whose browser copy changed in a way the write log does not describe.
+ *
+ * A row insert/delete is a real result with no cell address, so it cannot appear in
+ * `locallyRunSources`; without this the record would be stale until the run ended and a viewer open
+ * during the run would keep showing the pre-run grid.
+ */
+let localCopyDirty = new Set();
 
 function recordLocalWrite(ds, rowIndex, columnKey, text) {
   const id = Number(ds?.id);
@@ -4666,6 +4740,7 @@ function recordLocalWrite(ds, rowIndex, columnKey, text) {
     cellValue: text == null ? "" : String(text),
     baseValue
   });
+  localCopyDirty.add(id);
   // Publish the divergence as it happens, not only when the run ends: a long run otherwise showed
   // no "needs sync" mark for minutes, and a crash mid-run lost the fact that the source had changed.
   scheduleLocalRunProgress();
@@ -4696,14 +4771,28 @@ function scheduleLocalRunProgress() {
 async function flushLocalRunProgress() {
   const taskId = String(playStatus.taskId || "").trim();
   if (!taskId) return;
+  // Server runs report themselves through the hub; nothing here applies to them.
+  if (playStatus.runOnServer !== false) return;
   const cells = collectLocalRunWrites();
-  if (!cells.length) return;
+  // Only the sources this run touched can have changed; the rest keep the record they already have.
+  const touched = new Set(localCopyDirty);
+  cells.forEach((c) => {
+    const id = Number(c?.dataSourceId);
+    if (Number.isFinite(id) && id > 0) touched.add(id);
+  });
+  if (!cells.length && !touched.size) return;
   try {
     const tasks = await loadUserTasks();
     const idx = tasks.findIndex((t) => String(t.id) === taskId);
     if (idx >= 0) {
-      tasks[idx] = { ...tasks[idx], localRunPendingSync: true, locallyRunSources: cells };
+      const copies = snapshotLocalSourceCopies(localRunGraph, tasks[idx], touched);
+      // A run that only inserted rows wrote no CELL, but its copy still changed — so the records are
+      // persisted even when the write log is empty, or the viewer would keep showing the pre-run grid.
+      tasks[idx] = cells.length
+        ? { ...tasks[idx], localRunPendingSync: true, locallyRunSources: cells, localSourceCopies: copies }
+        : { ...tasks[idx], localSourceCopies: copies };
       await saveUserTasks(tasks);
+      localCopyDirty.clear();
     }
   } catch { /* the end-of-run write is the fallback */ }
   try {
@@ -4722,6 +4811,7 @@ async function flushLocalRunProgress() {
 
 function resetLocalRunWrites() {
   localRunWrites = new Map();
+  localCopyDirty = new Set();
   localProgressReported.clear();
   if (localProgressTimer) {
     clearTimeout(localProgressTimer);
@@ -5044,6 +5134,10 @@ function applyLocalRowShift(ds, atIndex, isInsert) {
     }
     ds.rowCount = Math.max(0, (Number(ds.rowCount) || 0) - 1);
   }
+  // A structural change is a result too: publish it so the viewer's own copy of this source grows a
+  // row at the same moment the run does, instead of after the run ends.
+  localCopyDirty.add(Number(ds.id));
+  scheduleLocalRunProgress();
   return true;
 }
 
@@ -5392,7 +5486,10 @@ async function markLocalRunPendingSync(taskId, results) {
       ...tasks[idx],
       localRunPendingSync: true,
       lastLocalRunAt: new Date().toISOString(),
-      locallyRunSources: cells
+      locallyRunSources: cells,
+      // The finished run's own copy of every private source: this is the data the local viewer must
+      // show afterwards, including the rows an Insert action created.
+      localSourceCopies: snapshotLocalSourceCopies(localRunGraph, tasks[idx])
     };
     await saveUserTasks(tasks);
     // Mark the changed sources on the SERVER too, exactly as the desktop player does: the sources

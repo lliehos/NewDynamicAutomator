@@ -806,15 +806,20 @@ async function syncTasksFromPortal(message = {}) {
  */
 function preserveLoadedLocalValues(incoming, previous) {
   if (!incoming || !previous) return incoming;
+  // The per-source copies are the LOCAL data entity (one per source) and are written by the run, not
+  // by the portal: a canvas push carries structure only, so they are carried over unconditionally.
+  const withCopies = (obj) => (obj.localSourceCopies
+    ? obj
+    : { ...obj, localSourceCopies: previous.localSourceCopies });
   const inGraph = incoming.graph;
   const prevGraph = previous.graph;
-  if (!inGraph || !prevGraph) return incoming;
+  if (!inGraph || !prevGraph) return withCopies(incoming);
 
   const inStamp = String(inGraph.updatedAtUtc || inGraph.updatedAt || "");
   const prevStamp = String(prevGraph.updatedAtUtc || prevGraph.updatedAt || "");
   if (!inStamp || !previous.localValuesStamp
     || String(previous.localValuesStamp) !== inStamp || prevStamp !== inStamp) {
-    return incoming;
+    return withCopies(incoming);
   }
 
   const byId = new Map((prevGraph.dataSources || []).map((d) => [String(d.id), d]));
@@ -831,7 +836,8 @@ function preserveLoadedLocalValues(incoming, previous) {
   return {
     ...incoming,
     graph: { ...inGraph, dataSources: sources },
-    localValuesStamp: previous.localValuesStamp
+    localValuesStamp: previous.localValuesStamp,
+    localSourceCopies: incoming.localSourceCopies || previous.localSourceCopies
   };
 }
 
