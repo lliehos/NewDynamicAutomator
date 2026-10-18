@@ -3,7 +3,9 @@
  */
 (function () {
   let conn = null;
-  const listeners = { taskChanged: [], sourceChanged: [], playState: [], updateAvailable: [] };
+  const listeners = {
+    taskChanged: [], sourceChanged: [], playState: [], updateAvailable: [], serverRunStateChanged: []
+  };
 
   function on(event, fn) {
     if (!listeners[event]) listeners[event] = [];
@@ -36,6 +38,9 @@
       c.on("taskChanged", (p) => emit("taskChanged", p));
       c.on("sourceChanged", (p) => emit("sourceChanged", p));
       c.on("playState", (p) => emit("playState", p));
+      // The admin's server-run master switch (deployment-wide). Panels use it to force every row
+      // to local, and to explain why an attempted server switch cannot be turned on.
+      c.on("serverRunStateChanged", (p) => emit("serverRunStateChanged", p));
       // Pushed by UpdateNotifyBackgroundService when a newer version appears.
       c.on("updateAvailable", (p) => emit("updateAvailable", p));
       // Sent to this user's own group when an administrator closes their session from Admin →

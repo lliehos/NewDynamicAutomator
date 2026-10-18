@@ -71,6 +71,26 @@ public class CatalogLiveService
         await NotifyAdminsAsync("sourceChanged", payload, ct);
     }
 
+    /// <summary>
+    /// Tell EVERY open panel that the deployment-wide server-run switch changed.
+    /// </summary>
+    /// <remarks>
+    /// This is deliberately not scoped to the processes a user can see: the switch decides whether
+    /// any row may offer a server run, so a panel that misses it keeps showing a choice the server
+    /// will refuse. <c>stoppedTaskIds</c> lets a user whose run was just aborted get the explicit
+    /// "your run was stopped" notice instead of the generic state change.
+    /// </remarks>
+    public Task BroadcastServerRunStateAsync(
+        bool enabled, IReadOnlyList<string> stoppedTaskIds, string? message, string? actorUserName,
+        CancellationToken ct = default)
+        => _hub.Clients.All.SendAsync("serverRunStateChanged", new
+        {
+            serverRunEnabled = enabled,
+            stoppedTaskIds = stoppedTaskIds ?? Array.Empty<string>(),
+            message,
+            actorUserName
+        }, ct);
+
     /// <summary>Library-level source events (create / rename / delete) — always to admins; owner if known.</summary>
     public async Task LibrarySourceChangedAsync(
         object sourceSummary, string action, string? actorUserName, int? ownerUserId = null, CancellationToken ct = default)

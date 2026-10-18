@@ -267,6 +267,15 @@ public class TasksController : Controller
                 message = "اجرای جدید توسط مدیر نظارت متوقف شده است."
             });
 
+        // The deployment-wide server-run master switch. A client that was open before the switch was
+        // turned off could still ask to register; refusing here keeps the capability withdrawn.
+        if (!await _settings.IsServerRunEnabledAsync(ct))
+            return StatusCode(StatusCodes.Status409Conflict, new
+            {
+                code = "server_run_disabled",
+                message = "اجرای روی سرور توسط مدیر غیرفعال شده است؛ از اجرای محلی استفاده کنید."
+            });
+
         var userName = body?.UserName
             ?? (User.Identity?.IsAuthenticated == true ? User.Identity.Name : null);
         int? uid = null;

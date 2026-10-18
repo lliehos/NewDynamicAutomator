@@ -605,6 +605,26 @@
   }
 
   /**
+   * While server runs are switched off, every process runs locally.
+   *
+   * The flag is client-local (the server has no column for it), so a deployment-wide switch-off
+   * has to be applied here: leaving a row on "server" would keep showing a choice the server will
+   * refuse. Returns true when any row changed.
+   */
+  function forceLocalRunsWhenServerOff() {
+    if (serverRunAllowedSync()) return false;
+    const tasks = readTasks();
+    let changed = false;
+    const next = tasks.map((task) => {
+      if (task.runOnServer === false) return task;
+      changed = true;
+      return { ...task, runOnServer: false };
+    });
+    if (changed) writeTasks(next, { silent: true });
+    return changed;
+  }
+
+  /**
    * Whether the signed-in user may shape the shared templates (Admin or ProcessManager).
    *
    * The flag is rendered by the view from the same role check the sidebar and HomeController use,
@@ -709,10 +729,13 @@
    * the server, and the Sync button appears afterwards for a deliberate push.
    */
   function runOnServerSwitch(task, tid) {
-    const on = task.runOnServer !== false;
-    const title = on ? t("tasks.runOnServerOn") : t("tasks.runOnServerOff");
-    return `<label class="da-runswitch" title="${escapeHtml(title)}">
-      <input type="checkbox" class="da-runswitch-input" data-da-runserver="${tid}" ${on ? "checked" : ""} />
+    const allowed = serverRunAllowedSync();
+    const on = allowed && task.runOnServer !== false;
+    const title = !allowed
+      ? t("tasks.serverRunRestricted")
+      : (on ? t("tasks.runOnServerOn") : t("tasks.runOnServerOff"));
+    return `<label class="da-runswitch${allowed ? "" : " is-locked"}" title="${escapeHtml(title)}">
+      <input type="checkbox" class="da-runswitch-input" data-da-runserver="${tid}" ${on ? "checked" : ""} ${allowed ? "" : "aria-disabled=\"true\""} />
       <span class="da-runswitch-ui" aria-hidden="true"></span>
       <span class="da-runswitch-text">${escapeHtml(t("tasks.runOnServer"))}</span>
     </label>`;
@@ -726,6 +749,12 @@
    * about to lose the server-side visibility and concurrency guard they may be relying on.
    */
   async function setRunOnServer(taskId, on) {
+    if (on && !serverRunAllowedSync()) {
+      notifyHome(t("tasks.serverRunRestricted")
+        || "اجرای روی سرور توسط مدیر محدود شده است؛ از اجرای محلی استفاده کنید.", "warn");
+      render();
+      return;
+    }
     const tasks = readTasks();
     const idx = findTaskIndex(tasks, taskId);
     if (idx < 0) return;
@@ -810,7 +839,18 @@
       btn.addEventListener("click", () => syncLocalRun(btn.getAttribute("data-da-sync")));
     });
     root?.querySelectorAll("[data-da-runserver]").forEach((inp) => {
-      inp.addEventListener("change", () => setRunOnServer(inp.getAttribute("data-da-runserver"), inp.checked));
+      inp.addEventListener("change", () => {
+        // The switch stays clickable even while server runs are limited, so an attempt gets an
+        // explanation instead of a dead control. It always snaps back to OFF.
+        if (inp.checked && !serverRunAllowedSync()) {
+          inp.checked = false;
+          notifyHome(t("tasks.serverRunRestricted")
+            || "اجرای روی سرور توسط مدیر محدود شده است؛ از اجرای محلی استفاده کنید.", "warn");
+          render();
+          return;
+        }
+        setRunOnServer(inp.getAttribute("data-da-runserver"), inp.checked);
+      });
     });
     root?.querySelectorAll("[data-da-del]").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -3389,6 +3429,28 @@ function dataSourceSafeFileName(ds) {
         refreshProcessViewer();
       }
     });
+    DaCatalog.on("serverRunStateChanged", (payload) => {
+      const enabled = payload?.serverRunEnabled !== false;
+      serverRunFlag = { value: enabled, at: Date.now() };
+      const stoppedIds = Array.isArray(payload?.stoppedTaskIds)
+        ? payload.stoppedTaskIds.map(String)
+        : [];
+      if (!enabled) {
+        forceLocalRunsWhenServerOff();
+        const tasks = readTasks();
+        const mineStopped = stoppedIds.some((id) => findTaskIndex(tasks, id) >= 0);
+        notifyHome(mineStopped
+          ? (t("tasks.serverRunStoppedNotice")
+              || "اجرای روی سرور توسط مدیر غیرفعال شد؛ اجرای در حال اجرای شما متوقف شد.")
+          : (t("tasks.serverRunDisabledNotice")
+              || "اجرای روی سرور توسط مدیر غیرفعال شد؛ از این پس فقط اجرای محلی ممکن است."),
+          "warn");
+      } else {
+        notifyHome(t("tasks.serverRunEnabledNotice")
+          || "اجرای روی سرور دوباره فعال شد.", "success");
+      }
+      scheduleRender();
+    });
   }
 
   // --- Process data viewer: modal controls + grid interactions -------------------------------
@@ -3446,14 +3508,22 @@ function dataSourceSafeFileName(ds) {
   // The page cannot be told while it is hidden, so re-reading when it comes back to the foreground
   // is what makes the Sync button appear without the user having to reload.
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) scheduleRender();
+    if (document.hidden) return;
+    // The master switch may have changed while the page was hidden (or the hub was down).
+    fetchServerRunEnabled({ force: true }).then(() => {
+      forceLocalRunsWhenServerOff();
+      scheduleRender();
+    }).catch(() => scheduleRender());
   });
   if (window.DaEntitlements?.fetch) {
     DaEntitlements.fetch().then(() => scheduleRender()).catch(() => {});
   }
   // The server-run master switch decides whether the server run button is usable, so ask once up
   // front and re-render when the answer arrives — otherwise the first paint assumes it is allowed.
-  fetchServerRunEnabled({ force: true }).then(() => scheduleRender()).catch(() => {});
+  fetchServerRunEnabled({ force: true }).then(() => {
+    forceLocalRunsWhenServerOff();
+    scheduleRender();
+  }).catch(() => {});
   window.dispatchEvent(new CustomEvent("da-request-local-tasks"));
 
   // Search box: filter as the user types. The page only renders the input on the processes view,

@@ -5210,11 +5210,14 @@ async function registerPlayOnServer(taskId) {
   const userName = (await chrome.storage.local.get("da_local_user").catch(() => ({}))).da_local_user
     || null;
   const headers = await portalAuthHeaders();
-  await portalFetch("/Panel/Tasks/RegisterPlay", {
+  const res = await portalFetch("/Panel/Tasks/RegisterPlay", {
     method: "POST",
     headers,
     body: JSON.stringify({ taskId: String(taskId), userName })
   });
+  // 409 means the deployment refuses server runs (stop-all OR the server-run master switch).
+  // The caller stops the run instead of letting a run the server rejected keep going.
+  return !!res && res.status === 409;
 }
 
 async function unregisterPlayOnServer(taskId) {
@@ -5297,7 +5300,14 @@ function collectWrittenCells(results) {
 function startPlayAbortWatch(taskId, register) {
   if (playAbortPoll) clearInterval(playAbortPoll);
   // Registering is what makes this a SERVER-side run; a local run must not create a session.
-  if (register !== false) registerPlayOnServer(taskId).catch(() => {});
+  if (register !== false) {
+    registerPlayOnServer(taskId).then((refused) => {
+      if (refused && playStatus.playing) {
+        appendPlayLog("error", "اجرای روی سرور توسط مدیر غیرفعال شده است؛ اجرا متوقف شد. از اجرای محلی استفاده کنید.");
+        stopPlay("server_run_disabled");
+      }
+    }).catch(() => {});
+  }
   playAbortPoll = setInterval(async () => {
     if (!playStatus.playing) return;
     // Refresh liveness on the tick we already pay for. This is what lets detectOrphanedPlay tell a

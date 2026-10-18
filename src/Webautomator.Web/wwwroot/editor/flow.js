@@ -1205,10 +1205,17 @@
 
       conn.on("playStopDueToChange", async (payload) => {
         const who = payload?.actorUserName ? ` (${payload.actorUserName})` : "";
-        const msg = (t("editor.status.playStoppedByEdit") || "اجرا به‌خاطر تغییر فرآیند متوقف شد") + who;
+        const serverOff = String(payload?.reason || "") === "server_run_disabled";
+        const msg = serverOff
+          ? (t("editor.play.serverRunDisabled")
+              || payload?.message
+              || "اجرای روی سرور توسط مدیر غیرفعال شد؛ اجرا متوقف شد.")
+          : (t("editor.status.playStoppedByEdit") || "اجرا به‌خاطر تغییر فرآیند متوقف شد") + who;
         setStatus(msg, "warn");
         if (window.DaNotify) DaNotify.warn(msg);
-        window.dispatchEvent(new CustomEvent("da-stop-play", { detail: { reason: "canvas_changed", ...payload } }));
+        window.dispatchEvent(new CustomEvent("da-stop-play", {
+          detail: { ...payload, reason: payload?.reason || "canvas_changed" }
+        }));
         if (window.DaTelemetry) DaTelemetry.audit("PlayStoppedByEdit", msg);
       });
 

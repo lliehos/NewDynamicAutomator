@@ -57,6 +57,9 @@ public class PlayDataHub : Hub
         // a server-side run, so an open tab cannot simply start it again.
         if (await _settings.GetBoolAsync(SystemSettingKeys.StopAllServerRuns, false, CancellationToken.None))
             throw new HubException("runs_suspended");
+        // With server runs switched off deployment-wide, a stale client must not register either.
+        if (!await _settings.IsServerRunEnabledAsync(CancellationToken.None))
+            throw new HubException("server_run_disabled");
 
         var key = taskId.Trim();
         await Groups.AddToGroupAsync(Context.ConnectionId, TaskGroup(key));

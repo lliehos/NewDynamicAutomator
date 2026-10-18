@@ -1154,6 +1154,17 @@ html.light-style {
   white-space: nowrap;
 }
 
+/* Server runs switched off deployment-wide: the row still explains itself when clicked, but reads
+   as unavailable rather than as a usable choice. */
+.da-runswitch.is-locked {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.da-runswitch.is-locked .da-runswitch-ui {
+  background: #e7e5ee;
+}
+
 /* Explanatory line inside the run-type menu (a process already running, or server runs switched
    off). It is not a menu item, so it must not look clickable. */
 .da-play-target-note {

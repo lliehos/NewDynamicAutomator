@@ -82,6 +82,7 @@ public class PlayModeApiController : ControllerBase
             ct: ct);
 
         var stopped = new List<object>();
+        var stoppedIds = new List<string>();
         if (!enabled)
         {
             // Stop every live SERVER run. A local run was never registered here, so it is untouched —
@@ -112,8 +113,20 @@ public class PlayModeApiController : ControllerBase
                     await _catalog.NotifyPlayStateAsync(taskId, false, null, ct);
                 }
                 stopped.Add(new { taskId, userName = session.UserName });
+                stoppedIds.Add(taskId);
             }
         }
+
+        // Every open panel hears about the new state: the ones with an interrupted run get the
+        // explicit notice, and every row switch is forced off (and explained) while it stays off.
+        await _catalog.BroadcastServerRunStateAsync(
+            enabled,
+            stoppedIds,
+            enabled
+                ? "اجرای روی سرور توسط مدیر دوباره فعال شد."
+                : "اجرای روی سرور توسط مدیر غیرفعال شد؛ اجراهای در حال اجرا متوقف شدند و اجرای جدید روی سرور ممکن نیست. از اجرای محلی استفاده کنید.",
+            User.Identity?.Name,
+            ct);
 
         return Ok(new { ok = true, serverRunEnabled = enabled, stopped });
     }
