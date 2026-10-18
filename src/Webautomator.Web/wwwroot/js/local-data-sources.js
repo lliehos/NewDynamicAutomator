@@ -1248,6 +1248,10 @@
   /**
    * Make sure a stored copy exists for the open source, reading the server ONCE if this browser has
    * never built one. Everything afterwards is local.
+   *
+   * When there is no process to hold the record (a library row whose copies live on some other
+   * process, or none at all), the read still becomes the view: the modal must open with the rows it
+   * has and say they are not a local copy, rather than opening nothing at all.
    */
   async function ensureLocalCopy() {
     const sourceId = Number(viewerState.sourceId);
@@ -1256,7 +1260,13 @@
     if (!readLocalCopyRecord(ownerId, sourceId)) {
       const fresh = await fetchSourceContent(sourceId);
       fresh.id = sourceId;
-      persistLocalGridCopy(fresh);
+      if (ownerId != null) {
+        persistLocalGridCopy(fresh);
+      } else {
+        // No owner to attach it to: this is a view of the server's rows, labelled as such.
+        viewerState.lastSource = fresh;
+        return fresh;
+      }
     }
     return buildLocalView();
   }
@@ -2046,7 +2056,16 @@
   function localGridOwnerTaskId() {
     const pending = pendingWritesForSource(viewerState.sourceId);
     if (pending) return pending.task.id;
-    return viewerState.taskId;
+    if (viewerState.taskId != null) return viewerState.taskId;
+    // A LIBRARY row has no process, but the copy still belongs to whichever process loaded it. Without
+    // this fallback a source opened from the library could not resolve a record at all, so the local
+    // view had nothing to draw and the click looked dead.
+    const sid = String(Number(viewerState.sourceId));
+    const owner = readTasks().find((x) => {
+      const copies = x?.localSourceCopies;
+      return copies && copies[sid] && Array.isArray(copies[sid].cells);
+    });
+    return owner ? owner.id : null;
   }
 
   /** Column keys of a source snapshot, whichever of the two shapes it carries. */
@@ -2565,16 +2584,32 @@
     } finally {
       setGridBusy(false);
     }
-    if (!viewerState.lastSource) {
-      const entry = tid != null ? findEntry(tid, sourceId) : null;
-      if (!entry) {
-        notify("منبع پیدا نشد.", "error");
-        return;
-      }
-      renderViewerTable(entry.ds);
-    }
+    // Show the modal BEFORE deciding what to draw: a viewer that only appears when a fetch happened
+    // to succeed is a button that sometimes does nothing — which is exactly how a local copy that
+    // could not be resolved looked from the row.
     const modal = document.getElementById("da-portal-ds-viewer");
     if (modal) modal.hidden = false;
+    if (!viewerState.lastSource) {
+      const entry = tid != null ? findEntry(tid, sourceId) : null;
+      if (entry) {
+        renderViewerTable(entry.ds);
+      } else {
+        // Nothing to draw: say so INSIDE the modal, so the click always produces an answer.
+        const titleEl = document.getElementById("da-portal-ds-title");
+        if (titleEl) titleEl.textContent = t("sources.notFound") || "منبع پیدا نشد.";
+        const subEl = document.getElementById("da-portal-ds-sub");
+        if (subEl) subEl.textContent = "";
+        const table = document.getElementById("da-portal-ds-table");
+        const thead = table?.querySelector("thead");
+        const tbody = table?.querySelector("tbody");
+        if (thead) thead.innerHTML = "";
+        if (tbody) {
+          tbody.innerHTML = `<tr><td class="ds-viewer-empty">${escapeHtml(t("sources.loadFailed")
+            || "دادهٔ این نسخه بارگذاری نشد. دکمهٔ بازخوانی را بزنید یا دوباره امتحان کنید.")}</td></tr>`;
+        }
+        notify(t("sources.loadFailed") || "بارگذاری داده انجام نشد.", "error");
+      }
+    }
     if (viewerState.localCopy) {
       // The grid is showing a browser-side copy: neither the play hub nor a server pull may
       // overwrite it. Local cell events still arrive through the extension's window event.

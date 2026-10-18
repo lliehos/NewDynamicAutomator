@@ -1856,7 +1856,12 @@
 
   /** Does this source hold local results the server has not seen yet? */
   function sourceNeedsSync(sourceId) {
-    return pendingWritesFor(sourceId).length > 0;
+    if (pendingWritesFor(sourceId).length > 0) return true;
+    // A local run has started (or finished) for this process and this browser holds its own copy of
+    // the source: the server view and the local view can differ even before a cell write is logged,
+    // so both are offered instead of one ambiguous button.
+    const rec = localProcessRecord();
+    return rec?.localRunPendingSync === true && !!localCopyRecord(sourceId);
   }
 
   /** The stored browser copy of a source, if this process has one. */

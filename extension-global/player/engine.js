@@ -2002,6 +2002,11 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     await markPlayHeartbeat(graph.taskId || taskId, 1);
     // The values this run will read, fetched once here so the run itself stays off the wire.
     await ensureLocalSourceValues(String(graph.taskId || taskId), graph);
+    // Publish "this process now has a local copy the server has not seen" BEFORE the first step. The
+    // lists (processes, sources, the editor's start node) decide from this flag whether to offer the
+    // two data views, and waiting for the end-of-run write meant the second button only appeared
+    // after the operator stopped the run — i.e. exactly when the results were no longer live.
+    await markLocalRunStarted(String(graph.taskId || taskId));
     appendPlayLog("info", "اجرای محلی: روی سرور ثبت نمی‌شود و منابع غیرعمومی محلی خوانده/نوشته می‌شوند.");
   }
   // HUD (pause/stop + results) on the execution tab — skip for condition-only check.
@@ -5473,7 +5478,28 @@ async function unregisterPlayOnServer(taskId) {
 }
 
 /**
- * Flag a process as "has local results the server has not seen".
+ * Announce that a local run has STARTED, so the local copy becomes visible immediately.
+ *
+ * The per-write publish (see scheduleLocalRunProgress) already reports the sources a run touches, but
+ * it only fires on the first write and the portal may be a debounce behind. A local run has two
+ * realities from the moment it reads its sources — what the server holds and what this machine is
+ * about to write — so the flag is set up front. It is cleared by a sync, which is also the honest
+ * answer for a run that turned out to write nothing.
+ */
+async function markLocalRunStarted(taskId) {
+  try {
+    const tasks = await loadUserTasks();
+    const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
+    if (idx < 0) return;
+    if (tasks[idx].localRunPendingSync === true) return;
+    tasks[idx] = { ...tasks[idx], localRunPendingSync: true, lastLocalRunAt: new Date().toISOString() };
+    await saveUserTasks(tasks);
+    try { chrome.runtime.sendMessage({ type: "localRunPendingSync", taskId: String(taskId) }); } catch { /* portal closed */ }
+  } catch { /* the first write publishes it anyway */ }
+}
+
+/**
+ * Flag a process as "has local results the server has not seen" when the run ENDS.
  *
  * Written into the task record itself rather than a side table, so the processes list can read it
  * from the same place it already reads everything else, and so it survives a browser restart. The

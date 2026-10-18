@@ -1383,6 +1383,8 @@
     "localEditApplied": "Applied to the local copy — the server is untouched (sync carries cell values only).",
     "viewLocal": "View local data",
     "viewServer": "View server data",
+    "notFound": "Source not found.",
+    "loadFailed": "This copy could not be loaded. Press Refresh or try again.",
     "syncNowTitle": "Send the local result to the server",
     "resetLocalTitle": "Rebuild the local copy from the server (discards the local run result)",
     "resetLocalOk": "Replace",
