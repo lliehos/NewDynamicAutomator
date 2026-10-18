@@ -518,6 +518,28 @@ html.light-style {
   color: #ea5455;
 }
 
+/* Which copy of the data a button opens: this browser's copy (grey) or the server's (green).
+   The pair appears in more than one list (sources list, process list, editor's start node), so the
+   colours live here, unscoped — a row that forgot its own rule would otherwise show two identical
+   icons and the distinction the pair exists for would be lost. */
+.ds-icon-btn.is-data-local {
+  color: #a8aaae;
+}
+
+.ds-icon-btn.is-data-local:hover {
+  background: rgba(168, 170, 174, 0.16);
+  color: #7f8185;
+}
+
+.ds-icon-btn.is-data-server {
+  color: #28c76f;
+}
+
+.ds-icon-btn.is-data-server:hover {
+  background: rgba(40, 199, 111, 0.12);
+  color: #1fae5f;
+}
+
 .ds-icon-btn.is-busy {
   opacity: 0.45;
   pointer-events: none;
