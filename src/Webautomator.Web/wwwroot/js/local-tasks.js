@@ -1361,7 +1361,10 @@ function dataSourceSafeFileName(ds) {
     const graphs = [row?.graph, row?.canvasCache?.graph].filter(Boolean);
     for (const g of graphs) {
       const hit = (g.dataSources || []).find((d) => Number(d.id) === Number(sourceId));
-      if (hit && Array.isArray(hit.cells) && hit.cells.length) return hit;
+      // The canvas the server hands out carries no `cells` key at all, so the PRESENCE of the array
+      // is what marks a loaded copy — an empty one is a copy the user deliberately cleared, and
+      // re-reading the server for it would undo that.
+      if (hit && Array.isArray(hit.cells)) return hit;
     }
     return null;
   }
@@ -1447,13 +1450,16 @@ function dataSourceSafeFileName(ds) {
   }
 
   /**
-   * Load a source's data for a LOCAL run.
+   * Load a source's data for a LOCAL run — but only when the server copy actually moved.
    *
    * "Local" means the server is read ONCE, before the first step, and the run then works on its own
-   * copy — but that copy must be the server's CURRENT rows. Every local start therefore re-reads
-   * every non-public source (and the graph itself), because a cached snapshot from an earlier run
-   * would silently execute yesterday's data. Only non-public sources are touched: a shared/public
-   * source stays server-backed even in a local run, so its state is shared with everyone by design.
+   * copy — and that copy must be the server's CURRENT rows. So each non-public source is checked
+   * against the revision we last loaded: one light `/meta` request per source, and only a changed
+   * source pulls its rows. An unchanged process therefore starts a local run with no row traffic at
+   * all, while still running on the newest data the server holds.
+   *
+   * Public/shared sources are never cached: they stay server-backed even in a local run, because
+   * their state is shared with everyone else by design.
    *
    * The cells are written ONTO the graph's own source entries, because that is the only place the
    * engine's `readCellForRun` looks for local data (`ds.cells`). Storing them anywhere else would
@@ -1463,18 +1469,17 @@ function dataSourceSafeFileName(ds) {
    * and they are re-applied on top of the freshly loaded rows. Dropping them here would throw away
    * results the user has not synced yet — the sync button's whole reason for existing.
    *
-   * Returns `{ failed, loaded, pending }`: sources that could not be loaded (the run then falls back
-   * to server reads for them), sources that were refreshed, and cells that are still local-only.
+   * Returns `{ failed, loaded, kept, pending }`: sources that could not be loaded (the run then falls
+   * back to server reads for them), sources that were refreshed, sources whose cached copy was still
+   * current, and cells that remain local-only.
    */
   async function hydrateLocalRunSources(task) {
     const sources = (task?.graph?.dataSources || []);
-    if (!sources.length) return { failed: 0, loaded: 0, pending: 0 };
+    if (!sources.length) return { failed: 0, loaded: 0, kept: 0, pending: 0 };
 
-    // Public/shared sources are deliberately NOT cached: they stay server-backed even in a local run,
-    // so they are read live and their state stays shared with everyone else by design.
     const isPublic = (d) => d?.isPublic === true || d?.IsPublic === true;
     const targets = sources.filter((d) => d && d.id != null && !isPublic(d));
-    if (!targets.length) return { failed: 0, loaded: 0, pending: 0 };
+    if (!targets.length) return { failed: 0, loaded: 0, kept: 0, pending: 0 };
 
     // Writes this browser has not pushed to the server yet, grouped by source.
     const pendingBySource = new Map();
@@ -1485,19 +1490,22 @@ function dataSourceSafeFileName(ds) {
       pendingBySource.get(sid).push(c);
     }
 
-    // Revisions live on the task, keyed by source id: `{ [id]: dataRevision }`. Kept as bookkeeping
-    // (and shown in diagnostics) — the reload itself no longer depends on them.
+    // Revisions live on the task, keyed by source id: `{ [id]: dataRevision }`. `localSourcesLoaded`
+    // records "we hold a snapshot for this source" separately, because a source with zero rows is a
+    // real snapshot — testing `cells.length` would re-download it on every single run.
     const revisions = task.localSourceRevisions || {};
+    const loadedFlags = task.localSourcesLoaded || {};
     let failed = 0;
     let loaded = 0;
+    let kept = 0;
     let pending = 0;
 
     for (const ds of targets) {
       const id = Number(ds.id);
       if (!Number.isFinite(id) || id <= 0) continue;
       try {
-        // What revision does the server hold right now? The meta endpoint is small and carries no
-        // cells, so asking costs one light request instead of a second full download.
+        // What revision does the server hold right now? The meta endpoint carries no cells, so the
+        // check costs one light request per source instead of a second full download.
         let serverRevision = null;
         try {
           const metaRes = await fetch(`/api/datasources/${id}/meta`, {
@@ -1508,21 +1516,31 @@ function dataSourceSafeFileName(ds) {
             const meta = await metaRes.json();
             serverRevision = meta?.dataRevision ?? meta?.DataRevision ?? null;
           }
-        } catch { /* the revision is informational; the content pull below is what matters */ }
+        } catch { /* treated as "unknown" below: an unknown revision means reload */ }
 
-        const content = await fetchProcessSourceContent(id);
-        // Write the snapshot exactly where the engine reads it.
-        ds.cells = content.cells;
-        ds.columns = content.columns;
-        ds.columnKeys = content.columnKeys;
-        ds.rowCount = content.rowCount;
-        ds.columnCount = content.columnCount ?? content.columns.length;
-        revisions[id] = serverRevision;
-        loaded += 1;
+        const haveSnapshot = loadedFlags[id] === true || Array.isArray(ds.cells);
+        const unchanged = haveSnapshot
+          && serverRevision != null
+          && revisions[id] === serverRevision;
 
-        // Re-apply this browser's unsynced writes so a fresh load never discards local results.
+        if (unchanged) {
+          kept += 1;
+        } else {
+          const content = await fetchProcessSourceContent(id);
+          // Write the snapshot exactly where the engine reads it.
+          ds.cells = content.cells;
+          ds.columns = content.columns;
+          ds.columnKeys = content.columnKeys;
+          ds.rowCount = content.rowCount;
+          ds.columnCount = content.columnCount ?? content.columns.length;
+          revisions[id] = serverRevision;
+          loadedFlags[id] = true;
+          loaded += 1;
+        }
+
+        // Re-apply this browser's unsynced writes so a reload never discards local results.
         const keep = pendingBySource.get(id);
-        if (keep && keep.length) {
+        if (keep && keep.length && Array.isArray(ds.cells)) {
           keep.forEach((w) => {
             setProcessLocalCell(ds, Number(w.rowIndex) || 0, String(w.columnKey || ""), w.cellValue ?? "");
             pending += 1;
@@ -1534,10 +1552,11 @@ function dataSourceSafeFileName(ds) {
     }
 
     task.localSourceRevisions = revisions;
+    task.localSourcesLoaded = loadedFlags;
     task.localSourcesLoadedAt = Date.now();
     task.localSourcesLoadedCount = loaded;
     task.localSourcesPendingCount = pending;
-    return { failed, loaded, pending };
+    return { failed, loaded, kept, pending };
   }
 
   // --- Live read/write overlays (same behaviour as the sources-page viewer) --------------------
@@ -1609,6 +1628,168 @@ function dataSourceSafeFileName(ds) {
       }
       ds.rowCount = Math.max(0, (Number(ds.rowCount) || 0) + delta);
     }
+  }
+
+  // --- Local structural editing ---------------------------------------------------------------
+  // While the grid shows a browser-side copy, every edit — cell OR shape — belongs to that copy.
+  // The server is not told anything: a local run's whole promise is that the shared source stays
+  // untouched until the user syncs. These helpers mutate the displayed source and mirror it onto the
+  // process's snapshot, so the next local run and the next open of this grid see the same shape.
+
+  /** Column keys of a source snapshot, from whichever of the two shapes it carries. */
+  function snapshotColumnKeys(ds) {
+    return (ds?.columnKeys || (ds?.columns || []).map((c) => String(c.key || c.Key || "")) || [])
+      .filter(Boolean);
+  }
+
+  /** Insert a column at `atIndex` (append when null) with one empty cell per existing row. */
+  function localAddColumn(ds, key, title, atIndex) {
+    const cols = Array.isArray(ds.columns) ? ds.columns.slice() : snapshotColumnKeys(ds).map((k) => ({ key: k, title: k }));
+    const keys = snapshotColumnKeys(ds);
+    const at = atIndex == null ? keys.length : Math.max(0, Math.min(Number(atIndex) || 0, keys.length));
+    cols.splice(at, 0, { key, title: title || key });
+    keys.splice(at, 0, key);
+    ds.columns = cols;
+    ds.columnKeys = keys;
+    ds.columnCount = keys.length;
+    ds.cells = Array.isArray(ds.cells) ? ds.cells : [];
+    const rows = Number(ds.rowCount) || 0;
+    for (let r = 0; r < rows; r++) ds.cells.push({ key: String(key), index: r, cellValue: "" });
+  }
+
+  /** Remove a column and every cell that belongs to it. */
+  function localDeleteColumn(ds, key) {
+    const drop = String(key);
+    ds.cells = (Array.isArray(ds.cells) ? ds.cells : [])
+      .filter((c) => String(c.key ?? c.Key ?? "") !== drop);
+    ds.columnKeys = snapshotColumnKeys(ds).filter((k) => k !== drop);
+    if (Array.isArray(ds.columns)) {
+      ds.columns = ds.columns.filter((c) => String(c.key || c.Key || "") !== drop);
+    }
+    ds.columnCount = ds.columnKeys.length;
+  }
+
+  /** Rename a column everywhere: its definition, the key list, and its cells. */
+  function localRenameColumn(ds, oldKey, newKey) {
+    const from = String(oldKey);
+    const to = String(newKey);
+    ds.columnKeys = snapshotColumnKeys(ds).map((k) => (k === from ? to : k));
+    if (Array.isArray(ds.columns)) {
+      ds.columns = ds.columns.map((c) =>
+        String(c.key || c.Key || "") === from ? { ...c, key: to, title: to } : c);
+    }
+    (Array.isArray(ds.cells) ? ds.cells : []).forEach((c) => {
+      if (String(c.key ?? c.Key ?? "") !== from) return;
+      if (c.key !== undefined) c.key = to;
+      else if (c.Key !== undefined) c.Key = to;
+    });
+  }
+
+  /** Mirror the displayed source's cells + shape onto the process's local snapshot. */
+  function persistLocalSnapshot(ds) {
+    if (!ds) return;
+    const tasks = readTasks();
+    const idx = findTaskIndex(tasks, processViewerState.taskId);
+    if (idx < 0) return;
+    const task = tasks[idx];
+    let touched = false;
+    [task.graph, task.canvasCache?.graph].filter(Boolean).forEach((g) => {
+      const snap = (g.dataSources || []).find((d) => Number(d.id) === Number(ds.id));
+      if (!snap) return;
+      snap.cells = ds.cells;
+      snap.columns = ds.columns;
+      snap.columnKeys = ds.columnKeys;
+      snap.rowCount = ds.rowCount;
+      snap.columnCount = ds.columnCount;
+      touched = true;
+    });
+    if (!touched) return;
+    tasks[idx] = { ...task };
+    writeTasks(tasks, { silent: true });
+  }
+
+  /**
+   * Apply one grid-menu action to the browser copy of a local-run source.
+   *
+   * Deliberately no fetch: adding/removing rows or columns and renaming a column all change the
+   * source for every user, which a local run must never do. The change is real for this browser —
+   * the next run uses it — and the banner keeps saying the server may disagree. Structural changes
+   * have no cell address, so the sync button carries values only; that is stated in the toast.
+   */
+  async function runLocalProcessGridAction(action, rowIndex, columnKey, columnIndex) {
+    const ds = processViewerState.source;
+    if (!ds) return;
+    const confirmAsk = async (msg, titleKey, okKey) => (window.DaNotify?.confirm
+      ? DaNotify.confirm(msg, {
+          title: t(titleKey) || "",
+          okText: t(okKey) || "تأیید",
+          cancelText: t("common.cancel") || "انصراف"
+        })
+      : window.confirm(msg));
+
+    if (action === "col-rename") {
+      const next = window.DaNotify?.prompt
+        ? await DaNotify.prompt(t("sources.renameColumnPrompt") || "نام جدید ستون را وارد کنید", {
+            title: t("sources.renameColumn") || "تغییر نام ستون",
+            value: columnKey
+          })
+        : window.prompt(t("sources.renameColumnPrompt") || "نام جدید ستون را وارد کنید", columnKey);
+      if (next == null) return;
+      const newName = String(next).trim();
+      if (!newName || newName === columnKey) return;
+      localRenameColumn(ds, columnKey, newName);
+    } else if (action === "row-delete") {
+      const msg = t("sources.deleteRowConfirm", { row: rowIndex + 1 }) || `ردیف ${rowIndex + 1} حذف شود؟`;
+      if (!(await confirmAsk(msg, "sources.deleteRow", "common.delete"))) return;
+      shiftProcessRows(ds, rowIndex, -1);
+    } else if (action === "col-delete") {
+      const msg = t("sources.deleteColumnConfirm", { key: columnKey }) || `ستون «${columnKey}» با همهٔ داده‌هایش حذف شود؟`;
+      if (!(await confirmAsk(msg, "sources.deleteColumn", "common.delete"))) return;
+      localDeleteColumn(ds, columnKey);
+    } else if (action === "row-before") {
+      shiftProcessRows(ds, Math.max(0, rowIndex ?? 0), 1);
+    } else if (action === "row-after") {
+      shiftProcessRows(ds, Math.max(0, (rowIndex ?? 0) + 1), 1);
+    } else {
+      const key = nextProcessColumnKey(snapshotColumnKeys(ds));
+      const at = action === "col-before"
+        ? (columnIndex ?? snapshotColumnKeys(ds).length)
+        : ((columnIndex ?? snapshotColumnKeys(ds).length - 1) + 1);
+      localAddColumn(ds, key, key, at);
+    }
+    persistLocalSnapshot(ds);
+    renderProcessViewerTable(ds);
+    notifyHome(t("sources.localEditApplied")
+      || "تغییر روی نسخهٔ محلی اعمال شد؛ دادهٔ سرور دست‌نخورده ماند (همگام‌سازی فقط مقدار سلول‌ها را منتقل می‌کند).", "info");
+  }
+
+  /** Empty the browser copy of a local-run source. The server's rows stay exactly as they are. */
+  function clearProcessLocalData() {
+    const ds = processViewerState.source;
+    if (!ds) return;
+    ds.cells = [];
+    ds.rowCount = 0;
+    processViewerState.cellRevisions = {};
+    processViewerState.cellMeta = {};
+    // The cells those pending writes pointed at no longer exist locally, so they are dropped with
+    // them; otherwise the next sync would try to write into rows this copy no longer has.
+    const tasks = readTasks();
+    const idx = findTaskIndex(tasks, processViewerState.taskId);
+    if (idx >= 0) {
+      const task = tasks[idx];
+      const kept = (task.locallyRunSources || [])
+        .filter((w) => Number(w?.dataSourceId) !== Number(ds.id));
+      tasks[idx] = {
+        ...task,
+        locallyRunSources: kept.length ? kept : null,
+        localRunPendingSync: kept.length > 0
+      };
+      writeTasks(tasks, { silent: true });
+    }
+    persistLocalSnapshot(ds);
+    renderProcessViewerTable(ds);
+    notifyHome(t("sources.clearDataLocalDone")
+      || "دادهٔ نسخهٔ محلی پاک شد؛ دادهٔ سرور دست‌نخورده ماند.", "success");
   }
 
   function handleProcessCellEvent(ev) {
@@ -1737,12 +1918,21 @@ function dataSourceSafeFileName(ds) {
       notifyHome(t("sources.clearDataFail") || "پاک‌سازی داده انجام نشد.", "error");
       return;
     }
-    // Clearing is a SERVER operation (it deletes rows for everyone), so it has no meaning on a
-    // browser-side copy: the run's own writes are the only thing this grid may change, and they
-    // leave through the sync button.
+    // Clearing is a SERVER operation (it deletes rows for everyone), so on the browser copy it
+    // clears the LOCAL rows — the run then starts from an empty grid — and leaves the server alone.
     if (processViewerState.localMode) {
-      notifyHome(t("sources.clearDataLocalBlocked")
-        || "در حالت اجرای محلی، پاک‌سازی داده روی سرور انجام نمی‌شود؛ ابتدا نتیجه را همگام‌سازی کنید.", "info");
+      const title = ds.title || dataSourceSafeFileName(ds);
+      const msg = t("sources.clearDataConfirm", { title })
+        || `همهٔ ردیف‌های منبع «${title}» پاک شود؟ ستون‌ها می‌مانند.`;
+      const ask = window.DaNotify?.confirm
+        ? await DaNotify.confirm(msg, {
+            title: t("sources.clearData") || "پاک‌سازی داده",
+            okText: t("common.yes") || "بله",
+            cancelText: t("common.no") || "خیر"
+          })
+        : window.confirm(msg);
+      if (!ask) return;
+      clearProcessLocalData();
       return;
     }
     const title = ds.title || dataSourceSafeFileName(ds);
@@ -1789,11 +1979,56 @@ function dataSourceSafeFileName(ds) {
       processViewerState.cellMeta = fresh.cellMeta;
       delete fresh.cellRevisions;
       delete fresh.cellMeta;
+      // In local mode the grid must describe the copy the run uses: the server rows are overlaid
+      // with this browser's unsynced writes, and the result is cached back onto the process so the
+      // next open (and the next run) has a local snapshot instead of an empty or stale one.
+      if (processViewerState.localMode) {
+        overlayLocalWrites(fresh, sourceId);
+        cacheLocalSnapshot(processViewerState.taskId, sourceId, fresh);
+      }
       renderProcessViewerTable(fresh);
     } catch { /* keep the current grid */ }
   }
 
-  /** Record the editor stamp for one cell so a re-render shows the right tooltip. */
+  /**
+   * Apply this browser's unsynced writes for one source on top of a freshly read server copy.
+   *
+   * The run read and wrote these values locally; showing the bare server rows would display numbers
+   * the run never saw, which is precisely what the banner warns about. Overlaying them keeps the
+   * grid, the next local run and the pending-sync payload describing the same data.
+   */
+  function overlayLocalWrites(ds, sourceId) {
+    if (!ds) return ds;
+    const row = findTask(readTasks(), String(processViewerState.taskId ?? ""));
+    const writes = (row?.locallyRunSources || []).filter((w) => Number(w?.dataSourceId) === Number(sourceId));
+    if (!writes.length) return ds;
+    ds.cells = Array.isArray(ds.cells) ? ds.cells : [];
+    writes.forEach((w) => {
+      setProcessLocalCell(ds, Number(w.rowIndex) || 0, String(w.columnKey || ""), w.cellValue ?? "");
+    });
+    return ds;
+  }
+
+  /** Store a read copy on the process, so the local snapshot is available without a re-read. */
+  function cacheLocalSnapshot(taskId, sourceId, content) {
+    const tasks = readTasks();
+    const idx = findTaskIndex(tasks, taskId);
+    if (idx < 0) return;
+    const task = tasks[idx];
+    const graphs = [task.graph, task.canvasCache?.graph].filter(Boolean);
+    if (!graphs.length) return;
+    graphs.forEach((g) => {
+      const snap = (g.dataSources || []).find((d) => Number(d.id) === Number(sourceId));
+      if (!snap) return;
+      snap.cells = content.cells;
+      snap.columns = content.columns;
+      snap.columnKeys = content.columnKeys;
+      snap.rowCount = content.rowCount;
+      snap.columnCount = content.columnCount ?? (content.columns || []).length;
+    });
+    tasks[idx] = { ...task };
+    writeTasks(tasks, { silent: true });
+  }  /** Record the editor stamp for one cell so a re-render shows the right tooltip. */
   function setProcessCellMeta(rowIndex, columnKey, userId, userName, updatedAtUtc) {
     if (!processViewerState.cellMeta) processViewerState.cellMeta = {};
     processViewerState.cellMeta[rowIndex] = processViewerState.cellMeta[rowIndex] || {};
@@ -2053,13 +2288,10 @@ function dataSourceSafeFileName(ds) {
     const source = processViewerState.source;
     const sourceId = source?.id;
     if (!sourceId) return;
-    // Adding/removing rows or columns and renaming a column are SERVER operations: they change the
-    // source's shape for every process, which is exactly what a local run must not do. The grid also
-    // cannot apply them to the browser copy without the server's row/revision bookkeeping, so the
-    // action is refused with an explanation rather than half-done.
+    // In local mode the grid is this browser's copy: every shape edit belongs to it and no request
+    // may leave for the server (a local run must not change the shared source).
     if (processViewerState.localMode) {
-      notifyHome(t("sources.shapeEditLocalBlocked")
-        || "در حالت اجرای محلی، ساختار منبع روی سرور تغییر نمی‌کند؛ ابتدا نتیجه را همگام‌سازی کنید.", "info");
+      await runLocalProcessGridAction(action, rowIndex, columnKey, columnIndex);
       return;
     }
     if (action === "col-rename") {
@@ -2246,10 +2478,14 @@ function dataSourceSafeFileName(ds) {
       if (modal) modal.hidden = false;
       else { notifyHome("نمایشگر داده در این صفحه نیست.", "error"); return; }
       if (localMode) {
-        // The rows already come from the run's own copy. Pulling them from the server here would
-        // replace exactly the values the banner warns about, and joining the play hub would let the
-        // server patch a grid it does not own — so neither happens. Local cell events arrive through
-        // the extension's window event instead (see the `da-ds-cell-event` listener).
+        // A local snapshot exists only after this browser loaded the source once (the run does that
+        // itself). Without one, the grid would be a summary with no cell values — empty rows — so the
+        // rows are read ONCE, overlaid with the unsynced local writes, and cached back onto the
+        // process for next time. Reading is not a data change; nothing is written to the server.
+        if (!snapshot) await refreshProcessViewer();
+        // The rows come from the run's own copy, so the play hub cannot update them: joining it
+        // would let the server patch a grid it does not own. Local cell events arrive through the
+        // extension's window event instead (see the `da-ds-cell-event` listener).
         setProcessLiveStatus(false, t("sources.localLive") || "● محلی — بدون به‌روزرسانی زنده");
         return;
       }
@@ -2869,7 +3105,7 @@ function dataSourceSafeFileName(ds) {
   }
 
   /** Ensure the process canvas is in the local cache (player reads localStorage / extension sync). */
-  async function ensureTaskGraphCached(taskId, opts = {}) {
+  async function ensureTaskGraphCached(taskId) {
     const id = String(taskId || "").trim();
     if (!id) return null;
     const tasks = readTasks();
@@ -2915,10 +3151,7 @@ function dataSourceSafeFileName(ds) {
     // process is run from the cached copy and the start costs no traffic at all. A process that DID
     // change (or one we have never loaded) is read once, whole, and then cached against its stamp.
     if (/^\d+$/.test(id)) {
-      // `force` reads the canvas again even when the stamp says our copy is current. A LOCAL run
-      // starts from the diagram exactly as the server holds it now — the cache is an optimisation
-      // for an ordinary start, not a promise about what the server currently serves.
-      if (!opts.force && canvasCacheIsCurrent(hit)) {
+      if (canvasCacheIsCurrent(hit)) {
         hit.graph = canvasCacheOf(hit).graph;
         return hit;
       }
@@ -3185,10 +3418,11 @@ function dataSourceSafeFileName(ds) {
       setTasksBusy(true, t("tasks.preparing") || "آماده‌سازی افزونهٔ اجرا…");
       let cached = null;
       try {
-        // A LOCAL run starts from a fresh load — the graph and every non-public source are re-read
-        // from the server before the first step — so the canvas cache is bypassed here. A server run
-        // keeps the cache: the server is the copy being executed, so pre-reading it proves nothing.
-        cached = await ensureTaskGraphCached(taskId, { force: !runOnServer });
+        // The canvas is re-read only when the process has moved on the server: the list row's
+        // `updatedAtUtc` is the stamp the cache was taken from, so an unchanged process starts from
+        // the cached copy with no request at all. That is true for a local run too — "local" says
+        // where the data lives, not that the diagram has to be fetched again.
+        cached = await ensureTaskGraphCached(taskId);
         if (!cached?.graph?.nodes?.length) {
           throw new Error(t("tasks.graphNotCached") || "فرآیند در حافظهٔ محلی پیدا نشد. صفحه را رفرش کنید.");
         }
@@ -3202,9 +3436,9 @@ function dataSourceSafeFileName(ds) {
         return;
       }
       if (!runOnServer) {
-        setTasksBusy(true, t("tasks.localHydrateLoading") || "بارگذاری گراف و منابع غیرعمومی برای اجرای محلی…");
+        setTasksBusy(true, t("tasks.localHydrateLoading") || "بررسی نسخهٔ منابع برای اجرای محلی…");
         const load = await hydrateLocalRunSources(cached)
-          .catch(() => ({ failed: 0, loaded: 0, pending: 0 }));
+          .catch(() => ({ failed: 0, loaded: 0, kept: 0, pending: 0 }));
         if (load.failed > 0) {
           notifyHome(t("tasks.localHydrateFail", { n: load.failed })
             || `بارگذاری محلی ${load.failed} منبع ناموفق بود؛ خواندن آن‌ها در زمان اجرا از سرور انجام می‌شود.`, "warn");
@@ -3670,13 +3904,16 @@ function dataSourceSafeFileName(ds) {
     });
     document.getElementById("da-portal-ds-refresh")?.addEventListener("click", () => {
       if (!processViewerState.source) return;
-      // In local mode "refresh" must not read the server: the grid is showing this browser's copy,
-      // so it is repainted from that copy (which is also what the run is using right now).
+      // In local mode "refresh" must not read the server values into the grid: the grid is this
+      // browser's copy. It is repainted from that copy; only when no copy was ever loaded (an empty
+      // grid) is the source read once — overlaid with the unsynced local writes — so it is never blank.
       if (processViewerState.localMode) {
         const snap = localProcessSnapshot(processViewerState.taskId, processViewerState.source.id);
         if (snap) {
           renderProcessViewerTable(snap);
           notifyHome(t("sources.localRefreshed") || "نمایش از نسخهٔ محلی به‌روز شد.", "info");
+        } else {
+          refreshProcessViewer();
         }
         return;
       }
@@ -3692,8 +3929,7 @@ function dataSourceSafeFileName(ds) {
       if (th) {
         e.preventDefault();
         if (processViewerState.localMode) {
-          notifyHome(t("sources.shapeEditLocalBlocked")
-            || "در حالت اجرای محلی، ساختار منبع روی سرور تغییر نمی‌کند؛ ابتدا نتیجه را همگام‌سازی کنید.", "info");
+          runLocalProcessGridAction("col-rename", null, th.dataset.col, null);
           return;
         }
         renameProcessColumn(processViewerState.source?.id, th.dataset.col);

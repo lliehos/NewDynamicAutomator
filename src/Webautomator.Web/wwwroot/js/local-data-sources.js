@@ -1720,9 +1720,153 @@
     });
   }
 
+  /** The process that owns the browser copy shown in this grid, if any. */
+  function localGridOwnerTaskId() {
+    const pending = pendingWritesForSource(viewerState.sourceId);
+    if (pending) return pending.task.id;
+    return viewerState.taskId;
+  }
+
+  /** Column keys of a source snapshot, whichever of the two shapes it carries. */
+  function gridColumnKeys(ds) {
+    return (ds?.columnKeys || (ds?.columns || []).map((c) => String(c.key || c.Key || "")) || [])
+      .filter(Boolean);
+  }
+
+  function localAddGridColumn(ds, key, atIndex) {
+    const keys = gridColumnKeys(ds);
+    const cols = Array.isArray(ds.columns) && ds.columns.length
+      ? ds.columns.slice()
+      : keys.map((k) => ({ key: k, title: k }));
+    const at = atIndex == null ? keys.length : Math.max(0, Math.min(Number(atIndex) || 0, keys.length));
+    cols.splice(at, 0, { key, title: key });
+    keys.splice(at, 0, key);
+    ds.columns = cols;
+    ds.columnKeys = keys;
+    ds.columnCount = keys.length;
+    ds.cells = Array.isArray(ds.cells) ? ds.cells : [];
+    const rows = Number(ds.rowCount) || 0;
+    for (let r = 0; r < rows; r++) ds.cells.push({ key, index: r, cellValue: "" });
+  }
+
+  function localDeleteGridColumn(ds, key) {
+    const drop = String(key);
+    ds.cells = (Array.isArray(ds.cells) ? ds.cells : [])
+      .filter((c) => String(c.key ?? c.Key ?? "") !== drop);
+    ds.columnKeys = gridColumnKeys(ds).filter((k) => k !== drop);
+    if (Array.isArray(ds.columns)) {
+      ds.columns = ds.columns.filter((c) => String(c.key || c.Key || "") !== drop);
+    }
+    ds.columnCount = ds.columnKeys.length;
+  }
+
+  function localRenameGridColumn(ds, oldKey, newKey) {
+    const from = String(oldKey);
+    const to = String(newKey);
+    ds.columnKeys = gridColumnKeys(ds).map((k) => (k === from ? to : k));
+    if (Array.isArray(ds.columns)) {
+      ds.columns = ds.columns.map((c) =>
+        String(c.key || c.Key || "") === from ? { ...c, key: to, title: to } : c);
+    }
+    (Array.isArray(ds.cells) ? ds.cells : []).forEach((c) => {
+      if (String(c.key ?? c.Key ?? "") !== from) return;
+      if (c.key !== undefined) c.key = to;
+      else if (c.Key !== undefined) c.Key = to;
+    });
+  }
+
+  /** Mirror the displayed copy onto the owning process's local snapshot, so it survives a re-open. */
+  function persistLocalGridCopy(ds) {
+    const taskId = localGridOwnerTaskId();
+    if (taskId == null || !ds) return;
+    const tasks = readTasks();
+    const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
+    if (idx < 0) return;
+    const task = tasks[idx];
+    let touched = false;
+    [task.graph, task.canvasCache?.graph].filter(Boolean).forEach((g) => {
+      const snap = (g.dataSources || []).find((d) => Number(d.id) === Number(viewerState.sourceId));
+      if (!snap) return;
+      snap.cells = ds.cells;
+      snap.columns = ds.columns;
+      snap.columnKeys = ds.columnKeys;
+      snap.rowCount = ds.rowCount;
+      snap.columnCount = ds.columnCount;
+      touched = true;
+    });
+    if (!touched) return;
+    tasks[idx] = { ...task };
+    writeTasks(tasks);
+  }
+
+  /**
+   * Apply one grid-menu action to the browser copy of a local-run source.
+   *
+   * No fetch on purpose: a local run must not reshape the shared source. The change is real for this
+   * browser (the next run and the next open of this grid use it) and the banner keeps saying the
+   * server may disagree. Structural changes have no cell address, so the sync button carries values
+   * only — the toast says so rather than letting the user believe a shape change will travel.
+   */
+  async function runLocalGridAction(action, rowIndex, columnKey, columnIndex) {
+    const ds = viewerState.lastSource || viewerSource();
+    if (!ds) return;
+    const ask = async (msg, titleKey, okKey) => (window.DaNotify?.confirm
+      ? DaNotify.confirm(msg, {
+          title: t(titleKey) || "",
+          okText: t(okKey) || "تأیید",
+          cancelText: t("common.cancel") || "انصراف"
+        })
+      : window.confirm(msg));
+
+    if (action === "col-rename") {
+      const next = window.DaNotify?.prompt
+        ? await DaNotify.prompt(t("sources.renameColumnPrompt") || "نام جدید ستون را وارد کنید", {
+            title: t("sources.renameColumn") || "تغییر نام ستون",
+            value: columnKey
+          })
+        : window.prompt(t("sources.renameColumnPrompt") || "نام جدید ستون را وارد کنید", columnKey);
+      if (next == null) return;
+      const newName = String(next).trim();
+      if (!newName || newName === columnKey) return;
+      localRenameGridColumn(ds, columnKey, newName);
+    } else if (action === "row-delete") {
+      const msg = t("sources.deleteRowConfirm", { row: rowIndex + 1 }) || `ردیف ${rowIndex + 1} حذف شود؟`;
+      if (!(await ask(msg, "sources.deleteRow", "common.delete"))) return;
+      shiftViewerRows(ds, rowIndex, -1);
+    } else if (action === "col-delete") {
+      const msg = t("sources.deleteColumnConfirm", { key: columnKey }) || `ستون «${columnKey}» با همهٔ داده‌هایش حذف شود؟`;
+      if (!(await ask(msg, "sources.deleteColumn", "common.delete"))) return;
+      localDeleteGridColumn(ds, columnKey);
+    } else if (action === "row-before") {
+      shiftViewerRows(ds, Math.max(0, rowIndex ?? 0), 1);
+    } else if (action === "row-after") {
+      shiftViewerRows(ds, Math.max(0, (rowIndex ?? 0) + 1), 1);
+    } else if (action === "row-append") {
+      shiftViewerRows(ds, Number(ds.rowCount) || 0, 1);
+    } else {
+      const keys = gridColumnKeys(ds);
+      const key = nextColumnKey(keys);
+      const at = action === "col-before" ? (columnIndex ?? keys.length)
+        : action === "col-after" ? ((columnIndex ?? keys.length - 1) + 1)
+        : null;
+      localAddGridColumn(ds, key, at);
+    }
+    persistLocalGridCopy(ds);
+    viewerState.lastSource = ds;
+    renderViewerTable(ds);
+    notify(t("sources.localEditApplied")
+      || "تغییر روی نسخهٔ محلی اعمال شد؛ دادهٔ سرور دست‌نخورده ماند (همگام‌سازی فقط مقدار سلول‌ها را منتقل می‌کند).", "info");
+  }
+
   async function runGridAction(action, rowIndex, columnKey, columnIndex) {
     const sourceId = viewerState.sourceId;
     if (sourceId == null) return;
+    // A browser-side copy (unsynced local-run values, or a process set to run locally): every menu
+    // action — cell or shape — belongs to that copy and must not send anything to the server.
+    if (viewerState.localCopy) {
+      await runLocalGridAction(action, rowIndex, columnKey, columnIndex);
+      return;
+    }
     if (action === "col-rename") {
       await renameLibraryColumn(sourceId, columnKey);
       return;
@@ -1950,11 +2094,45 @@
       notify(t("sources.clearDataFail") || "پاک‌سازی داده انجام نشد.", "error");
       return;
     }
-    // Clearing deletes rows for EVERYONE, so it is a server operation with no meaning on a
-    // browser-side copy — the local run's writes leave through the sync button instead.
-    if (viewerState.localDirty) {
-      notify(t("sources.clearDataLocalBlocked")
-        || "در حالت اجرای محلی، پاک‌سازی داده روی سرور انجام نمی‌شود؛ ابتدا نتیجه را همگام‌سازی کنید.", "info");
+    // Clearing deletes rows for EVERYONE, so in local mode it clears the LOCAL copy instead: the run
+    // then starts from an empty grid and the server's rows stay exactly as they are.
+    if (viewerState.localCopy) {
+      const title = ds.title || dataSourceSafeFileName(ds);
+      const msg = t("sources.clearDataConfirm", { title })
+        || `همهٔ ردیف‌های منبع «${title}» پاک شود؟ ستون‌ها می‌مانند.`;
+      const ask = window.DaNotify?.confirm
+        ? await DaNotify.confirm(msg, {
+            title: t("sources.clearData") || "پاک‌سازی داده",
+            okText: t("common.yes") || "بله",
+            cancelText: t("common.no") || "خیر"
+          })
+        : window.confirm(msg);
+      if (!ask) return;
+      ds.cells = [];
+      ds.rowCount = 0;
+      viewerState.cellRevisions = {};
+      viewerState.cellMeta = {};
+      viewerState.page = 0;
+      persistLocalGridCopy(ds);
+      // The addresses those pending writes pointed at no longer exist locally, so they go with them.
+      const ownerId = localGridOwnerTaskId();
+      if (ownerId != null) {
+        const tasks = readTasks();
+        const idx = tasks.findIndex((x) => String(x.id) === String(ownerId));
+        if (idx >= 0) {
+          const kept = (tasks[idx].locallyRunSources || [])
+            .filter((w) => Number(w?.dataSourceId) !== Number(ds.id ?? viewerState.sourceId));
+          tasks[idx] = {
+            ...tasks[idx],
+            locallyRunSources: kept.length ? kept : null,
+            localRunPendingSync: kept.length > 0
+          };
+          writeTasks(tasks);
+        }
+      }
+      renderViewerTable(ds);
+      notify(t("sources.clearDataLocalDone")
+        || "دادهٔ نسخهٔ محلی پاک شد؛ دادهٔ سرور دست‌نخورده ماند.", "success");
       return;
     }
     const title = ds.title || dataSourceSafeFileName(ds);

@@ -5637,20 +5637,19 @@
    * tooltip names the ceiling rather than a fixed pause.
    */
   function makeWaitBadge(w, h, waitMs, kind) {
-    // A rectangle's bottom-right corner IS its box corner. A condition is a diamond, so the
-    // bounding box's corner is empty space far from the shape; its badge rides on the middle of
-    // the lower-right edge instead, which reads as "attached to this node" rather than floating.
-    const cx = kind === "condition" ? w * 0.75 + 5 : w + 2;
-    const cy = kind === "condition" ? h * 0.75 + 5 : h + 8.5;
+    // The clock HANGS ON the node's outline rather than floating below it: its centre sits just
+    // outside the edge, so the plate overlaps the border by a couple of pixels and reads as
+    // attached. A condition is a diamond, so the bounding box's corner is empty space far from the
+    // shape; its badge rides on the middle of the lower-right edge instead.
+    const cx = kind === "condition" ? w * 0.75 + 1.5 : w + 1.5;
+    const cy = kind === "condition" ? h * 0.75 + 1.5 : h + 4;
     const badge = el("g", {
       class: "node-wait-badge",
       transform: `translate(${Math.round(cx - 6)},${Math.round(cy - 6.5)})`
     });
-    const ms = Number(waitMs) > 0 ? Math.round(Number(waitMs)) : 1000;
+    const ms = waitMsOf(waitMs);
     const tip = document.createElementNS(ns, "title");
-    tip.textContent = kind === "group"
-      ? `داخل این گروه انتظار تا ظاهر شدن المان روشن است — حداکثر ${ms} میلی‌ثانیه`
-      : `انتظار تا ظاهر شدن المان روشن است — حداکثر ${ms} میلی‌ثانیه`;
+    tip.textContent = `انتظار تا ظاهر شدن المان روشن است — حداکثر ${Math.round(ms)} میلی‌ثانیه`;
     badge.appendChild(tip);
     badge.appendChild(el("circle", { cx: 6, cy: 6.5, r: 7.5 }));
     // Hands: an hour mark up from the centre, then the minute hand toward four o'clock.
@@ -5659,38 +5658,73 @@
   }
 
   /**
-   * The element-wait budget a node carries, or 0 when every wait switch on it is off.
+   * The element-wait budget a node carries, or 0 when it has no enabled element wait.
    *
-   * Both selector instances count (target and compare), because either one can make the run
-   * pause for an element. A GROUP reports the largest budget found anywhere inside it — at any
-   * nesting depth — because the waiting really happens within the group and folding work into a
-   * container must not hide it. Start/end carry no element lookup of their own, so they never
-   * raise the badge even when a recorder stamped the flags on them.
+   * Only the switches the inspector ACTUALLY RENDERS for this node count. A node carries
+   * `selectorWaitEnabled` in its JSON merely because a default was stamped on it, so reading the
+   * flags alone would put a clock on nodes that have nothing to wait for: a condition that compares
+   * a stored value, a GoToUrl whose value is the address, a WaitTime step (its "value" is a
+   * duration), or a group (whose repeat is not tied to a page element at all). Each wait flag is
+   * therefore paired with the exact predicate that decides whether its selector block is shown.
+   *
+   * A GROUP never raises the badge: it has no selector block and no wait of its own, and its
+   * children carry their own clocks — lighting the container too would say the group waits, which
+   * is not something the engine does.
    */
-  function nodeWaitBudget(n, seen) {
+  function nodeWaitBudget(n) {
     if (!n) return 0;
-    if (n.kind === "start" || n.kind === "end") return 0;
-    const budgets = [];
-    if (n.selectorWaitEnabled === true) {
-      const v = Number(n.selectorWaitMs);
-      budgets.push(Number.isFinite(v) && v > 0 ? Math.max(200, v) : 1000);
+    if (isActionNode(n)) {
+      const budgets = [];
+      if (stepShowsTargetSelector(n) && n.selectorWaitEnabled === true) {
+        budgets.push(waitMsOf(n.selectorWaitMs));
+      }
+      if (stepShowsValueSelector(n) && n.equalSelectorWaitEnabled === true) {
+        budgets.push(waitMsOf(n.equalSelectorWaitMs));
+      }
+      return budgets.length ? Math.max(...budgets) : 0;
     }
-    if (n.equalSelectorWaitEnabled === true) {
-      const v = Number(n.equalSelectorWaitMs);
-      budgets.push(Number.isFinite(v) && v > 0 ? Math.max(200, v) : 1000);
+    if (n.kind === "condition") {
+      const budgets = [];
+      if (conditionShowsSubjectSelector(n) && n.selectorWaitEnabled === true) {
+        budgets.push(waitMsOf(n.selectorWaitMs));
+      }
+      if (conditionShowsCompareSelector(n) && n.equalSelectorWaitEnabled === true) {
+        budgets.push(waitMsOf(n.equalSelectorWaitMs));
+      }
+      return budgets.length ? Math.max(...budgets) : 0;
     }
-    if (budgets.length) return Math.max(...budgets);
-    if (n.kind !== "group") return 0;
-    // `seen` keeps the walk finite on a damaged graph whose groups are each other's ancestors.
-    const visited = seen || new Set();
-    if (visited.has(n.id)) return 0;
-    visited.add(n.id);
-    let best = 0;
-    (graph.nodes || []).forEach((kid) => {
-      if (kid.groupNodeId !== n.id) return;
-      best = Math.max(best, nodeWaitBudget(kid, visited));
-    });
-    return best;
+    return 0;
+  }
+
+  /** Normalise a stored wait budget: a missing/invalid value means the default one second. */
+  function waitMsOf(raw) {
+    const v = Number(raw);
+    return Number.isFinite(v) && v > 0 ? Math.max(200, v) : 1000;
+  }
+
+  /** Condition types whose inspector renders the «المان مورد بررسی» selector (with its wait switch). */
+  const SUBJECT_SELECTOR_CONDITIONS = new Set([
+    "ElementValue", "FindElement", "NotFindElement", "FindElements", "ElementVisible", "ElementHidden"
+  ]);
+
+  function conditionShowsSubjectSelector(n) {
+    return SUBJECT_SELECTOR_CONDITIONS.has(String(n?.conditionType || ""));
+  }
+
+  /**
+   * Whether the condition's COMPARE operand gets its own selector block (and therefore the
+   * `equalSelectorWaitEnabled` switch).
+   *
+   * Mirrors conditionInspectorHtml: a page-element subject carries the wait on its own selector,
+   * a memory subject has no compare selector, a comparison that needs no operand has no compare
+   * field at all, and the operand is a page element only when its source type says so.
+   */
+  function conditionShowsCompareSelector(n) {
+    const ct = String(n?.conditionType || "");
+    if (SUBJECT_SELECTOR_CONDITIONS.has(ct)) return false;
+    if (ct === "MemoryValue") return false;
+    if (!conditionNeedsCompareOperand(ct, n?.equalityType || "equal")) return false;
+    return String(n?.contentSourceType || "Constant") === "Elements";
   }
 
   function deepClonePlain(obj) {
