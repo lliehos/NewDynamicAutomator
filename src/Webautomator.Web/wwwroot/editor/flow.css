@@ -861,6 +861,15 @@ rect.flow-marquee{pointer-events:none}
 .insp-status b{font-weight:600;color:#8a8699}
 .ds-list .ds-keys{display:none}
 .ds-list .ds-actions{display:flex;gap:2px;flex-wrap:wrap;flex-shrink:0;align-items:center;position:relative;z-index:1}
+/*
+ * The two data-copy buttons on a diverged source: GREEN is the server's copy, GREY is this
+ * browser's. Colour carries the meaning because the two buttons sit next to each other and their
+ * titles are the only other difference.
+ */
+.ds-actions .ds-icon-btn.is-data-server{color:#28c76f}
+.ds-actions .ds-icon-btn.is-data-server:hover{background:rgba(40,199,111,.12)}
+.ds-actions .ds-icon-btn.is-data-local{color:#a8aaae}
+.ds-actions .ds-icon-btn.is-data-local:hover{background:rgba(168,170,174,.16)}
 .ds-viewer[hidden]{display:none!important}
 .ds-viewer{
   position:fixed;

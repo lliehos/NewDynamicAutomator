@@ -1333,7 +1333,9 @@ function dataSourceSafeFileName(ds) {
     // True while the open grid is showing a LOCAL (browser-side) copy. In that mode the grid reads
     // no rows from the server, sends no cell write to it, and is not patched by the live hub: the
     // data belongs to the client, so only the client can update it.
-    localMode: false
+    localMode: false,
+    /** Timer that repaints the local grid (there is no hub for a browser-side copy). */
+    localTimer: null
   };
 
   // Cell events reach a browser twice: once as a window event the extension broadcasts locally and
@@ -1889,9 +1891,35 @@ function dataSourceSafeFileName(ds) {
     }
   }
 
+  /**
+   * Repaint the LOCAL grid every couple of seconds from this browser's copy.
+   *
+   * A local run writes nothing to the server, so there is no live feed to subscribe to; the cell
+   * events give the instant feedback, and this timer is the safety net for anything they missed.
+   * It touches localStorage and the DOM only — no requests.
+   */
+  function startProcessLocalTimer() {
+    stopProcessLocalTimer();
+    processViewerState.localTimer = setInterval(() => {
+      if (!processViewerState.localMode || !processViewerState.source) return;
+      if (processViewerState.editing) return;  // never repaint under a half-typed cell
+      const snap = localProcessSnapshot(processViewerState.taskId, processViewerState.source.id);
+      if (!snap) return;
+      renderProcessViewerTable(snap);
+    }, 2000);
+  }
+
+  function stopProcessLocalTimer() {
+    if (processViewerState.localTimer) {
+      clearInterval(processViewerState.localTimer);
+      processViewerState.localTimer = null;
+    }
+  }
+
   async function closeProcessViewer() {
     const modal = document.getElementById("da-portal-ds-viewer");
     if (modal) modal.hidden = true;
+    stopProcessLocalTimer();
     for (const t of processViewerState.blinkTimers.values()) clearTimeout(t);
     processViewerState.blinkTimers.clear();
     processViewerState.source = null;
@@ -2485,8 +2513,10 @@ function dataSourceSafeFileName(ds) {
         if (!snapshot) await refreshProcessViewer();
         // The rows come from the run's own copy, so the play hub cannot update them: joining it
         // would let the server patch a grid it does not own. Local cell events arrive through the
-        // extension's window event instead (see the `da-ds-cell-event` listener).
+        // extension's window event, and a slow repaint from the browser copy covers anything a
+        // missed event would leave behind — local data only, no requests.
         setProcessLiveStatus(false, t("sources.localLive") || "● محلی — بدون به‌روزرسانی زنده");
+        startProcessLocalTimer();
         return;
       }
       // The list/canvas snapshot is a summary without cell VALUES, so pull the real rows (and the

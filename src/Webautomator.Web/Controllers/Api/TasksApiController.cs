@@ -300,7 +300,33 @@ public class TasksApiController : ControllerBase
         var applied = 0;
         var unchanged = 0;
         var skipped = 0;
+        var rowsAdded = 0;
         var conflicts = new List<object>();
+
+        // A local run may have INSERTED rows (locally) before writing into them. Those rows do not
+        // exist on the server, and a per-cell patch would have created them one column at a time —
+        // leaving every column the run did not write BLANK, which is exactly the "empty rows" a sync
+        // appeared to produce. So the rows a source needs are materialised first, in one call per
+        // source, and only then are the values patched into them.
+        foreach (var group in cells.Where(c => c.DataSourceId > 0).GroupBy(c => c.DataSourceId))
+        {
+            // Derived counters, because a cell write never touches the parent row: the stored
+            // RowCount can lag behind the cells that actually exist.
+            var meta = await _sources.GetMetaDerivedAsync(UserId, group.Key, ct);
+            if (meta is null) continue;                       // not visible to this user: cells are skipped below
+            var needed = group.Max(c => c.RowIndex) + 1;
+            var have = Math.Max(meta.RowCount, 0);
+            if (needed <= have) continue;
+            var added = await _sources.AddRowsAsync(UserId, group.Key,
+                new Webautomator.Contracts.DataSources.AddDataSourceRowRequest
+                {
+                    // Append: the local rows are at the END of the copy the run loaded.
+                    BeforeIndex = null,
+                    Count = needed - have
+                }, ct);
+            if (added?.Ok == true) rowsAdded += needed - have;
+        }
+
         foreach (var cell in cells)
         {
             if (cell.DataSourceId <= 0 || string.IsNullOrWhiteSpace(cell.ColumnKey)) { skipped++; continue; }
@@ -351,7 +377,7 @@ public class TasksApiController : ControllerBase
         await _events.LogAsync("Info", "Play", "LocalRunSynced",
             $"Local run results synced ({applied} cell(s), {conflicts.Count} conflict(s))",
             UserId, User.Identity?.Name,
-            System.Text.Json.JsonSerializer.Serialize(new { taskId = id, applied, unchanged, conflicts = conflicts.Count, skipped }),
+            System.Text.Json.JsonSerializer.Serialize(new { taskId = id, applied, unchanged, conflicts = conflicts.Count, skipped, rowsAdded }),
             path: HttpContext.Request.Path,
             ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
             ct: ct);
@@ -365,7 +391,7 @@ public class TasksApiController : ControllerBase
             reason = "local_run_synced"
         }, ct);
 
-        return Ok(new { ok = true, applied, unchanged, conflicts, skipped });
+        return Ok(new { ok = true, applied, unchanged, conflicts, skipped, rowsAdded });
     }
 
     /// <summary>

@@ -71,6 +71,10 @@
   const ICO_GLOBE = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.9 6h-3a15 15 0 0 0-1.3-3.4A8 8 0 0 1 18.9 8zM12 4.2c.7 1 1.3 2.3 1.7 3.8h-3.4A14 14 0 0 1 12 4.2zM4.3 14A8 8 0 0 1 4 12c0-.7.1-1.4.3-2h3.4a17 17 0 0 0 0 4H4.3zm.8 2h3a15 15 0 0 0 1.3 3.4A8 8 0 0 1 5.1 16zm3-8h-3A8 8 0 0 1 8.4 4.6 15 15 0 0 0 7.1 8zM12 19.8a14 14 0 0 1-1.7-3.8h3.4a14 14 0 0 1-1.7 3.8zm2.1-5.8H9.9a15 15 0 0 1 0-4h4.2a15 15 0 0 1 0 4zm.5 5.4a15 15 0 0 0 1.3-3.4h3a8 8 0 0 1-4.3 3.4zm1.7-5.4a17 17 0 0 0 0-4h3.4c.2.6.3 1.3.3 2s-.1 1.4-.3 2h-3.4z"/></svg>`;
   const ICO_ADD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5z"/></svg>`;
   const ICO_SHIELD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2l7 3v6c0 4.4-3 8-7 11-4-3-7-6.6-7-11V5l7-3zm0 2.2L7 6v5c0 3.4 2.1 6.2 5 8.7 2.9-2.5 5-5.3 5-8.7V6l-5-1.8zM10.9 9.6l1.9 1.9 3.4-3.4 1.1 1.1-4.5 4.5-3-3 1.1-1.1z"/></svg>`;
+  //
+  // The two data-copy icons: a small table. Tinted green for the server's copy and grey for this
+  // browser's, so "which data am I about to look at?" is answered by colour before the tooltip.
+  const ICO_DATA = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 4h16a1 1 0 0 1 1 1v3H3V5a1 1 0 0 1 1-1zm-1 6h18v3H3v-3zm0 5h18v3H3v-3zm0 5h18v.5a.5.5 0 0 1-.5.5h-17a.5.5 0 0 1-.5-.5V20z"/></svg>`;
 
   function iconBtn(cls, title, iconHtml, extra = "") {
     return `<button type="button" class="ds-icon-btn ${cls}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}" ${extra}>${iconHtml}</button>`;
@@ -621,6 +625,50 @@
     await reloadSourceWithParsedFile(sourceId, title, file, parsed);
   }
 
+  /**
+   * The local view's «ریست دیتا از سرور» button.
+   *
+   * It does NOT empty anything: the server's current rows are fetched once and become the local copy
+   * again, which is how a local run that drifted (or a local file load that went wrong) gets back to
+   * a known state without touching the server.
+   */
+  async function resetLocalFromServer() {
+    const sourceId = Number(viewerState.sourceId);
+    if (!Number.isFinite(sourceId) || sourceId <= 0) return;
+    const msg = t("sources.resetLocalConfirm")
+      || "دادهٔ سرور دوباره برای نسخهٔ محلی خوانده شود؟ تغییرات محلیِ همگام‌نشده جایگزین می‌شوند (دادهٔ سرور تغییری نمی‌کند).";
+    const ask = window.DaNotify?.confirm
+      ? await DaNotify.confirm(msg, {
+          title: t("sources.resetLocal") || "ریست از سرور",
+          okText: t("common.yes") || "بله",
+          cancelText: t("common.no") || "خیر"
+        })
+      : window.confirm(msg);
+    if (!ask) return;
+    const btn = document.getElementById("da-portal-ds-reset");
+    if (btn) btn.disabled = true;
+    try {
+      const fresh = await fetchSourceContent(sourceId);
+      fresh.id = sourceId;
+      // The local copy becomes exactly the server's again, so the pending writes that described the
+      // old copy no longer mean anything.
+      dropPendingWritesForSource(sourceId);
+      viewerState.lastSource = fresh;
+      viewerState.page = 0;
+      viewerState.localDirty = false;
+      viewerState.localCopy = true;
+      setLocalNote(true);
+      persistLocalGridCopy(fresh);
+      renderViewerTable(fresh);
+      syncViewerModeChrome();
+      notify(t("sources.resetLocalDone") || "نسخهٔ محلی از دادهٔ سرور بازسازی شد.", "success");
+    } catch (e) {
+      notify(e.message || t("sources.loadingGrid") || "بارگذاری انجام نشد.", "error");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   /** Precise warning: name every process + step that reads a column the new file dropped. */
   async function confirmMissingColumns(compat, title) {
     const lines = [];
@@ -1123,10 +1171,55 @@
     /**
      * Which copy the operator explicitly asked for: "local" (the browser's), "server", or null for
      * "decide from the divergence". A source with local-run results is opened twice from its row —
-     * one eye per copy — so this is the only way the two views can differ on the same source.
+     * one icon per copy — so this is the only way the two views can differ on the same source.
      */
-    forceMode: null
+    forceMode: null,
+    /** Timer that repaints the LOCAL view; the hub cannot reach a browser-side copy. */
+    localTimer: null
   };
+
+  /** The browser's copy of the open source, newest first (process snapshot, then the grid). */
+  function localCopySnapshot() {
+    const ownerId = localGridOwnerTaskId();
+    if (ownerId != null) {
+      const row = readTasks().find((t) => String(t.id) === String(ownerId));
+      for (const g of [row?.graph, row?.canvasCache?.graph].filter(Boolean)) {
+        const snap = (g.dataSources || []).find((d) => Number(d.id) === Number(viewerState.sourceId));
+        if (snap && Array.isArray(snap.cells)) return snap;
+      }
+    }
+    return viewerState.lastSource;
+  }
+
+  /**
+   * A local grid has no live feed: the run's writes never reach the server, so the hub cannot patch
+   * this table. A slow timer repaints it from the browser's own copy instead — cheap (localStorage
+   * only, no requests), and frequent enough that a running local process is visibly filling rows.
+   */
+  function setLocalViewTimer(on) {
+    if (viewerState.localTimer) {
+      clearInterval(viewerState.localTimer);
+      viewerState.localTimer = null;
+    }
+    if (!on) return;
+    viewerState.localTimer = setInterval(() => {
+      if (!viewerState.localCopy || viewerState.sourceId == null) return;
+      const snap = localCopySnapshot();
+      if (!snap) return;
+      // Do not fight the inline editor: it is a DOM edit on top of the grid, and a repaint would
+      // throw away the half-typed value.
+      if (editingCell) return;
+      viewerState.lastSource = snap;
+      renderViewerTable(snap);
+    }, 2000);
+  }
+
+  /** Show/hide the buttons that only make sense in one of the two views. */
+  function syncViewerModeChrome() {
+    const reset = document.getElementById("da-portal-ds-reset");
+    if (reset) reset.hidden = !viewerState.localCopy;
+    setLocalViewTimer(viewerState.localCopy);
+  }
 
   /**
    * Rows per grid page. A source can hold thousands of rows, so rendering them all would build a
@@ -2209,6 +2302,7 @@
       setLocalNote(viewerState.localCopy);
       viewerState.lastSource = fresh;
       renderViewerTable(fresh);
+      syncViewerModeChrome();
     } catch { /* leave the grid as-is */ }
     finally { if (busy) setGridBusy(false); }
   }
@@ -2360,6 +2454,9 @@
     viewerState.localCopy = false;
     viewerState.forceMode = null;
     setLocalNote(false);
+    setLocalViewTimer(false);
+    const resetBtn = document.getElementById("da-portal-ds-reset");
+    if (resetBtn) resetBtn.hidden = true;
     editingCell = null;
     setLiveStatus(false);
     if (viewerState.connection) {
@@ -2417,9 +2514,9 @@
     // server view rewrites the server's.
     const viewBtn = Number(sid) > 0
       ? (divergent
-        ? iconBtn("js-view-local is-sync", t("sources.viewLocal") || "نمایش اطلاعات محلی", ICO_VIEW,
+        ? iconBtn("js-view-local is-data-local", t("sources.viewLocal") || "نمایش اطلاعات محلی", ICO_DATA,
             `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}" data-mode="local"`)
-          + iconBtn("js-view-server", t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_VIEW,
+          + iconBtn("js-view-server is-data-server", t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_DATA,
             `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}" data-mode="server"`)
         : iconBtn("js-view", t("sources.viewTable"), ICO_VIEW, `${row.taskId != null ? `data-task="${tid}" ` : ""}data-id="${sid}"`))
       : "";
@@ -2619,6 +2716,11 @@
   document.getElementById("da-portal-ds-reload")?.addEventListener("click", () => {
     if (viewerState.sourceId == null) return;
     reloadFromModal();
+  });
+  // Only meaningful in the local view: pull the server's rows back into the browser copy.
+  document.getElementById("da-portal-ds-reset")?.addEventListener("click", () => {
+    if (viewerState.sourceId == null) return;
+    resetLocalFromServer();
   });
   // Paging is pure rendering: the data is already loaded, so this only re-slices the rows.
   document.getElementById("da-portal-ds-prev")?.addEventListener("click", () => {
