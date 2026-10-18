@@ -1084,6 +1084,16 @@ html.light-style {
   color: var(--webautomator-primary, var(--webautomator-primary-default));
 }
 
+/* Two copies of the same data: the browser's (what this machine ran on) and the server's (what
+   everyone else sees). Colour is the only difference the icons can carry, so it has to be obvious. */
+.da-task-actions .ds-icon-btn.is-data-local {
+  color: #a8aaae;
+}
+
+.da-task-actions .ds-icon-btn.is-data-server {
+  color: #28c76f;
+}
+
 .da-task-actions .ds-icon-btn.is-xlsx {
   color: #28c76f;
 }

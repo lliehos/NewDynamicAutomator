@@ -4539,7 +4539,7 @@ let localRunGraph = null;
  * keyed by source id, complete, replaced only by a fresh read of that same source, and untouched by
  * any graph reload.
  */
-function snapshotLocalSourceCopies(graph, task, onlyIds) {
+function snapshotLocalSourceCopies(graph, task, onlyIds, opts = {}) {
   const sources = Array.isArray(graph?.dataSources) ? graph.dataSources : [];
   const previous = (task && task.localSourceCopies && typeof task.localSourceCopies === "object")
     ? task.localSourceCopies
@@ -4553,6 +4553,10 @@ function snapshotLocalSourceCopies(graph, task, onlyIds) {
     const id = Number(ds?.id);
     if (!Number.isFinite(id) || id <= 0) return;
     if (filter && !filter.has(id)) return;
+    // `onlyMissing`: the graph here came from the PORTAL (which may put the server's rows into it
+    // when a viewer is opened), so it is not evidence about the browser copy. An existing record is
+    // kept — overwriting it would silently replace the local results a sync still has to send.
+    if (opts.onlyMissing && previous[String(id)]) return;
     // Shared sources stay server-backed in both modes, so caching one would let this machine drift
     // from everyone else's data — the one thing a public source must never do.
     if (isPublicSource(ds, graph)) return;
@@ -4602,8 +4606,10 @@ async function ensureLocalSourceValues(taskId, graph) {
         ...task,
         localValuesStamp: stamp || task.localValuesStamp || "",
         // Even a run that reads nothing refreshes the per-source records: they are what the data
-        // viewers draw, and a stale record is exactly what shows pre-run rows after a run.
-        localSourceCopies: snapshotLocalSourceCopies(graph, task)
+        // viewers draw, and a stale record is exactly what shows pre-run rows after a run. Missing
+        // records are created here, but an existing one is NOT overwritten from a graph the portal
+        // may have handed us (see `onlyMissing`).
+        localSourceCopies: snapshotLocalSourceCopies(graph, task, null, { onlyMissing: true })
       };
       await saveUserTasks(tasks);
     }

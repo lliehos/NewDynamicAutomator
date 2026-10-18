@@ -701,8 +701,20 @@
     const smartBtn = isEmpty && !isChild
       ? iconBtn("is-smart", t("tasks.smart"), ICO_SMART, `data-da-action="start-smart-record" data-task-id="${tid}" data-task-title="${ttitle}"`)
       : "";
+    /**
+     * A process whose local results are still unsynced carries TWO copies, so it gets two data
+     * buttons: the browser's copy (what the run produced) and the server's rows (what everyone else
+     * sees). One icon could only ever show one of them, and which one it showed was a guess.
+     */
+    const isPending = task.localRunPendingSync === true
+      || (Array.isArray(task.locallyRunSources) && task.locallyRunSources.length > 0);
     const dataBtns = hasData
-      ? iconBtn("is-view", t("tasks.viewData"), ICO_DATA, `data-da-view-data="${tid}"`)
+      ? (isPending
+        ? iconBtn("is-view is-data-local", t("sources.viewLocal") || "نمایش اطلاعات محلی", ICO_DATA,
+            `data-da-view-data="${tid}" data-mode="local"`)
+          + iconBtn("is-view is-data-server", t("sources.viewServer") || "نمایش اطلاعات سرور", ICO_DATA,
+            `data-da-view-data="${tid}" data-mode="server"`)
+        : iconBtn("is-view", t("tasks.viewData"), ICO_DATA, `data-da-view-data="${tid}"`))
       : "";
     /**
      * A live "open the source template" button for a CHILD, so the relationship is one click away
@@ -755,8 +767,8 @@
       ${task.canDelete !== false
         ? iconBtn("is-danger", t("tasks.delete"), ICO_DEL, `data-da-del="${tid}"`)
         : ""}
-      ${task.localRunPendingSync
-        ? iconBtn("is-sync", t("tasks.syncLocalRun"), ICO_SYNC, `data-da-sync="${tid}"`)
+      ${(task.localRunPendingSync || (Array.isArray(task.locallyRunSources) && task.locallyRunSources.length > 0))
+        ? iconBtn("is-sync", t("tasks.syncAllSources") || t("tasks.syncLocalRun"), ICO_SYNC, `data-da-sync="${tid}"`)
         : ""}
       ${runOnServerSwitch(task, tid)}`;
   }
@@ -921,8 +933,29 @@
     const tasks = readTasks();
     const task = findTask(tasks, taskId);
     if (!task) return;
-    const msg = t("tasks.syncConfirm")
-      || "نتیجهٔ اجرای محلی روی سرور نوشته می‌شود. اگر فرآیند یا منبع روی سرور تغییر کرده باشد، ممکن است اطلاعات روی سرور جایگزین یا از دست برود. ادامه می‌دهید؟";
+    // ONE sync for the whole process: the row's button must settle every source the run touched,
+    // not just the one that happens to be open somewhere. The payload is the pending-write log,
+    // which is keyed by source id already.
+    const cells = Array.isArray(task.locallyRunSources) ? task.locallyRunSources : [];
+    const sourceIds = [...new Set(cells
+      .map((c) => Number(c?.dataSourceId))
+      .filter((n) => Number.isFinite(n) && n > 0))];
+    if (!cells.length) {
+      notifyHome(t("tasks.syncNothing")
+        || "نتیجهٔ محلیِ سینک‌نشده‌ای برای این فرآیند نیست.", "info");
+      // The flag can outlive its payload (an older build cleared one and not the other), so a sync
+      // request with nothing to send also puts the badge out rather than leaving a dead button.
+      const i0 = findTaskIndex(tasks, taskId);
+      if (i0 >= 0 && task.localRunPendingSync !== false) {
+        tasks[i0] = { ...tasks[i0], localRunPendingSync: false };
+        writeTasks(tasks);
+      }
+      render(tasks);
+      return;
+    }
+    const msg = t("tasks.syncConfirmAll", { n: sourceIds.length, cells: cells.length })
+      || t("tasks.syncConfirm")
+      || "نتیجهٔ اجرای محلی همهٔ منابع این فرآیند روی سرور نوشته می‌شود. اگر روی سرور تغییر کرده باشند، ممکن است اطلاعات جایگزین یا از دست برود. ادامه می‌دهید؟";
     const ok = window.DaNotify
       ? await DaNotify.confirm(msg, {
           title: t("tasks.syncLocalRun"),
@@ -943,20 +976,33 @@
           // The API names this `cells` (see SyncLocalRunRequest). Sending it as `dataSources` meant
           // the server read an empty list: the sync reported success, cleared nothing and wrote no
           // values, so the badge stayed and the divergence was never resolved.
-          cells: (task.locallyRunSources || [])
+          cells
         })
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.message || t("tasks.syncFail"));
       }
+      const result = await res.json().catch(() => ({}));
       const idx = findTaskIndex(tasks, taskId);
       if (idx >= 0) {
-        tasks[idx] = { ...tasks[idx], localRunPendingSync: false };
+        // The server consumed the payload: clear the LOG as well as the flag. Clearing only the flag
+        // left `locallyRunSources` behind, so the badge (and these two data buttons) came straight
+        // back on the next render and the row claimed a divergence that no longer existed.
+        tasks[idx] = { ...tasks[idx], localRunPendingSync: false, locallyRunSources: null };
         writeTasks(tasks);
         render(tasks);
       }
-      notifyHome(t("tasks.syncDone") || "نتیجهٔ اجرای محلی روی سرور سینک شد.", "success");
+      const applied = Number(result?.applied) || 0;
+      const conflicts = Array.isArray(result?.conflicts) ? result.conflicts.length : 0;
+      notifyHome(
+        conflicts
+          ? (t("tasks.syncDoneAllConflicts", { n: sourceIds.length, applied, conflicts })
+            || `نتیجهٔ ${sourceIds.length} منبع سینک شد — ${applied} سلول نوشته شد · ${conflicts} تعارض (نسخهٔ سرور حفظ شد).`)
+          : (t("tasks.syncDoneAll", { n: sourceIds.length, applied })
+            || `نتیجهٔ ${sourceIds.length} منبع سینک شد — ${applied} سلول نوشته شد.`),
+        conflicts ? "warn" : "success"
+      );
     } catch (e) {
       notifyHome(String(e.message || e), "error");
     }
@@ -1107,7 +1153,8 @@
       });
     });
     root?.querySelectorAll("[data-da-view-data]").forEach((btn) => {
-      btn.addEventListener("click", () => viewProcessData(btn.getAttribute("data-da-view-data"), btn));
+      btn.addEventListener("click", () =>
+        viewProcessData(btn.getAttribute("data-da-view-data"), btn, btn.getAttribute("data-mode")));
     });
     // Turn a process into a template. The post and the notifying live in local-templates.js, so the
     // table stays out of the template rules and only has to hand over the id and the title.
@@ -2664,7 +2711,7 @@ function dataSourceSafeFileName(ds) {
     }
   }
 
-  async function viewProcessData(taskId, btn) {
+  async function viewProcessData(taskId, btn, mode) {
     if (btn) { btn.disabled = true; btn.classList.add("is-busy"); }
     try {
       const hit = await loadProcessDataSource(taskId);
@@ -2674,12 +2721,14 @@ function dataSourceSafeFileName(ds) {
       }
       processViewerState.taskId = taskId;
       // A public/shared source stays server-backed even for a local run, so only a private source of
-      // a locally-run process is shown from the browser's copy. A SERVER-run process keeps its old
-      // behaviour (live server rows + hub) even when unsynced local results exist — those belong to
-      // the sources list, where the two data icons resolve them.
+      // a locally-run process is shown from the browser's copy.
+      //
+      // WHICH copy is opened is the operator's choice when the two differ: the row then offers one
+      // button per copy (`data-mode`). With no explicit mode the switch decides, as before.
       const ctx = processLocalContext(taskId);
       const isPublicSource = hit.ds.isPublic === true || hit.ds.IsPublic === true;
-      const localMode = !isPublicSource && ctx.local;
+      const wantLocal = mode === "local" ? true : mode === "server" ? false : ctx.local;
+      const localMode = !isPublicSource && wantLocal;
       processViewerState.localMode = localMode;
       // The banner still appears for a server-run process holding unsynced local results: the grid
       // below is the server's, but the user should know a local copy is waiting to be settled.

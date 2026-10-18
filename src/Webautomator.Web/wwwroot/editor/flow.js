@@ -1514,8 +1514,23 @@
       const localBadge = onServer
         ? ""
         : `<span class="ds-badge-local" title="${esc(t("editor.ds.onLocalHint"))}">${esc(t("editor.ds.onLocalBadge"))}</span>`;
+      /**
+       * A source whose local run results are still unsynced holds TWO copies, so it gets two data
+       * buttons: the browser's copy (what this machine ran on) and the server's rows (what everyone
+       * else sees). One button could only show one of them and which one it showed was a guess.
+       */
+      const divergent = sourceNeedsSync(sid);
+      const viewBtns = divergent
+        ? dsIconBtn("js-ds-view is-data-local", t("editor.ds.viewLocal") || "نمایش اطلاعات محلی", DS_ICO_DATA,
+            `data-id="${sid}" data-mode="local"`)
+          + dsIconBtn("js-ds-view is-data-server", t("editor.ds.viewServer") || "نمایش اطلاعات سرور", DS_ICO_DATA,
+            `data-id="${sid}" data-mode="server"`)
+        : dsIconBtn("js-ds-view", t("editor.ds.viewTable"), DS_ICO_DATA, `data-id="${sid}"`);
+      const syncBadge = divergent
+        ? `<span class="ds-badge-sync" title="${esc(t("editor.ds.needsSyncHint") || "")}">${esc(t("editor.ds.needsSync") || "نیاز به همگام‌سازی")}</span>`
+        : "";
       const actions = `
-        ${dsIconBtn("js-ds-view", t("editor.ds.viewTable"), DS_ICO_DATA, `data-id="${sid}"`)}
+        ${viewBtns}
         ${masterBtn}
         ${canEditRow ? dsIconBtn("js-ds-del is-danger", t("editor.ds.detach"), DS_ICO_DEL, `data-id="${sid}"`) : ""}
       `;
@@ -1525,7 +1540,7 @@
       return `<li data-id="${d.id}" class="${isMaster ? "ds-is-master" : ""}${isPublic ? " ds-is-public" : ""}">
         <div class="ds-row-top">
           <div class="ds-title-row">
-            <span class="ds-title">${esc(label)}${publicBadge}${localBadge}</span>
+            <span class="ds-title">${esc(label)}${publicBadge}${localBadge}${syncBadge}</span>
             ${canEditRow ? dsIconBtn("js-ds-rename", t("editor.ds.rename"), DS_ICO_RENAME, `data-id="${sid}"`) : ""}
           </div>
           <div class="ds-actions">${actions}</div>
@@ -1535,7 +1550,8 @@
     }).join("");
 
     listEl.querySelectorAll(".js-ds-view").forEach((btn) => {
-      btn.addEventListener("click", () => openDsViewer(Number(btn.dataset.id)));
+      btn.addEventListener("click", () =>
+        openDsViewer(Number(btn.dataset.id), btn.dataset.mode === "local" ? "local" : (btn.dataset.mode === "server" ? "server" : null)));
     });
     listEl.querySelectorAll(".js-ds-rename").forEach((btn) => {
       btn.addEventListener("click", (ev) => {
@@ -1808,7 +1824,152 @@
     }
   }
 
-  const dsViewerState = { sourceId: null, connection: null, blinkTimers: new Map(), cellRevisions: null, editing: null, source: null };
+  const dsViewerState = {
+    sourceId: null, connection: null, blinkTimers: new Map(), cellRevisions: null, editing: null,
+    source: null,
+    /**
+     * Which copy the open viewer shows: "local" (this browser's copy, including unsynced run
+     * results) or "server" (the rows everyone else sees). The two are opened by two buttons only
+     * when they actually differ; otherwise there is one copy and one button.
+     */
+    mode: "server"
+  };
+
+  // --- Local vs server copy of one source -------------------------------------------------------
+  // A local run keeps its own copy of every private source (`localSourceCopies[sourceId]`) plus the
+  // writes it has not pushed yet (`locallyRunSources`). While those exist the source has TWO
+  // realities, so the start node offers one data button per reality instead of a single guess.
+
+  /** This browser's stored record for the open process, or null when it is not cached here. */
+  function localProcessRecord() {
+    const id = String(taskId ?? "").trim();
+    if (!id) return null;
+    return (readLocalTasks() || []).find((t2) => String(t2.id) === id) || null;
+  }
+
+  /** Pending local-run writes for one source: the addresses and values a sync would send. */
+  function pendingWritesFor(sourceId) {
+    const rec = localProcessRecord();
+    const list = Array.isArray(rec?.locallyRunSources) ? rec.locallyRunSources : [];
+    return list.filter((w) => Number(w?.dataSourceId) === Number(sourceId));
+  }
+
+  /** Does this source hold local results the server has not seen yet? */
+  function sourceNeedsSync(sourceId) {
+    return pendingWritesFor(sourceId).length > 0;
+  }
+
+  /** The stored browser copy of a source, if this process has one. */
+  function localCopyRecord(sourceId) {
+    const rec = localProcessRecord()?.localSourceCopies?.[String(Number(sourceId))];
+    return rec && Array.isArray(rec.cells) ? rec : null;
+  }
+
+  /** Set one cell inside any source-shaped object (graph entry, record or detached view). */
+  function applyCellTo(ds, rowIndex, columnKey, value) {
+    if (!ds) return;
+    ds.cells = Array.isArray(ds.cells) ? ds.cells : [];
+    const hit = ds.cells.find((c) =>
+      (c.key === columnKey || c.Key === columnKey || c.columnName === columnKey)
+      && Number(c.index ?? c.Index ?? c.rowIndex) === Number(rowIndex));
+    if (hit) {
+      if (hit.cellValue !== undefined) hit.cellValue = value;
+      else if (hit.CellValue !== undefined) hit.CellValue = value;
+      else hit.value = value;
+    } else {
+      ds.cells.push({ key: String(columnKey), index: Number(rowIndex), cellValue: value });
+    }
+    ds.rowCount = Math.max(Number(ds.rowCount) || 0, Number(rowIndex) + 1);
+  }
+
+  /** The browser's copy of a source as a detached view object, with this browser's writes applied. */
+  function buildLocalSourceView(sourceId, base) {
+    const id = Number(sourceId);
+    const rec = localCopyRecord(id);
+    const view = {
+      id,
+      title: rec?.title || base?.title || "",
+      fileName: rec?.fileName || base?.fileName || null,
+      columns: Array.isArray(rec?.columns) && rec.columns.length
+        ? rec.columns.map((c) => ({ ...c }))
+        : (Array.isArray(base?.columns) ? base.columns.map((c) => ({ ...c })) : []),
+      columnKeys: Array.isArray(rec?.columnKeys) && rec.columnKeys.length
+        ? rec.columnKeys.slice()
+        : (Array.isArray(base?.columnKeys) ? base.columnKeys.slice() : []),
+      cells: Array.isArray(rec?.cells) ? rec.cells.map((c) => ({ ...c })) : [],
+      rowCount: Number(rec?.rowCount) || 0,
+      columnCount: Number(rec?.columnCount) || 0
+    };
+    if (!rec && Array.isArray(base?.cells)) {
+      // No independent record yet: fall back to whatever copy the graph carries.
+      view.cells = base.cells.map((c) => ({ ...c }));
+      view.rowCount = Number(base.rowCount) || view.rowCount;
+      view.columnCount = Number(base.columnCount) || view.columnCount;
+    }
+    pendingWritesFor(id).forEach((w) => {
+      applyCellTo(view, w.rowIndex, w.columnKey, w.cellValue ?? "");
+    });
+    return view;
+  }
+
+  /** Persist the local view's cells as this process's copy of that source. */
+  function writeLocalCopyRecord(view, sourceId) {
+    if (!view) return;
+    const tasks = readLocalTasks();
+    const idx = tasks.findIndex((t2) => String(t2.id) === String(taskId));
+    if (idx < 0) return;
+    const sid = String(Number(sourceId));
+    const task = tasks[idx];
+    const copies = { ...(task.localSourceCopies || {}) };
+    copies[sid] = {
+      cells: (view.cells || []).map((c) => ({ ...c })),
+      columns: Array.isArray(view.columns) ? view.columns : [],
+      columnKeys: Array.isArray(view.columnKeys) ? view.columnKeys.slice() : [],
+      rowCount: Number(view.rowCount) || 0,
+      columnCount: Number(view.columnCount) || 0,
+      title: view.title || null,
+      fileName: view.fileName || null,
+      savedAtUtc: new Date().toISOString()
+    };
+    tasks[idx] = { ...task, localSourceCopies: copies };
+    writeLocalTasks(tasks);
+  }
+
+  /** One LOCAL cell edit: the browser copy and the pending-write log move together. */
+  function saveLocalViewCell(rowIndex, columnKey, value) {
+    const view = dsViewerState.source;
+    const sid = Number(dsViewerState.sourceId);
+    if (!view || !Number.isFinite(sid)) return false;
+    const before = (view.cells || []).find((c) =>
+      (c.key === columnKey || c.Key === columnKey)
+      && Number(c.index ?? c.Index ?? c.rowIndex) === Number(rowIndex));
+    const baseValue = before ? (before.cellValue ?? before.CellValue ?? null) : null;
+    applyCellTo(view, rowIndex, columnKey, value);
+    writeLocalCopyRecord(view, sid);
+    const tasks = readLocalTasks();
+    const idx = tasks.findIndex((t2) => String(t2.id) === String(taskId));
+    if (idx >= 0) {
+      const task = tasks[idx];
+      const list = Array.isArray(task.locallyRunSources) ? task.locallyRunSources.slice() : [];
+      const same = (c) => Number(c?.dataSourceId) === sid
+        && Number(c?.rowIndex) === Number(rowIndex)
+        && String(c?.columnKey) === String(columnKey);
+      const hit = list.find(same);
+      if (hit) hit.cellValue = String(value ?? "");
+      else {
+        list.push({
+          dataSourceId: sid,
+          rowIndex: Number(rowIndex),
+          columnKey: String(columnKey),
+          cellValue: String(value ?? ""),
+          baseValue
+        });
+      }
+      tasks[idx] = { ...task, locallyRunSources: list, localRunPendingSync: true };
+      writeLocalTasks(tasks);
+    }
+    return true;
+  }
 
   function setDsViewerLive(on, text) {
     const el = document.getElementById("ds-viewer-live");
@@ -1989,8 +2150,12 @@
     const { headers, colKeys, rows } = dataSourceTableRows(ds);
     if (titleEl) titleEl.textContent = ds.title || dataSourceSafeFileName(ds);
     if (subEl) {
+      const modeNote = dsViewerState.mode === "local"
+        ? ` · ${t("editor.ds.localViewNote") || "نسخهٔ محلی (با سرور همگام نشده)"}`
+        : "";
       subEl.textContent = `${colKeys.length} ${t("editor.ds.columns")} · ${rows.length} ${t("editor.ds.rows")}`
         + (ds.fileName ? ` · ${ds.fileName}` : "")
+        + modeNote
         + " — " + t("editor.ds.liveHint")
         + (canModify ? " · " + t("editor.ds.editHint") : "");
     }
@@ -2010,10 +2175,30 @@
     ).join("");
   }
 
-  async function loadDataSourceForViewer(sourceId) {
-    const ds = findDataSourceById(sourceId);
-    if (!ds) return null;
-    if (isLocalMode || !(Number(sourceId) > 0)) return ds;
+  async function loadDataSourceForViewer(sourceId, mode) {
+    const base = findDataSourceById(sourceId);
+    if (!base) return null;
+    // The LOCAL copy: what this machine ran on, plus the writes it still owes the server.
+    if (mode === "local") return buildLocalSourceView(sourceId, base);
+    /**
+     * A DETACHED copy, never the graph's own entry: reading the server into the graph would overwrite
+     * the cells a local run reads (and the record the local view draws), so merely LOOKING at the
+     * server copy could destroy the local one.
+     */
+    const ds = {
+      id: Number(sourceId),
+      title: base.title || "",
+      fileName: base.fileName || null,
+      columns: Array.isArray(base.columns) ? base.columns.map((c) => ({ ...c })) : [],
+      columnKeys: Array.isArray(base.columnKeys) ? base.columnKeys.slice() : [],
+      cells: [],
+      rowCount: Number(base.rowCount) || 0,
+      columnCount: Number(base.columnCount) || 0
+    };
+    if (isLocalMode || !(Number(sourceId) > 0)) {
+      ds.cells = Array.isArray(base.cells) ? base.cells.map((c) => ({ ...c })) : [];
+      return ds;
+    }
     try {
       const metaRes = await fetch(`/api/datasources/${sourceId}/meta`, { credentials: "same-origin" });
       if (!metaRes.ok) return ds;
@@ -2126,6 +2311,13 @@
   /** Structural edits need the server store; local-only sources can only be edited as cells. */
   function dsViewerServerGuard() {
     const sourceId = dsViewerState.sourceId;
+    if (dsViewerState.mode === "local") {
+      // Shape changes have no cell address, so they cannot travel through the sync payload. The local
+      // grid in the sources list is where a shape can be reshaped; here the copy is a result to read.
+      setStatus(t("editor.ds.localStructureLocked")
+        || "در نمای محلی تغییر ساختار ممکن نیست؛ برای تغییر شکل منبع از فهرست منابع استفاده کنید.", "error");
+      return false;
+    }
     if (!isLocalMode && Number(sourceId) > 0) return true;
     setStatus(t("editor.ds.serverOnly") || "این عملیات فقط برای منابع ذخیره‌شده روی سرور در دسترس است.", "error");
     return false;
@@ -2175,6 +2367,16 @@
   async function saveDsViewerCell(rowIndex, columnKey, value) {
     const sourceId = dsViewerState.sourceId;
     if (sourceId == null) return false;
+    // A LOCAL view edits the browser copy: nothing goes to the server, and the edit joins the pending
+    // writes so the process's sync carries it like any other local result.
+    if (dsViewerState.mode === "local") {
+      const ok = saveLocalViewCell(rowIndex, columnKey, value);
+      if (ok) {
+        setStatus(t("editor.ds.cellSavedLocal")
+          || "در نسخهٔ محلی ذخیره شد؛ با «همگام‌سازی با سرور» به سرور منتقل می‌شود.", "success");
+      }
+      return ok;
+    }
     if (isLocalMode || !(Number(sourceId) > 0)) {
       setDsLocalCell(rowIndex, columnKey, value);
       await save();
@@ -2206,6 +2408,9 @@
         dsViewerState.cellRevisions[rowIndex][columnKey] = body.cellRevision;
       }
       setDsLocalCell(rowIndex, columnKey, value);
+      // Keep the OPEN view in step as well: it is a detached copy now, so it would otherwise keep the
+      // old value until the next reload.
+      applyCellTo(dsViewerState.source, rowIndex, columnKey, value);
       setStatus(t("editor.ds.cellSaved") || "سلول ذخیره شد.", "success");
       return true;
     } catch (e) {
@@ -2445,8 +2650,9 @@
     }
   }
 
-  async function openDsViewer(sourceId) {
-    const ds = await loadDataSourceForViewer(sourceId);
+  async function openDsViewer(sourceId, mode) {
+    dsViewerState.mode = mode === "local" ? "local" : "server";
+    const ds = await loadDataSourceForViewer(sourceId, dsViewerState.mode);
     if (!ds) {
       setStatus(t("editor.ds.notFound"), "error");
       return;
@@ -2455,6 +2661,12 @@
     renderDsViewerTable(ds);
     const modal = document.getElementById("ds-viewer");
     if (modal) modal.hidden = false;
+    if (dsViewerState.mode === "local") {
+      // No live feed for a browser-side copy: nothing was written to the server, so joining the hub
+      // would let the server patch a grid it does not own.
+      setDsViewerLive(false, t("editor.ds.localLive") || "● محلی — بدون به‌روزرسانی زنده");
+      return;
+    }
     setDsViewerLive(false, t("editor.ds.connecting"));
     await ensureDsViewerHub();
   }
@@ -2494,6 +2706,35 @@
     const btn = document.getElementById("ds-viewer-clear");
     if (btn) btn.disabled = true;
     try {
+      // A local view clears the BROWSER copy only: the server's rows stay exactly as they are, and
+      // the pending writes that pointed at the removed rows go with them.
+      if (dsViewerState.mode === "local") {
+        const view = dsViewerState.source;
+        if (view) {
+          view.cells = [];
+          view.rowCount = 0;
+          writeLocalCopyRecord(view, ds.id);
+        }
+        const tasks = readLocalTasks();
+        const idx = tasks.findIndex((t2) => String(t2.id) === String(taskId));
+        if (idx >= 0) {
+          const task = tasks[idx];
+          const kept = (task.locallyRunSources || [])
+            .filter((w) => Number(w?.dataSourceId) !== Number(ds.id));
+          tasks[idx] = {
+            ...task,
+            locallyRunSources: kept.length ? kept : null,
+            localRunPendingSync: kept.length > 0
+          };
+          writeLocalTasks(tasks);
+        }
+        dsViewerState.cellRevisions = {};
+        if (view) renderDsViewerTable(view);
+        renderDataSources();
+        setStatus(t("editor.ds.clearDataLocalDone")
+          || "دادهٔ نسخهٔ محلی پاک شد؛ دادهٔ سرور دست‌نخورده ماند.", "success");
+        return;
+      }
       if (!isLocalMode && Number(ds.id) > 0) {
         const res = await fetch(`/api/datasources/${ds.id}/rows`, {
           method: "DELETE",
