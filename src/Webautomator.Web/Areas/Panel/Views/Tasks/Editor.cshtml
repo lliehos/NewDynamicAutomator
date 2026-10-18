@@ -202,6 +202,13 @@
         </div>
         <div class="ds-viewer-head-actions">
           <span class="ds-viewer-live" id="ds-viewer-live" data-i18n="editor.ds.offline">@L["editor.ds.offline"]</span>
+          <!-- Excel export lives here now (it was a per-row button on the start node's source list):
+               the file then matches the copy the grid is showing. -->
+          <button type="button" class="ds-icon-btn" id="ds-viewer-download"
+                  title="@L["editor.ds.downloadExcel"]" aria-label="@L["editor.ds.downloadExcel"]"
+                  data-i18n-title="editor.ds.downloadExcel" data-i18n-aria="editor.ds.downloadExcel">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 3h2v8.2l2.9-2.9 1.4 1.4-5.3 5.3-5.3-5.3 1.4-1.4 2.9 2.9V3zM5 16.6h14v2H5v-2z"/></svg>
+          </button>
           <button type="button" class="btn-flow btn-ghost" id="ds-viewer-clear" data-i18n="editor.ds.clearData">@L["editor.ds.clearData"]</button>
           <button type="button" class="btn-flow btn-ghost" id="ds-viewer-refresh" data-i18n="editor.ds.refresh">@L["editor.ds.refresh"]</button>
           <button type="button" class="btn-flow btn-ghost" data-ds-viewer-close="1" data-i18n="editor.ds.close">@L["editor.ds.close"]</button>

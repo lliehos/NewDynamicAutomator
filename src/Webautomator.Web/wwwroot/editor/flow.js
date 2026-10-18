@@ -1508,8 +1508,7 @@
       const cloudIco = onServer ? DS_ICO_CLOUD : DS_ICO_LOCAL;
       const cloudCls = onServer ? "js-ds-cloud is-server" : "js-ds-cloud is-local";
       const actions = `
-        ${dsIconBtn("js-ds-view", t("editor.ds.viewTable"), DS_ICO_VIEW, `data-id="${sid}"`)}
-        ${dsIconBtn("js-ds-dl", t("editor.ds.downloadExcel"), DS_ICO_DL, `data-id="${sid}"`)}
+        ${dsIconBtn("js-ds-view", t("editor.ds.viewTable"), DS_ICO_DATA, `data-id="${sid}"`)}
         ${dsIconBtn(cloudCls, cloudTitle, cloudIco, `data-id="${sid}" data-on-server="${onServer ? "1" : "0"}" disabled`)}
         ${masterBtn}
         ${canEditRow ? dsIconBtn("js-ds-del is-danger", t("editor.ds.detach"), DS_ICO_DEL, `data-id="${sid}"`) : ""}
@@ -1531,9 +1530,6 @@
 
     listEl.querySelectorAll(".js-ds-view").forEach((btn) => {
       btn.addEventListener("click", () => openDsViewer(Number(btn.dataset.id)));
-    });
-    listEl.querySelectorAll(".js-ds-dl").forEach((btn) => {
-      btn.addEventListener("click", () => downloadDataSource(Number(btn.dataset.id), btn));
     });
     listEl.querySelectorAll(".js-ds-cloud").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -1582,8 +1578,10 @@
     });
   }
 
-  const DS_ICO_VIEW = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5c5.2 0 9.3 3.4 10.7 7-1.4 3.6-5.5 7-10.7 7S2.7 15.6 1.3 12C2.7 8.4 6.8 5 12 5zm0 2.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5zm0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5z"/></svg>`;
-  const DS_ICO_DL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.4-3.4 1.4 1.4L12 17l-4.8-5.8 1.4-1.4L11 13.2V3h1zM5 19h14v2H5v-2z"/></svg>`;
+  // Retired: the eye said nothing about WHICH copy of the data opens, so the source rows of the start
+  // node use the table glyph like every other data view. The Excel export left the row as well — it
+  // now lives inside the viewer modal, where the copy on screen can be named.
+  const DS_ICO_DATA = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 4h16a1 1 0 0 1 1 1v3H3V5a1 1 0 0 1 1-1zm-1 6h18v3H3v-3zm0 5h18v3H3v-3zm0 5h18v.5a.5.5 0 0 1-.5.5h-17a.5.5 0 0 1-.5-.5V20z"/></svg>`;
   const DS_ICO_CLOUD = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17.5 19H8a5 5 0 0 1-.7-9.95A6.5 6.5 0 0 1 20 12.5a3.5 3.5 0 0 1-2.5 6.5z"/></svg>`;
   const DS_ICO_LOCAL = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 6h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zm0 2v5h16V8H4z"/></svg>`;
   const DS_ICO_STAR = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3.6l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.1 7.2 18.5l.9-5.4L4.2 9.3l5.4-.8L12 3.6z"/></svg>`;
@@ -1808,7 +1806,7 @@
     }
   }
 
-  const dsViewerState = { sourceId: null, connection: null, blinkTimers: new Map(), cellRevisions: null, editing: null };
+  const dsViewerState = { sourceId: null, connection: null, blinkTimers: new Map(), cellRevisions: null, editing: null, source: null };
 
   function setDsViewerLive(on, text) {
     const el = document.getElementById("ds-viewer-live");
@@ -1983,6 +1981,9 @@
     const titleEl = document.getElementById("ds-viewer-title");
     const subEl = document.getElementById("ds-viewer-sub");
     if (!table || !ds) return;
+    // Remember the exact copy on screen: the modal's Excel export must describe THIS data, not the
+    // list row (which carries column/row counts only).
+    dsViewerState.source = ds;
     const { headers, colKeys, rows } = dataSourceTableRows(ds);
     if (titleEl) titleEl.textContent = ds.title || dataSourceSafeFileName(ds);
     if (subEl) {
@@ -2460,6 +2461,7 @@
     const modal = document.getElementById("ds-viewer");
     if (modal) modal.hidden = true;
     dsViewerState.sourceId = null;
+    dsViewerState.source = null;
     setDsViewerLive(false);
     if (dsViewerState.connection) {
       try { await dsViewerState.connection.stop(); } catch { /* ignore */ }
@@ -2515,12 +2517,32 @@
     }
   }
 
+  /**
+   * Excel export for the open viewer: exports the copy the modal is drawing.
+   *
+   * `downloadDataSource` reads the SOURCE LIST entry, which is a summary (counts, no cells) unless a
+   * viewer has already hydrated it. Exporting from the viewer itself means the file matches what the
+   * operator sees — including a local-run copy or an inline edit that has not been saved yet.
+   */
+  async function downloadDsViewerSource(btn) {
+    const ds = dsViewerState.source || findDataSourceById(dsViewerState.sourceId);
+    if (!ds) {
+      setStatus(t("editor.ds.notFound"), "error");
+      return;
+    }
+    await downloadDataSource(ds.id ?? dsViewerState.sourceId, btn);
+  }
+
   function bindDsViewerChrome() {
     document.querySelectorAll("[data-ds-viewer-close]").forEach((el) => {
       el.addEventListener("click", () => closeDsViewer());
     });
     document.getElementById("ds-viewer-clear")?.addEventListener("click", () => {
       clearDsViewerData();
+    });
+    // The Excel export moved here from the source row of the start node.
+    document.getElementById("ds-viewer-download")?.addEventListener("click", (ev) => {
+      downloadDsViewerSource(ev.currentTarget);
     });
     document.getElementById("ds-viewer-refresh")?.addEventListener("click", () => {
       reloadDsViewer();
