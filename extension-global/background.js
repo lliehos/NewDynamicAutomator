@@ -868,6 +868,20 @@ function normalizeTaskId(value) {
  * the text is returned to the content script, which writes it while the click is still the active
  * gesture.
  */
+/**
+ * New action/condition nodes start with the element wait ON at one second, matching the editor's
+ * own creation default. Explicit values on an incoming step (for example a copied graph that turned
+ * it off) are preserved.
+ */
+function withDefaultElementWait(node) {
+  if (!node || !["action", "step", "condition"].includes(node.kind)) return node;
+  if (node.selectorWaitEnabled == null) node.selectorWaitEnabled = true;
+  if (!(Number(node.selectorWaitMs) >= 200)) node.selectorWaitMs = 1000;
+  if (node.equalSelectorWaitEnabled == null) node.equalSelectorWaitEnabled = true;
+  if (!(Number(node.equalSelectorWaitMs) >= 200)) node.equalSelectorWaitMs = 1000;
+  return node;
+}
+
 function buildRecordedGraphText(steps, groupTitle, taskId, title) {
   const groupId = "group-1";
   const startId = "start-1";
@@ -885,7 +899,11 @@ function buildRecordedGraphText(steps, groupTitle, taskId, title) {
     // node the paste wires the scope's `contains` edges from. Leaving it out (which an earlier
     // version did) is why the pasted steps arrived with no group around them.
     { id: groupId, kind: "group", title: groupTitle, x: X_START, y: Y },
-    { id: startId, kind: "start", title: groupTitle, x: X_START, y: Y, groupNodeId: groupId }
+    {
+      id: startId, kind: "start", title: groupTitle, x: X_START, y: Y, groupNodeId: groupId,
+      selectorWaitEnabled: true, selectorWaitMs: 1000,
+      equalSelectorWaitEnabled: true, equalSelectorWaitMs: 1000
+    }
   ];
   const edges = [];
 
@@ -1928,6 +1946,10 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
       x: 48,
       y: 80,
       repeatSourceType: "None",
+      selectorWaitEnabled: true,
+      selectorWaitMs: 1000,
+      equalSelectorWaitEnabled: true,
+      equalSelectorWaitMs: 1000,
       isActive: true
     });
     edges.push({ id: `e-rec-${stamp}-g-${gi}`, from: tip, to: gid, kind: "next" });
@@ -1954,6 +1976,10 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         framePathJson: JSON.stringify(a.framePath || []),
         ignoreError: true,
+        selectorWaitEnabled: true,
+        selectorWaitMs: 1000,
+        equalSelectorWaitEnabled: true,
+        equalSelectorWaitMs: 1000,
         isActive: true,
         x: 40,
         y: i * 90
@@ -2349,6 +2375,10 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
       x: 48,
       y: 80,
       repeatSourceType: "None",
+      selectorWaitEnabled: true,
+      selectorWaitMs: 1000,
+      equalSelectorWaitEnabled: true,
+      equalSelectorWaitMs: 1000,
       isActive: true
     });
     edges.push({ id: `e-g-${gi}`, from: prevNode, to: gid, kind: "next" });
@@ -2375,6 +2405,10 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         framePathJson: JSON.stringify(a.framePath || []),
         ignoreError: true,
+        selectorWaitEnabled: true,
+        selectorWaitMs: 1000,
+        equalSelectorWaitEnabled: true,
+        equalSelectorWaitMs: 1000,
         isActive: true,
         x: 40,
         y: i * 90

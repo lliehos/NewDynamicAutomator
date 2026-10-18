@@ -324,7 +324,12 @@ internal static class SmartLearningGraphFactory
                     ["contentSourceType"] = "Elements",
                     ["equalityType"] = EqHasValue,
                     ["equalSelectorValue"] = selector,
-                    ["equalSelectorWaitEnabled"] = false
+                    // New nodes start with the element wait ON at one second, like the editor's own
+                    // creation default; the author can turn it off per node.
+                    ["selectorWaitEnabled"] = true,
+                    ["selectorWaitMs"] = 1000,
+                    ["equalSelectorWaitEnabled"] = true,
+                    ["equalSelectorWaitMs"] = 1000
                 }
             };
         }
@@ -334,7 +339,12 @@ internal static class SmartLearningGraphFactory
             ["id"] = nextId("n"),
             ["kind"] = KindAction,
             ["title"] = Title(kind, target),
-            ["selectorValue"] = selector
+            ["selectorValue"] = selector,
+            // New nodes start with the element wait ON at one second.
+            ["selectorWaitEnabled"] = true,
+            ["selectorWaitMs"] = 1000,
+            ["equalSelectorWaitEnabled"] = true,
+            ["equalSelectorWaitMs"] = 1000
         };
 
         // What was typed into the element, so the step re-types it instead of only clicking.

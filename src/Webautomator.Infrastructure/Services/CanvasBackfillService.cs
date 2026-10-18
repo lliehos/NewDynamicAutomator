@@ -371,6 +371,11 @@ public static class CanvasBackfillService
                     ["kind"] = "condition",
                     ["entityId"] = cg.Id,
                     ["title"] = string.IsNullOrWhiteSpace(cg.Title) ? "شرط" : cg.Title,
+                    // New nodes start with the element wait ON at one second.
+                    ["selectorWaitEnabled"] = true,
+                    ["selectorWaitMs"] = 1000,
+                    ["equalSelectorWaitEnabled"] = true,
+                    ["equalSelectorWaitMs"] = 1000,
                     ["x"] = StartX(cid, interGroup ? gx + 620 : CondX(sid)),
                     ["y"] = StartY(cid, CondY(sid))
                 };
@@ -583,6 +588,11 @@ public static class CanvasBackfillService
                     ["isActive"] = s.IsActive,
                     ["constantValue"] = action?.ConstantValue,
                     ["navigateUrl"] = action?.NavigateUrl,
+                    // New nodes start with the element wait ON at one second.
+                    ["selectorWaitEnabled"] = true,
+                    ["selectorWaitMs"] = 1000,
+                    ["equalSelectorWaitEnabled"] = true,
+                    ["equalSelectorWaitMs"] = 1000,
                     ["x"] = StartX(sid, StartX(gid, gx - 360) + 28),
                     ["y"] = StartY(sid, StartY(gid, 80) + 70 + sy)
                 };

@@ -1000,6 +1000,11 @@ public class RecordingService
                 ["framePath"] = framePath,
                 ["constantValue"] = item.Value,
                 ["navigateUrl"] = item.ActionType.Equals("GoToUrl", StringComparison.OrdinalIgnoreCase) ? item.Url : null,
+                // New recorded steps start with the element wait ON at one second.
+                ["selectorWaitEnabled"] = true,
+                ["selectorWaitMs"] = 1000,
+                ["equalSelectorWaitEnabled"] = true,
+                ["equalSelectorWaitMs"] = 1000,
                 ["x"] = gx + 28,
                 ["y"] = 150 + sy
             };

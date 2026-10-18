@@ -450,6 +450,7 @@
   async function flushGraphForPlay() {
     const id = stableTaskId(taskId);
     if (!id || !graph?.nodes?.length) return null;
+    normalizeNodeWaitBudgets();
     const g = structuredClone
       ? structuredClone(graph)
       : JSON.parse(JSON.stringify(graph));
@@ -585,6 +586,18 @@
     delete g.updatedAtUtc;
     delete g.baseUpdatedAtUtc;
     delete g.editorSessionId;
+  }
+
+  /** The wait field never accepts less than the engine's 200 ms retry step. */
+  function normalizeNodeWaitBudgets() {
+    for (const n of graph.nodes || []) {
+      if (n?.selectorWaitEnabled === true) {
+        n.selectorWaitMs = Math.max(200, Number(n.selectorWaitMs) || 1000);
+      }
+      if (n?.equalSelectorWaitEnabled === true) {
+        n.equalSelectorWaitMs = Math.max(200, Number(n.equalSelectorWaitMs) || 1000);
+      }
+    }
   }
 
   /**
@@ -1250,6 +1263,7 @@
     saving = true;
     setSaveButtonsBusy(true);
     try {
+      normalizeNodeWaitBudgets();
       const orphan = graph.nodes.filter((n) => isActionNode(n) && !n.groupNodeId);
       void orphan;
 
@@ -3415,6 +3429,11 @@
         x: 48,
         y: 80,
         repeatSourceType: "None",
+        // The group's element-repeat selector uses this switch; default it ON like any new selector.
+        selectorWaitEnabled: true,
+        selectorWaitMs: 1000,
+        equalSelectorWaitEnabled: true,
+        equalSelectorWaitMs: 1000,
         isActive: true
       };
       graph.nodes.push(s);
@@ -5768,6 +5787,14 @@
         : "action";
       copy.id = tmpId(prefix);
       delete copy.entityId;
+      // Recorded payloads from before this default existed carry no wait keys. A pasted node is a
+      // new node, so it starts with the same ON + 1000 ms default; explicit values are preserved.
+      if (copy.kind === "action" || copy.kind === "step" || copy.kind === "condition") {
+        if (copy.selectorWaitEnabled == null) copy.selectorWaitEnabled = true;
+        if (!(Number(copy.selectorWaitMs) >= 200)) copy.selectorWaitMs = 1000;
+        if (copy.equalSelectorWaitEnabled == null) copy.equalSelectorWaitEnabled = true;
+        if (!(Number(copy.equalSelectorWaitMs) >= 200)) copy.equalSelectorWaitMs = 1000;
+      }
       nodeMap[n.id] = copy.id;
 
       // The open scope replaces whatever scope the payload recorded, so the block lands where the
@@ -7245,6 +7272,12 @@
       // The admin's inner-node default (Admin → Settings → Ignore-error defaults). Distinct from
       // the start node's process-level flag, which lives on the root start node instead.
       ignoreError: diagramDefaults.nodeIgnoreError ?? true,
+      // Every new step starts with the element wait ON at one second (the author can turn it off).
+      // Creation default only — saved nodes keep whatever they were saved with.
+      selectorWaitEnabled: true,
+      selectorWaitMs: 1000,
+      equalSelectorWaitEnabled: true,
+      equalSelectorWaitMs: 1000,
       framePathJson: "[]",
       x: opts.x ?? 120,
       y: opts.y ?? (100 + siblings.length * 48)
@@ -12111,6 +12144,11 @@
       node.equalityType = "Equal";
       node.constantEqualValue = "";
       node.loopBackLimit = DEFAULT_LOOP_BACK_LIMIT;
+      // New conditions start with the element wait ON at one second.
+      node.selectorWaitEnabled = true;
+      node.selectorWaitMs = 1000;
+      node.equalSelectorWaitEnabled = true;
+      node.equalSelectorWaitMs = 1000;
     }
     if (kind === "end") {
       // Centre the disc on the drop point — the default places the top-left corner there, which
