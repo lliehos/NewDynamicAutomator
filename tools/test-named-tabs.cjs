@@ -70,6 +70,7 @@ context.resolveDynamicSelectorAsync = async () => "";
 context.resolveStepParamAsync = async (step) => step.constantValue || step.navigateUrl || "";
 context.logDynamicSelectorResolution = () => {};
 context.waitTabComplete = async () => {};
+const realAppendPlayLog = context.appendPlayLog;
 context.appendPlayLog = () => {};
 
 function assert(cond, message) {
@@ -121,6 +122,13 @@ function assert(cond, message) {
 
   assert(context.validatePlayTabAlias("main").ok === false, "main is reserved");
   assert(context.collectPlayTabAliases({ nodes: [{ ...stepOpenB, kind: "action" }] }).has("b"), "validation knows B");
+
+  // Log history is bounded, and the bound is what the HUD receives.
+  context.appendPlayLog = realAppendPlayLog;
+  for (let i = 0; i < 50; i += 1) realAppendPlayLog("info", `line ${i}`);
+  assert(vm.runInContext("playLogs.length", context) === 30, "log history capped at 30");
+  assert(vm.runInContext("playLogs[playLogs.length - 1].text", context) === "line 49", "newest log kept");
+  assert(context.getPlayStatus().logs.length === 30, "HUD receives at most 30 logs");
 
   await context.finalizePlayTabs();
   console.log("named-tabs runtime test: PASS");
