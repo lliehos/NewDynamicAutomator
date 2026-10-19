@@ -303,28 +303,62 @@ public class TasksApiController : ControllerBase
         var rowsAdded = 0;
         var conflicts = new List<object>();
 
-        // A local run may have INSERTED rows (locally) before writing into them. Those rows do not
-        // exist on the server, and a per-cell patch would have created them one column at a time —
-        // leaving every column the run did not write BLANK, which is exactly the "empty rows" a sync
-        // appeared to produce. So the rows a source needs are materialised first, in one call per
-        // source, and only then are the values patched into them.
+        // A local run may have INSERTED rows before writing into them. Those rows do not exist on the
+        // server, and a per-cell patch would have created them one column at a time — leaving every
+        // column the run did not write BLANK, which is exactly the "empty rows" a sync appeared to
+        // produce. So rows are materialised first, and only then are the values patched into them.
+        //
+        // WHERE they go matters. Appending at the end is only right when the run appended: a run that
+        // inserted in the middle writes into the rows below, and on the server those indexes still
+        // belong to the records that were there before — appending there would put the run's values
+        // beside the wrong data and then report every passed row as a conflict. The inserted rows
+        // therefore go in at the index the LOCAL copy gave them, from the highest downwards so each
+        // insertion lands on a numbering the later (lower) ones still match.
+        var declaredRows = (body?.Rows ?? new List<SyncLocalRunRowDto>())
+            .Where(r => r.DataSourceId > 0)
+            .GroupBy(r => r.DataSourceId);
+        var rowsBySource = declaredRows.ToDictionary(
+            g => g.Key,
+            g => g.Select(r => r.RowIndex).Where(i => i >= 0).Distinct().OrderByDescending(i => i).ToList());
+
         foreach (var group in cells.Where(c => c.DataSourceId > 0).GroupBy(c => c.DataSourceId))
         {
             // Derived counters, because a cell write never touches the parent row: the stored
             // RowCount can lag behind the cells that actually exist.
             var meta = await _sources.GetMetaDerivedAsync(UserId, group.Key, ct);
             if (meta is null) continue;                       // not visible to this user: cells are skipped below
-            var needed = group.Max(c => c.RowIndex) + 1;
             var have = Math.Max(meta.RowCount, 0);
-            if (needed <= have) continue;
-            var added = await _sources.AddRowsAsync(UserId, group.Key,
-                new Webautomator.Contracts.DataSources.AddDataSourceRowRequest
+
+            if (rowsBySource.TryGetValue(group.Key, out var declared) && declared.Count > 0)
+            {
+                var current = have;
+                foreach (var rowIndex in declared.Where(i => i <= current))
                 {
-                    // Append: the local rows are at the END of the copy the run loaded.
-                    BeforeIndex = null,
-                    Count = needed - have
-                }, ct);
-            if (added?.Ok == true) rowsAdded += needed - have;
+                    var res = await _sources.AddRowsAsync(UserId, group.Key,
+                        new Webautomator.Contracts.DataSources.AddDataSourceRowRequest
+                        {
+                            BeforeIndex = rowIndex,
+                            Count = 1
+                        }, ct);
+                    if (res?.Ok == true) { rowsAdded++; current++; }
+                }
+                have = current;
+            }
+
+            // Rows the payload did not name explicitly (an older client, or a row index past the end
+            // of the current copy) still have to exist: append the shortfall, as before.
+            var needed = group.Max(c => c.RowIndex) + 1;
+            if (needed > have)
+            {
+                var add = needed - have;
+                var added = await _sources.AddRowsAsync(UserId, group.Key,
+                    new Webautomator.Contracts.DataSources.AddDataSourceRowRequest
+                    {
+                        BeforeIndex = null,
+                        Count = add
+                    }, ct);
+                if (added?.Ok == true) rowsAdded += add;
+            }
         }
 
         foreach (var cell in cells)

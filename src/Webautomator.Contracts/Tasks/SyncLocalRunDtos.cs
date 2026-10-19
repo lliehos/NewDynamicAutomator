@@ -14,6 +14,26 @@ public class SyncLocalRunRequest
 
     /// <summary>The cells to write back to the server.</summary>
     public List<SyncLocalRunCellDto> Cells { get; set; } = new();
+
+    /// <summary>
+    /// Rows the local run INSERTED (per source), so the sync materialises them where the run saw them.
+    /// </summary>
+    /// <remarks>
+    /// Appending rows from <c>max(RowIndex)</c> is only right when every new row is at the end. A run
+    /// that inserts in the middle writes into rows below it, and on the server that index belongs to a
+    /// different record — appending there would put the run's values next to the wrong data and report
+    /// those cells as conflicts. Optional: an older client sends none and keeps the old behaviour.
+    /// </remarks>
+    public List<SyncLocalRunRowDto> Rows { get; set; } = new();
+}
+
+/// <summary>One row a local run inserted, addressed by the index it used in the local copy.</summary>
+public class SyncLocalRunRowDto
+{
+    public int DataSourceId { get; set; }
+
+    /// <summary>The 0-based row index the inserted row occupies in the LOCAL copy.</summary>
+    public int RowIndex { get; set; }
 }
 
 /// <summary>One cell a local run wrote, addressed the same way the cell API addresses cells.</summary>

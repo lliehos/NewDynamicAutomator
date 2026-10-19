@@ -2022,6 +2022,7 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   await chrome.storage.local.set({ playing: true, playTabId: tabId, playPaused: false });
   // Every run starts with an empty write log, so a previous run's local writes are never re-synced.
   resetLocalRunWrites();
+  initLocalServerRowMap(graph);
   // The graph of THIS run; the per-source records are refreshed from it as the run progresses.
   localRunGraph = null;
   playStatus.runOnServer = runOnServer;
@@ -3764,9 +3765,12 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     // the rest of the run write into an empty grid and leave "rows with no values" behind.
     const rowDsLocal = (graph?.dataSources || []).find((d) => Number(d.id) === dsId);
     if (playStatus.runOnServer === false && rowDsLocal && !isPublicSource(rowDsLocal, graph)) {
+      // The copy shifts now, the server's rows do not: remember the shift so every later write and
+      // the sync payload can map a local index back to the server row it really belongs to.
+      noteLocalRowShift(dsId, targetRow, isInsert);
       applyLocalRowShift(rowDsLocal, targetRow, isInsert);
       appendPlayLog("info", isInsert
-        ? `ردیف خالی در نسخهٔ محلی منبع ${dsId} در جای ${targetRow} درج شد (سرور دست‌نخورده)`
+        ? `ردیف خالی در نسخهٔ محلی منبع ${dsId} در جای ${targetRow} درج شد (سرور دست‌نخورده — با سینک در همان جای سرور درج می‌شود)`
         : `ردیف ${targetRow} از نسخهٔ محلی منبع ${dsId} حذف شد (سرور دست‌نخورده)`);
       // Tell this machine's viewers the grid moved — the same window event a cell write uses, with no
       // server hop, and awaited so the next step's read cannot land on the pre-shift numbering.
@@ -4714,6 +4718,14 @@ async function readCellForRun(ds, graph, rowIndex, columnKey) {
     // Never loaded on this machine: one read keeps behaviour correct instead of a false empty.
     return await readServerCell(Number(ds?.id), rowIndex, columnKey);
   }
+  // The run reads the COPY it started from, at the index this run itself uses. Its own row shifts
+  // are local bookkeeping for the sync, not a renumbering of what the run sees: after a local
+  // InsertRow the new row and the ones below it ARE the rows the following steps mean — including
+  // a cell this very run wrote a moment ago.
+  const committed = committedLocalRunWrites.get(`${Number(ds?.id)}|${row}|${col}`);
+  if (committed !== undefined) {
+    return { ok: true, body: { cellValue: committed, local: true } };
+  }
   const hit = cells.find((c) =>
     (c.key === col || c.Key === col || c.columnName === col)
     && Number(c.index ?? c.Index ?? c.rowIndex) === row
@@ -4758,6 +4770,151 @@ let localRunWrites = new Map();
  */
 let localCopyDirty = new Set();
 
+/**
+ * Row-address remaps caused by InsertRow / DeleteRow in a LOCAL run.
+ *
+ * A local row operation shifts the browser copy's indexes, but the server's rows are still where
+ * they were. Without a remap every write below the insertion point would be synced to a row that
+ * holds a different record on the server, and every write below a deleted row would target the row
+ * after its real one. `toServerRow` maps a local index back to the row it had on the server, and the
+ * pending writes are re-pointed whenever the copy shifts again.
+ */
+let localServerRowMap = new Map(); // dataSourceId -> { at, delta }[]
+
+/**
+ * Values this run wrote, keyed by LOCAL address.
+ *
+ * The cell cache is also the input for snapshotting and for the sync's base values, so it is not a
+ * reliable "what does the run currently see" store once a local row shift has moved rows around.
+ * This small map answers that question directly and is cleared with the rest of the run state.
+ */
+let committedLocalRunWrites = new Map();
+
+/** Re-key committed values with pending writes after a local row shift (see noteLocalRowShift). */
+function rekeyCommittedLocalRunWrites(dsId, at, isInsert) {
+  const moved = new Map();
+  for (const [key, value] of committedLocalRunWrites) {
+    const [idPart, rowPart, ...colParts] = key.split("|");
+    const col = colParts.join("|");
+    if (Number(idPart) !== Number(dsId)) { moved.set(key, value); continue; }
+    const row = Number(rowPart) || 0;
+    if (row < at) { moved.set(key, value); continue; }
+    const next = Math.max(0, row + (isInsert ? 1 : -1));
+    moved.set(`${idPart}|${next}|${col}`, value);
+  }
+  committedLocalRunWrites = moved;
+}
+
+function initLocalServerRowMap(graph) {
+  localServerRowMap = new Map();
+  for (const ds of graph?.dataSources || []) {
+    const id = Number(ds?.id);
+    if (Number.isFinite(id) && id > 0) localServerRowMap.set(id, []);
+  }
+}
+
+function noteLocalRowShift(dsId, at, isInsert) {
+  const id = Number(dsId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  const list = localServerRowMap.get(id) || [];
+  list.push({ at: Math.max(0, Number(at) || 0), delta: isInsert ? 1 : -1 });
+  localServerRowMap.set(id, list);
+
+  // Re-point every pending write of this source: the local index it was recorded at may now sit on
+  // a different row. `localRowIndex` is the index it was recorded at, and it must follow the shift
+  // too — otherwise a second shift (say a delete above it) would be applied to the old index and
+  // land on the wrong row.
+  for (const entry of localRunWrites.values()) {
+    if (Number(entry.dataSourceId) !== id) continue;
+    const local = Number(entry.localRowIndex) || 0;
+    if (local >= at) entry.localRowIndex = local + (isInsert ? 1 : -1);
+    if (Number(entry.localRowIndex) < 0) entry.localRowIndex = 0;
+    entry.rowIndex = serverRowForLocal(id, entry.localRowIndex);
+  }
+  rekeyCommittedLocalRunWrites(id, at, isInsert);
+}
+
+function serverRowForLocal(dsId, localRow) {
+  const list = localServerRowMap.get(Number(dsId));
+  if (!Array.isArray(list) || !list.length) return localRow;
+  let row = Number(localRow) || 0;
+  // Apply the shifts newest-first: each one describes a state the copy went through, so undoing
+  // them in reverse order restores the server's numbering.
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = list[i];
+    if (row < e.at) continue;
+    row -= e.delta;
+  }
+  return row;
+}
+
+/** Does the browser copy actually hold any cell at this local row? */
+function existsInLocalCopy(dsId, localRow) {
+  const ds = (localRunGraph?.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+  const cells = Array.isArray(ds?.cells) ? ds.cells : [];
+  return cells.some((c) => Number(c.index ?? c.Index ?? c.rowIndex) === Number(localRow));
+}
+
+function isInsertedServerRow(dsId, serverRow) {
+  const list = localServerRowMap.get(Number(dsId)) || [];
+  const row = Number(serverRow) || 0;
+  // Undo the shifts one at a time, remembering the row as it stood BEFORE each one. Only that view
+  // can tell an inserted row (it did not exist before the insert) from a real row the insert pushed
+  // down — and a local index that cannot be mapped is below a deletion, so it is not inserted.
+  // Work on a LOCAL index: a server row at or after an insertion is the copy's row AFTER the push,
+  // and testing it unchanged would make the pushed-down real row look like the inserted one. A row
+  // the copies never contain (a not-yet-materialised appended row) has no pre-insert existence.
+  let local = localRowForServer(dsId, row);
+  if (local < 0 || !existsInLocalCopy(dsId, local)) return false;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = list[i];
+    if (local < e.at) continue;
+    if (e.delta > 0 && local < e.at + e.delta) return true;
+    local -= e.delta;
+  }
+  return false;
+}
+
+function localRowForServer(dsId, serverRow) {
+  const list = localServerRowMap.get(Number(dsId));
+  if (!Array.isArray(list) || !list.length) return serverRow;
+  let row = Number(serverRow) || 0;
+  // Forward application, so an inserted row is recognised as inserted (see isInsertedServerRow):
+  // on its own insertion, `row >= at` would push the server row past the new row entirely.
+  for (const e of list) {
+    if (e.delta > 0) {
+      if (row >= e.at) row += e.delta;
+    } else if (row >= e.at + e.delta) {
+      // A deleted row sat at `at`; server rows after it moved up by one.
+      row += e.delta;
+    }
+  }
+  return row;
+}
+
+/**
+ * What the SERVER row held when this run started.
+ *
+ * The local copy is only a valid comparison AFTER unmapping the run's own row shifts (see
+ * localServerRowMap). `undefined` means "the copy cannot answer" (a row the run inserted, or a cell
+ * it never carried); the server then decides from what it has.
+ */
+function snapshotBaseValue(ds, serverRow, col) {
+  const id = Number(ds?.id);
+  // A row this run created has no pre-run value on the server; the sync materialises it empty, so
+  // "empty" is the base that makes the merge agree instead of reporting a conflict.
+  if (isInsertedServerRow(id, serverRow)) return "";
+  const localRow = localRowForServer(id, serverRow);
+  const cells = Array.isArray(ds?.cells) ? ds.cells : [];
+  const hit = cells.find((c) =>
+    (c.key === col || c.Key === col || c.columnName === col)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === localRow
+  );
+  if (!hit) return undefined;
+  const v = hit.cellValue !== undefined ? hit.cellValue : hit.CellValue;
+  return v === undefined || v === null ? undefined : String(v);
+}
+
 function recordLocalWrite(ds, rowIndex, columnKey, text) {
   const id = Number(ds?.id);
   if (!Number.isFinite(id) || id <= 0) return;
@@ -4765,25 +4922,19 @@ function recordLocalWrite(ds, rowIndex, columnKey, text) {
   const row = Number(rowIndex) || 0;
   const key = `${id}|${row}|${col}`;
   const existing = localRunWrites.get(key);
-  let baseValue = existing ? existing.baseValue : undefined;
-  if (!existing) {
-    // MUST run before applyCellToLocalCache overwrites the value: this is the last moment the
-    // pre-run value is visible. `undefined` means "unknown" (a cell the local copy never carried);
-    // the server then falls back to the pre-merge overwrite behaviour for this cell.
-    const hit = (ds?.cells || []).find((c) =>
-      (c.key === col || c.Key === col || c.columnName === col)
-      && Number(c.index ?? c.Index ?? c.rowIndex) === row
-    );
-    const v = hit ? (hit.cellValue !== undefined ? hit.cellValue : hit.CellValue) : undefined;
-    baseValue = v === undefined || v === null ? undefined : String(v);
-  }
+  // MUST run before applyCellToLocalCache overwrites the value: this is the last moment the
+  // pre-run value is visible. Kept from the FIRST write so a loop writing the same row twice still
+  // compares against what the run loaded.
+  const baseValue = existing ? existing.baseValue : snapshotBaseValue(ds, serverRowForLocal(id, row), col);
   localRunWrites.set(key, {
     dataSourceId: id,
-    rowIndex: row,
+    rowIndex: serverRowForLocal(id, row),
+    localRowIndex: row,
     columnKey: col,
     cellValue: text == null ? "" : String(text),
     baseValue
   });
+  committedLocalRunWrites.set(`${id}|${row}|${col}`, text == null ? "" : String(text));
   localCopyDirty.add(id);
   // Publish the divergence as it happens, not only when the run ends: a long run otherwise showed
   // no "needs sync" mark for minutes, and a crash mid-run lost the fact that the source had changed.
@@ -4832,8 +4983,15 @@ async function flushLocalRunProgress() {
       const copies = snapshotLocalSourceCopies(localRunGraph, tasks[idx], touched);
       // A run that only inserted rows wrote no CELL, but its copy still changed — so the records are
       // persisted even when the write log is empty, or the viewer would keep showing the pre-run grid.
+      const insertedRows = collectLocalInsertedRows();
       tasks[idx] = cells.length
-        ? { ...tasks[idx], localRunPendingSync: true, locallyRunSources: cells, localSourceCopies: copies }
+        ? {
+            ...tasks[idx],
+            localRunPendingSync: true,
+            locallyRunSources: cells,
+            locallyRunInsertedRows: insertedRows,
+            localSourceCopies: copies
+          }
         : { ...tasks[idx], localSourceCopies: copies };
       await saveUserTasks(tasks);
       localCopyDirty.clear();
@@ -4856,6 +5014,8 @@ async function flushLocalRunProgress() {
 function resetLocalRunWrites() {
   localRunWrites = new Map();
   localCopyDirty = new Set();
+  localServerRowMap = new Map();
+  committedLocalRunWrites = new Map();
   localProgressReported.clear();
   if (localProgressTimer) {
     clearTimeout(localProgressTimer);
@@ -4865,6 +5025,24 @@ function resetLocalRunWrites() {
 
 function collectLocalRunWrites() {
   return Array.from(localRunWrites.values());
+}
+
+/**
+ * Rows this run inserted, as `{ dataSourceId, rowIndex }` in SERVER numbering.
+ *
+ * The sync uses this list to create those rows where the run saw them. Appending instead is only
+ * correct when the insertion was at the end; anywhere above existing rows it would shift nothing on
+ * the server and every value written below would land on a different record.
+ */
+function collectLocalInsertedRows() {
+  const out = [];
+  for (const [dsId, list] of localServerRowMap) {
+    for (const e of list) {
+      if (e.delta <= 0) continue;
+      for (let i = 0; i < e.delta; i++) out.push({ dataSourceId: dsId, rowIndex: e.at + i });
+    }
+  }
+  return out;
 }
 
 function applyCellToLocalCache(ds, rowIndex, columnKey, value, cellRevision, dataRevision) {
@@ -5552,6 +5730,9 @@ async function markLocalRunPendingSync(taskId, results) {
       localRunPendingSync: true,
       lastLocalRunAt: new Date().toISOString(),
       locallyRunSources: cells,
+      // Rows the run inserted, so the sync creates them at the same indexes the run used instead of
+      // assuming they belong at the end.
+      locallyRunInsertedRows: collectLocalInsertedRows(),
       // The finished run's own copy of every private source: this is the data the local viewer must
       // show afterwards, including the rows an Insert action created.
       localSourceCopies: snapshotLocalSourceCopies(localRunGraph, tasks[idx])
