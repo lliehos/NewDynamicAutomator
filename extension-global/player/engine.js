@@ -1376,7 +1376,12 @@ function clearPlayLogs() {
 
 function broadcastPlayState() {
   const message = { type: "playStateChanged", ...getPlayStatus() };
-  if (playTabId) notifyTab(playTabId, message);
+  // Every named tab has its own HUD. Sending only to the current one left the other tabs showing
+  // a stale "playing" state after the run switched away from them.
+  const targets = new Set();
+  if (playTabId) targets.add(playTabId);
+  for (const entry of playTabs.values()) targets.add(entry.id);
+  for (const tabId of targets) notifyTab(tabId, message);
   // Popup / extension pages
   chrome.runtime.sendMessage(message).catch(() => {});
   // Designer/portal tabs must get condition results (playTabId is the target page, not the editor).
@@ -1642,9 +1647,6 @@ async function stopPlay(reason) {
     playAbortPoll = null;
   }
   const tid = String(playStatus.taskId || "").trim();
-  // Capture the play TAB up front: the storage write below clears playTabId, and the stamp we
-  // must remove lives on that tab. (A task id is NOT a tab id — passing one silently no-ops.)
-  const playingTabId = playTabId;
   appendPlayLog("warn", reason === "canvas_changed"
     ? "اجرا به‌خاطر تغییر فرآیند متوقف شد"
     : "اجرا توسط کاربر متوقف شد");
@@ -1656,7 +1658,7 @@ async function stopPlay(reason) {
   if (tid) await unregisterPlayOnServer(tid);
   // NOT `tid` — that is the TASK id. This clears a stamp on the play TAB, so capture the tab
   // before the storage write above nulls playTabId.
-  await clearPlayPageMode(playingTabId);
+  await clearAllPlayPageModes();
   await finalizePlayTabs();
   return getPlayStatus();
 }
@@ -1673,6 +1675,14 @@ async function stopPlay(reason) {
  *
  * Best-effort by design: the tab may already be gone, or be a chrome:// page we cannot script.
  */
+/** Clear the play stamp on EVERY tab of the run, not just the one that happened to be current. */
+async function clearAllPlayPageModes() {
+  const ids = new Set();
+  if (playTabId != null) ids.add(playTabId);
+  for (const entry of playTabs.values()) ids.add(entry.id);
+  for (const id of ids) await clearPlayPageMode(id);
+}
+
 async function clearPlayPageMode(tabId) {
   const id = tabId != null ? tabId : playTabId;
   if (id == null) return;
@@ -2316,12 +2326,11 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     }
     // Local state first (see stopPlay): the UI must not keep claiming a run while the portal
     // round-trip is in flight — most visibly on a failure, when the user is waiting for it.
-    const playingTabId = playTabId;
     await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
     broadcastPlayState();
     const failedTaskId = String(graph.taskId || taskId || "").trim();
     if (failedTaskId) await unregisterPlayOnServer(failedTaskId);
-    await clearPlayPageMode(playingTabId);
+    await clearAllPlayPageModes();
     await finalizePlayTabs();
   });
 
@@ -2521,7 +2530,6 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
     }
     // Local state first (see stopPlay): publish "finished" before the portal round-trip so the
     // HUD flips immediately instead of waiting on a network call to agree.
-    const playingTabId = playTabId;
     await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
     broadcastPlayState();
     const finishedTaskId = String(playStatus.taskId || graph?.taskId || "").trim();
@@ -2542,7 +2550,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
         }
       }
     }
-    await clearPlayPageMode(playingTabId);
+    await clearAllPlayPageModes();
     await finalizePlayTabs();
   }
 }
@@ -4004,6 +4012,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
           await chrome.tabs.update(existing.id, shouldSwitch ? { url, active: true } : { url });
           await waitTabComplete(existing.id, resolveNavigationWaitMs(step));
           await protectPlayTab(existing.id);
+          await injectPlayFab(existing.id);
           if (shouldSwitch && existingTab.windowId != null) {
             try { await chrome.windows.update(existingTab.windowId, { focused: true }); } catch { /* ignore */ }
           }
@@ -4020,6 +4029,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
       registerPlayTab(alias, created.id);
       await protectPlayTab(created.id);
       await waitTabComplete(created.id, resolveNavigationWaitMs(step));
+      await injectPlayFab(created.id);
       if (shouldSwitch && created.windowId != null) {
         try { await chrome.windows.update(created.windowId, { focused: true }); } catch { /* ignore */ }
       }
