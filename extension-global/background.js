@@ -1096,6 +1096,10 @@ async function startRecordSession(message = {}) {
     draft: [],
     recordingGroups,
     recordTabId: null,
+    // Named-tab recording: every tab the operator works in gets an alias, so a later tab switch
+    // can be replayed as SwitchTab instead of being lost from the recording.
+    recordTabAliases: {},
+    recordActiveTabId: null,
     lastNavUrl: null,
     navChainFrom: null,
     navChainAt: 0,
@@ -1132,7 +1136,11 @@ async function startRecordSession(message = {}) {
   }
 
   if (tab?.id) {
-    await chrome.storage.local.set({ recordTabId: tab.id });
+    await chrome.storage.local.set({
+      recordTabId: tab.id,
+      recordTabAliases: { [String(tab.id)]: "main" },
+      recordActiveTabId: tab.id
+    });
     const url = tab.url || tab.pendingUrl || "";
     if (reused && isTrackableNavUrl(url)) {
       await appendNavStep(url, tab.id);
@@ -1213,7 +1221,9 @@ async function finishRecord() {
   }
   await chrome.storage.local.set({
     recording: false,
-    recordPhase: "review"
+    recordPhase: "review",
+    recordTabAliases: {},
+    recordActiveTabId: null
   });
   // Recording is over, so the dev poll may run again (see suspendDevPoll).
   resumeDevPoll();
@@ -1237,6 +1247,8 @@ async function discardRecord(opts = {}) {
     draft: [],
     recordingGroups: [],
     recordTabId: null,
+    recordTabAliases: {},
+    recordActiveTabId: null,
     lastNavUrl: null,
     recordTargetTaskId: null,
     recordTargetTitle: null
@@ -1264,12 +1276,67 @@ async function discardRecord(opts = {}) {
  * `closeTab: false` is essential here — the tab is already gone, and asking chrome to close it
  * again would throw.
  */
-async function handleRecordTabClosed(tabId) {
-  const { recording, recordTabId } = await chrome.storage.local.get(["recording", "recordTabId"]);
-  if (!recording || Number(recordTabId) !== Number(tabId)) return;
-  // `discardRecord` already ends with `broadcastRecordState()`, which is the `recordingChanged`
-  // message the portal and the FAB listen for — so the stop propagates without a second send.
-  await discardRecord({ closeTab: false });
+function handleRecordTabClosed(tabId) {
+  // Enqueue synchronously: onRemoved is followed by onActivated for the surviving tab, and the
+  // CloseTab step must come before that SwitchTab step.
+  return enqueueRecordMutation(() => handleRecordTabClosedLocked(tabId));
+}
+
+async function handleRecordTabClosedLocked(tabId) {
+  const st = await chrome.storage.local.get([
+    "recording", "recordTabId", "recordTabAliases", "recordActiveTabId"
+  ]);
+  if (!st.recording) return;
+
+  const aliases = { ...(st.recordTabAliases || {}) };
+  const key = String(tabId);
+  const alias = aliases[key];
+
+  // An older session (or a tab opened after recording ended) has no alias. The old rule still
+  // applies then: closing the recording tab ends the recording.
+  if (!alias) {
+    if (Number(st.recordTabId) !== Number(tabId)) return;
+    await discardRecord({ closeTab: false });
+    return;
+  }
+
+  delete aliases[key];
+  const remaining = Object.keys(aliases);
+  if (!remaining.length) {
+    // The last tab of the recording is gone. `discardRecord` broadcasts the stop itself.
+    await discardRecord({ closeTab: false });
+    return;
+  }
+
+  // Closing a tab is part of the flow the operator performed, so replay it too. The alias is still
+  // in the map at this point; the step only stores its NAME, and the engine resolves it at play time.
+  await appendRecordedSyntheticStepLocked({
+    actionType: "CloseTab",
+    closeTabTarget: "Alias",
+    closeTabAlias: alias,
+    value: "",
+    url: "",
+    elementBy: "CssSelector",
+    elementValue: "",
+    elementLabel: null,
+    framePath: [],
+    recordedAt: new Date().toISOString(),
+    title: `بستن تب ${alias}`
+  });
+
+  // Keep the "recording tab" pointer on a tab that still exists, so a later close of THAT tab
+  // cannot be mistaken for "the whole recording ended" while other named tabs are still alive.
+  const nextRecordTabId = Number(st.recordTabId) === Number(tabId)
+    ? Number(remaining[0])
+    : st.recordTabId;
+  const nextActiveTabId = Number(st.recordActiveTabId) === Number(tabId)
+    ? Number(remaining[0])
+    : st.recordActiveTabId;
+  await chrome.storage.local.set({
+    recordTabAliases: aliases,
+    recordTabId: nextRecordTabId,
+    recordActiveTabId: nextActiveTabId
+  });
 }
 
 /**
@@ -1442,6 +1509,7 @@ function recordedActionVerbFa(actionType) {
     case "GoToUrl": return "رفتن به";
     case "GoBack": return "بازگشت";
     case "GoForward": return "جلورفتن";
+    case "SwitchTab": return "سوئیچ به تب";
     case "CloseTab": return "بستن تب";
     case "InsertRow": return "درج ردیف";
     case "DeleteRow": return "حذف ردیف";
@@ -1492,11 +1560,21 @@ function buildRecordedActionTitle(step, index) {
   return `${verb} ${n}`;
 }
 
-async function onRecordedEvent(payload, sender) {
-  const { recording, playing, recordingGroups } = await chrome.storage.local.get([
-    "recording", "playing", "recordingGroups"
+function onRecordedEvent(payload, sender) {
+  return enqueueRecordMutation(() => onRecordedEventLocked(payload, sender));
+}
+
+async function onRecordedEventLocked(payload, sender) {
+  const { recording, playing, recordingGroups, recordTabAliases } = await chrome.storage.local.get([
+    "recording", "playing", "recordingGroups", "recordTabAliases"
   ]);
   if (!recording || playing) return { ok: true, ignored: true };
+
+  const tabId = sender.tab?.id;
+  const alias = recordTabAliases?.[String(tabId)];
+  // Only tabs that belong to this recording may contribute steps. Before named tabs a recorder
+  // accepted events from every http(s) page, so an unrelated tab could inject actions into a flow.
+  if (!alias) return { ok: true, ignored: true };
 
   // V2: ensure at least one group exists (Start creates empty Group).
   let groups = Array.isArray(recordingGroups) ? recordingGroups.slice() : [];
@@ -1504,7 +1582,6 @@ async function onRecordedEvent(payload, sender) {
     groups.push({ id: "group-1", title: "گروه ضبط", steps: [] });
   }
 
-  const tabId = sender.tab?.id;
   const frameId = sender.frameId ?? 0;
   const framePath = tabId != null ? await buildFramePath(tabId, frameId) : [];
 
@@ -1517,6 +1594,7 @@ async function onRecordedEvent(payload, sender) {
     elementLabel: String(payload.elementLabel || "").trim() || null,
     title: null,
     framePath,
+    recordedTabAlias: alias,
     recordedAt: new Date().toISOString()
   };
   item.title = buildRecordedActionTitle(item);
@@ -2479,13 +2557,202 @@ function stepNavigatesOnItsOwn(step) {
   return !!step && NAVIGATING_STEP_TYPES.has(String(step.actionType || "").toLowerCase());
 }
 
-async function appendNavStep(url, tabId) {
-  const { recording, lastNavUrl, playing, recordingGroups, navChainFrom, navChainAt } =
+/**
+ * All recorder mutations go through one promise chain.
+ *
+ * Opening a tab fires `tabs.onCreated` and `tabs.onActivated` back to back, while the page's first
+ * navigation arrives from `webNavigation` at the same time. Each event reads the group array,
+ * appends and writes it back; without serialisation two of them can read the same array and the
+ * later write silently drops the earlier step.
+ */
+let recordMutationChain = Promise.resolve();
+function enqueueRecordMutation(fn) {
+  const run = recordMutationChain.then(fn, fn);
+  recordMutationChain = run.catch(() => {});
+  return run;
+}
+
+function nextRecordedTabAlias(aliases) {
+  const used = new Set(Object.values(aliases || {}).map((alias) => String(alias).toLowerCase()));
+  for (let i = 0; i < 26; i++) {
+    const alias = String.fromCharCode(65 + i);
+    if (!used.has(alias.toLowerCase())) return alias;
+  }
+  return `tab${used.size + 1}`;
+}
+
+/** Append a recorder-owned step while ALREADY holding the mutation lock. */
+async function appendRecordedSyntheticStepLocked(item) {
+  const { recording, playing, recordingGroups } = await chrome.storage.local.get([
+    "recording", "playing", "recordingGroups"
+  ]);
+  if (!recording || playing) return false;
+  let groups = Array.isArray(recordingGroups) ? recordingGroups.slice() : [];
+  if (!groups.length) {
+    groups.push({ id: "group-1", title: "گروه ضبط", steps: [] });
+  }
+  const lastGroup = groups[groups.length - 1];
+  lastGroup.steps = (lastGroup.steps || []).concat(item);
+  await chrome.storage.local.set({
+    recordingGroups: groups,
+    draft: flattenGroupSteps(groups)
+  });
+  await broadcastDraftUpdated();
+  return true;
+}
+
+/** Append a recorder-owned step (open/switch/close tab) into the last recording group. */
+function appendRecordedSyntheticStep(item) {
+  return enqueueRecordMutation(() => appendRecordedSyntheticStepLocked(item));
+}
+
+/**
+ * The open step is created from `tabs.onCreated`, where the final URL is often not known yet.
+ * Fill it in from the first committed navigation instead of appending a second GoToUrl — the
+ * replay must open the tab AND end up on the right page.
+ */
+async function fillRecordedOpenStep(alias, url) {
+  const { recordingGroups } = await chrome.storage.local.get("recordingGroups");
+  const groups = Array.isArray(recordingGroups)
+    ? recordingGroups.map((group) => ({ ...group, steps: (group.steps || []).slice() }))
+    : [];
+  let changed = false;
+  for (const group of groups) {
+    for (let i = 0; i < group.steps.length; i++) {
+      const step = group.steps[i];
+      if (step.recordAwaitingUrl !== true) continue;
+      if (String(step.newTabAlias || "").toLowerCase() !== String(alias).toLowerCase()) continue;
+      const next = {
+        ...step,
+        navigateUrl: url,
+        constantValue: url,
+        url,
+        value: url
+      };
+      delete next.recordAwaitingUrl;
+      next.title = buildRecordedActionTitle(next);
+      group.steps[i] = next;
+      changed = true;
+    }
+  }
+  if (changed) {
+    await chrome.storage.local.set({
+      recordingGroups: groups,
+      draft: flattenGroupSteps(groups)
+    });
+    await broadcastDraftUpdated();
+  }
+  return changed;
+}
+
+/**
+ * A tab opened FROM a recorded tab joins the recording under a new alias.
+ *
+ * Only opener-linked tabs are adopted: a tab the operator opens independently (or the portal) must
+ * not silently become part of the process. The step is written with `switchToNewTab:false`; the
+ * activation event that follows records the SwitchTab, which is exactly what the operator did.
+ */
+function handleRecordTabCreated(tab) {
+  // Enqueue synchronously so onCreated's OpenTab is ordered before the onActivated SwitchTab that
+  // Chrome fires immediately afterwards for the same tab.
+  return enqueueRecordMutation(() => handleRecordTabCreatedLocked(tab));
+}
+
+async function handleRecordTabCreatedLocked(tab) {
+  if (!tab?.id) return;
+  const st = await chrome.storage.local.get([
+    "recording", "playing", "recordTabId", "recordTabAliases"
+  ]);
+  if (!st.recording || st.playing) return;
+  const aliases = { ...(st.recordTabAliases || {}) };
+  if (!aliases[String(st.recordTabId)]) return;
+  const openerAlias = tab.openerTabId != null ? aliases[String(tab.openerTabId)] : null;
+  if (!openerAlias || aliases[String(tab.id)]) return;
+
+  const alias = nextRecordedTabAlias(aliases);
+  aliases[String(tab.id)] = alias;
+  const url = String(tab.pendingUrl || tab.url || "");
+  const item = {
+    actionType: "GoToUrl",
+    openInNewTab: true,
+    newTabAlias: alias,
+    switchToNewTab: false,
+    waitForLoad: true,
+    navigateUrl: url,
+    constantValue: url,
+    value: url,
+    url,
+    elementBy: "CssSelector",
+    elementValue: "",
+    elementLabel: null,
+    framePath: [],
+    recordedAt: new Date().toISOString(),
+    recordAwaitingUrl: !isTrackableNavUrl(url)
+  };
+  item.title = buildRecordedActionTitle(item);
+  // Alias first: the first navigation of this tab can arrive while the step is still being written,
+  // and appendNavStep must recognise the tab as part of the recording.
+  await chrome.storage.local.set({ recordTabAliases: aliases });
+  await appendRecordedSyntheticStepLocked(item);
+  await injectRecordFab(tab.id).catch(() => false);
+}
+
+/** Switching to another tab of the recording is a step of its own: SwitchTab + alias. */
+function handleRecordTabActivated(tabId) {
+  return enqueueRecordMutation(() => handleRecordTabActivatedLocked(tabId));
+}
+
+async function handleRecordTabActivatedLocked(tabId) {
+  const st = await chrome.storage.local.get([
+    "recording", "playing", "recordActiveTabId", "recordTabAliases"
+  ]);
+  if (!st.recording || st.playing) return;
+  if (Number(st.recordActiveTabId) === Number(tabId)) return;
+  const alias = st.recordTabAliases?.[String(tabId)];
+  if (!alias) return; // activating the portal or an unrelated tab is not part of the flow
+
+  await appendRecordedSyntheticStepLocked({
+    actionType: "SwitchTab",
+    switchTabTarget: "Alias",
+    switchTabAlias: alias,
+    switchTabActivate: true,
+    value: "",
+    url: "",
+    elementBy: "CssSelector",
+    elementValue: "",
+    elementLabel: null,
+    framePath: [],
+    recordedAt: new Date().toISOString(),
+    title: `سوئیچ به تب ${alias}`
+  });
+  await chrome.storage.local.set({ recordActiveTabId: tabId });
+}
+
+function appendNavStep(url, tabId) {
+  return enqueueRecordMutation(() => appendNavStepLocked(url, tabId));
+}
+
+async function appendNavStepLocked(url, tabId) {
+  const { recording, lastNavUrl, playing, recordingGroups, navChainFrom, navChainAt, recordTabAliases } =
     await chrome.storage.local.get([
-      "recording", "lastNavUrl", "playing", "recordingGroups", "navChainFrom", "navChainAt"
+      "recording", "lastNavUrl", "playing", "recordingGroups", "navChainFrom", "navChainAt",
+      "recordTabAliases"
     ]);
   if (!recording || playing) return;
   if (!isTrackableNavUrl(url)) return;
+  const alias = recordTabAliases?.[String(tabId)];
+  if (!alias) return;
+
+  // First commit of a freshly opened tab: complete its OpenTab step instead of adding another.
+  if (await fillRecordedOpenStep(alias, url)) {
+    await chrome.storage.local.set({
+      lastNavUrl: url,
+      navChainFrom: null,
+      navChainAt: 0
+    });
+    return;
+  }
+
   if (lastNavUrl === url) return;
 
   let groups = Array.isArray(recordingGroups) ? recordingGroups.slice() : [];
@@ -2532,6 +2799,7 @@ async function appendNavStep(url, tabId) {
     elementValue: "",
     elementLabel: null,
     framePath: [],
+    recordedTabAlias: alias,
     recordedAt: new Date().toISOString()
   };
   item.title = buildRecordedActionTitle(item);
@@ -2550,8 +2818,10 @@ async function appendNavStep(url, tabId) {
 chrome.webNavigation.onCommitted.addListener(async (details) => {
   if (details.frameId !== 0) return;
   if (details.transitionType === "auto_subframe") return;
-  const { recording, recordTabId } = await chrome.storage.local.get(["recording", "recordTabId"]);
-  if (!recording || !recordTabId || details.tabId !== recordTabId) return;
+  const { recording, recordTabAliases } = await chrome.storage.local.get([
+    "recording", "recordTabAliases"
+  ]);
+  if (!recording || !recordTabAliases?.[String(details.tabId)]) return;
   await appendNavStep(details.url, details.tabId);
 });
 
@@ -2810,8 +3080,12 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status === "complete") {
     reinjectPlayHudForTab(tabId, "tabs.onUpdated").catch(() => {});
   }
-  const { recording, recordTabId } = await chrome.storage.local.get(["recording", "recordTabId"]);
-  if (!recording || !recordTabId || tabId !== recordTabId) return;
+  const { recording, recordTabAliases } = await chrome.storage.local.get([
+    "recording", "recordTabAliases"
+  ]);
+  // Any tab of the recording gets its HUD back after a navigation — a named tab is a first-class
+  // part of the flow now, not a window the recorder forgot about.
+  if (!recording || !recordTabAliases?.[String(tabId)]) return;
   if (changeInfo.status === "complete") {
     injectRecordFab(tabId).catch(() => {});
   }
@@ -2825,7 +3099,10 @@ chrome.webNavigation.onCompleted.addListener((details) => {
   reinjectPlayHudForTab(details.tabId, "webNavigation.onCompleted").catch(() => {});
 });
 
-chrome.tabs.onCreated.addListener(() => scheduleOpenTabsBroadcast("created"));
+chrome.tabs.onCreated.addListener((tab) => {
+  scheduleOpenTabsBroadcast("created");
+  handleRecordTabCreated(tab).catch((err) => console.warn("[Webautomator Global] record tab open", err));
+});
 /**
  * Closing the tab a session runs in must END that session, not just update the tab list.
  *
@@ -2841,7 +3118,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   handleRecordTabClosed(tabId).catch((err) => console.warn("[Webautomator Global] record tab close", err));
   handlePlayTabClosed(tabId).catch((err) => console.warn("[Webautomator Global] play tab close", err));
 });
-chrome.tabs.onActivated.addListener(() => scheduleOpenTabsBroadcast("activated"));
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  scheduleOpenTabsBroadcast("activated");
+  handleRecordTabActivated(tabId).catch((err) => console.warn("[Webautomator Global] record tab switch", err));
+});
 chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId !== chrome.windows.WINDOW_ID_NONE) scheduleOpenTabsBroadcast("focus");
 });
