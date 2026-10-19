@@ -73,6 +73,20 @@ context.waitTabComplete = async () => {};
 const realAppendPlayLog = context.appendPlayLog;
 context.appendPlayLog = () => {};
 
+// Local-run row mapping: a run that inserts in the MIDDLE must keep writing to the right SERVER row.
+vm.runInContext(`
+  playStatus.runOnServer = false;
+  resetLocalRunWrites();
+  const rowSource = { id: 7, cells: [
+    { key: "c", index: 0, cellValue: "r0" },
+    { key: "c", index: 1, cellValue: "r1" },
+    { key: "c", index: 2, cellValue: "r2" }
+  ], columnKeys: ["c"], rowCount: 3 };
+  noteLocalRowShift(7, 1, true);
+  applyLocalRowShift(rowSource, 1, true);
+  writeServerCellWait(rowSource, {}, 2, "c", "r1-again");
+`, context, { filename: "local-insert-probe.js" });
+
 function assert(cond, message) {
   if (!cond) throw new Error("ASSERT: " + message);
 }
@@ -122,6 +136,31 @@ function assert(cond, message) {
 
   assert(context.validatePlayTabAlias("main").ok === false, "main is reserved");
   assert(context.collectPlayTabAliases({ nodes: [{ ...stepOpenB, kind: "action" }] }).has("b"), "validation knows B");
+
+  // Insert above an existing row: local row 2 is server row 1, so the write must sync to row 1 and
+  // its base value must be the PRE-insert value (r1), not the row the insertion pushed down.
+  const localWrites = vm.runInContext("collectLocalRunWrites()", context);
+  assert(localWrites.length === 1, "one local write recorded");
+  assert(localWrites[0].rowIndex === 1, `write maps to server row 1, got ${localWrites[0].rowIndex}`);
+  assert(localWrites[0].localRowIndex === 2, "local row kept for reference");
+  assert(localWrites[0].baseValue === "r1", `base value is the pre-insert value, got ${localWrites[0].baseValue}`);
+  const inserted = vm.runInContext("collectLocalInsertedRows()", context);
+  assert(inserted.length === 1 && inserted[0].rowIndex === 1, "inserted row reported at index 1");
+  // The run keeps reading the rows it sees: local row 2 is where its value now lives.
+  vm.runInContext("localRunGraph = { dataSources: [{ id: 7, cells: rowSource.cells }] }", context);
+  const readBack = await vm.runInContext("readCellForRun({id:7, cells: rowSource.cells}, {}, 2, 'c')", context);
+  assert(readBack.ok === true && readBack.body.cellValue === "r1-again", "run reads the copy at its own row index");
+
+  // Delete row 0 from the copy: every remaining local row moves up one, so local row 1 is now the
+  // old local row 2, and its pending write must be re-pointed at server row 1 as well.
+  vm.runInContext(`
+    noteLocalRowShift(7, 0, false);
+    applyLocalRowShift(rowSource, 0, false);
+  `, context);
+  const afterDelete = vm.runInContext("collectLocalRunWrites()", context);
+  assert(afterDelete.length === 1 && afterDelete[0].rowIndex === 1, "write follows the row after a local delete");
+  const readAfterDelete = await vm.runInContext("readCellForRun({id:7, cells: rowSource.cells}, {}, 1, 'c')", context);
+  assert(readAfterDelete.body.cellValue === "r1-again", "committed value follows the row into its new index");
 
   // Log history is bounded, and the bound is what the HUD receives.
   context.appendPlayLog = realAppendPlayLog;

@@ -1014,6 +1014,12 @@
     const cells = answer?.ok
       ? (Array.isArray(answer.cells) ? answer.cells : [])
       : (Array.isArray(task.locallyRunSources) ? task.locallyRunSources : []);
+    // Rows the run INSERTED locally. The server has to create them AT THESE INDEXES before patching
+    // values: appending them at the end puts the run's values beside the wrong records whenever the
+    // insertion was above existing rows, and every passed row then comes back as a conflict.
+    const insertedRows = Array.isArray(answer?.insertedRows)
+      ? answer.insertedRows
+      : (Array.isArray(task?.locallyRunInsertedRows) ? task.locallyRunInsertedRows : []);
     const sourceIds = [...new Set(cells
       .map((c) => Number(c?.dataSourceId))
       .filter((n) => Number.isFinite(n) && n > 0))];
@@ -1055,7 +1061,8 @@
           // The API names this `cells` (see SyncLocalRunRequest). Sending it as `dataSources` meant
           // the server read an empty list: the sync reported success, cleared nothing and wrote no
           // values, so the badge stayed and the divergence was never resolved.
-          cells
+          cells,
+          rows: insertedRows
         })
       });
       if (!res.ok) {
@@ -1089,6 +1096,7 @@
           ...tasks[idx],
           localRunPendingSync: false,
           locallyRunSources: null,
+          locallyRunInsertedRows: null,
           localSourceCopies: Object.keys(copies).length ? copies : null,
           localSourcesLoaded: Object.keys(loadedFlags).length ? loadedFlags : null
         };

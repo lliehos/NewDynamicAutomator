@@ -447,6 +447,10 @@
         taskId: String(holder.id),
         cells,
         total: all.length,
+        // Rows the run inserted locally, so the sync creates them where the run saw them. Without
+        // this the server could only append, and values written below an insertion landed on the
+        // wrong records.
+        insertedRows: Array.isArray(holder.locallyRunInsertedRows) ? holder.locallyRunInsertedRows : [],
         localRunAt: holder.lastLocalRunAt || null,
         pending: holder.localRunPendingSync === true,
         copies: Object.keys(holder.localSourceCopies || {}),
