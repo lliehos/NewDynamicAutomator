@@ -78,5 +78,15 @@ public enum ActionType
     /// Insert a blank row into a library data source, at a chosen position.
     /// The columns come from the source itself; the new row starts empty.
     /// </summary>
-    InsertRow = 35
+    InsertRow = 35,
+
+    /// <summary>
+    /// Switch the run to a different live tab without closing or navigating the current one.
+    /// </summary>
+    /// <remarks>
+    /// Needed for a process that works in more than one system: GoToUrl can open a named new tab,
+    /// and this action returns to it later with its page state (and login) intact. The target is a
+    /// step field (alias / URL / title / positional), not a value and not a selector.
+    /// </remarks>
+    SwitchTab = 36
 }

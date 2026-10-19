@@ -252,22 +252,47 @@ effectiveRow = moveLoop ? gRow : parentRow
    - `ignored` → لاگ warn و بازگشت `{ok:true, ignoredError:true}` → **جریان به یال بعدی ادامه می‌دهد**.
    - `!ignored` → بازگشت `{ok:false, stepFailed:true}` → **تکرار جاری تمام می‌شود**.
 8. اگر موفق:
-   - تغییر تب (`outcome.tabId`) → به‌روزرسانی `playTabId` + تزریق دوبارهٔ FAB.
-   - `navigated`/`GoToUrl`/`Navigate` → تزریق دوبارهٔ FAB.
+   - تغییر تب (`outcome.tabId`) → به‌روزرسانی `playTabId` و `playSessionTabId` + تزریق دوبارهٔ FAB.
+   - `navigated`/`GoToUrl` → تزریق دوبارهٔ FAB.
    - `outcome.waitMs` (مکث `WaitTime`) → `sleepInterruptible`.
 
-### قوانین داخلی `runStep` (خط 2193)
+### قوانین داخلی `runStep`
 
 | اقدام | مسیر ویژه |
 |-------|-----------|
-| `CloseFirstTab` / `CloseLastTab` | بستن تب پنجره و انتخاب تب ادامه |
-| `NewPage` | `tabs.create` + انتظار بارگذاری |
-| `GoToUrl` / `Navigate` | `tabs.update` + `waitTabComplete(resolveNavigationWaitMs)` |
+| `CloseTab` | بستن تب با هدف First / Last / Next / Previous / Current / **Alias** و انتخاب تب ادامه |
+| `SwitchTab` | تغییر تب جاری به alias / URL / title / موقعیت، **بدون بستن یا ناوبری** |
+| `GoToUrl` (حالت عادی) | `tabs.update` + `waitTabComplete(resolveNavigationWaitMs)` |
+| `GoToUrl` + `openInNewTab` | ساخت/استفادهٔ مجدد از تب نام‌دار + `waitTabComplete` |
 | `WaitTime` | فقط `waitMs` برمی‌گرداند |
 | `SetMemory` | **قبل از** منطق سلکتور/فریم return می‌کند؛ نام متغیر لازم است |
 | `WaitForElement` | **قبل از** بررسی موجودیت مشترک return می‌کند (بودجهٔ انتظار خودش) |
-| Capture (`TakeContent`/`SaveContent`) | `runCaptureStep` |
 | بقیه | پاک‌کردن هایلایت → `playExecute` → fallback با `executeInFrame` |
+
+### تب‌های نام‌دار (اجرای متوالی در چند سامانه)
+
+یک اجرا همیشه **یک تب جاری** دارد، ولی می‌تواند چند تب زنده نگه دارد و بین آن‌ها جابه‌جا شود:
+
+| مفهوم | جزئیات |
+|-------|--------|
+| `main` | alias رزروشدهٔ تب شروع اجرا |
+| `openInNewTab` روی `GoToUrl` | تب جدید می‌سازد (یا اگر alias زنده است همان را ناوبری می‌کند) |
+| `newTabAlias` | نام تب؛ خالی = تولید خودکار `A`، `B`، … |
+| `switchToNewTab` | پیش‌فرض `true`؛ خاموش = تب در پس‌زمینه می‌ماند |
+| `SwitchTab` | هدف: `Alias` / `Url` / `Title` / `First` / `Last` / `Next` / `Previous` |
+| `switchTabActivate` | پیش‌فرض `true`؛ فقط فوکوس مرورگر را کنترل می‌کند، نه تب هدف اجرا |
+
+**قواعد:**
+
+- رجیستری alias در حافظهٔ همان اجرا نگه داشته می‌شود؛ با شروع اجرا ریست و در پایان آزاد می‌شود.
+- `GoToUrl` با alias موجود، **همان تب** را ناوبری می‌کند تا حلقه‌های تکراری تب جدید نسازند.
+- تب‌های نام‌دار با `autoDiscardable: false` محافظت می‌شوند تا Chrome در پس‌زمینه آن‌ها را discard
+  نکند و وضعیت صفحه (و لاگین اسپا) از دست نرود؛ در پایان اجرا مقدار قبلی برگردانده می‌شود.
+- بستن تب با دست کاربر یا `CloseTab`، alias را فوراً حذف می‌کند؛ `SwitchTab` به آن با خطای صریح
+  شکست می‌خورد، نه با سوئیچ به یک tab id بازاستفاده‌شده.
+- `SwitchTab` روی تب غیرفعال هم کار می‌کند (`chrome.scripting` به tabId هدف می‌زند)؛ اگر تب discard
+  شده باشد بیدار می‌شود و در لاگ هشدار ثبت می‌شود.
+- بستن **تب جاری** (مثل قبل) اجرا را متوقف می‌کند؛ برای جابه‌جایی بی‌خطر از `SwitchTab` استفاده کنید.
 
 ---
 
@@ -296,7 +321,7 @@ effectiveRow = moveLoop ? gRow : parentRow
 |-------|------|-------|
 | فاصلهٔ بین مراحل | `resolveStepDelayMs`: نود شروع **ریشه** `stepDelayMs` → `graph.stepDelayMs` → ۰ | `delayAfterNode` **بعد از** اقدام/شرط/گروه |
 | مکث `WaitTime` | `step.contentSourceType` → `resolveStepParamAsync` | `outcome.waitMs` → `sleepInterruptible` |
-| انتظار ناوبری | `resolveNavigationWaitMs`: `waitForLoad===false` → ۰؛ وگرنه `waitMaxMs` یا **۱۵۰۰۰** | `GoToUrl`/`Navigate`/`NewPage` |
+| انتظار ناوبری | `resolveNavigationWaitMs`: `waitForLoad===false` → ۰؛ وگرنه `waitMaxMs` یا **۱۵۰۰۰** | `GoToUrl` (هر دو حالت) |
 | انتظار المان | `selectorWaitEnabled` + `selectorWaitMs` (حداقل ۲۰۰، پیش‌فرض ۱۰۰۰) | `executeInFrameWithWait`: هر ۲۰۰ms حل زنجیرهٔ فریم + انتخاب المان تا پایان بودجه |
 | انتظار المان (شرط/تکرار گروه) | همان سوئیچ روی سلکتور | `elementExistsInTab` / `readElementText` / شمارش شرط و تکرار گروه، همه با retry فریم |
 

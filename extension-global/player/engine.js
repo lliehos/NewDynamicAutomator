@@ -343,6 +343,18 @@ function validateDataSourcePick(n, opts = {}) {
   return { ok: true };
 }
 
+/** Aliases this process can name: `main` plus every tab it opens itself. */
+function collectPlayTabAliases(graph) {
+  const aliases = new Set([PLAY_TAB_MAIN]);
+  for (const node of graph?.nodes || []) {
+    if (!isActionNode(node) || node.isActive === false) continue;
+    if (String(node.actionType || "") !== "GoToUrl" || node.openInNewTab !== true) continue;
+    const v = validatePlayTabAlias(node.newTabAlias);
+    if (v.ok) aliases.add(normalizePlayTabAlias(v.alias));
+  }
+  return aliases;
+}
+
 function validateActionNodeForPlay(n, graph) {
   const reasons = [];
   if (n.isActive === false) return { ok: true, reasons };
@@ -441,6 +453,36 @@ function validateActionNodeForPlay(n, graph) {
   }
   if (stepWritesToMemory(at) && at !== "LoadContent") {
     if (!String(n.memoryVariableName || "").trim()) reasons.push(tv("act.memDestMissing"));
+  }
+
+  // Named tabs: an alias is a contract INSIDE this process. Opening a tab without a usable name
+  // would make it unreachable, and switching to a name no step creates would fail mid-run — both
+  // are authoring mistakes the editor and the engine should refuse before the first action.
+  if (at === "GoToUrl" && n.openInNewTab === true) {
+    const v = validatePlayTabAlias(n.newTabAlias);
+    if (!v.ok) reasons.push(tv(v.reasonKey));
+  }
+  if (at === "SwitchTab") {
+    const target = String(n.switchTabTarget || "Alias");
+    if (target === "Alias") {
+      const raw = String(n.switchTabAlias || "").trim();
+      if (!raw) reasons.push(tv("act.switchTabAliasMissing"));
+      else if (!collectPlayTabAliases(graph).has(normalizePlayTabAlias(raw))) {
+        reasons.push(tv("act.tabAliasUnknown", { alias: raw }));
+      }
+    } else if (target === "Url" || target === "Title") {
+      const pattern = String((target === "Url" ? n.switchTabUrl : n.switchTabTitle) || "").trim();
+      if (!pattern) reasons.push(tv("act.switchTabPatternMissing"));
+    } else if (!["First", "Last", "Next", "Previous"].includes(target)) {
+      reasons.push(tv("act.switchTabTargetBad"));
+    }
+  }
+  if (at === "CloseTab" && String(n.closeTabTarget || "Last") === "Alias") {
+    const raw = String(n.closeTabAlias || "").trim();
+    if (!raw) reasons.push(tv("act.closeTabAliasMissing"));
+    else if (!collectPlayTabAliases(graph).has(normalizePlayTabAlias(raw))) {
+      reasons.push(tv("act.tabAliasUnknown", { alias: raw }));
+    }
   }
 
   // The node's own row pointer (the "ردیف اختصاصی" switch): a pointer that is on but dangling
@@ -757,6 +799,14 @@ const ENGINE_MSG = {
     "act.urlEmpty": "آدرس ثابت خالی است",
     "act.constantEmpty": "مقدار ثابت خالی است",
     "act.memVarMissing": "متغیر حافظه مشخص نیست",
+    "act.tabAliasMissing": "نام تب جدید مشخص نیست",
+    "act.tabAliasBad": "نام تب باید با حرف شروع شود و فقط شامل حرف، رقم، خط تیره یا زیرخط باشد (حداکثر ۲۴ نویسه)",
+    "act.tabAliasReserved": "نام «main» برای تب شروع اجرا رزرو شده است؛ نام دیگری انتخاب کنید",
+    "act.switchTabAliasMissing": "نام تب مقصد مشخص نیست",
+    "act.switchTabPatternMissing": "الگوی تب مقصد مشخص نیست",
+    "act.switchTabTargetBad": "نوع هدف سوئیچ تب نامعتبر است",
+    "act.tabAliasUnknown": "تبی با نام «{alias}» در این فرآیند تعریف نشده است؛ ابتدا با «رفتن به آدرس» و گزینهٔ «تب جدید» آن را بسازید",
+    "act.closeTabAliasMissing": "نام تب موردنظر برای بستن مشخص نیست",
 
     "cond.typeMissing": "نوع شرط انتخاب نشده",
     "cond.srcDsMissing": "منبع مورد بررسی انتخاب نشده",
@@ -788,6 +838,10 @@ const ENGINE_MSG = {
 
     "run.tabNotFound": "تب فعلی پیدا نشد.",
     "run.lastTab": "فقط یک تب باز است؛ قابل بستن نیست.",
+    "run.tabAliasMissing": "تبی با نام «{alias}» در این اجرا ثبت نشده است.",
+    "run.tabAliasClosed": "تب «{alias}» بسته شده است؛ آن را دوباره با «رفتن به آدرس» و گزینهٔ «تب جدید» باز کنید.",
+    "run.tabMatchMissing": "هیچ تبی با «{pattern}» پیدا نشد.",
+    "run.newTabFailed": "تب جدید ساخته نشد.",
     "run.memNameEmpty": "نام متغیر خالی است.",
     "run.saveTargetMissing": "منبع/ستون مقصد ذخیره مشخص نیست.",
     "run.noResult": "بدون نتیجه",
@@ -839,6 +893,14 @@ const ENGINE_MSG = {
     "act.urlEmpty": "Constant URL is empty",
     "act.constantEmpty": "Constant value is empty",
     "act.memVarMissing": "Memory variable is not set",
+    "act.tabAliasMissing": "The new tab's name is not set",
+    "act.tabAliasBad": "A tab name must start with a letter and contain only letters, digits, '-' or '_' (max 24 characters)",
+    "act.tabAliasReserved": "\"main\" is reserved for the run's starting tab; choose another name",
+    "act.switchTabAliasMissing": "The destination tab's name is not set",
+    "act.switchTabPatternMissing": "The destination tab's match pattern is not set",
+    "act.switchTabTargetBad": "The switch-tab target type is invalid",
+    "act.tabAliasUnknown": "No tab named \"{alias}\" is defined in this process; create it first with Go to URL + \"open in a new tab\"",
+    "act.closeTabAliasMissing": "The name of the tab to close is not set",
 
     "cond.typeMissing": "Condition type is not selected",
     "cond.srcDsMissing": "No data source selected to check",
@@ -870,6 +932,10 @@ const ENGINE_MSG = {
 
     "run.tabNotFound": "Current tab not found.",
     "run.lastTab": "Only one tab is open; it cannot be closed.",
+    "run.tabAliasMissing": "No tab named \"{alias}\" is registered in this run.",
+    "run.tabAliasClosed": "The tab named \"{alias}\" has been closed; reopen it with Go to URL + \"open in a new tab\".",
+    "run.tabMatchMissing": "No tab matched \"{pattern}\".",
+    "run.newTabFailed": "The new tab could not be created.",
     "run.memNameEmpty": "Variable name is empty.",
     "run.saveTargetMissing": "Destination source/column is not specified.",
     "run.noResult": "No result",
@@ -1033,6 +1099,212 @@ let playPaused = false;
 let playResumeWaiters = [];
 let playLogs = [];
 let playTabId = null;
+
+/**
+ * Named tabs of the CURRENT run.
+ *
+ * A run used to have exactly one tab (`playTabId`), so a process that needed a second system had
+ * to navigate the same tab away and back — losing whatever page state the first system held.
+ * Now a step can open a tab under a name, leave it alive in the background, and come back to it.
+ * The map belongs to the run: it is reset at start and dropped when the run ends, because an alias
+ * is a handle into pages THIS run opened, not a browser bookmark.
+ */
+const PLAY_TAB_MAIN = "main";
+const PLAY_TAB_ALIAS_MAX = 24;
+let playTabs = new Map(); // normalized alias -> { id, name }
+let playTabAutoDiscard = new Map(); // tabId -> previous autoDiscardable value
+let playTabAutoAliasSeq = 0;
+
+function normalizePlayTabAlias(raw) {
+  return String(raw == null ? "" : raw).trim().toLowerCase();
+}
+
+/** Alias syntax shared with the editor: a letter, then letters/digits/_/- (Unicode letters allowed). */
+function validatePlayTabAlias(raw) {
+  const value = String(raw == null ? "" : raw).trim();
+  if (!value) return { ok: false, reasonKey: "act.tabAliasMissing" };
+  if (value.length > PLAY_TAB_ALIAS_MAX) return { ok: false, reasonKey: "act.tabAliasBad" };
+  if (!/^[\p{L}][\p{L}\p{N}_-]*$/u.test(value)) return { ok: false, reasonKey: "act.tabAliasBad" };
+  if (normalizePlayTabAlias(value) === PLAY_TAB_MAIN) {
+    return { ok: false, reasonKey: "act.tabAliasReserved" };
+  }
+  return { ok: true, alias: value };
+}
+
+/** First unused letter (A, B, C, …) for a new tab whose step left the name blank. */
+function nextAutoPlayTabAlias() {
+  for (let i = 0; i < 26; i++) {
+    const alias = String.fromCharCode(65 + ((playTabAutoAliasSeq + i) % 26));
+    if (!playTabs.has(alias.toLowerCase())) {
+      playTabAutoAliasSeq += i + 1;
+      return alias;
+    }
+  }
+  playTabAutoAliasSeq += 1;
+  return `tab${playTabAutoAliasSeq}`;
+}
+
+/** Keep a created/found tab from being discarded while the run still needs its page state. */
+async function protectPlayTab(tabId) {
+  if (tabId == null || playTabAutoDiscard.has(tabId)) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const previous = tab.autoDiscardable !== false;
+    playTabAutoDiscard.set(tabId, previous);
+    if (tab.autoDiscardable !== false) {
+      await chrome.tabs.update(tabId, { autoDiscardable: false });
+    }
+  } catch { /* tab already gone — nothing to protect */ }
+}
+
+async function releasePlayTabProtection(tabId) {
+  if (!playTabAutoDiscard.has(tabId)) return;
+  const previous = playTabAutoDiscard.get(tabId);
+  playTabAutoDiscard.delete(tabId);
+  try { await chrome.tabs.update(tabId, { autoDiscardable: previous }); } catch { /* gone */ }
+}
+
+async function releaseAllPlayTabProtection() {
+  for (const tabId of [...playTabAutoDiscard.keys()]) {
+    await releasePlayTabProtection(tabId);
+  }
+}
+
+function registerPlayTab(alias, tabId) {
+  const key = normalizePlayTabAlias(alias);
+  if (!key || tabId == null) return null;
+  playTabs.set(key, { id: Number(tabId), name: String(alias).trim() });
+  return key;
+}
+
+function forgetPlayTabByTabId(tabId) {
+  for (const [key, entry] of playTabs) {
+    if (Number(entry.id) === Number(tabId)) playTabs.delete(key);
+  }
+}
+
+/** Start-of-run reset: the initial tab is always reachable as `main`. */
+async function resetPlayTabs(initialTabId) {
+  await releaseAllPlayTabProtection();
+  playTabs.clear();
+  playTabAutoAliasSeq = 0;
+  if (initialTabId != null) {
+    registerPlayTab(PLAY_TAB_MAIN, initialTabId);
+    await protectPlayTab(initialTabId);
+  }
+}
+
+/** End-of-run cleanup: release the discard guard but LEAVE the pages open for the operator. */
+async function finalizePlayTabs() {
+  await releaseAllPlayTabProtection();
+  playTabs.clear();
+}
+
+// A tab closed by the user (or by CloseTab) must lose its alias in the same instant; a later step
+// naming it has to fail with "that tab is closed", not switch to a reused tab id.
+if (chrome?.tabs?.onRemoved?.addListener) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    forgetPlayTabByTabId(tabId);
+    playTabAutoDiscard.delete(tabId);
+  });
+}
+
+async function findTabByUrlPattern(pattern) {
+  const needle = String(pattern || "").trim().toLowerCase();
+  if (!needle) return null;
+  const tabs = await chrome.tabs.query({});
+  return tabs.find((tab) =>
+    String(tab.url || tab.pendingUrl || "").toLowerCase().includes(needle)) || null;
+}
+
+async function findTabByTitlePattern(pattern) {
+  const needle = String(pattern || "").trim().toLowerCase();
+  if (!needle) return null;
+  const tabs = await chrome.tabs.query({});
+  return tabs.find((tab) => String(tab.title || "").toLowerCase().includes(needle)) || null;
+}
+
+/**
+ * Resolve the tab a SwitchTab step means.
+ *
+ * Alias is the normal form because it is stable for the whole run. URL/title matching exists for
+ * tabs the operator opened by hand before the run (they have no alias yet) and for processes that
+ * are easier to author against an address than a name.
+ */
+async function resolveSwitchTabTarget(currentTabId, step) {
+  const mode = String(step?.switchTabTarget || "Alias");
+
+  if (mode === "Alias") {
+    const raw = String(step?.switchTabAlias || "").trim();
+    const key = normalizePlayTabAlias(raw);
+    if (!key) return { ok: false, error: tv("act.switchTabAliasMissing") };
+    const entry = playTabs.get(key);
+    if (!entry) return { ok: false, error: tv("run.tabAliasMissing", { alias: raw }) };
+    try {
+      const tab = await chrome.tabs.get(entry.id);
+      return { ok: true, tab, alias: entry.name };
+    } catch {
+      playTabs.delete(key);
+      return { ok: false, error: tv("run.tabAliasClosed", { alias: entry.name }) };
+    }
+  }
+
+  if (mode === "Url" || mode === "Title") {
+    const pattern = String((mode === "Url" ? step?.switchTabUrl : step?.switchTabTitle) || "").trim();
+    if (!pattern) return { ok: false, error: tv("act.switchTabPatternMissing") };
+    const tab = mode === "Url"
+      ? await findTabByUrlPattern(pattern)
+      : await findTabByTitlePattern(pattern);
+    if (!tab) return { ok: false, error: tv("run.tabMatchMissing", { pattern }) };
+    return { ok: true, tab, alias: null };
+  }
+
+  // Positional targets are measured in the window of the tab the run is in, exactly like CloseTab.
+  let baseTab = null;
+  try { baseTab = await chrome.tabs.get(currentTabId); } catch { baseTab = null; }
+  if (!baseTab) return { ok: false, error: tv("run.tabNotFound") };
+  const ordered = (await chrome.tabs.query({ windowId: baseTab.windowId }))
+    .slice()
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  const here = ordered.findIndex((tab) => Number(tab.id) === Number(currentTabId));
+  let tab = null;
+  if (mode === "First") tab = ordered[0] || null;
+  else if (mode === "Last") tab = ordered[ordered.length - 1] || null;
+  else if (mode === "Next") tab = here >= 0 ? ordered[here + 1] || null : null;
+  else if (mode === "Previous") tab = here >= 0 ? ordered[here - 1] || null : null;
+  else return { ok: false, error: tv("act.switchTabTargetBad") };
+  if (!tab) return { ok: false, error: tv("run.tabMatchMissing", { pattern: mode }) };
+  return { ok: true, tab, alias: null };
+}
+
+/**
+ * Switch the run to another named/found tab WITHOUT closing anything.
+ *
+ * `switchTabActivate` only controls browser focus; the run's target changes either way, because
+ * Chrome can script a background tab. Keeping focus off is what lets a run work on B while the
+ * operator watches A.
+ */
+async function runSwitchTabStep(currentTabId, step) {
+  const target = await resolveSwitchTabTarget(currentTabId, step);
+  if (!target.ok) return { ok: false, error: target.error, reason: "tab_switch_failed" };
+
+  const tab = target.tab;
+  if (tab.discarded) {
+    appendPlayLog("warn", `تب «${target.alias || tab.id}» در پس‌زمینه رها شده بود؛ بیدار می‌شود و وضعیت صفحه‌اش ممکن است بازنشانی شود.`);
+    await ensureTabScriptable(tab.id, { force: true });
+  }
+  if (step.switchTabActivate !== false) {
+    try { await chrome.tabs.update(tab.id, { active: true }); } catch { /* gone */ }
+    if (tab.windowId != null) {
+      try { await chrome.windows.update(tab.windowId, { focused: true }); } catch { /* ignore */ }
+    }
+  }
+  await protectPlayTab(tab.id);
+  if (target.alias) registerPlayTab(target.alias, tab.id);
+  appendPlayLog("info", `سوئیچ به تب «${target.alias || tab.id}» (#${tab.id})`);
+  return { ok: true, tabId: tab.id, tabAlias: target.alias || null };
+}
+
 let playAbortPoll = null;
 let playStatus = {
   playing: false,
@@ -1385,6 +1657,7 @@ async function stopPlay(reason) {
   // NOT `tid` — that is the TASK id. This clears a stamp on the play TAB, so capture the tab
   // before the storage write above nulls playTabId.
   await clearPlayPageMode(playingTabId);
+  await finalizePlayTabs();
   return getPlayStatus();
 }
 
@@ -1951,6 +2224,7 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   // worker console. clearPlayLogs() also drops the previous results/lastError, so the HUD cannot
   // display two runs at once.
   clearPlayLogs();
+  await resetPlayTabs(tabId);
   playTabId = tabId;
   // nextFromNodeId is excluded here too: it is a full walk from a different entry point, so it keeps
   // the process-level repeat (a spreadsheet source still drives one iteration per row).
@@ -2048,6 +2322,7 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     const failedTaskId = String(graph.taskId || taskId || "").trim();
     if (failedTaskId) await unregisterPlayOnServer(failedTaskId);
     await clearPlayPageMode(playingTabId);
+    await finalizePlayTabs();
   });
 
   return getPlayStatus();
@@ -2268,6 +2543,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
       }
     }
     await clearPlayPageMode(playingTabId);
+    await finalizePlayTabs();
   }
 }
 
@@ -2956,7 +3232,10 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
   if (outcome.tabId && outcome.tabId !== tabId) {
     activeTabId = outcome.tabId;
     playTabId = activeTabId;
-    await chrome.storage.local.set({ playTabId: activeTabId });
+    // The HUD follows the tab the run is ACTUALLY working on. Without this, a process that
+    // switched to another tab kept a session marker on the first one, so the new tab's fresh
+    // document could not re-mount the HUD after a navigation.
+    await chrome.storage.local.set({ playTabId: activeTabId, playSessionTabId: activeTabId });
     await injectPlayFab(activeTabId);
   } else if (outcome.navigated || step.actionType === "GoToUrl") {
     await injectPlayFab(activeTabId);
@@ -3548,7 +3827,7 @@ async function readElementText(tabId, node, graph, rowIndex) {
  * tab to continue in. Closing the LAST tab of a window is refused rather than silently ending the
  * session, because Chrome would close the window with it.
  */
-async function closeWindowTab(currentTabId, target) {
+async function closeWindowTab(currentTabId, target, alias) {
   let tab;
   try {
     tab = await chrome.tabs.get(currentTabId);
@@ -3558,31 +3837,58 @@ async function closeWindowTab(currentTabId, target) {
   const winId = tab.windowId;
   const tabs = await chrome.tabs.query({ windowId: winId });
   const ordered = tabs.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-  if (ordered.length <= 1) {
+  const targetMode = String(target || "Last");
+  const aliasMode = targetMode === "Alias";
+  if (!aliasMode && ordered.length <= 1) {
     return { ok: false, error: tv("run.lastTab"), reason: "last_tab" };
   }
 
   const here = ordered.findIndex((t) => Number(t.id) === Number(currentTabId));
   let victim = null;
-  switch (String(target || "Last")) {
-    case "First":
-      victim = ordered[0];
-      break;
-    case "Next":
-      victim = here >= 0 ? ordered[here + 1] || null : null;
-      break;
-    case "Previous":
-      victim = here >= 0 ? ordered[here - 1] || null : null;
-      break;
-    // The run's own tab. The walker is told which tab to continue in (below), so the run moves to a
-    // neighbour instead of dying with the tab it just closed.
-    case "Current":
-      victim = here >= 0 ? ordered[here] : null;
-      break;
-    case "Last":
-    default:
-      victim = ordered[ordered.length - 1];
-      break;
+  let closedAliasKey = null;
+
+  if (aliasMode) {
+    const raw = String(alias || "").trim();
+    closedAliasKey = normalizePlayTabAlias(raw);
+    if (!closedAliasKey) {
+      return { ok: false, error: tv("act.closeTabAliasMissing"), reason: "missing_tab_alias" };
+    }
+    const entry = playTabs.get(closedAliasKey);
+    if (!entry) {
+      return { ok: false, error: tv("run.tabAliasMissing", { alias: raw }), reason: "tab_alias_missing" };
+    }
+    try {
+      victim = await chrome.tabs.get(entry.id);
+    } catch {
+      playTabs.delete(closedAliasKey);
+      return { ok: false, error: tv("run.tabAliasClosed", { alias: entry.name }), reason: "tab_alias_closed" };
+    }
+    // Refuse to close the last tab of the victim's window, whichever window the named tab is in.
+    const victimWindowTabs = await chrome.tabs.query({ windowId: victim.windowId });
+    if (victimWindowTabs.length <= 1) {
+      return { ok: false, error: tv("run.lastTab"), reason: "last_tab" };
+    }
+  } else {
+    switch (targetMode) {
+      case "First":
+        victim = ordered[0];
+        break;
+      case "Next":
+        victim = here >= 0 ? ordered[here + 1] || null : null;
+        break;
+      case "Previous":
+        victim = here >= 0 ? ordered[here - 1] || null : null;
+        break;
+      // The run's own tab. The walker is told which tab to continue in (below), so the run moves to a
+      // neighbour instead of dying with the tab it just closed.
+      case "Current":
+        victim = here >= 0 ? ordered[here] : null;
+        break;
+      case "Last":
+      default:
+        victim = ordered[ordered.length - 1];
+        break;
+    }
   }
 
   if (!victim) {
@@ -3599,6 +3905,7 @@ async function closeWindowTab(currentTabId, target) {
   // explicitly which tab to continue in.
   const next = ordered.find((t) => t.id !== victim.id) || null;
   await chrome.tabs.remove(victim.id);
+  if (closedAliasKey) playTabs.delete(closedAliasKey);
   const continueId = victim.id === currentTabId ? (next ? next.id : null) : currentTabId;
   if (continueId) {
     try { await chrome.tabs.update(continueId, { active: true }); } catch { /* ignore */ }
@@ -3647,7 +3954,13 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
 
   // One close-tab action with a target, replacing the old first/last pair who differed only here.
   if (actionType === "CloseTab") {
-    return closeWindowTab(tabId, step.closeTabTarget || "Last");
+    return closeWindowTab(tabId, step.closeTabTarget || "Last", step.closeTabAlias);
+  }
+
+  // Switch the run to another live tab. Nothing is closed and no navigation happens: the page in
+  // the target tab keeps exactly the state it had, which is the whole point of a named tab.
+  if (actionType === "SwitchTab") {
+    return runSwitchTabStep(tabId, step);
   }
 
   // Back / forward in the tab's own history (not a tab switch — see runHistoryStep).
@@ -3670,6 +3983,50 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
         framePathJson: step.framePathJson
       });
     }
+    // A named tab is created on first use and REUSED afterwards. Opening a second tab under an
+    // alias that is still alive would make every loop iteration grow the window, and "return to
+    // system B" would stop meaning the page that is already logged in.
+    if (step.openInNewTab === true) {
+      const rawAlias = String(step.newTabAlias || "").trim();
+      const checked = validatePlayTabAlias(rawAlias);
+      if (rawAlias && !checked.ok) {
+        return { ok: false, error: tv(checked.reasonKey), reason: "bad_tab_alias" };
+      }
+      const alias = checked.ok ? checked.alias : nextAutoPlayTabAlias();
+      const key = normalizePlayTabAlias(alias);
+      const shouldSwitch = step.switchToNewTab !== false;
+
+      const existing = playTabs.get(key);
+      if (existing) {
+        let existingTab = null;
+        try { existingTab = await chrome.tabs.get(existing.id); } catch { existingTab = null; }
+        if (existingTab) {
+          await chrome.tabs.update(existing.id, shouldSwitch ? { url, active: true } : { url });
+          await waitTabComplete(existing.id, resolveNavigationWaitMs(step));
+          await protectPlayTab(existing.id);
+          if (shouldSwitch && existingTab.windowId != null) {
+            try { await chrome.windows.update(existingTab.windowId, { focused: true }); } catch { /* ignore */ }
+          }
+          appendPlayLog("info", `تب «${existing.name}» دوباره استفاده شد (#${existing.id})`);
+          return { ok: true, tabId: shouldSwitch ? existing.id : tabId, navigated: true, tabAlias: existing.name };
+        }
+        playTabs.delete(key);
+      }
+
+      const created = await chrome.tabs.create({ url, active: shouldSwitch });
+      if (!created?.id) {
+        return { ok: false, error: tv("run.newTabFailed"), reason: "new_tab_failed" };
+      }
+      registerPlayTab(alias, created.id);
+      await protectPlayTab(created.id);
+      await waitTabComplete(created.id, resolveNavigationWaitMs(step));
+      if (shouldSwitch && created.windowId != null) {
+        try { await chrome.windows.update(created.windowId, { focused: true }); } catch { /* ignore */ }
+      }
+      appendPlayLog("info", `تب «${alias}» باز شد (#${created.id})`);
+      return { ok: true, tabId: shouldSwitch ? created.id : tabId, navigated: true, tabAlias: alias };
+    }
+
     await chrome.tabs.update(tabId, { url });
     await waitTabComplete(tabId, resolveNavigationWaitMs(step));
     return { ok: true };
