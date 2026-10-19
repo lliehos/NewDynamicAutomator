@@ -2,7 +2,7 @@
 
 مسیر ورک‌اسپیس فعلی؛ ریموت: https://github.com/lliehos/NewDynamicAutomator
 
-برنچ فعال توسعه: `Action-Cleanup` (از `Record-EngineTuning`)
+برنچ فعال توسعه: `feature/named-tabs` (از `stabilize/night-2026-10-18`)
 
 ## حالت فعلی
 
