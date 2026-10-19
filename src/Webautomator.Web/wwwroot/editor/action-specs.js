@@ -56,6 +56,8 @@
     SetMemory:      { value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true, writesMem: true },
 
     // --- navigation / tabs ---------------------------------------------------
+    // GoToUrl navigates the run's current tab by default. Its own fields can instead send it to a
+    // named NEW tab (`openInNewTab` + `newTabAlias`), which stays alive for later SwitchTab steps.
     GoToUrl:        { value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true },
     GoBack:         {},
     GoForward:      {},
@@ -65,6 +67,13 @@
     ScrollPage:     { value: true, selector: true },
     // Which tab to close is a step field, not a value and not a selector.
     CloseTab:       {},
+    // SwitchTab only changes which live tab the run works on. The target (alias / URL / title /
+    // positional) is chosen on the step, so it needs neither a selector nor a value.
+    SwitchTab:      {},
+    // PressKey sends a keyboard event. Its key is a step field (`pressKeyName`), not a value — the
+    // value plumbing would let it read a source cell, which makes no sense for "press Enter". The
+    // selector is optional: with none it acts on whatever is focused.
+    PressKey:       {},
 
     // --- timing / flow -------------------------------------------------------
     WaitTime:       { value: true, memoryVal: true, systemVal: true, readsCell: true },
