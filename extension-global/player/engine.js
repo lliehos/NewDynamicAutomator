@@ -361,7 +361,9 @@ function validateActionNodeForPlay(n, graph) {
   const at = n.actionType || "";
   if (!at || at === "NoAction") return { ok: true, reasons };
 
-  if (stepShowsTargetSelector(n)) {
+  // PressKey's element is OPTIONAL: no selector means "whatever has focus", a valid target for a
+  // keyboard event (Enter in the field the previous step filled).
+  if (stepShowsTargetSelector(n) && !(at === "PressKey" && !String(n.selectorValue || "").trim())) {
     const v = validateSelectorBlock(n, { labelKey: "label.targetSelector" });
     if (!v.ok) reasons.push(v.reason);
   }

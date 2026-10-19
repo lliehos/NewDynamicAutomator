@@ -9203,7 +9203,9 @@
     const at = n.actionType || "";
     if (!at || at === "NoAction") return { ok: true, reasons };
 
-    if (stepShowsTargetSelector(n)) {
+    // PressKey's element is OPTIONAL: an empty selector means "whatever has focus", which is a
+    // valid target for a keyboard event (Enter in the field the previous step filled).
+    if (stepShowsTargetSelector(n) && !(at === "PressKey" && !n.selectorValue)) {
       const v = validateSelectorBlock(n, { label: "سلکتور هدف" });
       if (!v.ok) reasons.push(v.reason);
     }
