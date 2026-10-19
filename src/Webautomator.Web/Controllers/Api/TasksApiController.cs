@@ -303,6 +303,9 @@ public class TasksApiController : ControllerBase
         var rowsAdded = 0;
         var rowsDeleted = 0;
         var conflicts = new List<object>();
+        // WHY a cell was refused. `skipped` alone said nothing: a count of 6 told the user the sync
+        // failed but not whether the row, the column or the write itself was the problem.
+        var rejected = new List<object>();
 
         // A local run may have INSERTED rows before writing into them. Those rows do not exist on the
         // server, and a per-cell patch would have created them one column at a time — leaving every
@@ -398,7 +401,18 @@ public class TasksApiController : ControllerBase
             // else has touched the cell and the run's value is written; when it differs, the
             // server's newer value wins and the cell is reported so the user sees what was kept.
             var current = await _sources.GetCellAsync(UserId, cell.DataSourceId, cell.RowIndex, cell.ColumnKey, ct);
-            if (current is null) { skipped++; continue; }
+            if (current is null)
+            {
+                skipped++;
+                rejected.Add(new
+                {
+                    dataSourceId = cell.DataSourceId,
+                    rowIndex = cell.RowIndex,
+                    columnKey = cell.ColumnKey,
+                    reason = "source-not-visible"
+                });
+                continue;
+            }
             var serverValue = current.CellValue ?? "";
             if (string.Equals(serverValue, incoming, StringComparison.Ordinal)) { unchanged++; continue; }
             if (cell.BaseValue is not null
@@ -425,7 +439,19 @@ public class TasksApiController : ControllerBase
                 ExpectedCellRevision = null,
                 InsertMode = "auto"
             }, ct);
-            if (res?.Ok == true) applied++; else skipped++;
+            if (res?.Ok == true) applied++;
+            else
+            {
+                skipped++;
+                rejected.Add(new
+                {
+                    dataSourceId = cell.DataSourceId,
+                    rowIndex = cell.RowIndex,
+                    columnKey = cell.ColumnKey,
+                    reason = res?.Code ?? "patch-failed",
+                    message = res?.Message
+                });
+            }
         }
 
         // The merge has consumed this run's payload: applied cells are on the server, conflicting
@@ -452,7 +478,7 @@ public class TasksApiController : ControllerBase
             reason = "local_run_synced"
         }, ct);
 
-        return Ok(new { ok = true, applied, unchanged, conflicts, skipped, rowsAdded, rowsDeleted });
+        return Ok(new { ok = true, applied, unchanged, conflicts, skipped, rejected, rowsAdded, rowsDeleted });
     }
 
     /// <summary>

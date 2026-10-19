@@ -5292,19 +5292,68 @@ function noteLocalRowShift(dsId, at, isInsert) {
   const list = localServerRowMap.get(id) || [];
   list.push({ at: Math.max(0, Number(at) || 0), delta: isInsert ? 1 : -1 });
   localServerRowMap.set(id, list);
-
+  const previousRow = serverRowForLocal(id, Math.max(0, Number(at) || 0));
+  // Each deletion describes the SERVER row that disappears, so the run's stored row index no longer
+  // matches its live one: shifting it again here would apply the same deletion twice.
+  list[list.length - 1].serverRow = previousRow;
   // Re-point every pending write of this source: the local index it was recorded at may now sit on
   // a different row. `localRowIndex` is the index it was recorded at, and it must follow the shift
   // too — otherwise a second shift (say a delete above it) would be applied to the old index and
   // land on the wrong row.
+  const shiftedEntries = [];
   for (const entry of localRunWrites.values()) {
     if (Number(entry.dataSourceId) !== id) continue;
     const local = Number(entry.localRowIndex) || 0;
-    if (local >= at) entry.localRowIndex = local + (isInsert ? 1 : -1);
+    if (local >= at) {
+      entry.localRowIndex = local + (isInsert ? 1 : -1);
+      shiftedEntries.push(entry);
+    }
     if (Number(entry.localRowIndex) < 0) entry.localRowIndex = 0;
+    if (isInsert && local === at) {
+      // An inserted row has no pre-run value on the server: the row the run had loaded at that index
+      // moved down, so its value must not be used as the new row's base.
+      entry.baseValue = "";
+    }
+  }
+  if (!isInsert) {
+    // The row at `previousRow` is gone, so the rows BELOW it moved up: the value the run loaded for
+    // them now sits one row further down. Rebuilding the base keeps a shifted write from looking
+    // like a conflict against the record that took its place. Each write's base therefore comes
+    // from the row one BELOW its new position; a write that did NOT move keeps its own base.
+    for (const entry of shiftedEntries) {
+      const movedBase = loadedValueAtServerRow(id, previousRow + 1, entry.columnKey);
+      entry.baseValue = movedBase === undefined ? null : movedBase;
+    }
+  }
+  for (const entry of localRunWrites.values()) {
+    if (Number(entry.dataSourceId) !== id) continue;
     entry.rowIndex = serverRowForLocal(id, entry.localRowIndex);
   }
   rekeyCommittedLocalRunWrites(id, at, isInsert);
+  // The map key follows the row: `recordLocalWrite` looks an existing entry up by the local index,
+  // so a stale key makes the run treat the moved row as a brand-new cell and lose its base value.
+  const movedKeys = new Map();
+  for (const entry of localRunWrites.values()) {
+    if (Number(entry?.dataSourceId) !== id) continue;
+    movedKeys.set(`${id}|${Number(entry.localRowIndex) || 0}|${String(entry.columnKey || "")}`, entry);
+  }
+  for (const [key, entry] of localRunWrites) {
+    if (Number(entry?.dataSourceId) !== id) movedKeys.set(key, entry);
+  }
+  localRunWrites = movedKeys;
+}
+
+/** The value the run loaded for a cell, addressed by the SERVER row it came from. */
+function loadedValueAtServerRow(dsId, serverRow, columnKey) {
+  const ds = (localRunGraph?.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+  const cells = Array.isArray(ds?.cells) ? ds.cells : [];
+  const col = String(columnKey || "");
+  const hit = cells.find((c) =>
+    (c.key === col || c.Key === col || c.columnName === col)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === Number(serverRow));
+  if (!hit) return undefined;
+  const v = hit.cellValue !== undefined ? hit.cellValue : hit.CellValue;
+  return v === undefined || v === null ? undefined : String(v);
 }
 
 function serverRowForLocal(dsId, localRow) {

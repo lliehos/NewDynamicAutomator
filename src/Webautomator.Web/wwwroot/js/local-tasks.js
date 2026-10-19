@@ -1110,8 +1110,17 @@
       } else if (!accepted) {
         // Keep the log: the values are still only here, so the choice (retry after the server
         // changes, or rebuild this copy from the server) is still the user's to make.
-        notifyHome(t("tasks.syncRefused", { applied, conflicts, skipped })
-          || `سرور هیچ سلولی را از این ارسال نپذیرفت (${conflicts} تعارض · ${skipped} نامعتبر) — نسخهٔ سرور حفظ شد و «نیاز به همگام‌سازی» باقی ماند. اگر نسخهٔ سرور درست است، این منبع را از سرور بازسازی کنید؛ وگرنه دوباره سینک کنید.`, "error");
+        //
+        // Say WHY each cell was refused. A bare count ("6 نامعتبر") left the user guessing whether
+        // the row, the column or the write itself was the problem — the reasons now come from the
+        // server, so the message can name them.
+        const rejectedList = Array.isArray(result?.rejected) ? result.rejected : [];
+        const reasons = [...new Set(rejectedList.map((r) => r?.reason).filter(Boolean))];
+        const detail = rejectedList.length
+          ? ` — ${String(t("tasks.syncRejectedDetail") || "دلیل:").trim()} ${rejectedList.slice(0, 3).map((r) => `${r?.reason || "?"} @ ${Number(r?.rowIndex) + 1}/${r?.columnKey}`).join(" · ")}${rejectedList.length > 3 ? " …" : ""}`
+          : (reasons.length ? ` — ${reasons.join(", ")}` : "");
+        notifyHome((t("tasks.syncRefused", { applied, conflicts, skipped })
+          || `سرور هیچ سلولی را از این ارسال نپذیرفت (${conflicts} تعارض · ${skipped} نامعتبر) — نسخهٔ سرور حفظ شد و «نیاز به همگام‌سازی» باقی ماند. اگر نسخهٔ سرور درست است، این منبع را از سرور بازسازی کنید؛ وگرنه دوباره سینک کنید.`) + detail, "error");
         return;
       }
       notifyHome(
