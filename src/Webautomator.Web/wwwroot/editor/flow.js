@@ -40,6 +40,7 @@
       GoToUrl: t("editor.actions.GoToUrl"),
       GoBack: t("editor.actions.GoBack"),
       GoForward: t("editor.actions.GoForward"),
+      SwitchTab: t("editor.actions.SwitchTab"),
       CloseTab: t("editor.actions.CloseTab"),
       WaitTime: t("editor.actions.WaitTime"),
       WaitForLoading: t("editor.actions.WaitForLoading"),
@@ -73,6 +74,7 @@
       GoToUrl: t("editor.actionDesc.GoToUrl"),
       GoBack: t("editor.actionDesc.GoBack"),
       GoForward: t("editor.actionDesc.GoForward"),
+      SwitchTab: t("editor.actionDesc.SwitchTab"),
       CloseTab: t("editor.actionDesc.CloseTab"),
       WaitTime: t("editor.actionDesc.WaitTime"),
       WaitForLoading: t("editor.actionDesc.WaitForLoading"),
@@ -197,7 +199,7 @@
     "InputContent", "ClearContent", "SelectOption",
     "InsertContent", "LoadContent", "InsertRow", "DeleteRow",
     "SetMemory",
-    "GoToUrl", "GoBack", "GoForward", "Refresh", "ScrollPage",
+    "GoToUrl", "GoBack", "GoForward", "SwitchTab", "Refresh", "ScrollPage",
     "CloseTab",
     "WaitTime", "WaitForLoading",
     "AlertAccept", "RemoveElements"
@@ -3968,6 +3970,11 @@
         return [{ d: "M11 6l-5 6 5 6M18 6l-5 6 5 6", ...stroke }];
       case "GoForward":
         return [{ d: "M13 6l5 6-5 6M6 6l5 6-5 6", ...stroke }];
+      case "SwitchTab":
+        return [
+          { d: "M4 9h8v8H4z", ...stroke },
+          { d: "M9 4h11v11", ...stroke, "stroke-dasharray": "2 2" }
+        ];
       case "CloseTab":
       case "WaitTime":
         return [{ d: "M12 7v5l3 2M12 4a8 8 0 110 16 8 8 0 010-16z", ...stroke }];
@@ -8199,8 +8206,24 @@
       }
       const apply = () => {
         const k = inp.dataset.k;
+        // These two selects reveal a different field set (alias / plain pattern), so the block
+        // has to be rebuilt instead of leaving the old fields mounted.
+        if (k === "switchTabTarget" || k === "closeTabTarget") {
+          n[k] = inp.value;
+          renderInspector();
+          syncNodeValidity(n);
+          return;
+        }
         if (inp.type === "checkbox") {
           n[k] = inp.checked;
+          if (k === "openInNewTab") {
+            if (inp.checked && !String(n.newTabAlias || "").trim()) {
+              n.newTabAlias = nextTabAliasSuggestion();
+            }
+            renderInspector();
+            syncNodeValidity(n);
+            return;
+          }
           if (k === "valueFromSource" && !inp.checked) {
             n.dataSourceId = null;
             n.dynamicSourceColumnName = null;
@@ -9286,6 +9309,35 @@
       }
     }
 
+    // Named tabs: the alias is a contract inside this process. An unreachable tab (no name) or a
+    // SwitchTab to a name nothing creates would only fail mid-run, so both are rejected here.
+    if (at === "GoToUrl" && n.openInNewTab === true) {
+      const v = validateTabAlias(n.newTabAlias);
+      if (!v.ok) reasons.push(v.reason);
+    }
+    if (at === "SwitchTab") {
+      const target = String(n.switchTabTarget || "Alias");
+      if (target === "Alias") {
+        const raw = String(n.switchTabAlias || "").trim();
+        if (!raw) reasons.push("نام تب مقصد مشخص نیست");
+        else if (!knownTabAliases().has(normalizeTabAlias(raw))) {
+          reasons.push(`تبی با نام «${raw}» در این فرآیند تعریف نشده است`);
+        }
+      } else if (target === "Url" || target === "Title") {
+        const pattern = String((target === "Url" ? n.switchTabUrl : n.switchTabTitle) || "").trim();
+        if (!pattern) reasons.push("الگوی تب مقصد مشخص نیست");
+      } else if (!["First", "Last", "Next", "Previous"].includes(target)) {
+        reasons.push("نوع هدف سوئیچ تب نامعتبر است");
+      }
+    }
+    if (at === "CloseTab" && String(n.closeTabTarget || "Last") === "Alias") {
+      const raw = String(n.closeTabAlias || "").trim();
+      if (!raw) reasons.push("نام تب موردنظر برای بستن مشخص نیست");
+      else if (!knownTabAliases().has(normalizeTabAlias(raw))) {
+        reasons.push(`تبی با نام «${raw}» در این فرآیند تعریف نشده است`);
+      }
+    }
+
     // Both row pointers: the node's own and its dynamic selector's.
     validateRowPointerNode(n, reasons);
     validateRowPointerNode(n, reasons, "selector");
@@ -9509,6 +9561,60 @@
     return [...names].filter(Boolean).sort();
   }
 
+  // -------------------------------------------------------------------------
+  // Named tabs — same contract the player enforces (engine.js).
+  // -------------------------------------------------------------------------
+  const TAB_ALIAS_MAIN = "main";
+  const TAB_ALIAS_MAX = 24;
+
+  function normalizeTabAlias(raw) {
+    return String(raw == null ? "" : raw).trim().toLowerCase();
+  }
+
+  function validateTabAlias(raw) {
+    const value = String(raw == null ? "" : raw).trim();
+    if (!value) return { ok: false, reason: "نام تب جدید مشخص نیست" };
+    if (value.length > TAB_ALIAS_MAX) {
+      return { ok: false, reason: "نام تب حداکثر ۲۴ نویسه است" };
+    }
+    if (!/^[\p{L}][\p{L}\p{N}_-]*$/u.test(value)) {
+      return { ok: false, reason: "نام تب باید با حرف شروع شود و فقط شامل حرف، رقم، خط تیره یا زیرخط باشد" };
+    }
+    if (normalizeTabAlias(value) === TAB_ALIAS_MAIN) {
+      return { ok: false, reason: "نام «main» برای تب شروع اجرا رزرو شده است" };
+    }
+    return { ok: true, alias: value };
+  }
+
+  /** Aliases this process can name: `main` plus every tab it opens itself. */
+  function knownTabAliases() {
+    const aliases = new Map([[TAB_ALIAS_MAIN, TAB_ALIAS_MAIN]]);
+    (graph.nodes || []).forEach((n) => {
+      if (!isActionNode(n) || n.isActive === false) return;
+      if (String(n.actionType || "") !== "GoToUrl" || n.openInNewTab !== true) return;
+      const v = validateTabAlias(n.newTabAlias);
+      if (v.ok) aliases.set(normalizeTabAlias(v.alias), v.alias);
+    });
+    return aliases;
+  }
+
+  function tabAliasDatalistHtml() {
+    const options = [...knownTabAliases().values()]
+      .map((name) => `<option value="${esc(name)}"></option>`)
+      .join("");
+    return `<datalist id="tab-alias-list">${options}</datalist>`;
+  }
+
+  /** Suggest A, B, C… for a new tab, skipping names the process already uses. */
+  function nextTabAliasSuggestion() {
+    const used = knownTabAliases();
+    for (let i = 0; i < 26; i++) {
+      const alias = String.fromCharCode(65 + i);
+      if (!used.has(alias.toLowerCase())) return alias;
+    }
+    return `tab${used.size}`;
+  }
+
   function normalizeStepValueSource(n) {
     let src = n.contentSourceType;
     const at = n.actionType || "";
@@ -9620,8 +9726,58 @@
           <option value="Next" ${tgt === "Next" ? "selected" : ""}>تب بعدی نسبت به تب اجرا</option>
           <option value="Previous" ${tgt === "Previous" ? "selected" : ""}>تب قبلی نسبت به تب اجرا</option>
           <option value="Current" ${tgt === "Current" ? "selected" : ""}>تب جاری (همان تب اجرا)</option>
+          <option value="Alias" ${tgt === "Alias" ? "selected" : ""}>${esc(t("editor.actions.closeTabByAlias") || "تب نام‌دار")}</option>
         </select>
         <p class="palette-hint">با «تب جاری» خودِ تب اجرا بسته می‌شود و اجرا در تب کنارش ادامه پیدا می‌کند؛ بقیهٔ گزینه‌ها تب اجرا را دست نمی‌زنند. اگر فقط یک تب باز باشد، مرحله خطا می‌دهد.</p>
+      </div>`;
+      if (tgt === "Alias") {
+        body += `<div class="insp-field"><label>${esc(t("editor.actions.closeTabAlias") || "نام تب")}</label>
+          <input data-k="closeTabAlias" list="tab-alias-list" value="${esc(n.closeTabAlias || "")}" placeholder="B" />
+          ${tabAliasDatalistHtml()}
+          <p class="palette-hint">${esc(t("editor.actions.closeTabAliasHint") || "تبی که با همین نام در فرآیند باز شده است.")}</p>
+        </div>`;
+      }
+    }
+
+    // SwitchTab: move the run to another LIVE tab. The page there is never navigated or reloaded.
+    if (at === "SwitchTab") {
+      const mode = String(n.switchTabTarget || "Alias");
+      body += `<div class="insp-section-title">${esc(t("editor.actions.switchTabSection") || "تب مقصد")}</div>
+        <div class="insp-field"><label>${esc(t("editor.actions.switchTabTarget") || "نوع هدف")}</label>
+          <select data-k="switchTabTarget">
+            <option value="Alias" ${mode === "Alias" ? "selected" : ""}>${esc(t("editor.actions.switchTabByAlias") || "نام تب (Alias)")}</option>
+            <option value="Url" ${mode === "Url" ? "selected" : ""}>${esc(t("editor.actions.switchTabByUrl") || "بخشی از آدرس")}</option>
+            <option value="Title" ${mode === "Title" ? "selected" : ""}>${esc(t("editor.actions.switchTabByTitle") || "بخشی از عنوان")}</option>
+            <option value="First" ${mode === "First" ? "selected" : ""}>${esc(t("editor.actions.switchTabByFirst") || "اولین تب پنجره")}</option>
+            <option value="Last" ${mode === "Last" ? "selected" : ""}>${esc(t("editor.actions.switchTabByLast") || "آخرین تب پنجره")}</option>
+            <option value="Next" ${mode === "Next" ? "selected" : ""}>${esc(t("editor.actions.switchTabByNext") || "تب بعدی نسبت به تب اجرا")}</option>
+            <option value="Previous" ${mode === "Previous" ? "selected" : ""}>${esc(t("editor.actions.switchTabByPrevious") || "تب قبلی نسبت به تب اجرا")}</option>
+          </select>
+        </div>`;
+      if (mode === "Alias") {
+        body += `<div class="insp-field"><label>${esc(t("editor.actions.switchTabAlias") || "نام تب")}</label>
+          <input data-k="switchTabAlias" list="tab-alias-list" value="${esc(n.switchTabAlias || "")}" placeholder="main" />
+          ${tabAliasDatalistHtml()}
+          <p class="palette-hint">${esc(t("editor.actions.switchTabAliasHint") || "main تب شروع اجراست. تب‌های دیگر را با «رفتن به آدرس» و گزینهٔ «تب جدید» بسازید.")}</p>
+        </div>`;
+      } else if (mode === "Url") {
+        body += `<div class="insp-field"><label>${esc(t("editor.actions.switchTabUrl") || "بخشی از آدرس تب")}</label>
+          <input data-k="switchTabUrl" value="${esc(n.switchTabUrl || "")}" placeholder="system-b.example" />
+          <p class="palette-hint">${esc(t("editor.actions.switchTabUrlHint") || "اولین تبی که آدرسش این متن را دارد انتخاب می‌شود (بدون حساسیت به حروف).")}</p>
+        </div>`;
+      } else if (mode === "Title") {
+        body += `<div class="insp-field"><label>${esc(t("editor.actions.switchTabTitle") || "بخشی از عنوان تب")}</label>
+          <input data-k="switchTabTitle" value="${esc(n.switchTabTitle || "")}" placeholder="سامانه دوم" />
+        </div>`;
+      }
+      const activate = n.switchTabActivate !== false;
+      body += `<div class="insp-field">
+        <label class="da-switch">
+          <input type="checkbox" data-k="switchTabActivate" ${activate ? "checked" : ""}/>
+          <span class="da-switch-ui" aria-hidden="true"></span>
+          <span class="da-switch-text">${esc(t("editor.actions.switchTabActivate") || "فوکوس دادن به تب (نمایش در مرورگر)")}</span>
+        </label>
+        <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">${esc(t("editor.actions.switchTabActivateHint") || "خاموش: تب هدف اجرا می‌شود ولی مرورگر روی تب فعلی می‌ماند.")}</p>
       </div>`;
     }
 
@@ -9969,6 +10125,32 @@
 
     // ناوبری: سوئیچ انتظار برای تکمیل بارگذاری + سقف انتظار (فقط وقتی روشن است).
     if (isUrl) {
+      const openNew = n.openInNewTab === true;
+      const switchNew = n.switchToNewTab !== false;
+      html += `<div class="insp-field">
+        <label class="da-switch">
+          <input type="checkbox" data-k="openInNewTab" ${openNew ? "checked" : ""}/>
+          <span class="da-switch-ui" aria-hidden="true"></span>
+          <span class="da-switch-text">${esc(t("editor.actions.openInNewTab") || "باز کردن در تب جدید")}</span>
+        </label>
+        <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">${esc(t("editor.actions.openInNewTabHint") || "تب جدید با نام مشخص ساخته می‌شود و تا پایان اجرا زنده می‌ماند. مراحل بعدی با «سوئیچ به تب دیگر» به آن برمی‌گردند؛ اگر تبی با همین نام از قبل باز باشد، همان تب ناوبری می‌شود.")}</p>
+      </div>`;
+      if (openNew) {
+        html += `<div class="insp-field"><label>${esc(t("editor.actions.newTabAlias") || "نام تب جدید")}</label>
+          <input data-k="newTabAlias" list="tab-alias-list" value="${esc(n.newTabAlias || "")}" placeholder="B" />
+          ${tabAliasDatalistHtml()}
+          <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${esc(t("editor.actions.newTabAliasHint") || "مثلاً B. نام main برای تب شروع اجرا رزرو است.")}</p>
+        </div>
+        <div class="insp-field">
+          <label class="da-switch">
+            <input type="checkbox" data-k="switchToNewTab" ${switchNew ? "checked" : ""}/>
+            <span class="da-switch-ui" aria-hidden="true"></span>
+            <span class="da-switch-text">${esc(t("editor.actions.switchToNewTab") || "رفتن به تب جدید بعد از باز شدن")}</span>
+          </label>
+          <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">${esc(t("editor.actions.switchToNewTabHint") || "خاموش: تب در پس‌زمینه باز می‌شود و اجرا در تب جاری ادامه می‌یابد.")}</p>
+        </div>`;
+      }
+
       const waitOn = n.waitForLoad !== false;
       const waitMs = Number(n.waitMaxMs) > 0 ? Number(n.waitMaxMs) : 15000;
       html += `
@@ -11530,7 +11712,8 @@
     "insertSeparator",
     "specificRowIndex",
     "selectorSpecificRowIndex",
-    "systemClockFormat"
+    "systemClockFormat",
+    "newTabAlias", "switchTabAlias", "switchTabUrl", "switchTabTitle", "closeTabAlias"
   ]);
   /** Keys that hold a free-text label the user reads, so they follow the UI direction. */
   const RTL_FIELD_KEYS = new Set(["title", "label", "attributeName"]);
