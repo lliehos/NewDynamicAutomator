@@ -70,6 +70,10 @@
     // SwitchTab only changes which live tab the run works on. The target (alias / URL / title /
     // positional) is chosen on the step, so it needs neither a selector nor a value.
     SwitchTab:      {},
+    // PressKey sends a keyboard event. Its key is a step field (`pressKeyName`), not a value — the
+    // value plumbing would let it read a source cell, which makes no sense for "press Enter". The
+    // selector is optional: with none it acts on whatever is focused.
+    PressKey:       {},
 
     // --- timing / flow -------------------------------------------------------
     WaitTime:       { value: true, memoryVal: true, systemVal: true, readsCell: true },

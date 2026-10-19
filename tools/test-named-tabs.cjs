@@ -91,6 +91,27 @@ function assert(cond, message) {
   if (!cond) throw new Error("ASSERT: " + message);
 }
 
+/** The injected page-side function only touches DOM globals, so it can run outside a page. */
+function makeDocument() {
+  const listeners = {};
+  const el = {
+    id: "x",
+    events: [],
+    focus() { this.focused = true; },
+    dispatchEvent(ev) {
+      this.events.push(ev.type);
+      for (const fn of listeners[ev.type] || []) fn(ev);
+      return true;
+    }
+  };
+  return {
+    document: { querySelector: (sel) => (sel === "#nope" ? null : el), activeElement: el, body: el },
+    el,
+    listeners,
+    KeyboardEvent: class { constructor(type, init) { this.type = type; Object.assign(this, init); } }
+  };
+}
+
 (async () => {
   const main = addTab("https://a.example/login", { active: true });
   await context.resetPlayTabs(main.id);
@@ -161,6 +182,34 @@ function assert(cond, message) {
   assert(afterDelete.length === 1 && afterDelete[0].rowIndex === 1, "write follows the row after a local delete");
   const readAfterDelete = await vm.runInContext("readCellForRun({id:7, cells: rowSource.cells}, {}, 1, 'c')", context);
   assert(readAfterDelete.body.cellValue === "r1-again", "committed value follows the row into its new index");
+
+  // PressKey: the injected half must fire keydown → keypress → keyup on the focused element, with
+  // both the modern key names and the legacy numeric fields a page might read.
+  const pressPage = makeDocument();
+  context.__pressDoc = pressPage;
+  const pressFn = (selector, key, info) => vm.runInContext(
+    `(() => {
+       const doc = globalThis.__pressDoc;
+       const saved = { q: globalThis.document, a: globalThis.activeElement, K: globalThis.KeyboardEvent };
+       globalThis.document = doc.document;
+       globalThis.KeyboardEvent = doc.KeyboardEvent;
+       try { return pressKeySelfContained(${JSON.stringify(selector)}, ${JSON.stringify(key)}, ${JSON.stringify(info)}); }
+       finally { globalThis.document = saved.q; globalThis.KeyboardEvent = saved.K; }
+     })()`, context);
+  context.__pressDoc = pressPage;
+  const pressResult = pressFn("", "Enter", vm.runInContext("keyCodeFor('Enter')", context));
+  assert(pressResult.ok === true && pressResult.key === "Enter", "Enter is reported as pressed");
+  assert(pressPage.el.events.join(",") === "keydown,keypress,keyup", `event order: ${pressPage.el.events}`);
+  const pressTab = pressFn("", "Tab", vm.runInContext("keyCodeFor('Tab')", context));
+  assert(pressTab.ok === true && pressPage.el.events.filter((e) => e === "keypress").length === 1,
+    "Tab sends keydown/keyup without a keypress");
+  const chord = vm.runInContext("keyCodeFor('Ctrl+A')", context);
+  assert(chord.key === "A" && chord.ctrl === true && chord.keyCode === 65, `Ctrl+A maps correctly: ${JSON.stringify(chord)}`);
+  const noTarget = pressFn("#nope", "Enter", vm.runInContext("keyCodeFor('Enter')", context));
+  assert(noTarget.ok === false, "a missing target element fails the step");
+  assert(vm.runInContext("typeof runPressKeyStep", context) === "function", "PressKey step exists");
+  assert(vm.runInContext("validateActionNodeForPlay({ kind:'action', actionType:'PressKey', pressKeyName:'' }, { nodes: [] }).ok", context) === false,
+    "PressKey without a key is invalid");
 
   // Log history is bounded, and the bound is what the HUD receives.
   context.appendPlayLog = realAppendPlayLog;

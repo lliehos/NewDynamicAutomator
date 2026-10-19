@@ -25,6 +25,17 @@ public class SyncLocalRunRequest
     /// those cells as conflicts. Optional: an older client sends none and keeps the old behaviour.
     /// </remarks>
     public List<SyncLocalRunRowDto> Rows { get; set; } = new();
+
+    /// <summary>
+    /// Rows the local run DELETED (per source), so the sync removes them before the values arrive.
+    /// </summary>
+    /// <remarks>
+    /// Deleting locally shifts every row below it up, so the payload's indexes are already one lower
+    /// than the server's there. Deleting on the server first puts both copies on the same numbering;
+    /// without it every row under a deleted one would be written into a row that holds a different
+    /// record, and the merge would report those cells as conflicts.
+    /// </remarks>
+    public List<SyncLocalRunRowDto> DeletedRows { get; set; } = new();
 }
 
 /// <summary>One row a local run inserted, addressed by the index it used in the local copy.</summary>

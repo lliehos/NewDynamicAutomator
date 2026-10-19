@@ -301,6 +301,7 @@ public class TasksApiController : ControllerBase
         var unchanged = 0;
         var skipped = 0;
         var rowsAdded = 0;
+        var rowsDeleted = 0;
         var conflicts = new List<object>();
 
         // A local run may have INSERTED rows before writing into them. Those rows do not exist on the
@@ -314,6 +315,25 @@ public class TasksApiController : ControllerBase
         // beside the wrong data and then report every passed row as a conflict. The inserted rows
         // therefore go in at the index the LOCAL copy gave them, from the highest downwards so each
         // insertion lands on a numbering the later (lower) ones still match.
+        // A row the run DELETED is the mirror problem: the copy is one row shorter above the cut, so
+        // every local index under it is one higher than the server's. Deleting on the server keeps
+        // both copies on the same numbering before the values are patched. Highest first, so each
+        // deletion lands on the numbering the later (lower) ones still match.
+        var deletedRows = (body?.DeletedRows ?? new List<SyncLocalRunRowDto>())
+            .Where(r => r.DataSourceId > 0)
+            .GroupBy(r => r.DataSourceId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(r => r.RowIndex).Where(i => i >= 0).Distinct().OrderByDescending(i => i).ToList());
+        foreach (var entry in deletedRows)
+        {
+            foreach (var rowIndex in entry.Value)
+            {
+                var res = await _sources.DeleteRowAsync(UserId, entry.Key, rowIndex, ct);
+                if (res?.Ok == true) rowsDeleted++;
+            }
+        }
+
         var declaredRows = (body?.Rows ?? new List<SyncLocalRunRowDto>())
             .Where(r => r.DataSourceId > 0)
             .GroupBy(r => r.DataSourceId);
@@ -328,6 +348,13 @@ public class TasksApiController : ControllerBase
             var meta = await _sources.GetMetaDerivedAsync(UserId, group.Key, ct);
             if (meta is null) continue;                       // not visible to this user: cells are skipped below
             var have = Math.Max(meta.RowCount, 0);
+            // A delete can leave the stored counter ahead of the cells that remain (a row at the
+            // very end has no cells to delete). Trust the cells when they are fewer, or a shortfall
+            // computed from the old count would add rows that already exist.
+            if (meta.RowCount > 0 && group.Max(c => c.RowIndex) + 1 < meta.RowCount)
+            {
+                have = Math.Min(have, group.Max(c => c.RowIndex) + 1);
+            }
 
             if (rowsBySource.TryGetValue(group.Key, out var declared) && declared.Count > 0)
             {
@@ -411,7 +438,7 @@ public class TasksApiController : ControllerBase
         await _events.LogAsync("Info", "Play", "LocalRunSynced",
             $"Local run results synced ({applied} cell(s), {conflicts.Count} conflict(s))",
             UserId, User.Identity?.Name,
-            System.Text.Json.JsonSerializer.Serialize(new { taskId = id, applied, unchanged, conflicts = conflicts.Count, skipped, rowsAdded }),
+            System.Text.Json.JsonSerializer.Serialize(new { taskId = id, applied, unchanged, conflicts = conflicts.Count, skipped, rowsAdded, rowsDeleted }),
             path: HttpContext.Request.Path,
             ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
             ct: ct);
@@ -425,7 +452,7 @@ public class TasksApiController : ControllerBase
             reason = "local_run_synced"
         }, ct);
 
-        return Ok(new { ok = true, applied, unchanged, conflicts, skipped, rowsAdded });
+        return Ok(new { ok = true, applied, unchanged, conflicts, skipped, rowsAdded, rowsDeleted });
     }
 
     /// <summary>

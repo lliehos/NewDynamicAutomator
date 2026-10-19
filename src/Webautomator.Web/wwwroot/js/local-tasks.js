@@ -1020,6 +1020,9 @@
     const insertedRows = Array.isArray(answer?.insertedRows)
       ? answer.insertedRows
       : (Array.isArray(task?.locallyRunInsertedRows) ? task.locallyRunInsertedRows : []);
+    const deletedRows = Array.isArray(answer?.deletedRows)
+      ? answer.deletedRows
+      : (Array.isArray(task?.locallyRunDeletedRows) ? task.locallyRunDeletedRows : []);
     const sourceIds = [...new Set(cells
       .map((c) => Number(c?.dataSourceId))
       .filter((n) => Number.isFinite(n) && n > 0))];
@@ -1062,7 +1065,8 @@
           // the server read an empty list: the sync reported success, cleared nothing and wrote no
           // values, so the badge stayed and the divergence was never resolved.
           cells,
-          rows: insertedRows
+          rows: insertedRows,
+          deletedRows
         })
       });
       if (!res.ok) {
@@ -1097,6 +1101,7 @@
           localRunPendingSync: false,
           locallyRunSources: null,
           locallyRunInsertedRows: null,
+          locallyRunDeletedRows: null,
           localSourceCopies: Object.keys(copies).length ? copies : null,
           localSourcesLoaded: Object.keys(loadedFlags).length ? loadedFlags : null
         };

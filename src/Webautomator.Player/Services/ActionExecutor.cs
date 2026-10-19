@@ -64,6 +64,15 @@ public sealed class ActionExecutor
                     driver.Navigate().Refresh();
                     return new StepOutcome(true, Navigated: true);
 
+                case "PressKey":
+                    return DoPressKey(driver, step);
+
+                case "SwitchTab":
+                    return DoSwitchTab(driver, step);
+
+                case "CloseTab":
+                    return DoCloseTab(driver, step);
+
                 case "Click":
                 case "DoubleClick":
                 case "RightClick":
@@ -195,6 +204,198 @@ public sealed class ActionExecutor
             ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].click();", el);
             return StepOutcome.Success;
         }
+    }
+
+    /// <summary>
+    /// Send a key to the step's element, or to the focused element when it names none.
+    /// </summary>
+    /// <remarks>
+    /// WebDriver's SendKeys produces a REAL key event, so unlike the extension's synthetic one it
+    /// also performs the browser's default action (Tab moves focus, Enter submits). That makes the
+    /// two players agree on what the step means, which is what matters to a process that runs on
+    /// either.
+    /// </remarks>
+    private static StepOutcome DoPressKey(IWebDriver driver, GraphNode step)
+    {
+        var name = step.ReadExtraString("pressKeyName");
+        if (string.IsNullOrWhiteSpace(name))
+            return StepOutcome.Fail("کلید موردنظر مشخص نیست.");
+
+        var keys = TranslateKey(name, out var isChord);
+        if (keys is null) return StepOutcome.Fail($"کلید «{name}» شناخته نشد.");
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(step.Selector))
+            {
+                var el = FindElement(driver, step, TimeSpan.FromSeconds(15));
+                try { el.SendKeys(keys); }
+                catch (ElementNotInteractableException)
+                {
+                    // A readonly/hidden target cannot take SendKeys; a key event is still meaningful.
+                    ((IJavaScriptExecutor)driver).ExecuteScript(
+                        "const el=arguments[0];el.focus&&el.focus();" +
+                        "const init={key:arguments[1],bubbles:true,cancelable:true};" +
+                        "el.dispatchEvent(new KeyboardEvent('keydown',init));" +
+                        "el.dispatchEvent(new KeyboardEvent('keyup',init));",
+                        el, name);
+                }
+                return StepOutcome.Success;
+            }
+
+            var body = driver.FindElement(By.TagName("body"));
+            body.SendKeys(keys);
+            return StepOutcome.Success;
+        }
+        catch (WebDriverException ex)
+        {
+            return StepOutcome.Fail($"فشردن کلید ناموفق بود: {Shorten(ex.Message)}");
+        }
+    }
+
+    /// <summary>
+    /// Map an author's key name onto Selenium's key sequences.
+    /// </summary>
+    /// <remarks>
+    /// A chord ("Ctrl+A", "Shift+Tab") becomes one sequence of modifier-down, key, modifier-up —
+    /// Selenium holds a modifier only until the next key in the same SendKeys call.
+    /// </remarks>
+    private static string? TranslateKey(string raw, out bool isChord)
+    {
+        isChord = false;
+        var parts = raw.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0) return null;
+        var keyPart = parts[^1];
+        var mods = string.Join("+", parts[..^1]).ToLowerInvariant();
+        var prefix = "";
+        if (mods.Contains("ctrl") || mods.Contains("control")) prefix += Keys.Control;
+        if (mods.Contains("shift")) prefix += Keys.Shift;
+        if (mods.Contains("alt")) prefix += Keys.Alt;
+        if (mods.Contains("meta") || mods.Contains("cmd") || mods.Contains("win")) prefix += Keys.Meta;
+        isChord = prefix.Length > 0;
+
+        var named = keyPart.ToLowerInvariant() switch
+        {
+            "enter" or "return" => Keys.Enter,
+            "tab" => Keys.Tab,
+            "escape" or "esc" => Keys.Escape,
+            "space" or " " => Keys.Space,
+            "backspace" => Keys.Backspace,
+            "delete" or "del" => Keys.Delete,
+            "insert" => Keys.Insert,
+            "home" => Keys.Home,
+            "end" => Keys.End,
+            "pageup" => Keys.PageUp,
+            "pagedown" => Keys.PageDown,
+            "arrowup" or "up" => Keys.ArrowUp,
+            "arrowdown" or "down" => Keys.ArrowDown,
+            "arrowleft" or "left" => Keys.ArrowLeft,
+            "arrowright" or "right" => Keys.ArrowRight,
+            _ => keyPart.Length == 1 ? keyPart : null
+        };
+        if (named is null) return null;
+        return prefix + named;
+    }
+
+    /// <summary>Move the driver to the tab a SwitchTab step names.</summary>
+    private static StepOutcome DoSwitchTab(IWebDriver driver, GraphNode step)
+    {
+        var handles = driver.WindowHandles.ToList();
+        if (handles.Count == 0) return StepOutcome.Fail("تبی برای سوئیچ پیدا نشد.");
+
+        var mode = step.ReadExtraString("switchTabTarget");
+        if (string.IsNullOrWhiteSpace(mode)) mode = "Alias";
+        string? handle = mode switch
+        {
+            "Url" or "Title" => FindHandleByText(driver, handles,
+                step.ReadExtraString(mode == "Url" ? "switchTabUrl" : "switchTabTitle"), mode == "Url"),
+            "First" => handles[0],
+            "Last" => handles[^1],
+            "Next" => NeighbourHandle(driver, handles, +1),
+            "Previous" => NeighbourHandle(driver, handles, -1),
+            // The desktop player has one window per run, so an alias has no separate handle to find:
+            // everything lives in the single window it opened.
+            _ => driver.CurrentWindowHandle
+        };
+        if (handle is null) return StepOutcome.Fail("تب مقصد پیدا نشد.");
+        if (!string.Equals(handle, driver.CurrentWindowHandle, StringComparison.Ordinal))
+            driver.SwitchTo().Window(handle);
+        return StepOutcome.Success;
+    }
+
+    /// <summary>Close the tab a CloseTab step names. The last tab of the session is never closed.</summary>
+    private static StepOutcome DoCloseTab(IWebDriver driver, GraphNode step)
+    {
+        var handles = driver.WindowHandles.ToList();
+        if (handles.Count <= 1) return StepOutcome.Fail("فقط یک تب باز است؛ قابل بستن نیست.");
+
+        var mode = step.ReadExtraString("closeTabTarget");
+        if (string.IsNullOrWhiteSpace(mode)) mode = "Last";
+        var current = driver.CurrentWindowHandle;
+        string? victim = mode switch
+        {
+            "Url" or "Title" => FindHandleByText(driver, handles,
+                step.ReadExtraString(mode == "Url" ? "closeTabUrl" : "closeTabTitle"), mode == "Url"),
+            "First" => handles[0],
+            "Next" => NeighbourHandle(driver, handles, +1),
+            "Previous" => NeighbourHandle(driver, handles, -1),
+            "Current" => current,
+            // A named tab is the run's own single window in the desktop player.
+            "Alias" => current,
+            _ => handles[^1]
+        };
+        if (victim is null) return StepOutcome.Fail("تب موردنظر برای بستن پیدا نشد.");
+        if (handles.Count <= 1) return StepOutcome.Fail("فقط یک تب باز است؛ قابل بستن نیست.");
+
+        var continueIn = string.Equals(victim, current, StringComparison.Ordinal)
+            ? handles.First(h => !string.Equals(h, victim, StringComparison.Ordinal))
+            : current;
+
+        driver.SwitchTo().Window(victim);
+        driver.Close();
+        try { driver.SwitchTo().Window(continueIn); }
+        catch (NoSuchWindowException)
+        {
+            var remaining = driver.WindowHandles.ToList();
+            if (remaining.Count == 0) return StepOutcome.Fail("هیچ تبی باقی نماند.");
+            driver.SwitchTo().Window(remaining[0]);
+        }
+        return StepOutcome.Success;
+    }
+
+    /** The handle whose URL or title contains the pattern (case-insensitive). */
+    private static string? FindHandleByText(
+        IWebDriver driver, List<string> handles, string pattern, bool byUrl)
+    {
+        var needle = (pattern ?? "").Trim();
+        if (needle.Length == 0) return null;
+        var original = driver.CurrentWindowHandle;
+        string? found = null;
+        foreach (var handle in handles)
+        {
+            try
+            {
+                driver.SwitchTo().Window(handle);
+                var text = byUrl ? driver.Url : driver.Title;
+                if ((text ?? "").Contains(needle, StringComparison.OrdinalIgnoreCase))
+                {
+                    found = handle;
+                    break;
+                }
+            }
+            catch { /* a window that vanished mid-scan is skipped */ }
+        }
+        try { driver.SwitchTo().Window(original); } catch { /* the caller re-switches */ }
+        return found;
+    }
+
+    /** Next/previous handle relative to the current one, or null at the ends. */
+    private static string? NeighbourHandle(IWebDriver driver, List<string> handles, int step)
+    {
+        var index = handles.IndexOf(driver.CurrentWindowHandle);
+        if (index < 0) return null;
+        var next = index + step;
+        return next >= 0 && next < handles.Count ? handles[next] : null;
     }
 
     private static StepOutcome DoHover(IWebDriver driver, GraphNode step, TimeSpan timeout)

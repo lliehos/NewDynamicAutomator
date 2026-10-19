@@ -88,5 +88,16 @@ public enum ActionType
     /// and this action returns to it later with its page state (and login) intact. The target is a
     /// step field (alias / URL / title / positional), not a value and not a selector.
     /// </remarks>
-    SwitchTab = 36
+    SwitchTab = 36,
+
+    /// <summary>
+    /// Send a keyboard event (Enter, Tab, Escape, arrows, Ctrl+A, …) to an element or the focused one.
+    /// </summary>
+    /// <remarks>
+    /// The browser exposes no way to inject a TRUSTED key, so this replays the event sequence a page's
+    /// own handler listens for. Text entry stays InputContent's job; this action is for "press Enter
+    /// to submit", "Tab out of the field", "Escape to close" — the gestures a form needs and the
+    /// extension had no way to express.
+    /// </remarks>
+    PressKey = 37
 }

@@ -262,6 +262,7 @@ effectiveRow = moveLoop ? gRow : parentRow
 |-------|-----------|
 | `CloseTab` | بستن تب با هدف First / Last / Next / Previous / Current / **Alias** و انتخاب تب ادامه |
 | `SwitchTab` | تغییر تب جاری به alias / URL / title / موقعیت، **بدون بستن یا ناوبری** |
+| `PressKey` | `keydown`/`keypress`/`keyup` با `key`+`code`+`keyCode` روی المان هدف یا المان فوکوس‌شده |
 | `GoToUrl` (حالت عادی) | `tabs.update` + `waitTabComplete(resolveNavigationWaitMs)` |
 | `GoToUrl` + `openInNewTab` | ساخت/استفادهٔ مجدد از تب نام‌دار + `waitTabComplete` |
 | `WaitTime` | فقط `waitMs` برمی‌گرداند |
@@ -293,6 +294,10 @@ effectiveRow = moveLoop ? gRow : parentRow
 - `SwitchTab` روی تب غیرفعال هم کار می‌کند (`chrome.scripting` به tabId هدف می‌زند)؛ اگر تب discard
   شده باشد بیدار می‌شود و در لاگ هشدار ثبت می‌شود.
 - بستن **تب جاری** (مثل قبل) اجرا را متوقف می‌کند؛ برای جابه‌جایی بی‌خطر از `SwitchTab` استفاده کنید.
+- `CloseTab` هدف‌های `Url` و `Title` هم دارد: اولین تبی که آدرس/عنوانش الگو را دارد بسته می‌شود و اگر
+  آن تب alias داشته باشد، alias هم آزاد می‌شود.
+- `PressKey` رویداد **ساختگی** می‌فرستد؛ Chrome راهی برای تزریق کلید trusted ندارد، پس Tab فوکوس را
+  جابه‌جا نمی‌کند و Enter در مرورگر submit نمی‌کند — ولی هندلر خود صفحه اجرا می‌شود.
 
 > این قابلیت در **افزونهٔ Chrome** پیاده شده است. اجراکنندهٔ دسکتاپ (`Webautomator.Player` / Selenium)
 > طبق طراحی فعلی تک‌تبی است و `SwitchTab` را پشتیبانی نمی‌کند؛ چنین مرحله‌ای در آن با خطای صریح

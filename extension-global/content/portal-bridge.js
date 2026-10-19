@@ -451,6 +451,7 @@
         // this the server could only append, and values written below an insertion landed on the
         // wrong records.
         insertedRows: Array.isArray(holder.locallyRunInsertedRows) ? holder.locallyRunInsertedRows : [],
+        deletedRows: Array.isArray(holder.locallyRunDeletedRows) ? holder.locallyRunDeletedRows : [],
         localRunAt: holder.lastLocalRunAt || null,
         pending: holder.localRunPendingSync === true,
         copies: Object.keys(holder.localSourceCopies || {}),

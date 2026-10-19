@@ -41,6 +41,7 @@
       GoBack: t("editor.actions.GoBack"),
       GoForward: t("editor.actions.GoForward"),
       SwitchTab: t("editor.actions.SwitchTab"),
+      PressKey: t("editor.actions.PressKey"),
       CloseTab: t("editor.actions.CloseTab"),
       WaitTime: t("editor.actions.WaitTime"),
       WaitForLoading: t("editor.actions.WaitForLoading"),
@@ -75,6 +76,7 @@
       GoBack: t("editor.actionDesc.GoBack"),
       GoForward: t("editor.actionDesc.GoForward"),
       SwitchTab: t("editor.actionDesc.SwitchTab"),
+      PressKey: t("editor.actionDesc.PressKey"),
       CloseTab: t("editor.actionDesc.CloseTab"),
       WaitTime: t("editor.actionDesc.WaitTime"),
       WaitForLoading: t("editor.actionDesc.WaitForLoading"),
@@ -199,7 +201,7 @@
     "InputContent", "ClearContent", "SelectOption",
     "InsertContent", "LoadContent", "InsertRow", "DeleteRow",
     "SetMemory",
-    "GoToUrl", "GoBack", "GoForward", "SwitchTab", "Refresh", "ScrollPage",
+    "GoToUrl", "GoBack", "GoForward", "SwitchTab", "PressKey", "Refresh", "ScrollPage",
     "CloseTab",
     "WaitTime", "WaitForLoading",
     "AlertAccept", "RemoveElements"
@@ -3974,6 +3976,11 @@
         return [
           { d: "M4 9h8v8H4z", ...stroke },
           { d: "M9 4h11v11", ...stroke, "stroke-dasharray": "2 2" }
+        ];
+      case "PressKey":
+        return [
+          { d: "M3 8h18v9H3z", ...stroke },
+          { d: "M7 12h.01M11 12h.01M15 12h.01M7 15h10", ...stroke, "stroke-width": 2.4 }
         ];
       case "CloseTab":
       case "WaitTime":
@@ -9330,12 +9337,23 @@
         reasons.push("نوع هدف سوئیچ تب نامعتبر است");
       }
     }
-    if (at === "CloseTab" && String(n.closeTabTarget || "Last") === "Alias") {
-      const raw = String(n.closeTabAlias || "").trim();
-      if (!raw) reasons.push("نام تب موردنظر برای بستن مشخص نیست");
-      else if (!knownTabAliases().has(normalizeTabAlias(raw))) {
-        reasons.push(`تبی با نام «${raw}» در این فرآیند تعریف نشده است`);
+    if (at === "CloseTab") {
+      const closeTarget = String(n.closeTabTarget || "Last");
+      if (closeTarget === "Alias") {
+        const raw = String(n.closeTabAlias || "").trim();
+        if (!raw) reasons.push("نام تب موردنظر برای بستن مشخص نیست");
+        else if (!knownTabAliases().has(normalizeTabAlias(raw))) {
+          reasons.push(`تبی با نام «${raw}» در این فرآیند تعریف نشده است`);
+        }
+      } else if ((closeTarget === "Url" || closeTarget === "Title")
+        && !String((closeTarget === "Url" ? n.closeTabUrl : n.closeTabTitle) || "").trim()) {
+        reasons.push("الگوی تب موردنظر برای بستن مشخص نیست");
+      } else if (!["First", "Last", "Next", "Previous", "Current", "Alias", "Url", "Title"].includes(closeTarget)) {
+        reasons.push("نوع هدف بستن تب نامعتبر است");
       }
+    }
+    if (at === "PressKey" && !String(n.pressKeyName || "").trim()) {
+      reasons.push("کلید موردنظر مشخص نیست");
     }
 
     // Both row pointers: the node's own and its dynamic selector's.
@@ -9727,6 +9745,8 @@
           <option value="Previous" ${tgt === "Previous" ? "selected" : ""}>تب قبلی نسبت به تب اجرا</option>
           <option value="Current" ${tgt === "Current" ? "selected" : ""}>تب جاری (همان تب اجرا)</option>
           <option value="Alias" ${tgt === "Alias" ? "selected" : ""}>${esc(t("editor.actions.closeTabByAlias") || "تب نام‌دار")}</option>
+          <option value="Url" ${tgt === "Url" ? "selected" : ""}>${esc(t("editor.actions.closeTabByUrl") || "بخشی از آدرس")}</option>
+          <option value="Title" ${tgt === "Title" ? "selected" : ""}>${esc(t("editor.actions.closeTabByTitle") || "بخشی از عنوان")}</option>
         </select>
         <p class="palette-hint">با «تب جاری» خودِ تب اجرا بسته می‌شود و اجرا در تب کنارش ادامه پیدا می‌کند؛ بقیهٔ گزینه‌ها تب اجرا را دست نمی‌زنند. اگر فقط یک تب باز باشد، مرحله خطا می‌دهد.</p>
       </div>`;
@@ -9736,7 +9756,36 @@
           ${tabAliasDatalistHtml()}
           <p class="palette-hint">${esc(t("editor.actions.closeTabAliasHint") || "تبی که با همین نام در فرآیند باز شده است.")}</p>
         </div>`;
+      } else if (tgt === "Url") {
+        body += `<div class="insp-field"><label>${esc(t("editor.actions.closeTabUrl") || "بخشی از آدرس تب")}</label>
+          <input data-k="closeTabUrl" value="${esc(n.closeTabUrl || "")}" placeholder="system-b.example" />
+          <p class="palette-hint">${esc(t("editor.actions.closeTabUrlHint") || "اولین تب بسته می‌شود که آدرسش این متن را دارد (بدون حساسیت به حروف).")}</p>
+        </div>`;
+      } else if (tgt === "Title") {
+        body += `<div class="insp-field"><label>${esc(t("editor.actions.closeTabTitle") || "بخشی از عنوان تب")}</label>
+          <input data-k="closeTabTitle" value="${esc(n.closeTabTitle || "")}" placeholder="سامانه دوم" />
+        </div>`;
       }
+    }
+
+    // PressKey: which key, and optionally which element receives it.
+    if (at === "PressKey") {
+      body += `<div class="insp-section-title">${esc(t("editor.actions.pressKeySection") || "کلید صفحه‌کلید")}</div>
+        <div class="insp-field"><label>${esc(t("editor.actions.pressKeyName") || "کلید")}</label>
+          <input data-k="pressKeyName" list="press-key-list" value="${esc(n.pressKeyName || "")}" placeholder="Enter" />
+          <datalist id="press-key-list">
+            <option value="Enter"></option><option value="Tab"></option>
+            <option value="Escape"></option><option value="Space"></option>
+            <option value="Backspace"></option><option value="Delete"></option>
+            <option value="ArrowUp"></option><option value="ArrowDown"></option>
+            <option value="ArrowLeft"></option><option value="ArrowRight"></option>
+            <option value="Home"></option><option value="End"></option>
+            <option value="PageUp"></option><option value="PageDown"></option>
+            <option value="Ctrl+A"></option><option value="Ctrl+Enter"></option>
+          </datalist>
+          <p class="palette-hint">${esc(t("editor.actions.pressKeyHint") || "نام کلید یا ترکیب آن، مثل Enter، Tab، Escape، ArrowDown یا Ctrl+A. صفحه فقط رویداد کلید را می‌بیند؛ تایپ متن همچنان کار «پر کردن فیلد» است.")}</p>
+        </div>
+        <p class="palette-hint" style="margin:0 0 8px;line-height:1.55">${esc(t("editor.actions.pressKeyTargetHint") || "اگر سلکتور هدف را خالی بگذارید، کلید به المانی که در صفحه فوکوس دارد فرستاده می‌شود.")}</p>`;
     }
 
     // SwitchTab: move the run to another LIVE tab. The page there is never navigated or reloaded.
@@ -11713,7 +11762,8 @@
     "specificRowIndex",
     "selectorSpecificRowIndex",
     "systemClockFormat",
-    "newTabAlias", "switchTabAlias", "switchTabUrl", "switchTabTitle", "closeTabAlias"
+    "newTabAlias", "switchTabAlias", "switchTabUrl", "switchTabTitle", "closeTabAlias",
+    "closeTabUrl", "closeTabTitle", "pressKeyName"
   ]);
   /** Keys that hold a free-text label the user reads, so they follow the UI direction. */
   const RTL_FIELD_KEYS = new Set(["title", "label", "attributeName"]);

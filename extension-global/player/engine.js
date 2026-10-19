@@ -477,12 +477,24 @@ function validateActionNodeForPlay(n, graph) {
       reasons.push(tv("act.switchTabTargetBad"));
     }
   }
-  if (at === "CloseTab" && String(n.closeTabTarget || "Last") === "Alias") {
-    const raw = String(n.closeTabAlias || "").trim();
-    if (!raw) reasons.push(tv("act.closeTabAliasMissing"));
-    else if (!collectPlayTabAliases(graph).has(normalizePlayTabAlias(raw))) {
-      reasons.push(tv("act.tabAliasUnknown", { alias: raw }));
+  if (at === "CloseTab") {
+    const closeTarget = String(n.closeTabTarget || "Last");
+    if (closeTarget === "Alias") {
+      const raw = String(n.closeTabAlias || "").trim();
+      if (!raw) reasons.push(tv("act.closeTabAliasMissing"));
+      else if (!collectPlayTabAliases(graph).has(normalizePlayTabAlias(raw))) {
+        reasons.push(tv("act.tabAliasUnknown", { alias: raw }));
+      }
+    } else if ((closeTarget === "Url" || closeTarget === "Title")
+      && !String((closeTarget === "Url" ? n.closeTabUrl : n.closeTabTitle) || "").trim()) {
+      reasons.push(tv("act.switchTabPatternMissing"));
+    } else if (!["First", "Last", "Next", "Previous", "Current", "Alias", "Url", "Title"].includes(closeTarget)) {
+      reasons.push(tv("act.switchTabTargetBad"));
     }
+  }
+  // The key name is free text ("Enter", "Tab", "Ctrl+A"), so only "nothing at all" is invalid.
+  if (at === "PressKey" && !String(n.pressKeyName || "").trim()) {
+    reasons.push(tv("run.keyMissing"));
   }
 
   // The node's own row pointer (the "ردیف اختصاصی" switch): a pointer that is on but dangling
@@ -842,6 +854,8 @@ const ENGINE_MSG = {
     "run.tabAliasClosed": "تب «{alias}» بسته شده است؛ آن را دوباره با «رفتن به آدرس» و گزینهٔ «تب جدید» باز کنید.",
     "run.tabMatchMissing": "هیچ تبی با «{pattern}» پیدا نشد.",
     "run.newTabFailed": "تب جدید ساخته نشد.",
+    "run.keyMissing": "کلید موردنظر مشخص نیست.",
+    "run.closeTabMatchMissing": "هیچ تبی با این مشخصات برای بستن پیدا نشد.",
     "run.memNameEmpty": "نام متغیر خالی است.",
     "run.saveTargetMissing": "منبع/ستون مقصد ذخیره مشخص نیست.",
     "run.noResult": "بدون نتیجه",
@@ -936,6 +950,8 @@ const ENGINE_MSG = {
     "run.tabAliasClosed": "The tab named \"{alias}\" has been closed; reopen it with Go to URL + \"open in a new tab\".",
     "run.tabMatchMissing": "No tab matched \"{pattern}\".",
     "run.newTabFailed": "The new tab could not be created.",
+    "run.keyMissing": "No key is specified for this step.",
+    "run.closeTabMatchMissing": "No tab matched the chosen criteria, so nothing was closed.",
     "run.memNameEmpty": "Variable name is empty.",
     "run.saveTargetMissing": "Destination source/column is not specified.",
     "run.noResult": "No result",
@@ -3877,7 +3893,7 @@ async function readElementText(tabId, node, graph, rowIndex) {
  * tab to continue in. Closing the LAST tab of a window is refused rather than silently ending the
  * session, because Chrome would close the window with it.
  */
-async function closeWindowTab(currentTabId, target, alias) {
+async function closeWindowTab(currentTabId, target, alias, step) {
   let tab;
   try {
     tab = await chrome.tabs.get(currentTabId);
@@ -3914,6 +3930,23 @@ async function closeWindowTab(currentTabId, target, alias) {
       return { ok: false, error: tv("run.tabAliasClosed", { alias: entry.name }), reason: "tab_alias_closed" };
     }
     // Refuse to close the last tab of the victim's window, whichever window the named tab is in.
+    const victimWindowTabs = await chrome.tabs.query({ windowId: victim.windowId });
+    if (victimWindowTabs.length <= 1) {
+      return { ok: false, error: tv("run.lastTab"), reason: "last_tab" };
+    }
+  } else if (targetMode === "Url" || targetMode === "Title") {
+    // "Close the tab showing X", the same matching SwitchTab offers. It is the natural companion of
+    // a URL/title switch: a process that opens a tab for a system knows the system, not a tab id.
+    const pattern = String((targetMode === "Url" ? step?.closeTabUrl : step?.closeTabTitle) || "").trim();
+    if (!pattern) return { ok: false, error: tv("act.switchTabPatternMissing"), reason: "missing_pattern" };
+    const found = targetMode === "Url"
+      ? await findTabByUrlPattern(pattern)
+      : await findTabByTitlePattern(pattern);
+    if (!found) return { ok: false, error: tv("run.closeTabMatchMissing"), reason: "no_such_tab" };
+    victim = found;
+    for (const [aliasKey, aliasEntry] of playTabs) {
+      if (Number(aliasEntry.id) === Number(found.id)) closedAliasKey = aliasKey;
+    }
     const victimWindowTabs = await chrome.tabs.query({ windowId: victim.windowId });
     if (victimWindowTabs.length <= 1) {
       return { ok: false, error: tv("run.lastTab"), reason: "last_tab" };
@@ -3974,6 +4007,63 @@ async function closeWindowTab(currentTabId, target, alias) {
  * that — so the step waits for the document to settle and reports that instead of claiming a
  * navigation happened.
  */
+/**
+ * PressKey on a tab: the page-side branch does the dispatching, this only resolves the frame.
+ *
+ * Chrome gives no way to inject a TRUSTED key, so this cannot move focus or submit by itself. What
+ * it does is what the author is after on an automation page: make the page's own key handler run
+ * (Enter-to-submit, Escape-to-close, arrow-key navigation in a custom widget).
+ */
+async function runPressKeyStep(tabId, step) {
+  const key = String(step?.pressKeyName || "").trim();
+  if (!key) return { ok: false, error: tv("run.keyMissing"), reason: "missing_key" };
+  const selector = String(step?.selectorValue || "").trim();
+  // The element selector is optional: with none, the focused element (or the document) is the target.
+  const target = { tabId };
+  try {
+    const hopFrame = await resolveFramePath(tabId, parseFramePath(step?.framePathJson));
+    if (hopFrame != null) target.frameIds = [hopFrame];
+  } catch { /* top document */ }
+  try {
+    // The key table is resolved HERE (the worker knows it); the injected function only builds the
+    // events, because its source is serialised and cannot reach helpers in this scope.
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target,
+      func: pressKeySelfContained,
+      args: [selector, key, keyCodeFor(key)]
+    });
+    return result || { ok: false, error: tv("run.keyMissing"), reason: "press_key_failed" };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err), reason: "press_key_failed" };
+  }
+}
+
+/**
+ * The same helper, callable from injected code.
+ *
+ * `chrome.scripting.executeScript` serialises a function to its own source, so a page-side function
+ * cannot call module-level helpers (`keyCodeFor`) at run time. Simple key names are resolved here,
+ * in the worker, and the page side only builds the events.
+ */
+function pressKeySelfContained(selector, key, info) {
+  const el = selector ? document.querySelector(selector) : null;
+  if (selector && !el) return { ok: false, error: `عنصر پیدا نشد: ${selector}`, reason: "element_not_found" };
+  const target = el || document.activeElement || document.body;
+  const k = info || { key: key, code: key, keyCode: 0 };
+  try { target.focus({ preventScroll: true }); } catch { /* not focusable */ }
+  const init = {
+    key: k.key, code: k.code, keyCode: k.keyCode, which: k.keyCode,
+    bubbles: true, cancelable: true, composed: true,
+    ctrlKey: !!k.ctrl, shiftKey: !!k.shift, altKey: !!k.alt, metaKey: !!k.meta
+  };
+  const proceed = target.dispatchEvent(new KeyboardEvent("keydown", init));
+  if (proceed && (k.key.length === 1 || k.key === "Enter")) {
+    target.dispatchEvent(new KeyboardEvent("keypress", init));
+  }
+  target.dispatchEvent(new KeyboardEvent("keyup", init));
+  return { ok: true, key: k.key };
+}
+
 async function runHistoryStep(tabId, direction, step) {
   const dir = direction === "back" ? -1 : 1;
   try {
@@ -4004,13 +4094,19 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
 
   // One close-tab action with a target, replacing the old first/last pair who differed only here.
   if (actionType === "CloseTab") {
-    return closeWindowTab(tabId, step.closeTabTarget || "Last", step.closeTabAlias);
+    return closeWindowTab(tabId, step.closeTabTarget || "Last", step.closeTabAlias, step);
   }
 
   // Switch the run to another live tab. Nothing is closed and no navigation happens: the page in
   // the target tab keeps exactly the state it had, which is the whole point of a named tab.
   if (actionType === "SwitchTab") {
     return runSwitchTabStep(tabId, step);
+  }
+
+  // PressKey is a keyboard event on the page. It takes no target selector when the author means
+  // "the field that is already focused", so it must return before the selector plumbing below.
+  if (actionType === "PressKey") {
+    return runPressKeyStep(tabId, step);
   }
 
   // Back / forward in the tab's own history (not a tab switch — see runHistoryStep).
@@ -5365,6 +5461,7 @@ async function flushLocalRunProgress() {
             localRunPendingSync: true,
             locallyRunSources: cells,
             locallyRunInsertedRows: insertedRows,
+            locallyRunDeletedRows: collectLocalDeletedRows(),
             localSourceCopies: copies
           }
         : { ...tasks[idx], localSourceCopies: copies };
@@ -5409,6 +5506,18 @@ function collectLocalRunWrites() {
  * correct when the insertion was at the end; anywhere above existing rows it would shift nothing on
  * the server and every value written below would land on a different record.
  */
+/** Rows this run deleted, as `{ dataSourceId, rowIndex }` in SERVER numbering. */
+function collectLocalDeletedRows() {
+  const out = [];
+  for (const [dsId, list] of localServerRowMap) {
+    for (const e of list) {
+      if (e.delta >= 0) continue;
+      for (let i = 0; i > e.delta; i--) out.push({ dataSourceId: dsId, rowIndex: e.at - 1 - i });
+    }
+  }
+  return out;
+}
+
 function collectLocalInsertedRows() {
   const out = [];
   for (const [dsId, list] of localServerRowMap) {
@@ -6108,6 +6217,7 @@ async function markLocalRunPendingSync(taskId, results) {
       // Rows the run inserted, so the sync creates them at the same indexes the run used instead of
       // assuming they belong at the end.
       locallyRunInsertedRows: collectLocalInsertedRows(),
+      locallyRunDeletedRows: collectLocalDeletedRows(),
       // The finished run's own copy of every private source: this is the data the local viewer must
       // show afterwards, including the rows an Insert action created.
       localSourceCopies: snapshotLocalSourceCopies(localRunGraph, tasks[idx])
@@ -7432,6 +7542,102 @@ async function playExecuteInjected(payload) {
   }
 
   return { ok: false, error: tv("run.unsupportedAction", { action: actionType }), reason: "unsupported_action" };
+}
+
+/**
+ * Map a step's key name onto the KeyboardEvent fields a page reads.
+ *
+ * The names are the ones an author types ("Enter", "Tab", "ArrowDown", "a"), so the mapping has to
+ * cover the modern `key`/`code` pair AND the legacy numeric `keyCode`/`which` — plenty of legacy
+ * pages (the ones that needed this action in the first place) read only the numbers.
+ */
+/**
+ * Send keydown / keypress / keyup to an element, or to the focused element when none is given.
+ *
+ * A synthetic KeyboardEvent is what the page's own handlers receive. It deliberately does NOT
+ * perform the browser's default action (a synthetic Tab does not move focus, a synthetic Enter does
+ * not submit): browsers reserve those for trusted events. Pages that listen for Enter to submit —
+ * the common case — see this event and submit themselves, which is the behaviour the step is for.
+ */
+function pressKeyOn(el, value) {
+  const key = String(value || "").trim();
+  if (!key) return { ok: false, error: tv("run.keyMissing"), reason: "missing_key" };
+  const target = el || document.activeElement || document.body;
+  const info = keyCodeFor(key);
+  try { target.focus({ preventScroll: true }); } catch { /* not focusable */ }
+  const init = {
+    key: info.key,
+    code: info.code,
+    keyCode: info.keyCode,
+    which: info.keyCode,
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    ctrlKey: !!info.ctrl,
+    shiftKey: !!info.shift,
+    altKey: !!info.alt,
+    metaKey: !!info.meta
+  };
+  target.dispatchEvent(new KeyboardEvent("keydown", init));
+  // keypress exists only for printable keys and Enter on older pages; sending it anyway is harmless
+  // to a listener that filters by key, and required by the ones that do not.
+  if (info.key.length === 1 || info.key === "Enter") {
+    target.dispatchEvent(new KeyboardEvent("keypress", init));
+  }
+  target.dispatchEvent(new KeyboardEvent("keyup", init));
+  return { ok: true, key: info.key };
+}
+
+function keyCodeFor(raw) {
+  const name = String(raw || "").trim();
+  const lower = name.toLowerCase();
+  const simple = {
+    enter: { key: "Enter", code: "Enter", keyCode: 13 },
+    tab: { key: "Tab", code: "Tab", keyCode: 9 },
+    escape: { key: "Escape", code: "Escape", keyCode: 27 },
+    esc: { key: "Escape", code: "Escape", keyCode: 27 },
+    space: { key: " ", code: "Space", keyCode: 32 },
+    backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
+    delete: { key: "Delete", code: "Delete", keyCode: 46 },
+    insert: { key: "Insert", code: "Insert", keyCode: 45 },
+    home: { key: "Home", code: "Home", keyCode: 36 },
+    end: { key: "End", code: "End", keyCode: 35 },
+    pageup: { key: "PageUp", code: "PageUp", keyCode: 33 },
+    pagedown: { key: "PageDown", code: "PageDown", keyCode: 34 },
+    arrowup: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+    up: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+    arrowdown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+    down: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+    arrowleft: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
+    left: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
+    arrowright: { key: "ArrowRight", code: "ArrowRight", keyCode: 39 },
+    right: { key: "ArrowRight", code: "ArrowRight", keyCode: 39 }
+  };
+  const ctrl = /\bctrl\b|\bcontrol\b/i.test(name);
+  const shift = /\bshift\b/i.test(name);
+  const alt = /\balt\b/i.test(name);
+  // "Ctrl+A", "ctrl+enter", "shift+Tab" — the last segment is the key itself.
+  const parts = name.split("+").map((p) => p.trim()).filter(Boolean);
+  const last = parts.length ? parts[parts.length - 1] : name;
+  const mods = { ctrl, shift, alt, meta: /\bmeta\b|\bcmd\b|\bwin\b/i.test(name) };
+  if (parts.length > 1) {
+    const head = parts.slice(0, -1).join("+").toLowerCase();
+    mods.ctrl = mods.ctrl || head.includes("ctrl") || head.includes("control");
+    mods.shift = mods.shift || head.includes("shift");
+    mods.alt = mods.alt || head.includes("alt");
+    mods.meta = mods.meta || head.includes("meta") || head.includes("cmd") || head.includes("win");
+  }
+  const hit = simple[last.toLowerCase()];
+  if (hit) return { ...hit, ...mods };
+  if (last.length === 1) {
+    const upper = last.toUpperCase();
+    const code = /^[A-Z]$/.test(upper) ? `Key${upper}`
+      : /^[0-9]$/.test(upper) ? `Digit${upper}`
+        : "";
+    return { key: last, code, keyCode: upper.charCodeAt(0), ...mods };
+  }
+  // An unknown name is still sent as typed: the page may listen for a key this build does not know.
+  return { key: name, code: name, keyCode: 0, ...mods };
 }
 
 function matchChildIframe(hop) {
