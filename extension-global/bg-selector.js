@@ -661,6 +661,11 @@ async function handleBuildElement(info, tab, target) {
     return;
   }
 
+  // The content script can only describe the frame it runs in, so the CHAIN of iframes above it
+  // has to be built here — exactly like the recorder does. Without this the created node carried
+  // an element selector but no frame path, and a run looked for that element in the top document.
+  const framePath = await buildFramePath(tab.id, frameId, true);
+
   let editorTabId = 0;
   let taskId = "";
   if (target.tabId > 0) {
@@ -692,7 +697,7 @@ async function handleBuildElement(info, tab, target) {
     // Human name of the element, so the node created in the diagram says WHICH element it is about
     // (e.g. «ورود») instead of only repeating the action type.
     elementLabel: cap.captured.label || "",
-    framePathJson: cap.captured.framePathJson || null,
+    framePathJson: JSON.stringify(framePath),
     url: cap.captured.url || null,
     matchCount: cap.captured.matchCount ?? null,
     // Echo the process so the editor can refuse a tab that no longer shows it, instead of editing

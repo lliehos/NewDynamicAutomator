@@ -1031,6 +1031,19 @@ const RunMode = { Play: 0, Learn: 1 };
 let playAbort = false;
 let playPaused = false;
 let playResumeWaiters = [];
+/**
+ * HUD history bounds.
+ *
+ * A run can emit thousands of log lines (one per element retry, tag read, condition poll). Keeping
+ * all of them, copying the tail on every line and broadcasting the whole state to every tab made
+ * the extension itself the bottleneck on long runs. Thirty lines is what the HUD renders anyway;
+ * older lines cannot help an operator mid-run.
+ */
+const PLAY_LOG_LIMIT = 30;
+const PLAY_HUD_RESULT_LIMIT = 30;
+const PLAY_RESULT_LIMIT = 80;
+const PLAY_STATE_BROADCAST_MS = 250;
+
 let playLogs = [];
 let playTabId = null;
 let playAbortPoll = null;
@@ -1064,9 +1077,21 @@ function getPlayStatus() {
     ok: true,
     ...playStatus,
     paused: !!playPaused,
-    logs: playLogs.slice(-80),
-    results: Array.isArray(playStatus.results) ? playStatus.results.slice(-80) : []
+    logs: playLogs.slice(-PLAY_LOG_LIMIT),
+    results: Array.isArray(playStatus.results)
+      ? playStatus.results.slice(-PLAY_HUD_RESULT_LIMIT)
+      : []
   };
+}
+
+/** Coalesce log/result updates into at most one broadcast per 250 ms. */
+let playStateBroadcastTimer = null;
+function schedulePlayStateBroadcast() {
+  if (playStateBroadcastTimer) return;
+  playStateBroadcastTimer = setTimeout(() => {
+    playStateBroadcastTimer = null;
+    broadcastPlayState();
+  }, PLAY_STATE_BROADCAST_MS);
 }
 
 function wakePlayResumeWaiters() {
@@ -1083,13 +1108,15 @@ function appendPlayLog(level, text) {
     text: String(text || "")
   };
   playLogs.push(entry);
-  if (playLogs.length > 400) playLogs.splice(0, playLogs.length - 400);
-  playStatus.logs = playLogs.slice(-80);
+  if (playLogs.length > PLAY_LOG_LIMIT) {
+    playLogs.splice(0, playLogs.length - PLAY_LOG_LIMIT);
+  }
+  playStatus.logs = playLogs;
   // Mirror warn/error to the player extension service-worker console.
   const msg = `[DA Player] ${entry.text}`;
   if (entry.level === "error") console.error(msg);
   else if (entry.level === "warn") console.warn(msg);
-  broadcastPlayState();
+  schedulePlayStateBroadcast();
 }
 
 function clearPlayLogs() {
@@ -1103,6 +1130,12 @@ function clearPlayLogs() {
 }
 
 function broadcastPlayState() {
+  // A direct broadcast already carries the newest log/result state, so the pending coalesced one
+  // would only be a duplicate.
+  if (playStateBroadcastTimer) {
+    clearTimeout(playStateBroadcastTimer);
+    playStateBroadcastTimer = null;
+  }
   const message = { type: "playStateChanged", ...getPlayStatus() };
   if (playTabId) notifyTab(playTabId, message);
   // Popup / extension pages
@@ -1443,9 +1476,9 @@ async function resumePlay() {
 function appendPlayResult(entry) {
   if (!Array.isArray(playStatus.results)) playStatus.results = [];
   playStatus.results.push(entry);
-  if (playStatus.results.length > 80) playStatus.results.shift();
+  if (playStatus.results.length > PLAY_RESULT_LIMIT) playStatus.results.shift();
   playStatus.lastResult = entry;
-  broadcastPlayState();
+  schedulePlayStateBroadcast();
 }
 
 function processStartNode(graph) {
@@ -1983,7 +2016,7 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     lastResult: null,
     runMode: runMode === RunMode.Learn ? RunMode.Learn : RunMode.Play,
     scope: scopeLabel,
-    logs: playLogs.slice(-80),
+    logs: playLogs.slice(-PLAY_LOG_LIMIT),
     results: priorResults
   };
   await chrome.storage.local.set({ playing: true, playTabId: tabId, playPaused: false });
