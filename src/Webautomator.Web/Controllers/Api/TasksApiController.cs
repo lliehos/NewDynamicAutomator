@@ -306,6 +306,8 @@ public class TasksApiController : ControllerBase
         // WHY a cell was refused. `skipped` alone said nothing: a count of 6 told the user the sync
         // failed but not whether the row, the column or the write itself was the problem.
         var rejected = new List<object>();
+        // Where each value came from (the local run, or a hand edit in the local grid).
+        var changeKinds = body?.ChangeKinds ?? new Dictionary<string, string>();
 
         // A local run may have INSERTED rows before writing into them. Those rows do not exist on the
         // server, and a per-cell patch would have created them one column at a time — leaving every
@@ -454,6 +456,14 @@ public class TasksApiController : ControllerBase
             }
         }
 
+        // How the accepted values split between the run's own writes and the operator's edits. Values
+        // only, no rules: the operator pressed sync either way, and this is the summary that says
+        // what a local run actually contributed.
+        var kindCounts = cells
+                .Select(c => changeKinds.TryGetValue($"{c.DataSourceId}|{c.RowIndex}|{c.ColumnKey}", out var k) ? k : "run")
+                .GroupBy(k => k)
+                .ToDictionary(g => g.Key, g => g.Count());
+
         // The merge has consumed this run's payload: applied cells are on the server, conflicting
         // cells deliberately kept the server's newer value (reported above), and unchanged cells
         // already agreed. The "there is a newer copy on the client" flag has served its purpose and
@@ -464,7 +474,7 @@ public class TasksApiController : ControllerBase
         await _events.LogAsync("Info", "Play", "LocalRunSynced",
             $"Local run results synced ({applied} cell(s), {conflicts.Count} conflict(s))",
             UserId, User.Identity?.Name,
-            System.Text.Json.JsonSerializer.Serialize(new { taskId = id, applied, unchanged, conflicts = conflicts.Count, skipped, rowsAdded, rowsDeleted }),
+            System.Text.Json.JsonSerializer.Serialize(new { taskId = id, applied, unchanged, conflicts = conflicts.Count, skipped, rowsAdded, rowsDeleted, kindCounts }),
             path: HttpContext.Request.Path,
             ipAddress: HttpContext.Connection.RemoteIpAddress?.ToString(),
             ct: ct);
@@ -478,7 +488,7 @@ public class TasksApiController : ControllerBase
             reason = "local_run_synced"
         }, ct);
 
-        return Ok(new { ok = true, applied, unchanged, conflicts, skipped, rejected, rowsAdded, rowsDeleted });
+        return Ok(new { ok = true, applied, unchanged, conflicts, skipped, rejected, rowsAdded, rowsDeleted, kinds = kindCounts });
     }
 
     /// <summary>

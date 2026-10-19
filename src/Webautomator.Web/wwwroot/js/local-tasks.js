@@ -1023,6 +1023,21 @@
     const deletedRows = Array.isArray(answer?.deletedRows)
       ? answer.deletedRows
       : (Array.isArray(task?.locallyRunDeletedRows) ? task.locallyRunDeletedRows : []);
+    // The per-cell change KIND the viewer recorded: "run" (written by the local run) or "edit" (done
+    // by hand in the local grid). It travels with the payload so the server log — and the operator —
+    // can tell where a value came from, instead of treating every unsynced cell the same.
+    const changeKinds = {};
+    const changeSources = (answer && answer.ok && answer.changes && typeof answer.changes === "object")
+      ? answer.changes
+      : Object.fromEntries(Object.entries(task?.localSourceCopies || {})
+        .map(([sid, rec]) => [sid, rec?.changes || null]));
+    for (const [sid, rec] of Object.entries(changeSources || {})) {
+      for (const [rowKey, cols] of Object.entries(rec?.cells || {})) {
+        for (const [colKey, kind] of Object.entries(cols || {})) {
+          changeKinds[`${Number(sid)}|${Number(rowKey)}|${colKey}`] = kind;
+        }
+      }
+    }
     const sourceIds = [...new Set(cells
       .map((c) => Number(c?.dataSourceId))
       .filter((n) => Number.isFinite(n) && n > 0))];
@@ -1066,7 +1081,8 @@
           // values, so the badge stayed and the divergence was never resolved.
           cells,
           rows: insertedRows,
-          deletedRows
+          deletedRows,
+          changeKinds
         })
       });
       if (!res.ok) {

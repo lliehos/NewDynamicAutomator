@@ -36,6 +36,17 @@ public class SyncLocalRunRequest
     /// record, and the merge would report those cells as conflicts.
     /// </remarks>
     public List<SyncLocalRunRowDto> DeletedRows { get; set; } = new();
+
+    /// <summary>
+    /// Per-cell change kind, keyed <c>"{dataSourceId}|{rowIndex}|{columnKey}"</c>: <c>run</c> when the
+    /// local run wrote the value, <c>edit</c> when the operator changed it by hand in the local grid.
+    /// </summary>
+    /// <remarks>
+    /// Informational: the merge rule is the same for both. It travels so the server log (and anyone
+    /// reading a conflict report) can say whether a value came from the run or from a person, which
+    /// is the difference between "the process did this" and "I fixed it before syncing".
+    /// </remarks>
+    public Dictionary<string, string> ChangeKinds { get; set; } = new();
 }
 
 /// <summary>One row a local run inserted, addressed by the index it used in the local copy.</summary>
@@ -63,6 +74,13 @@ public class SyncLocalRunCellDto
     /// it (an older client, or a cell the local copy never carried) — the write then proceeds.
     /// </summary>
     public string? BaseValue { get; set; }
+
+    /// <summary>
+    /// Where this value came from: <c>run</c> (the local run wrote it) or <c>edit</c> (the operator
+    /// changed it by hand in the local grid). Informational only — it changes no merging rule, but it
+    /// is what the log, and a person reading the conflict report, needs to tell the two apart.
+    /// </summary>
+    public string? ChangeKind { get; set; }
 }
 
 /// <summary>

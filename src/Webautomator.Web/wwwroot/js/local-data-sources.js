@@ -366,6 +366,7 @@
           // The server now holds the merged shape, so the browser's own row shifts are done.
           fresh.rowShifts = [];
           viewerState.localRowShifts = [];
+          viewerState.localChanges = {};
           persistLocalGridCopy(fresh, { rebuilt: true });
           if (Number(viewerState.sourceId) === sid) {
             viewerState.lastSource = fresh;
@@ -777,6 +778,7 @@
       viewerState.localDirty = false;
       viewerState.localCopy = true;
       viewerState.localRowShifts = [];
+      viewerState.localChanges = {};
       // A pull queued BEFORE this click must not arrive afterwards and overwrite what was just
       // rebuilt; `isRefreshStale` compares against this stamp.
       viewerState.localRebuiltAt = new Date().toISOString();
@@ -1315,6 +1317,16 @@
     localCopy: false,
     /** Local row shifts made in this grid: { dataSourceId, at, delta }. Part of the browser copy. */
     localRowShifts: [],
+    /**
+     * What the browser copy changed, per source: `{ rows, cells, deleted }`.
+     *   rows    — local row indexes the copy CREATED (an inserted row),
+     *   deleted — local row indexes the copy REMOVED (their content, so it can still be shown),
+     *   cells   — `{ [rowIndex]: { [columnKey]: "run" | "edit" } }`, i.e. a cell a local run wrote
+     *             ("run") or one edited by hand in this grid ("edit").
+     * The sync reads the same record to decide what to replay on the server, and the grid paints it
+     * so the operator can see WHAT will travel before pressing sync.
+     */
+    localChanges: null,
     /** Set by "rebuild the local copy from the server": the queued pulls must not undo it. */
     localRebuiltAt: null,
     /**
@@ -1698,6 +1710,9 @@
     // The shift is part of the browser copy: the run and the sync have to know that a row was added
     // or removed locally, or their row indexes no longer point at the server's records.
     if (Number.isFinite(sourceId)) {
+      // …and the grid paints it: an inserted row is outlined, a delete is named in the legend, so the
+      // operator sees the shape change a sync will replay.
+      markLocalRowChange(at, delta > 0 ? "insert" : "delete", at);
       viewerState.localRowShifts = Array.isArray(viewerState.localRowShifts)
         ? viewerState.localRowShifts.slice()
         : [];
@@ -1724,6 +1739,16 @@
       const entry = findEntry(viewerState.taskId, Number(ds.id));
       if (entry) writeTasks(entry.tasks);
     }
+  }
+
+  /** Record that a local run wrote this cell, for the grid's change colours and the sync summary. */
+  function markLocalRunCellFromEvent(rowIndex, columnKey, sourceId) {
+    const sid = Number(sourceId ?? viewerState.sourceId);
+    if (!Number.isFinite(sid)) return;
+    const prev = viewerState.sourceId;
+    viewerState.sourceId = sid;
+    markLocalCellChange(rowIndex, columnKey, "run");
+    viewerState.sourceId = prev;
   }
 
   function handleCellEvent(ev, channel) {
@@ -1776,6 +1801,9 @@
     if (!viewing) return;
     const table = document.getElementById("da-portal-ds-table");
     if (isWrite && ds && hasValue && col) {
+      // A local run's write is a change of the browser copy: mark it so it is coloured as a
+      // run-written cell and counted in the sync summary.
+      if (channel === "local" && viewerState.localCopy) markLocalRunCellFromEvent(idx, col, sid);
       showWrittenCell(ds, idx, col, val);
       showActor(ev);
     } else {
@@ -1902,6 +1930,87 @@
     }
   }
 
+  /**
+   * The change record of the open source, created on demand.
+   *
+   * `rows`/`deleted`/`cells` are LOCAL row indexes of the copy on screen; the sync converts them to
+   * the server's numbering through `rowShifts`, exactly like the values it carries.
+   */
+  function localChangeRecord(sourceId, create) {
+    const sid = Number(sourceId);
+    if (!Number.isFinite(sid)) return null;
+    if (!viewerState.localChanges || typeof viewerState.localChanges !== "object") {
+      if (!create) return null;
+      viewerState.localChanges = {};
+    }
+    let rec = viewerState.localChanges[String(sid)];
+    if (!rec && create) {
+      rec = { rows: [], deleted: [], cells: {} };
+      viewerState.localChanges[String(sid)] = rec;
+    }
+    return rec || null;
+  }
+
+  /** Record that a cell of the browser copy now holds a value the server does not. */
+  function markLocalCellChange(rowIndex, columnKey, kind) {
+    const sid = Number(viewerState.sourceId);
+    if (!Number.isFinite(sid)) return;
+    const rec = localChangeRecord(sid, true);
+    const row = String(Number(rowIndex));
+    rec.cells[row] = rec.cells[row] || {};
+    // A hand edit on a cell a run wrote keeps saying "run": the sync must still carry it.
+    if (rec.cells[row][columnKey] === "run") return;
+    rec.cells[row][columnKey] = kind === "edit" ? "edit" : "run";
+  }
+
+  /** Record a structural change: a row this copy created, or one it removed. */
+  function markLocalRowChange(rowIndex, kind, atIndex) {
+    const sid = Number(viewerState.sourceId);
+    if (!Number.isFinite(sid)) return;
+    const rec = localChangeRecord(sid, true);
+    const row = Number(rowIndex);
+    if (!Number.isFinite(row)) return;
+    rec.rows = (rec.rows || []).filter((r) => Number(r) !== row);
+    rec.deleted = (rec.deleted || []).filter((d) => Number(d?.rowIndex) !== row);
+    if (kind === "insert") rec.rows.push(row);
+    else rec.deleted.push({ rowIndex: row, at: Number(atIndex ?? row) });
+  }
+
+  /** Drop every change mark of a source — the copy it described was just rebuilt or synced away. */
+  function clearLocalChanges(sourceId) {
+    const sid = Number(viewerState.sourceId);
+    if (viewerState.localChanges && typeof viewerState.localChanges === "object") {
+      delete viewerState.localChanges[String(sid ?? sourceId)];
+    }
+  }
+
+  /** Row classes + per-cell classes for the change record, used by the grid render. */
+  function localChangePaint(sourceId) {
+    const rec = localChangeRecord(sourceId, false);
+    const rows = new Map();
+    const cells = new Map();
+    if (!rec) return { rows, cells, hasAny: false };
+    for (const r of rec.rows || []) rows.set(Number(r), "ds-chg-row-insert");
+    // A deleted row is not in the copy any more, so it is not painted here: it is named in the
+    // legend/summary instead. A row that merely MOVED (the shift a delete caused) keeps a faint
+    // outline so the operator can see the numbering changed.
+    for (const s of viewerState.localRowShifts || []) {
+      if (Number(s?.delta) < 0) {
+        for (let r = Number(s.at); r < Number(s.at) + 1; r++) {
+          if (!rows.has(r)) rows.set(r, "ds-chg-row-shift");
+        }
+      }
+    }
+    for (const [rowKey, cols] of Object.entries(rec.cells || {})) {
+      for (const [colKey, kind] of Object.entries(cols || {})) {
+        if (!cells.has(Number(rowKey))) cells.set(Number(rowKey), new Map());
+        cells.get(Number(rowKey)).set(String(colKey), kind === "edit" ? "ds-chg-cell-edit" : "ds-chg-cell-write");
+      }
+    }
+    const hasAny = rows.size > 0 || cells.size > 0 || (rec.deleted || []).length > 0;
+    return { rows, cells, hasAny, rec };
+  }
+
   function renderViewerTable(ds) {
     const table = document.getElementById("da-portal-ds-table");
     const titleEl = document.getElementById("da-portal-ds-title");
@@ -1930,13 +2039,60 @@
     if (viewerState.page < 0) viewerState.page = 0;
     const from = viewerState.page * GRID_PAGE_SIZE;
     const slice = rows.slice(from, from + GRID_PAGE_SIZE);
+    // A browser-side copy is annotated with what changed in it (inserted row, run-written cell,
+    // hand edit); the server view never is, because nothing there is unsynced.
+    const paint = viewerState.localCopy
+      ? localChangePaint(Number(ds.id ?? viewerState.sourceId))
+      : { rows: new Map(), cells: new Map(), hasAny: false };
     tbody.innerHTML = slice.map((r, i) => {
       const rowIndex = from + i;
-      return `<tr><th class="ds-row-idx" data-row-index="${rowIndex}">${(rowIndex + 1).toLocaleString("fa-IR")}</th>${r.map((v, ci) =>
-        `<td data-row="${rowIndex}" data-col="${escapeHtml(colKeys[ci])}" title="${escapeHtml(cellTooltip(rowIndex, colKeys[ci]))}">${escapeHtml(v)}</td>`
-      ).join("")}</tr>`;
+      const rowCls = paint.rows.get(rowIndex) || "";
+      return `<tr${rowCls ? ` class="${rowCls}"` : ""}><th class="ds-row-idx" data-row-index="${rowIndex}">${(rowIndex + 1).toLocaleString("fa-IR")}</th>${r.map((v, ci) => {
+        const colKey = colKeys[ci];
+        const cellCls = paint.cells.get(rowIndex)?.get(String(colKey)) || "";
+        return `<td data-row="${rowIndex}" data-col="${escapeHtml(colKey)}"${cellCls ? ` class="${cellCls}"` : ""} title="${escapeHtml(cellTooltip(rowIndex, colKey))}">${escapeHtml(v)}</td>`;
+      }).join("")}</tr>`;
     }).join("");
+    renderViewerChangeLegend(paint);
     renderViewerPager(rows.length, totalPages);
+  }
+
+  /**
+   * Name what the local copy changed, above the grid.
+   *
+   * The colours alone would be a puzzle: this line says which kind of change each one is and how
+   * many there are, so the operator knows what a sync is about to carry before pressing it.
+   */
+  function renderViewerChangeLegend(paint) {
+    let host = document.getElementById("da-portal-ds-changes");
+    if (!host) {
+      host = document.createElement("p");
+      host.id = "da-portal-ds-changes";
+      host.className = "ds-chg-legend";
+      const note = document.getElementById("da-portal-ds-local-note");
+      if (note?.parentNode) note.parentNode.insertBefore(host, note.nextSibling);
+    }
+    if (!host) return;
+    if (!paint || !paint.hasAny) {
+      host.hidden = true;
+      host.innerHTML = "";
+      return;
+    }
+    const rec = paint.rec || {};
+    const runs = Object.values(rec.cells || {}).reduce((n, cols) =>
+      n + Object.values(cols || {}).filter((k) => k !== "edit").length, 0);
+    const edits = Object.values(rec.cells || {}).reduce((n, cols) =>
+      n + Object.values(cols || {}).filter((k) => k === "edit").length, 0);
+    const ins = (rec.rows || []).length;
+    const del = (rec.deleted || []).length;
+    const item = (cls, color, text) => `<span><i style="background:${color}"></i>${escapeHtml(text)}</span>`;
+    host.innerHTML = [
+      ins ? item("ds-chg-row-insert", "rgba(234,84,85,.85)", t("sources.chgRowInsert", { n: ins }) || `${ins} ردیف درج‌شده`) : "",
+      del ? item("ds-chg-row-delete", "rgba(140,140,150,.55)", t("sources.chgRowDelete", { n: del }) || `${del} ردیف حذف‌شده`) : "",
+      runs ? item("ds-chg-cell-write", "#d93025", t("sources.chgCellRun", { n: runs }) || `${runs} سلول نوشته‌شده با اجرا`) : "",
+      edits ? item("ds-chg-cell-edit", "#1a73e8", t("sources.chgCellEdit", { n: edits }) || `${edits} سلول ویرایش‌شده با دست`) : ""
+    ].filter(Boolean).join("");
+    host.hidden = !host.innerHTML;
   }
 
   /** Show/hide and fill the pager; hidden entirely for a source that fits in one page. */
@@ -2035,6 +2191,9 @@
   function saveCellLocally(rowIndex, columnKey, value, source) {
     const sourceId = Number(viewerState.sourceId);
     if (!Number.isFinite(sourceId) || sourceId <= 0) return false;
+    // A hand edit here is not a local-run value: the grid must show it as an edit, and the sync has
+    // to know it is the operator's own change rather than something a run wrote.
+    markLocalCellChange(rowIndex, columnKey, "edit");
     let previous = null;
     if (source && Array.isArray(source.cells)) {
       const hit = source.cells.find((c) =>
@@ -2193,8 +2352,11 @@
       td.textContent = commit ? next : before;
       editingCell = null;
       if (!commit || next === before) return;
+      // The change marks arrive with the write, but the cell was repainted from the DOM above: a
+      // fresh render is what puts the colour back on it.
       const ok = await saveCell(rowIndex, columnKey, next);
       if (!ok) td.textContent = before;
+      else if (viewerState.localCopy && viewerState.lastSource) renderViewerTable(viewerState.lastSource);
     };
 
     input.addEventListener("keydown", (e) => {
@@ -2375,6 +2537,10 @@
       // The run reads the ROWS this browser holds and needs to know which of them it created or
       // removed locally, so a sync can reproduce the shape on the server.
       rowShifts: Array.isArray(viewerState.localRowShifts) ? viewerState.localRowShifts.slice() : [],
+      // WHAT changed, per row and cell: the grid paints it and the sync asks the server to replay it.
+      changes: JSON.parse(JSON.stringify(viewerState.localChanges?.[String(sourceId)] || {
+        rows: [], deleted: [], cells: {}
+      })),
       savedAtUtc
     };
     ds.savedAtUtc = savedAtUtc;
@@ -2758,6 +2924,7 @@
       ds.rowCount = 0;
       ds.rowShifts = [];
       viewerState.localRowShifts = [];
+      viewerState.localChanges = {};
       viewerState.cellRevisions = {};
       viewerState.cellMeta = {};
       viewerState.page = 0;
@@ -2837,6 +3004,7 @@
     viewerState.localDirty = false;
     viewerState.localCopy = false;
     viewerState.localRowShifts = [];
+    viewerState.localChanges = {};
     setLocalNote(false);
     // Read the source straight from the server: the grid needs real cell values and the current
     // column set, which the list payload deliberately omits (it is a summary-only shape).
