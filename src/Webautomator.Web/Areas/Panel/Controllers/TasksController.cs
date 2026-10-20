@@ -319,6 +319,9 @@ public class TasksController : Controller
         taskId = (taskId ?? "").Trim();
         if (string.IsNullOrEmpty(taskId)) return BadRequest();
 
+        // The abort poll is the one signal a live run always emits, so it doubles as the session's
+        // liveness refresh: a session that stops polling expires instead of blocking saves forever.
+        _plays.Touch(taskId);
         // The client polls this while it plays, so the answer carries both stop signals it has to obey:
         // a per-task abort (an administrator stopped this run, or the canvas changed under it) and the
         // stop-all switch, which has to reach even a run that was started with the feature off and is

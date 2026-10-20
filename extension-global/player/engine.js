@@ -6316,12 +6316,40 @@ async function registerPlayOnServer(taskId) {
   return !!res && res.status === 409;
 }
 
+/**
+ * The in-flight RegisterPlay request, per task id.
+ *
+ * Register and unregister are separate HTTP calls, and register is deliberately fire-and-forget so a
+ * slow portal cannot delay the run starting. For a fast run — a condition check takes milliseconds —
+ * the two were genuinely racing: unregister could reach the server first and the register would then
+ * land on top, leaving the process marked "playing" with nothing running. Every later save was refused
+ * with a 409 for a run that had already finished. Holding the promise here lets the unregister wait for
+ * the register it is meant to undo.
+ */
+const playRegisterInflight = new Map();
+
+function registerPlayOnServerTracked(taskId) {
+  const key = String(taskId || "").trim();
+  if (!key) return Promise.resolve(false);
+  const p = registerPlayOnServer(key).catch(() => false);
+  playRegisterInflight.set(key, p);
+  p.finally(() => {
+    // Only clear the slot if it still holds this promise, so a newer register is not clobbered.
+    if (playRegisterInflight.get(key) === p) playRegisterInflight.delete(key);
+  });
+  return p;
+}
+
 async function unregisterPlayOnServer(taskId) {
+  const key = String(taskId || "").trim();
+  // Let the matching register land first, or the two can cross and the server keeps "playing".
+  const pending = playRegisterInflight.get(key);
+  if (pending) await pending.catch(() => {});
   const headers = await portalAuthHeaders();
   await portalFetch("/Panel/Tasks/UnregisterPlay", {
     method: "POST",
     headers,
-    body: JSON.stringify({ taskId: String(taskId) })
+    body: JSON.stringify({ taskId: key })
   });
 }
 
@@ -6425,7 +6453,7 @@ function startPlayAbortWatch(taskId, register) {
   if (playAbortPoll) clearInterval(playAbortPoll);
   // Registering is what makes this a SERVER-side run; a local run must not create a session.
   if (register !== false) {
-    registerPlayOnServer(taskId).then((refused) => {
+    registerPlayOnServerTracked(taskId).then((refused) => {
       if (refused && playStatus.playing) {
         appendPlayLog("error", "اجرای روی سرور توسط مدیر غیرفعال شده است؛ اجرا متوقف شد. از اجرای محلی استفاده کنید.");
         stopPlay("server_run_disabled");

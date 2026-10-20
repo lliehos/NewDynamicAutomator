@@ -46,6 +46,10 @@ public class RunCommandApiController : ControllerBase
         taskId = (taskId ?? "").Trim();
         var stopAll = await _settings.GetBoolAsync(SystemSettingKeys.StopAllServerRuns, false, ct);
 
+        // This poll is the liveness signal the tracker relies on: a session that stops asking has
+        // stopped running (see PlaySessionTracker.StaleAfter), so it must not block saves forever.
+        _plays.Touch(taskId);
+
         // A per-task abort is consumed on read: it is an instruction for one run, and answering with it
         // twice would stop a run that has already restarted under the same id.
         var aborted = !string.IsNullOrEmpty(taskId) && _plays.ConsumeAbort(taskId);
