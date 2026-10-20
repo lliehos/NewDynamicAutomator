@@ -1,0 +1,117 @@
+@using Webautomator.Domain.Entities
+@using Webautomator.Domain.Enums
+@{
+    ViewData["Title"] = L["billing.history.title"];
+    var orders = ViewBag.Orders as List<Order> ?? new List<Order>();
+    // Whether the storefront can actually sign a licence file. When it cannot, the row explains
+    // instead of offering a link that would fail on click.
+    var canDownload = ViewBag.CanDownloadLicense is true;
+
+    // One list for all three revenue paths, because the customer thinks in payments, not in tables.
+    string KindLabel(OrderKind kind) => kind switch
+    {
+        OrderKind.Plan => L["billing.history.kindPlan"],
+        OrderKind.SoftwarePackage => L["billing.history.kindPackage"],
+        OrderKind.LicenseRenewal => L["billing.history.kindRenewal"],
+        _ => "—"
+    };
+    string StatusLabel(OrderStatus status) => status switch
+    {
+        OrderStatus.Pending => L["billing.history.stPending"],
+        OrderStatus.Paid => L["billing.history.stPaid"],
+        OrderStatus.Fulfilled => L["billing.history.stFulfilled"],
+        OrderStatus.Failed => L["billing.history.stFailed"],
+        OrderStatus.Cancelled => L["billing.history.stCancelled"],
+        _ => "—"
+    };
+    string StatusClass(OrderStatus status) => status switch
+    {
+        OrderStatus.Paid or OrderStatus.Fulfilled => "billing-st-ok",
+        OrderStatus.Failed => "billing-st-bad",
+        OrderStatus.Pending => "billing-st-wait",
+        _ => "text-muted"
+    };
+    string CycleLabel(string? cycle) => cycle switch
+    {
+        "yearly" => L["billing.common.cycleYearly"],
+        "perpetual" => L["billing.common.cyclePerpetual"],
+        "monthly" => L["billing.common.cycleMonthly"],
+        _ => "—"
+    };
+}
+
+<div class="da-home">
+  @if (TempData["BillingError"] is string billErr && !string.IsNullOrWhiteSpace(billErr))
+  {
+    <div class="alert alert-warning small">@billErr</div>
+  }
+  <header class="da-home-head">
+    <div>
+      <h4 class="da-home-title mb-1">@L["billing.history.heading"]</h4>
+      <p class="da-home-sub mb-0">@L["billing.history.sub"]</p>
+    </div>
+  </header>
+
+  @if (orders.Count == 0)
+  {
+    <div class="alert alert-info">@L["billing.history.empty"]</div>
+    return;
+  }
+
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table mb-0">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>@L["billing.history.colKind"]</th>
+            <th>@L["billing.history.colDesc"]</th>
+            <th>@L["billing.history.colCycle"]</th>
+            <th>@L["billing.history.colAmount"]</th>
+            <th>@L["billing.history.colStatus"]</th>
+            <th>@L["billing.history.colDate"]</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          @foreach (var o in orders)
+          {
+            var when = (o.PaidAtUtc ?? o.CreatedAtUtc).ToLocalTime();
+            <tr>
+              <td>@o.Id</td>
+              <td class="text-nowrap">@KindLabel(o.Kind)</td>
+              <td>@o.ItemTitle</td>
+              <td class="text-nowrap">@CycleLabel(o.BillingCycle)</td>
+              <td class="text-nowrap">@o.PayableAmount.ToString("N0") @o.Currency</td>
+              <td class="text-nowrap"><span class="@StatusClass(o.Status)">@StatusLabel(o.Status)</span></td>
+              <td class="text-nowrap">@when.ToString("yyyy/MM/dd HH:mm")</td>
+              <td class="text-nowrap">
+                @if (o.Status is OrderStatus.Pending)
+                {
+                  <a class="btn btn-sm btn-primary"
+                     asp-area="Panel" asp-controller="Billing" asp-action="Checkout" asp-route-orderId="@o.Id">
+                    @L["billing.history.continuePay"]
+                  </a>
+                }
+                else if (o.Kind != OrderKind.Plan && o.Status is OrderStatus.Paid or OrderStatus.Fulfilled)
+                {
+                  @if (canDownload)
+                  {
+                    <a class="btn btn-sm btn-label-secondary"
+                       asp-area="Panel" asp-controller="Billing" asp-action="DownloadLicense" asp-route-orderId="@o.Id">
+                      @L["billing.history.downloadLicense"]
+                    </a>
+                  }
+                  else
+                  {
+                    <span class="text-muted small" title="@L["billing.result.licenseNotIssuable"]">@L["billing.history.licenseUnavailable"]</span>
+                  }
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

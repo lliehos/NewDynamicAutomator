@@ -1,0 +1,89 @@
+using Webautomator.Domain.Entities;
+
+namespace Webautomator.Domain.Entities;
+
+/// <summary>User-owned Excel/data library entry — independent of any process.</summary>
+public class DataSource
+{
+    public int Id { get; set; }
+    public int OwnerUserId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? FileName { get; set; }
+    public int ColumnCount { get; set; }
+    public int RowCount { get; set; }
+    /// <summary>JSON array of { key, title }.</summary>
+    public string ColumnsJson { get; set; } = "[]";
+    /// <summary>Legacy bulk JSON — migrated to <see cref="DataSourceCell"/> rows; kept for export/import fallback.</summary>
+    public string CellsJson { get; set; } = "[]";
+    /// <summary>Incremented on any cell/metadata write — optimistic concurrency for patch API.</summary>
+    public long DataRevision { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public int? LastEditorUserId { get; set; }
+
+    /// <summary>
+    /// A shared source every signed-in user can see and use, owned by the ProcessManager who made it.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately a real <see cref="DataSource"/> row rather than a separate entity or an ACL
+    /// table: the whole subsystem (cells, rows, columns, linking, the grid API, the editor's source
+    /// picker) already keys off a data source id, so a public source that is still a data source
+    /// inherits all of it. <see cref="OwnerUserId"/> stays the creator, which is what keeps the
+    /// quota and the "who owns this" answer honest.
+    ///
+    /// Access is split by intent, not by a per-user row: everyone may read it and write cell values
+    /// (that is what "use it as an action target" means), while the shape of the source — adding,
+    /// renaming or removing columns — stays with ProcessManager/Admin. Row insert/delete is allowed
+    /// for everyone, because a run that appends a result row is using the source, not redesigning it.
+    /// </remarks>
+    public bool IsPublic { get; set; }
+
+    /// <summary>
+    /// When set on a public source, ANY process may attach it (and, once attached, use it). When not
+    /// set, only the processes listed in <see cref="ProcessAccesses"/> may attach it.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <c>true</c> so a public source behaves exactly as it always has — usable by
+    /// everyone — until the manager who shared it deliberately narrows the list from the sources
+    /// page. The access list is the narrow half: adding a process there also attaches the source to
+    /// it, and removing a process detaches it, so "who has access" has exactly one visible answer.
+    /// </remarks>
+    public bool AllowAllProcesses { get; set; } = true;
+
+    /// <summary>
+    /// Set when a LOCAL run changed this source and the server has not received the new values yet.
+    /// </summary>
+    /// <remarks>
+    /// Local runs write into the client's own copy (the whole point is staying off the server), so
+    /// the server cannot see the divergence — the client reports it. The flag is what turns "somewhere
+    /// on this machine there is a newer version of this source" into a visible sync icon with a
+    /// single action, and it is cleared when the run's results are synced back (or when the client
+    /// reports nothing changed). The source itself is never "local" or "server": only the RUN is,
+    /// and this flag is the bookkeeping that follows from having run locally.
+    /// </remarks>
+    public bool NeedsSync { get; set; }
+
+    /// <summary>When the local change was reported; diagnostics only.</summary>
+    public DateTime? NeedsSyncAtUtc { get; set; }
+
+    public ICollection<DataSourceCell> Cells { get; set; } = new List<DataSourceCell>();
+
+    public AppUser? Owner { get; set; }
+    public AppUser? LastEditor { get; set; }
+    public ICollection<ProcessDataSource> ProcessLinks { get; set; } = new List<ProcessDataSource>();
+
+    /// <summary>Process grants for a public source — see <see cref="DataSourceProcessAccess"/>.</summary>
+    public ICollection<DataSourceProcessAccess> ProcessAccesses { get; set; } = new List<DataSourceProcessAccess>();
+}
+
+/// <summary>Attach a library data source to a process (unlink ≠ delete).</summary>
+public class ProcessDataSource
+{
+    public int ProcessId { get; set; }
+    public int DataSourceId { get; set; }
+    public bool IsDefault { get; set; }
+    public int SortOrder { get; set; }
+
+    public Process? Process { get; set; }
+    public DataSource? DataSource { get; set; }
+}

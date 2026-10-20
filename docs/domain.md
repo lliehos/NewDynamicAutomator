@@ -1,55 +1,41 @@
-# دامنه
+# دامنه (Canvas-first + کتابخانه منابع)
 
-مرجع رفتار کسب‌وکار: پروژهٔ قدیمی `C:\Projects\dynamicAutomatorV2` (به‌ویژه `FormRecord`).
-اینجا فقط UI، محل ذخیره (مرورگر)، و جایگزینی Selenium با افزونه Chrome عوض می‌شود — نه مدل دامنه.
+منبع حقیقت **گراف فرآیند** سند **Graph JSON** است (`Processes.GraphJson`). گروه/مرحله/شرط/سلکتور داخل JSON هستند.
 
-## ضبط (منطق V2 — الزامی)
+**منابع داده (Excel)** موجودیت مستقل در جدول `DataSources` هستند و با جدول واسط `ProcessDataSources` به فرآیند وصل می‌شوند. حذف فرآیند فقط لینک را پاک می‌کند؛ کتابخانه می‌ماند. جدا کردن منبع از فرآیند ≠ حذف از کتابخانه.
 
-در V2 با **Start**:
-1. یک **Group خالی** روی Task جاری ساخته می‌شود.
-2. رویدادهای مرورگر **Step** را به **آخرین Group** اضافه می‌کنند.
-3. Pause و Start دوباره → Group خالی بعدی.
-4. ذخیره → همان گروه‌ها (با Steps تو در تو) persist می‌شوند.
-
-V3 همان را نگه می‌دارد: `recordingGroups[]`؛ اولین Start یک گروه خالی می‌سازد؛ اکشن‌ها داخل آخرین گروه.
+آرشیو اسکیمای ویندوزی V2: [legacy-windows-v2.md](legacy-windows-v2.md).
 
 ## هدف محصول
 
-کاربر یک **فرآیند** با **گروه، حلقه و شرط** می‌سازد و آن را اجرا می‌کند روی یکی از:
+کاربر یک **فرآیند** با **گروه، حلقه و شرط** می‌سازد و با افزونه Chrome MV3 اجرا می‌کند.
 
-| `RepeatSourceType` | معنی |
-|--------------------|------|
+| `repeatSourceType` (روی node گروه) | معنی |
+|------------------------------------|------|
 | `None` | یک‌بار |
-| `DataSource` | به‌ازای هر ردیف منبع داده |
-| `Elements` | به‌ازای هر المان صفحه (مثلاً ردیف جدول) — سلکتور روی گروه |
+| `DataSource` | به‌ازای هر ردیف منبع لینک‌شده |
+| `Elements` | به‌ازای هر المان صفحه (سلکتور روی گروه) |
 | `Loops` | تعداد ثابت تکرار |
 
-## موجودیت‌ها
+## موجودیت‌های پایدار (DB)
 
-- `AutomationTask` فرآیند
-- `Group` بلوک منطقی + حلقه (`ParentGroupId`, `MoveLoop`, `RepeatSourceType`, `Selector` برای Elements، `DataSourceId`)
-- `Step` مرحله — **همیشه داخل یک گروه** (`GroupId`)
-- `StepAction` اکشن + `OnFailedType`
-- `ConditionGroup` / `Condition` — شاخه بین گروه‌ها (یال success/fail)
-- `Selector` + `FramePathJson`
-- `DataSource` / `DataSourceCell` — هر فرآیند چند منبع؛ بارگذاری از اکسل
-- `UserTaskAccess`
+- **`Process`** — عنوان، `GraphJson`, `DesignOrigin`, تأخیر، سازنده
+- **`ProcessShare`** — ACL (`CanView` / `CanEdit` / `CanDelete` / `CanExecute` / `CanChangeDataSource`)
+- **`DataSource`** — کتابخانهٔ کاربر (Title، ColumnsJson، CellsJson، مالک)
+- **`ProcessDataSource`** — لینک فرآیند↔منبع (`IsDefault`, `SortOrder`)؛ cascade با حذف فرآیند؛ Restrict روی منبع
+- **`AppUser`**, **`Plan`** (`MaxTasks`, `MaxDataSources`, `MaxProcessSteps`), **`PlanPrice`**, **`SystemSetting`**
+- **`DeviceSession`**, **`AppEventLog`**
 
-## منابع داده (Excel)
+## Graph JSON
 
-- کاربر در ویرایشگر فرآیند یک یا چند فایل `.xlsx` بارگذاری می‌کند.
-- ردیف اول شیت = هدر ستون‌ها → ستون‌ها به‌صورت **key/value**.
-- هر سلول داده به‌صورت **key / index / cellValue**.
-- گروه با `RepeatSourceType = DataSource` و `DataSourceId` روی ردیف‌های منبع حلقه می‌زند.
+- `nodes[]` / `edges[]` — گراف ادیتور/پخش
+- `dataSources[]` — اسنپ‌شات هیدراته‌شده از کتابخانه برای ادیتور/افزونه (SoT کتابخانه است)
+- نام ستون سلکتور (`selectorDynamicColumn` و …) با جدا شدن منبع حفظ می‌شود؛ با تغییر منبع پیش‌فرض می‌توان سلکتورهای با ستون متناظر را یکجا به‌روز کرد
 
-## سناریوی مرجع
+## انتقال از دیتابیس قدیمی (ادمین)
 
-رکورد → URL → شرط «فرم لاگین؟» → گروه لاگین یا منو → فرم → شرط «جدول ردیف دارد؟» → گروه حلقه `Elements` روی ردیف‌ها → تکرار بیرونی در صورت نیاز.
+فقط فرآیندهایی که کاربر **مالک** آن‌هاست (`CreatorUserId`) با گروه/مرحله/شرط به مبدأ `Transferred` منتقل می‌شوند. **منابع منتقل نمی‌شوند.**
 
-ضبط خطی مادهٔ خام است؛ شکستن به شرط/حلقه در ویرایشگر (علامت‌گذاری حین رکورد فاز بعد).
+## ضبط / اجرا
 
-## اجرا
-
-- بدون Selenium: افزونه Chrome MV3 برای ضبط و پخش.
-- `RunMode.Play`: پخش؛ حلقه/شرط هوک دارند و کامل می‌شوند.
-- `RunMode.Learn`: فاز بعدی.
+همان Graph JSON؛ ضبط merge به بوم؛ پخش روی تب هدف.

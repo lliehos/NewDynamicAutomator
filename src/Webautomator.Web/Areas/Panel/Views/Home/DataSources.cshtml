@@ -1,0 +1,151 @@
+@{
+    ViewData["Title"] = L["panel.sourcesTitle"] + " — " + L["brand.name"];
+}
+
+<div class="da-home da-sources-home">
+  <header class="da-home-head">
+    <div>
+      <div class="da-home-brand" data-i18n="brand.name">@L["brand.name"]</div>
+      <h4 class="da-home-title mb-0" data-i18n="panel.sourcesTitle">@L["panel.sourcesTitle"]</h4>
+      <p class="da-home-sub mb-0" id="da-sources-status" data-i18n="panel.sourcesSub">@L["panel.sourcesSub"]</p>
+    </div>
+    @if (ViewBag.CanCreatePublicSource == true)
+    {
+      @* A public source is visible to every user, so making one is a team-level action: the button
+         is shown only to the roles the API lets create one. *@
+      <div class="da-home-actions">
+        <button type="button" class="btn btn-primary btn-sm" id="da-create-public-source"
+                data-i18n="sources.createPublic">@L["sources.createPublic"]</button>
+      </div>
+    }
+  </header>
+
+  <div class="da-tasks-panel" id="da-sources-panel">
+    <div class="card d-none d-md-block mb-0">
+      <div class="table-responsive">
+        <table class="table mb-0">
+          <thead>
+            <tr>
+              <th>عنوان منبع</th>
+              <th>فرآیند</th>
+              <th class="text-nowrap">ستون</th>
+              <th class="text-nowrap">ردیف</th>
+              <th>فایل</th>
+              <th class="text-nowrap">عملیات</th>
+            </tr>
+          </thead>
+          <tbody id="da-source-rows">
+            <tr><td colspan="6" class="text-center text-muted py-6">در حال بارگذاری...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="da-task-list d-md-none" id="da-source-cards" aria-live="polite">
+      <div class="da-task-empty text-muted">در حال بارگذاری...</div>
+    </div>
+
+    <!-- List pager: the library can hold many sources, so the table shows one page at a time. -->
+    <div class="da-list-pager" id="da-sources-pager" hidden>
+      <button type="button" class="btn btn-sm btn-label-secondary" id="da-sources-prev">قبلی</button>
+      <span class="da-list-pageinfo" id="da-sources-pageinfo"></span>
+      <button type="button" class="btn btn-sm btn-label-secondary" id="da-sources-next">بعدی</button>
+    </div>
+  </div>
+</div>
+
+<div class="ds-viewer" id="da-portal-ds-viewer" hidden>
+  <div class="ds-viewer-backdrop" data-portal-ds-close="1"></div>
+  <div class="ds-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="da-portal-ds-title">
+    <div class="ds-viewer-head">
+      <div>
+        <h2 id="da-portal-ds-title">منبع داده</h2>
+        <p class="ds-viewer-sub" id="da-portal-ds-sub"></p>
+      </div>
+        <div class="ds-viewer-head-actions">
+          <!-- Which copy the grid below is: the server's rows or this browser's. Same colour contract
+               as the row buttons (green = server, grey = local), so the icon that opened the modal
+               and the modal itself can never tell two different stories. -->
+          <span class="ds-view-mode" id="da-portal-ds-mode" hidden></span>
+          <span class="ds-viewer-live" id="da-portal-ds-live" title="اتصال زنده">● آفلاین</span>
+          <span class="ds-viewer-actor text-muted small" id="da-portal-ds-actor" hidden></span>
+          <!-- Icon-only controls: they carry a tooltip and take one 30px square each, so the row can
+               never wrap onto a second line. -->
+          <!-- "Clear data" maps to emptying the copy being viewed, so the icon is an eraser with a
+               base line (the old pencil read as "edit", which the banner already says). -->
+          <button type="button" class="ds-icon-btn" id="da-portal-ds-clear"
+                  title="پاک‌سازی داده" aria-label="پاک‌سازی داده"
+                  data-i18n-title="sources.clearData" data-i18n-aria="sources.clearData">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M16.2 3.3c.6-.6 1.6-.6 2.2 0l2.3 2.3c.6.6.6 1.6 0 2.2l-9.3 9.2q-.3.3-.7.5l-1.7 1.4q-.9.5-1.8-.2l-2.6-2.6q-.6-.9-.2-1.8l1.4-1.7q.2-.4.5-.7zM8.4 15.2l-3-3-.9 1.1 2.6 2.6z"/><path fill="currentColor" d="M3 19.6h18v2H3z"/></svg>
+          </button>
+          <button type="button" class="ds-icon-btn" id="da-portal-ds-refresh"
+                  title="بازخوانی" aria-label="بازخوانی"
+                  data-i18n-title="sources.refresh" data-i18n-aria="sources.refresh">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5a7 7 0 0 1 6.5 4.4l1.9-1.1V13h-4.7l1.8-1A5 5 0 1 0 12 17v2a7 7 0 1 1 0-14z"/></svg>
+          </button>
+          <!-- Excel export moved here from the row: it exports whichever copy the modal shows. -->
+          <button type="button" class="ds-icon-btn" id="da-portal-ds-download"
+                  title="دانلود اکسل" aria-label="دانلود اکسل"
+                  data-i18n-title="sources.downloadExcel" data-i18n-aria="sources.downloadExcel">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 3h2v8.2l2.9-2.9 1.4 1.4-5.3 5.3-5.3-5.3 1.4-1.4 2.9 2.9V3zM5 16.6h14v2H5v-2z"/></svg>
+          </button>
+          <!-- Replacing the file moved here from the row: it acts on the copy being viewed (local or
+               server), which the row cannot express. -->
+          <button type="button" class="ds-icon-btn" id="da-portal-ds-reload"
+                  title="بارگذاری مجدد فایل" aria-label="بارگذاری مجدد فایل"
+                  data-i18n-title="sources.reloadFile" data-i18n-aria="sources.reloadFile">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3l4.5 4.5-1.4 1.4L13 6.8V15h-2V6.8L8.9 8.9 7.5 7.5 12 3zM5 17h14v2H5v-2z"/></svg>
+          </button>
+          <!-- Local view only, and only while this browser still owes the server writes: the PRIMARY
+               action there is sending them UP. It is the mirror of the "reset from server" button
+               below, and the two share no shape on purpose — confusing them loses a run's result. -->
+          <button type="button" class="ds-icon-btn" id="da-portal-ds-sync" hidden
+                  title="ارسال نتیجهٔ محلی به سرور" aria-label="ارسال نتیجهٔ محلی به سرور"
+                  data-i18n-title="sources.syncNowTitle" data-i18n-aria="sources.syncNowTitle">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 4h2v9.2l2.3-2.3 1.4 1.4L12 17l-4.7-4.7 1.4-1.4L11 13.2V4zM5 19h14v2H5v-2z"/></svg>
+          </button>
+          <!-- The opposite direction: throw the local copy away and rebuild it from the server. -->
+          <button type="button" class="ds-icon-btn" id="da-portal-ds-reset" hidden
+                  title="بازسازی نسخهٔ محلی از سرور (نتیجهٔ اجرای محلی از بین می‌رود)"
+                  aria-label="بازسازی نسخهٔ محلی از سرور"
+                  data-i18n-title="sources.resetLocalTitle" data-i18n-aria="sources.resetLocalTitle">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5V2L7 6l5 4V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>
+          </button>
+          <button type="button" class="ds-icon-btn" data-portal-ds-close="1"
+                  title="بستن" aria-label="بستن"
+                  data-i18n-title="sources.close" data-i18n-aria="sources.close">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M18.3 5.7L12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
+          </button>
+        </div>
+    </div>
+    <div class="ds-viewer-legend">
+      <span class="ds-leg ds-leg-read">خواندن</span>
+      <span class="ds-leg ds-leg-write">نوشتن</span>
+    </div>
+    <!-- Local-copy notice: this grid may be showing data a local run produced, not the server's. -->
+    <p class="ds-local-note" id="da-portal-ds-local-note" role="status" hidden></p>
+    <div class="ds-viewer-scroll">
+      <table class="ds-viewer-table" id="da-portal-ds-table">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+      <!-- Shown while a long grid operation runs (add row/column, refresh) so the user sees that the
+           click registered; without it a slow reload just looks frozen. -->
+      <div class="ds-grid-loader" id="da-portal-ds-loader" hidden>
+        <span class="ds-grid-spinner" aria-hidden="true"></span>
+        <span class="ds-grid-loader-text" id="da-portal-ds-loader-text"></span>
+      </div>
+    </div>
+    <div class="ds-viewer-foot" id="da-portal-ds-pager" hidden>
+      <button type="button" class="btn btn-sm btn-label-secondary" id="da-portal-ds-prev">قبلی</button>
+      <span class="ds-viewer-page" id="da-portal-ds-pageinfo"></span>
+      <button type="button" class="btn btn-sm btn-label-secondary" id="da-portal-ds-next">بعدی</button>
+    </div>
+  </div>
+</div>
+
+@section Scripts {
+<script src="~/lib/signalr/signalr.min.js"></script>
+<link rel="stylesheet" href="~/editor/flow.css?v=@V.AssetVersion" />
+<script src="~/js/local-data-sources.js?v=@V.AssetVersion"></script>
+}

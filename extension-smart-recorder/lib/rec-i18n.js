@@ -1,0 +1,169 @@
+/**
+ * Smart Recorder — shared extension UI strings (fa/en).
+ *
+ * Culture is synced from the portal: the web app writes the tenant/admin language into
+ * `chrome.storage.local.uiCulture` (the same key `extension-global/lib/ext-i18n.js` uses),
+ * so both extensions speak the language the user actually selected in the product.
+ *
+ * Deliberately self-contained (no import) because the recorder's manifest does not yet
+ * bundle the global extension's lib folder.
+ */
+(function (global) {
+  const STRINGS = {
+    fa: {
+      // popup
+      "app.title": "ضبط هوشمند",
+      "popup.idle": "ضبط هوشمند v{ver} · بی‌کار",
+      "popup.thinking": "در حال فکر کردن · جلسه {sid} · فرآیند #{id}",
+      "popup.learningComplete": "یادگیری کامل شد · آماده ذخیره",
+      "popup.refresh": "تازه‌سازی",
+      "popup.noServer": "سرور: مشخص نشده",
+      "popup.stop": "توقف فکر کردن",
+      "popup.hint": "از لیست فرآیندها شروع کنید. لوگوی روی صفحه، فکر کردن را متوقف می‌کند. لاگی ثبت نمی‌شود.",
+      // in-page FAB
+      "fab.stopThinking": "توقف فکر کردن",
+      "fab.learningComplete": "یادگیری کامل شد",
+      "fab.save": "ذخیره در فرآیند",
+      "fab.copy": "کپی در حافظه (برای Paste در دیاگرام)",
+      "fab.saveOk": "فرآیند ذخیره شد.",
+      "fab.saveFail": "ذخیره انجام نشد — چیزی به فرآیند اضافه نشد.",
+      "fab.saveNoServer": "سرور در دسترس نیست؛ ذخیره انجام نشد.",
+      "fab.copyOk": "در حافظه ذخیره شد — در دیاگرام راست‌کلیک و «چسباندن فرآیند» را بزنید.",
+      "fab.copyFail": "کپی در حافظه انجام نشد.",
+      "fab.copyNoClipboard": "فرآیند آماده شد ولی مرورگر اجازهٔ نوشتن در حافظه نداد — از پورتال دکمهٔ کپی را بزنید.",
+      "fab.markAlt": "وباتومیتور",
+      "fab.dragHint": "برای جابجایی بکشید",
+      "fab.resize": "برای تغییر اندازه بکشید",
+      "fab.guideClick": "کلیک",
+      "fab.guideCondition": "شرط — بررسی این المان (نه کلیک روی آن)",
+      "fab.guideAction": "اقدام — کلیک روی المان",
+      "fab.guideToggle": "راهنمای ژست‌ها — برای بستن کلیک کنید",
+      // portal status messages
+      "portal.notInstalled": "افزونهٔ Smart Recorder نصب نیست.",
+      "portal.noTask": "فرآیند هدف مشخص نیست.",
+      "portal.started": "هوشمندسازی فرآیند #{id} شروع شد — لوگو = توقف فکر کردن.",
+      "portal.serverDown": "سرور در دسترس نیست (404).",
+      "portal.startError": "خطا در شروع Smart Recorder",
+      "portal.noCopy": "فرآیند ضبط‌شده‌ای در حافظهٔ افزونه نیست.",
+      "portal.copied": "فرآیند ضبط‌شده در حافظه کپی شد — در دیاگرام راست‌کلیک و «چسباندن فرآیند» را بزنید.",
+      "portal.copyBlocked": "مرورگر اجازهٔ نوشتن در حافظه را نداد."
+    },
+    en: {
+      "app.title": "Smart Recorder",
+      "popup.idle": "Smart Recorder v{ver} · idle",
+      "popup.thinking": "Thinking · session {sid} · process #{id}",
+      "popup.learningComplete": "Learning complete · ready to save",
+      "popup.refresh": "Refresh",
+      "popup.noServer": "Server: not set",
+      "popup.stop": "Stop thinking",
+      "popup.hint": "Start from the process list. The mark on the page stops thinking. No logs.",
+      "fab.stopThinking": "Stop thinking",
+      "fab.learningComplete": "Learning complete",
+      "fab.save": "Save to process",
+      "fab.copy": "Copy to memory (paste into the diagram)",
+      "fab.saveOk": "The process was saved.",
+      "fab.saveFail": "Save failed — nothing was added to the process.",
+      "fab.saveNoServer": "The server is not reachable; the save did not happen.",
+      "fab.copyOk": "Copied to memory — right-click the diagram and choose Paste process.",
+      "fab.copyFail": "Copy to memory failed.",
+      "fab.copyNoClipboard": "The process was prepared, but the browser blocked the clipboard write — use the portal's copy button.",
+      "fab.markAlt": "Webautomator",
+      "fab.dragHint": "Drag to move",
+      "fab.resize": "Drag to resize",
+      "fab.guideClick": "Click",
+      "fab.guideCondition": "Condition - check this element (do not click it)",
+      "fab.guideAction": "Action - click the element",
+      "fab.guideToggle": "Gesture guide - click to dismiss",
+      "portal.notInstalled": "The Smart Recorder extension is not installed.",
+      "portal.noTask": "The target process is not specified.",
+      "portal.started": "Smart processing of process #{id} started — the mark stops thinking.",
+      "portal.serverDown": "Server is not reachable (404).",
+      "portal.startError": "Could not start Smart Recorder",
+      "portal.noCopy": "There is no recorded process in extension memory.",
+      "portal.copied": "The recorded process was copied — right-click the diagram and choose Paste process.",
+      "portal.copyBlocked": "The browser blocked the clipboard write."
+    }
+  };
+
+  let culture = "fa";
+  const listeners = new Set();
+
+  function normalize(v) {
+    const s = String(v || "").trim().toLowerCase();
+    if (s.startsWith("en")) return "en";
+    return "fa";
+  }
+
+  function t(key, vars) {
+    const pack = STRINGS[culture] || STRINGS.fa;
+    let text = pack[key] ?? STRINGS.fa[key] ?? key;
+    if (vars && typeof vars === "object") {
+      Object.keys(vars).forEach((k) => {
+        text = text.replace(new RegExp("\\{" + k + "\\}", "g"), vars[k] == null ? "" : String(vars[k]));
+      });
+    }
+    return text;
+  }
+
+  function dir() {
+    return culture === "en" ? "ltr" : "rtl";
+  }
+
+  function getCulture() {
+    return culture;
+  }
+
+  function setCulture(next) {
+    const n = normalize(next);
+    if (n === culture) return;
+    culture = n;
+    listeners.forEach((fn) => {
+      try { fn(culture); } catch { /* ignore */ }
+    });
+  }
+
+  function onChange(fn) {
+    if (typeof fn === "function") listeners.add(fn);
+    return () => listeners.delete(fn);
+  }
+
+  // Apply direction/language and translate every [data-i18n] node inside `root`.
+  function applyDom(root) {
+    const host = root || document;
+    host.querySelectorAll("[data-i18n]").forEach((el) => {
+      const key = el.getAttribute("data-i18n");
+      if (!key) return;
+      el.textContent = t(key);
+    });
+    host.querySelectorAll("[data-i18n-title]").forEach((el) => {
+      const key = el.getAttribute("data-i18n-title");
+      if (!key) return;
+      const val = t(key);
+      el.setAttribute("title", val);
+      el.setAttribute("aria-label", val);
+    });
+    const html = document.documentElement;
+    if (html) {
+      html.setAttribute("dir", dir());
+      html.setAttribute("lang", culture);
+    }
+  }
+
+  async function init() {
+    try {
+      const data = await chrome.storage.local.get(["uiCulture"]);
+      culture = normalize(data.uiCulture);
+    } catch {
+      culture = "fa";
+    }
+    try {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== "local" || !changes.uiCulture) return;
+        setCulture(changes.uiCulture.newValue);
+      });
+    } catch { /* ignore */ }
+    return culture;
+  }
+
+  global.DaRecI18n = { t, init, getCulture, setCulture, dir, applyDom, onChange, normalize };
+})(typeof globalThis !== "undefined" ? globalThis : window);

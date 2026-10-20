@@ -1,0 +1,733 @@
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Input;
+using Webautomator.Player.Models;
+using Webautomator.Player.Services;
+
+namespace Webautomator.Player;
+
+/// <summary>
+/// The runner's shell: sign in, see the process list, start a run.
+/// </summary>
+/// <remarks>
+/// Login state is remembered as a token, not as the password. The app is a client of the panel, and
+/// the panel already issues a bearer token the extension uses — storing the password to re-mint one
+/// would spread the credential further than the panel ever intended.
+/// </remarks>
+public partial class MainWindow : Window
+{
+    private readonly ObservableCollection<ProcessRow> _rows = new();
+    private PanelClient? _client;
+    private LicenseGate _license = LicenseGate.Blocked();
+    private UpdateListener? _updateListener;
+
+    /// <summary>Open run windows, so several runs can be watched at once.</summary>
+    private readonly List<RunWindow> _runs = new();
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        ProcessGrid.ItemsSource = _rows;
+        ApplyProductName();
+        Loaded += async (_, _) => await BootstrapAsync();
+        LicenseText.Text = DsStrings.LicenseMissing;
+    }
+
+    /// <summary>
+    /// Name the window after the deployment, once its branding is known.
+    /// </summary>
+    /// <remarks>
+    /// Called again after sign-in, when the panel's own app name replaces the shipped default — so
+    /// a customer's installation calls itself their product name plus "Player", not ours.
+    /// </remarks>
+    private void ApplyProductName()
+    {
+        Title = PlayerIdentity.ProductName;
+        ProductNameText.Text = PlayerIdentity.ProductName;
+        LoginProductName.Text = PlayerIdentity.ProductName;
+    }
+
+    // ---- Startup --------------------------------------------------------------------------------
+
+    private async Task BootstrapAsync()
+    {
+        // The server address comes from the licence on disk, the download binding, or the
+        // development fallback, in that order — never from the user. Resolved first, because the
+        // per-server folder itself is keyed off the resolved server.
+        ResolveServerAddress();
+        ServerLabel.Text = ServerAddress.BaseUrl ?? "";
+        ApplyServerFooter();
+
+        // Now that the key is known, adopt any pre-per-server state so an upgrade keeps the cached
+        // licence and remembered user instead of appearing to log out.
+        PlayerStorage.MigrateLegacyFiles();
+
+        // Read settings AFTER the per-server folder is in effect: a remembered token must come from
+        // this server's own file, not another player's on the same machine.
+        var saved = AppSettings.Load();
+
+        // Check for an update before sign-in. The endpoint is unauthenticated precisely so a client
+        // too old to talk to this server is told to update rather than failing at login with an
+        // error it cannot interpret.
+        _ = CheckForUpdateAsync(ServerAddress.BaseUrl, interactive: false);
+
+        if (!string.IsNullOrWhiteSpace(ServerAddress.BaseUrl) && !string.IsNullOrWhiteSpace(saved.Token))
+        {
+            _client = new PanelClient(ServerAddress.BaseUrl);
+            var res = await _client.UseTokenAsync(saved.Token!, saved.UserName);
+            if (res.Ok)
+            {
+                await AfterLoginAsync();
+                return;
+            }
+            // A stale token is normal (it expires); fall back to the login form rather than
+            // reporting an error the user cannot act on.
+            saved.Token = null;
+            AppSettings.Save(saved);
+        }
+
+        if (ServerAddress.Origin == ServerAddress.Source.None)
+            LoginStatus.Text = DsStrings.LicenseMissing;
+    }
+
+    /// <summary>
+    /// Show, in the footer, the server this copy is bound to.
+    /// </summary>
+    /// <remarks>
+    /// The address is shown with a short form of its deployment fingerprint, so a user looking at two
+    /// players on one machine can tell them apart at a glance — the same value Admin → Licence shows,
+    /// which is what makes "is this the server I think it is?" answerable without signing in. When no
+    /// server could be resolved the line says so plainly rather than staying blank, because a silent
+    /// empty footer reads as a rendering bug rather than a missing licence.
+    /// </remarks>
+    private void ApplyServerFooter()
+    {
+        var url = ServerAddress.BaseUrl;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            ServerFooterText.Text = DsStrings.NoServerAddress;
+            ServerFooterText.ToolTip = null;
+            return;
+        }
+
+        var fp = ServerAddress.Fingerprint ?? ServerAddress.FingerprintFromBaseUrl;
+        var shortFp = string.IsNullOrWhiteSpace(fp)
+            ? ""
+            : fp!.Length <= 12 ? fp : fp[..12];
+        ServerFooterText.Text = string.IsNullOrEmpty(shortFp)
+            ? $"سرور: {url}"
+            : $"سرور: {url}  ·  اثر انگشت: {shortFp}";
+        ServerFooterText.ToolTip = ServerAddress.Fingerprint ?? url;
+    }
+
+    /// <summary>
+    /// Read the signed licence to learn which server this install belongs to.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort: the app must still open when no licence is present, because the licence is also
+    /// what gates local execution and its absence is reported later and more meaningfully than a
+    /// failure to start would be.
+    /// </remarks>
+    private void ResolveServerAddress()
+    {
+        // The panel hands this install its licence on every sign-in, but the address is needed
+        // BEFORE sign-in — that is the whole point of not asking for it. So it is read from the
+        // copy the panel already mirrored locally, and a missing copy simply means the development
+        // fallback.
+        try
+        {
+            var payload = LicenseGate.ReadLocalPayload();
+            // The binding the panel stamped into the download is the second source: a fresh copy
+            // with no licence yet still reaches the server it came from, so the address never has
+            // to be typed back in by the person who just downloaded the app.
+            var binding = PlayerBinding.Load();
+            ServerAddress.Resolve(payload?.ServerBaseUrl, payload?.AllowedHost, binding);
+        }
+        catch
+        {
+            // A corrupt or unreadable licence falls back to the binding, then the development
+            // address, rather than blocking the window; the licence gate reports the real problem
+            // after sign-in.
+            ServerAddress.Resolve(null, null, PlayerBinding.Load());
+        }
+    }
+
+    /// <summary>
+    /// Look for a newer runner build and offer to install it.
+    /// </summary>
+    /// <remarks>
+    /// Offered rather than forced: an update replaces the running executable, so doing that without
+    /// consent mid-session would be a surprise. The user decides when to restart.
+    /// </remarks>
+    private async Task CheckForUpdateAsync(string? serverUrl, bool interactive)
+    {
+        if (string.IsNullOrWhiteSpace(serverUrl)) return;
+        var info = await UpdateService.CheckAsync(serverUrl);
+        if (info is null || !info.Available) return;
+        if (!UpdateService.IsNewer(info.Version, UpdateService.CurrentVersion)) return;
+
+        // A newer build exists. The user gets an in-app notification with one action — the update
+        // page, which downloads, applies the swap and restarts. Nothing replaces the running app
+        // without that choice, and the notification stays visible until it is taken.
+        ShowUpdateBanner(info.Version);
+        if (interactive) await OpenUpdateAsync(serverUrl);
+    }
+
+    /// <summary>Put the update notification on screen.</summary>
+    private void ShowUpdateBanner(string version)
+    {
+        UpdateBannerText.Text = $"نسخهٔ جدید {version} روی سرور موجود است — برای نصب روی «به‌روزرسانی» بزنید.";
+        UpdateBanner.Visibility = Visibility.Visible;
+    }
+
+    private async void UpdateBanner_Click(object sender, RoutedEventArgs e)
+    {
+        var baseUrl = _client?.BaseUrl ?? ServerAddress.BaseUrl;
+        await OpenUpdateAsync(baseUrl);
+    }
+
+    /// <summary>
+    /// Open the update page, re-checking first so a stale banner cannot start a download that has
+    /// nothing to install.
+    /// </summary>
+    private async Task OpenUpdateAsync(string? serverBase)
+    {
+        if (string.IsNullOrWhiteSpace(serverBase)) return;
+        var info = await UpdateService.CheckAsync(serverBase);
+        if (info is null || !info.Available || !UpdateService.IsNewer(info.Version, UpdateService.CurrentVersion))
+        {
+            UpdateBanner.Visibility = Visibility.Collapsed;
+            UpdateStatus.Text = "نسخهٔ جدیدی روی سرور نیست.";
+            return;
+        }
+        new UpdateWindow(serverBase, info) { Owner = this }.ShowDialog();
+    }
+
+    // ---- Login ----------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Sign in through the browser.
+    /// </summary>
+    /// <remarks>
+    /// The password is never typed into this app. The user signs in on the server's own page — with
+    /// the address bar they can check and whatever second factor their account has — and the app
+    /// receives a token afterwards. Asking for a panel password on a desktop window would train the
+    /// user to type it into something that is not the panel, which is the habit that makes phishing
+    /// work.
+    /// </remarks>
+    private async void BrowserLogin_Click(object sender, RoutedEventArgs e)
+    {
+        var baseUrl = ServerAddress.BaseUrl;
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            LoginStatus.Text = DsStrings.ErrServerUrl;
+            return;
+        }
+
+        BrowserLoginButton.IsEnabled = false;
+        LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsMutedBrush");
+        LoginStatus.Text = DsStrings.LoggingIn;
+        try
+        {
+            _client = new PanelClient(baseUrl);
+            var res = await _client.LoginWithBrowserAsync(
+                status => Dispatcher.Invoke(() => LoginStatus.Text = status));
+
+            if (!res.Ok)
+            {
+                LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsDangerBrush");
+                LoginStatus.Text = res.Error ?? DsStrings.LoginFailed;
+                return;
+            }
+
+            LoginStatus.Text = "";
+            // The token is kept so a restart does not force a browser round-trip; it is the same
+            // kind of token the extension stores, and it expires on the server's own schedule.
+            var saved = AppSettings.Load();
+            saved.ServerUrl = baseUrl;
+            saved.UserName = res.Value;
+            saved.Token = _client.AccessToken;
+            saved.Remember = true;
+            AppSettings.Save(saved);
+
+            await AfterLoginAsync();
+        }
+        finally
+        {
+            BrowserLoginButton.IsEnabled = true;
+        }
+    }
+
+    private async Task AfterLoginAsync()
+    {
+        if (_client is null) return;
+        LoginPanel.Visibility = Visibility.Collapsed;
+        ProcessPanel.Visibility = Visibility.Visible;
+        // The window was sized to the login card; the process list needs the full canvas. Manual
+        // sizing plus the wider minimums is what stops the list from being squashed into a form's
+        // footprint once the user is in.
+        SizeToContent = SizeToContent.Manual;
+        MinWidth = 900;
+        MinHeight = 560;
+        if (double.IsNaN(Width) || Width < 900) Width = 1120;
+        if (double.IsNaN(Height) || Height < 560) Height = 720;
+        WhoamiText.Text = $"کاربر: {_client.UserName} — {_client.BaseUrl}";
+
+        // Branding first, so the window and every later prompt carry the deployment's own product
+        // name rather than the shipped one.
+        PlayerIdentity.SetAppName(await _client.GetAppNameAsync());
+        ApplyProductName();
+
+        var licenseJson = await _client.GetLicenseJsonAsync();
+        // Mirrored to disk so the next launch knows its server address before it can sign in.
+        LicenseGate.CacheLocal(licenseJson);
+        _license = LicenseGate.FromJson(licenseJson);
+        LicenseText.Text = _license.AllowsLocalRun
+            ? $"لایسنس: اجرای محلی فعال{(string.IsNullOrWhiteSpace(_license.OrganizationName) ? "" : $" — {_license.OrganizationName}")}"
+            : DsStrings.LicenseBlocked;
+        LicenseText.Foreground = _license.AllowsLocalRun
+            ? (System.Windows.Media.Brush)FindResource("DsSuccessBrush")
+            : (System.Windows.Media.Brush)FindResource("DsDangerBrush");
+
+        // Now that the server URL is known for certain, check for updates against it, and start the
+        // push listener so a release staged later reaches this client without it having to poll.
+        _ = CheckForUpdateAsync(_client.BaseUrl, interactive: false);
+        await StartUpdateListenerAsync(_client.BaseUrl);
+
+        await LoadProcessesAsync();
+    }
+
+    /// <summary>
+    /// Attach the SignalR listener that the server pushes new releases to.
+    /// </summary>
+    /// <remarks>
+    /// A push is preferred over polling because the server already knows when it staged a package;
+    /// making every client ask on a timer spends their resources to learn something the server could
+    /// simply say. The launch-time and manual checks remain as the fallback, so a client that cannot
+    /// hold a WebSocket connection (a strict proxy, an older server) still learns of updates.
+    /// </remarks>
+    private async Task StartUpdateListenerAsync(string serverBase)
+    {
+        if (_updateListener is not null) return;
+        _updateListener = new UpdateListener(serverBase);
+        _updateListener.UpdateAvailable += info => Dispatcher.Invoke(() =>
+        {
+            // The server pushed a release; surface the same notification the launch check shows.
+            ShowUpdateBanner(info.Version);
+        });
+        await _updateListener.StartAsync();
+    }
+
+    /// <summary>
+    /// Drag the borderless window by its own title bar.
+    /// </summary>
+    /// <remarks>
+    /// WindowChrome is configured with CaptionHeight=0 on purpose (a non-zero caption height would
+    /// make WPF treat the bar as system chrome and re-introduce the very hit-testing behaviour we
+    /// are replacing). The cost is that dragging has to be wired up by hand.
+    /// </remarks>
+    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // Double-click the bar to maximise, matching every other Windows app. Restore from maximised
+        // is deliberately not a double-click toggle on the same place only — the standard behaviour
+        // is what users expect, so it is mirrored rather than invented.
+        if (e.ClickCount == 2)
+        {
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+            return;
+        }
+        try { DragMove(); } catch { /* the mouse was released mid-drag; nothing to do */ }
+    }
+
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void Logout_Click(object sender, RoutedEventArgs e) => ResetToLogin(null);
+
+    /// <summary>
+    /// Drop the session and go back to the sign-in form.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the Logout button and by the two ways the server can end a session by itself: a run
+    /// told to stop because the session was closed, and a 401 on the next refresh. A forced sign-out
+    /// that left the process list on screen would look like the client was still signed in.
+    /// </remarks>
+    private void ResetToLogin(string? notice)
+    {
+        _client?.Dispose();
+        _client = null;
+        var saved = AppSettings.Load();
+        saved.Token = null;
+        AppSettings.Save(saved);
+
+        foreach (var r in _runs.ToList()) { try { r.Close(); } catch { /* already closed */ } }
+        _runs.Clear();
+
+        ProcessPanel.Visibility = Visibility.Collapsed;
+        LoginPanel.Visibility = Visibility.Visible;
+        // Back to a form-sized window: the login card is small, and leaving the process list's
+        // canvas around it would show exactly the empty space the compact form exists to avoid.
+        MinWidth = 380;
+        MinHeight = 260;
+        SizeToContent = SizeToContent.WidthAndHeight;
+        LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsDangerBrush");
+        LoginStatus.Text = notice ?? "";
+    }
+
+    // ---- Process list ---------------------------------------------------------------------------
+
+    private async void Refresh_Click(object sender, RoutedEventArgs e) => await LoadProcessesAsync();
+
+    private async Task LoadProcessesAsync()
+    {
+        if (_client is null) return;
+        ListStatus.Text = DsStrings.Refreshing;
+        var res = await _client.ListProcessesAsync();
+        if (!res.Ok)
+        {
+            // A dead token means the session is over (a monitoring administrator closed it, or it was
+            // superseded); showing the list behind an error would leave a signed-out client looking
+            // merely unlucky. Anything else is a normal error on screen.
+            if (res.Error == PanelClient.AuthError)
+            {
+                ResetToLogin(DsStrings.SessionClosed);
+                return;
+            }
+            ListStatus.Text = res.Error;
+            return;
+        }
+        _rows.Clear();
+        foreach (var r in res.Value!) _rows.Add(r);
+        ListStatus.Text = _rows.Count == 0 ? DsStrings.NoProcesses : $"{_rows.Count} فرآیند";
+    }
+
+    // ---- Row actions ----------------------------------------------------------------------------
+
+    private async void RowRun_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ProcessRow row } || _client is null) return;
+
+        if (!_license.AllowsLocalRun && !row.RunOnServer)
+        {
+            MessageBox.Show(this, DsStrings.LicenseBlockedBody, DsStrings.LicenseBlocked,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // The admin's deployment-wide switch: when server runs are off, this row may not run on the
+        // server — the user has to switch it to a local run. Asked here (at the moment of running)
+        // rather than cached at sign-in, because the administrator can turn it off while this window
+        // is already open, and a stale "allowed" would start exactly the run they just stopped.
+        if (row.RunOnServer)
+        {
+            var serverRunEnabled = await _client.GetServerRunEnabledAsync();
+            if (serverRunEnabled == false)
+            {
+                MessageBox.Show(this, DsStrings.ServerRunDisabledBody, DsStrings.ServerRunDisabledTitle,
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (serverRunEnabled is null)
+            {
+                // Unreachable server (or an older deployment without the endpoint). Refusing is the
+                // honest answer: the whole point of the master switch is to stop server runs, and
+                // starting one while the answer is unknown could do the opposite.
+                MessageBox.Show(this, DsStrings.ServerRunUnknownBody, DsStrings.ServerRunDisabledTitle,
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+        }
+
+        // Reading the process is only worth a request when the process has moved since it was cached.
+        // The list already carries the server's stamp for the row, so an unchanged process starts from
+        // the cached canvas and costs no traffic at all.
+        string? canvasJson = null;
+        if (!CanvasCache.TryGetCanvas(row.Id, row.UpdatedAtUtc, out canvasJson))
+        {
+            var canvas = await _client.GetCanvasAsync(row.Id);
+            if (!canvas.Ok)
+            {
+                MessageBox.Show(this, canvas.Error, "خطا", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+            canvasJson = canvas.Value;
+            CanvasCache.SaveCanvas(row.Id, row.UpdatedAtUtc, canvasJson);
+        }
+        var graph = ProcessGraph.Parse(canvasJson);
+        if (graph is null)
+        {
+            MessageBox.Show(this, "دیاگرام فرآیند قابل خواندن نبود.", "خطا", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        // More than one iteration means the user has to say which rows to run — the same question
+        // the extension asks before it starts.
+        var rowIndices = new List<int> { 0 };
+        var totalRows = ResolveIterationCount(graph);
+        if (totalRows > 1)
+        {
+            var picker = new RepeatIndexWindow(totalRows) { Owner = this };
+            if (picker.ShowDialog() != true) return;
+            rowIndices = picker.SelectedIndices;
+            if (rowIndices.Count == 0) return;
+        }
+
+        var prereq = FirefoxRunner.CheckPrerequisites();
+        if (!prereq.ok)
+        {
+            MessageBox.Show(this, $"{DsStrings.DriverMissingBody}\n\n{prereq.detail}", DsStrings.DriverMissing,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // A local run reads its private sources from itself, so their values are loaded here — once,
+        // and only for this revision of the process — which is what keeps the run off the wire.
+        var seedCells = row.RunOnServer ? null : await LoadLocalSourceValuesAsync(row, graph);
+
+        var runWindow = new RunWindow(_client, _browser => new LocalRunEngine(_client, _browser, row.RunOnServer, seedCells));
+        runWindow.Configure(row.Title, graph, rowIndices, row.RunOnServer);
+        // A closed session ends the whole client, not just the run: the token is already dead, so the
+        // window goes back to the sign-in form and says why.
+        runWindow.SessionClosed += () => ResetToLogin(DsStrings.SessionClosed);
+        runWindow.Closed += (_, _) =>
+        {
+            _runs.Remove(runWindow);
+            // A local run that wrote anything needs a sync before its results reach the server; the
+            // sync chip appears on the row, and the touched sources are reported so the panel's
+            // source list carries the matching "needs sync" badge for whoever looks there instead.
+            if (!row.RunOnServer && runWindow.Engine?.State.Writes.Count > 0 && runWindow.Engine.State.LastError is null)
+            {
+                row.LocalRunPendingSync = true;
+                var touchedSources = runWindow.Engine.State.Writes.Select(w => w.DataSourceId);
+                _ = _client?.ReportLocalChangesAsync(row.Id, touchedSources);
+            }
+        };
+        _runs.Add(runWindow);
+        runWindow.Show();
+        runWindow.StartRun();
+    }
+
+    /// <summary>
+    /// The values a local run needs, loaded once per revision of the process.
+    /// </summary>
+    /// <remarks>
+    /// A local run keeps its private sources to itself, which only works if the values are already in
+    /// hand: reading them here — one request per source, and only when the process changed — is what
+    /// makes the run itself free of server traffic. Shared sources are skipped deliberately: they stay
+    /// server-backed in both modes, so copying them locally would add traffic and let this machine
+    /// disagree with everyone else.
+    /// </remarks>
+    private async Task<List<LocalCellWrite>?> LoadLocalSourceValuesAsync(ProcessRow row, ProcessGraph graph)
+    {
+        if (_client is null || graph.DataSources.Count == 0) return null;
+
+        if (CanvasCache.TryGetSourceValues(row.Id, graph.UpdatedAtUtc ?? row.UpdatedAtUtc, out var cached))
+            return cached;
+
+        var privateSources = graph.DataSources.Where(d => d.Id > 0 && !d.IsPublic).ToList();
+        if (privateSources.Count == 0) return null;
+
+        var loaded = new List<LocalCellWrite>();
+        foreach (var ds in privateSources)
+        {
+            var cells = await _client.GetSourceContentAsync(ds.Id);
+            if (cells is null) continue;
+            loaded.AddRange(cells);
+        }
+        if (loaded.Count == 0) return null;
+
+        CanvasCache.SaveSourceValues(row.Id, graph.UpdatedAtUtc ?? row.UpdatedAtUtc, loaded);
+        return loaded;
+    }
+
+    /// <summary>How many rows this process iterates, from its start node and default source.</summary>
+    private static int ResolveIterationCount(ProcessGraph graph)
+    {
+        var start = graph.StartNode;
+        if (start is null) return 1;
+        var repeat = start.ReadExtraString("repeatSourceType");
+        if (!string.Equals(repeat, "DataSource", StringComparison.OrdinalIgnoreCase)) return 1;
+        var dsId = start.DataSourceId ?? 0;
+        var ds = graph.DataSources.FirstOrDefault(d => d.Id == dsId);
+        return Math.Max(1, ds?.RowCount ?? 1);
+    }
+
+    private void RowEdit_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ProcessRow row } || _client is null) return;
+        // Editing belongs in the panel, where the full editor lives. Opening the browser is the
+        // honest answer; re-implementing the editor here would be a second, divergent one.
+        var url = $"{_client.BaseUrl}/Panel/Tasks/Editor/{row.Id}";
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"باز کردن ویرایشگر ناموفق بود: {ex.Message}", "خطا",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void RowSync_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ProcessRow row } || _client is null) return;
+        if (!row.LocalRunPendingSync)
+        {
+            MessageBox.Show(this, "برای این فرآیند نتیجهٔ محلی‌ای برای سینک وجود ندارد.",
+                DsStrings.SyncConfirmTitle, MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        // Explicit, and worded as a data-loss risk: a local run is off the server's books, so this is
+        // the only moment the two copies meet and the server's version can be replaced.
+        var confirm = MessageBox.Show(this, DsStrings.SyncConfirmBody, DsStrings.SyncConfirmTitle,
+            MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+        if (confirm != MessageBoxResult.OK) return;
+
+        var engineState = FindLatestRunState(row.Id);
+        var cells = (engineState?.Writes ?? new List<LocalCellWrite>())
+            .Select(w => (object)new { w.DataSourceId, w.RowIndex, w.ColumnKey, w.CellValue, w.BaseValue })
+            .ToList();
+
+        var res = await _client.SyncLocalRunAsync(row.Id, engineState?.StartedAtUtc, cells);
+        if (!res.Ok)
+        {
+            MessageBox.Show(this, res.Error, DsStrings.SyncFailed, MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+        row.LocalRunPendingSync = false;
+        // The server MERGES: cells nobody else touched take the local value, and cells the server has
+        // moved on from keep the server's. Reporting that number matters — a silent "synced" over
+        // cells that were deliberately NOT written is exactly the surprise the merge exists to avoid.
+        MessageBox.Show(this, DescribeSyncOutcome(res.Value), DsStrings.SyncConfirmTitle,
+            MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    /// <summary>Turn the sync response into one sentence, naming anything the server kept.</summary>
+    private static string DescribeSyncOutcome(string? responseBody)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody)) return DsStrings.SyncDone;
+        try
+        {
+            using var doc = JsonDocument.Parse(responseBody);
+            var root = doc.RootElement;
+            var applied = root.TryGetProperty("applied", out var a) && a.TryGetInt32(out var av) ? av : 0;
+            var unchanged = root.TryGetProperty("unchanged", out var u) && u.TryGetInt32(out var uv) ? uv : 0;
+            var conflicts = root.TryGetProperty("conflicts", out var c) && c.ValueKind == JsonValueKind.Array
+                ? c.GetArrayLength() : 0;
+            if (conflicts > 0)
+                return $"{DsStrings.SyncDone}\n{applied} سلول نوشته شد · {unchanged} سلول از قبل یکسان بود · {conflicts} سلول روی سرور تازه‌تر بود و با نسخهٔ سرور نگه داشته شد.";
+            return $"{DsStrings.SyncDone}\n{applied} سلول نوشته شد · {unchanged} سلول از قبل یکسان بود.";
+        }
+        catch { return DsStrings.SyncDone; }
+    }
+
+    /// <summary>
+    /// The most recent run state for a process, used as the sync payload.
+    /// </summary>
+    /// <remarks>
+    /// The writes live in the run's own engine while it exists. Keeping the last one around after
+    /// the window closes is what makes Sync possible at all — the run is over, but its results are
+    /// exactly what the user is asking to push.
+    /// </remarks>
+    private RunState? FindLatestRunState(int taskId)
+    {
+        RunState? best = null;
+        foreach (var w in _runs)
+        {
+            var st = w.Engine?.State;
+            if (st is null) continue;
+            if (best is null || st.StartedAtUtc > best.StartedAtUtc) best = st;
+        }
+        return best;
+    }
+
+    private void DriverCheck_Click(object sender, RoutedEventArgs e)
+    {
+        // Every available way to drive a browser is listed, so the user can see that a missing
+        // GeckoDriver is not the end of the road — the point of probing rather than assuming.
+        var lines = new List<string>();
+        foreach (var (_, label, probe) in ExecutionModeProbe.ProbeAll())
+            lines.Add($"{(probe.Available ? "✔" : "✖")} {label}\n    {probe.Detail}");
+
+        var anyAvailable = ExecutionModeProbe.ProbeAll().Any(p => p.Probe.Available);
+        MessageBox.Show(this,
+            string.Join("\n\n", lines),
+            anyAvailable ? "روش‌های اجرای موجود" : DsStrings.DriverMissing,
+            MessageBoxButton.OK, anyAvailable ? MessageBoxImage.Information : MessageBoxImage.Warning);
+    }
+
+    private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        var url = _client?.BaseUrl ?? ServerAddress.BaseUrl;
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            UpdateStatus.Text = "ابتدا آدرس سرور را وارد کنید.";
+            return;
+        }
+        UpdateStatus.Text = "در حال بررسی…";
+        var info = await UpdateService.CheckAsync(url);
+        if (info is null)
+        {
+            UpdateStatus.Text = "سرور در دسترس نبود.";
+            return;
+        }
+        if (!info.Available || !UpdateService.IsNewer(info.Version, UpdateService.CurrentVersion))
+        {
+            UpdateStatus.Text = $"برنامه به‌روز است (نسخهٔ {UpdateService.CurrentVersion}).";
+            return;
+        }
+        UpdateStatus.Text = "";
+        await CheckForUpdateAsync(url, interactive: true);
+    }
+}
+
+/// <summary>
+/// Persisted connection settings. Only the token is sensitive, and only when the user opts in.
+/// </summary>
+internal sealed class AppSettings
+{
+    public string? ServerUrl { get; set; }
+    public string? UserName { get; set; }
+    public bool Remember { get; set; }
+    public string? Token { get; set; }
+
+    private static string FilePath
+    {
+        get
+        {
+            // Per server, so a machine carrying two players keeps two remembered users rather than
+            // letting the last sign-in overwrite the other's token and name.
+            return PlayerStorage.FilePath("settings.json");
+        }
+    }
+
+    public static AppSettings Load()
+    {
+        try
+        {
+            var path = FilePath;
+            if (!File.Exists(path)) return new AppSettings();
+            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path)) ?? new AppSettings();
+        }
+        catch { return new AppSettings(); }
+    }
+
+    public static void Save(AppSettings settings)
+    {
+        try
+        {
+            // The token is only written when the user asked to be remembered; "not now" must not
+            // leave a credential on disk anyway.
+            var toWrite = new AppSettings
+            {
+                ServerUrl = settings.ServerUrl,
+                UserName = settings.UserName,
+                Remember = settings.Remember,
+                Token = settings.Remember ? settings.Token : null
+            };
+            File.WriteAllText(FilePath, JsonSerializer.Serialize(toWrite, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { /* settings that cannot be saved must not block the app */ }
+    }
+}

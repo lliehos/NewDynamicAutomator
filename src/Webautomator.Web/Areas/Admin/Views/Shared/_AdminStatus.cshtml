@@ -1,0 +1,5 @@
+@model bool
+<span class="admin-status @(Model ? "is-on" : "is-off")">
+  <span class="admin-status-dot" aria-hidden="true"></span>
+  <span>@(Model ? L["admin.ui.active"] : L["admin.ui.inactive"])</span>
+</span>

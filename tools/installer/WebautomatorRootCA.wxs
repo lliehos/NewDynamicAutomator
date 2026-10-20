@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Webautomator root CA - deployable MSI.
+
+  Why an MSI next to the PowerShell tool (Run-InstallRootCA.cmd):
+  SCCM, Intune, GPO Software Installation and most RMM suites speak MSI natively. An MSI also
+  brings what a script cannot: a real uninstall, rollback if the install fails half way, and a
+  standard verbose log (/l*v). Per-machine installs run elevated through the msiexec service, so
+  certutil writes to the machine Trusted Root store with no prompt and no interactive session.
+
+  Built by tools/installer/Build-RootCaMsi.ps1, which supplies every var below:
+    var.CerFullPath     absolute path of the exported <host>-root.cer
+    var.CerFileName     its file name (the MSI keeps a copy under INSTALLFOLDER)
+    var.RootThumbprint  SHA-1 thumbprint, used by uninstall and rollback to remove exactly this root
+    var.ProductVersion  MSI version
+    var.Manufacturer    vendor name shown in Add/Remove Programs
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package Name="Webautomator Root CA"
+           Manufacturer="$(var.Manufacturer)"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="B7C1A0E2-6F2B-4C6E-9E58-2D5A7C4B1F31"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <SummaryInformation Description="Trusts the Webautomator server root certificate on this computer"
+                        Manufacturer="$(var.Manufacturer)" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of the Webautomator root certificate package is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Webautomator Root CA" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Webautomator root certificate" Level="1">
+      <ComponentGroupRef Id="RootCaComponents" />
+      <ComponentGroupRef Id="FirefoxPolicyComponent" />
+    </Feature>
+
+    <!--
+      In WiX v4/v5 the sequencing elements live inside Package; a sequence element placed next to
+      Package (the v3 shape) is dropped without a warning, which silently produced an MSI that had
+      no certificate actions at all.
+    -->
+    <InstallExecuteSequence>
+      <Custom Action="AddRootCert" After="InstallFiles" Condition="NOT Installed" />
+      <Custom Action="RemoveRootCertRollback" After="AddRootCert" Condition="NOT Installed" />
+      <Custom Action="RemoveRootCert" Before="RemoveFiles" Condition='REMOVE~="ALL"' />
+    </InstallExecuteSequence>
+  </Package>
+
+  <!-- The certificate itself, kept on disk so repair, uninstall and manual inspection work. -->
+  <Fragment>
+    <ComponentGroup Id="RootCaComponents" Directory="INSTALLFOLDER">
+      <Component Id="cmpRootCer" Guid="A1B2C3D4-0001-4E5F-8A9B-000000000001">
+        <File Id="filRootCer" Source="$(var.CerFullPath)" Name="$(var.CerFileName)" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!--
+    Firefox keeps its own trust store; this policy points it at the Windows store. Chrome and Edge
+    already read the Windows store. Removed again on uninstall.
+  -->
+  <Fragment>
+    <ComponentGroup Id="FirefoxPolicyComponent" Directory="TARGETDIR">
+      <Component Id="cmpFirefoxPolicy" Guid="A1B2C3D4-0001-4E5F-8A9B-000000000002">
+        <RegistryKey Root="HKLM" Key="SOFTWARE\Policies\Mozilla\Firefox\Certificates">
+          <RegistryValue Name="ImportEnterpriseRoots" Type="integer" Value="1" KeyPath="yes" />
+        </RegistryKey>
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!--
+    The trust store write itself. WiX has no built-in element for a certificate store, so this uses
+    the documented custom-action pattern around certutil, which ships with every Windows:
+
+      install    certutil -addstore -f root <cert>    (idempotent: re-running is not an error)
+      rollback   certutil -delstore root <thumbprint>
+      uninstall  certutil -delstore root <thumbprint>
+
+    Return="check" on the install action means a failure fails the install - which is right: an MSI
+    that claims to trust a certificate it did not install is worse than a failed install.
+  -->
+  <Fragment>
+    <CustomAction Id="AddRootCert"
+                  Directory="SystemFolder"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check"
+                  ExeCommand="&quot;[SystemFolder]certutil.exe&quot; -addstore -f root &quot;[INSTALLFOLDER]$(var.CerFileName)&quot;" />
+
+    <CustomAction Id="RemoveRootCertRollback"
+                  Directory="SystemFolder"
+                  Execute="rollback"
+                  Impersonate="no"
+                  Return="ignore"
+                  ExeCommand="&quot;[SystemFolder]certutil.exe&quot; -delstore root $(var.RootThumbprint)" />
+
+    <CustomAction Id="RemoveRootCert"
+                  Directory="SystemFolder"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore"
+                  ExeCommand="&quot;[SystemFolder]certutil.exe&quot; -delstore root $(var.RootThumbprint)" />
+  </Fragment>
+
+</Wix>

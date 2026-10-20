@@ -1,0 +1,59 @@
+@model List<Webautomator.Domain.Entities.DeviceSession>
+@{
+  ViewData["Title"] = L["admin.devices.title"];
+  var devices = Model;
+
+  // The fingerprint is a 64-char hash: shown as a short handle with the full value in the tooltip,
+  // because a full hash per row makes the table unreadable and hides the columns that matter.
+  string ShortHash(string? hash) => string.IsNullOrWhiteSpace(hash)
+    ? "—"
+    : hash.Length <= 12 ? hash : hash[..12] + "…";
+}
+
+<div class="admin-filter-bar">
+  <a class="admin-chip" asp-action="Index">@L["admin.devices.backToEvents"]</a>
+</div>
+
+@if (devices.Count == 0)
+{
+  <div class="admin-empty">
+    <i class="ti ti-device-desktop" aria-hidden="true"></i>
+    <p>@L["admin.devices.empty"]</p>
+  </div>
+}
+else
+{
+  <div class="admin-table-wrap" data-page-size="20">
+  <table class="admin-table">
+    <thead>
+      <tr>
+        <th class="admin-nowrap">@L["admin.devices.colLastSeen"]</th>
+        <th>@L["admin.devices.colAccount"]</th>
+        <th>@L["admin.devices.colClaimedName"]</th>
+        <th>@L["admin.devices.colPlatform"]</th>
+        <th>@L["admin.devices.colScreen"]</th>
+        <th class="admin-nowrap">@L["admin.devices.colTimeZone"]</th>
+        <th class="text-center">@L["admin.devices.colLogins"]</th>
+        <th class="admin-nowrap">@L["admin.devices.colIp"]</th>
+        <th class="admin-nowrap">@L["admin.devices.colFingerprint"]</th>
+      </tr>
+    </thead>
+    <tbody>
+    @foreach (var device in devices)
+    {
+      <tr>
+        <td class="admin-nowrap">@Webautomator.Web.Services.DateDisplay.UtcDateTimeLocal(device.LastSeenUtc)</td>
+        <td>@device.User.UserName</td>
+        <td>@(string.IsNullOrWhiteSpace(device.ClaimedUserName) ? "—" : device.ClaimedUserName)</td>
+        <td>@(string.IsNullOrWhiteSpace(device.Platform) ? "—" : device.Platform)</td>
+        <td>@(string.IsNullOrWhiteSpace(device.Screen) ? "—" : device.Screen)</td>
+        <td class="admin-nowrap">@(string.IsNullOrWhiteSpace(device.TimeZone) ? "—" : device.TimeZone)</td>
+        <td class="text-center"><span class="admin-count-badge @(device.LoginCount == 0 ? "is-zero" : "")">@device.LoginCount</span></td>
+        <td class="admin-nowrap">@(string.IsNullOrWhiteSpace(device.IpAddress) ? "—" : device.IpAddress)</td>
+        <td class="admin-nowrap" title="@device.FingerprintHash">@ShortHash(device.FingerprintHash)</td>
+      </tr>
+    }
+    </tbody>
+  </table>
+  </div>
+}

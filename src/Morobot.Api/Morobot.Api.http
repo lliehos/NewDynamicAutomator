@@ -1,6 +1,0 @@
-@Morobot.Api_HostAddress = http://localhost:5282
-
-GET {{Morobot.Api_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

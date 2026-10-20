@@ -1,0 +1,7882 @@
+function isActionNode(n) {
+  return !!n && (n.kind === "action" || n.kind === "step");
+}
+
+function sameNodeId(a, b) {
+  if (a == null || b == null) return false;
+  return String(a) === String(b);
+}
+
+function findGraphNode(graph, id) {
+  if (id == null || id === "") return null;
+  return (graph?.nodes || []).find((n) => sameNodeId(n.id, id)) || null;
+}
+
+/** Play-time graph validation — mirrors editor leaf rules; blocks start if any node is invalid. */
+const DYN_SEL_PLACEHOLDER = "{مقدار پویا}";
+
+function selectorHasDynPlaceholder(val) {
+  const s = String(val || "");
+  return s.includes(DYN_SEL_PLACEHOLDER) || /\{\{[^}]+\}\}/.test(s);
+}
+
+/**
+ * Field names for one dynamic-selector configuration (target / compare / attribute selector).
+ *
+ * A dynamic selector is fed either by a source cell or by a loop index, and the author picks which;
+ * the keys follow the instance so the three configurations keep separate choices. A graph saved
+ * before the choice existed has no mode field, which reads as "Source" — its old meaning.
+ */
+function dynModeKey(dynFlag) {
+  return `${String(dynFlag || "selectorIsDynamic").replace(/IsDynamic$/, "")}DynamicMode`;
+}
+function dynIndexKeys(valueKey) {
+  const base = String(valueKey || "selectorValue").replace(/Value$/, "");
+  return { type: `${base}DynamicIndexType`, value: `${base}DynamicIndexValue` };
+}
+function dynUsesLoopIndex(node, dynFlag) {
+  return String(node?.[dynModeKey(dynFlag)] || "") === "LoopIndex";
+}
+
+/**
+ * The loop index a dynamic selector is built from.
+ *
+ * The walker's scope numbers travel on the node as `_rowScope` (the same marker trick `_selectorRow`
+ * uses), because the selector resolver is reached from places that no longer know the loop depth.
+ * Returns "" when the pointer cannot be resolved — the tolerance the row pointers have as well.
+ */
+function dynIndexText(node, graph, valueKey, dynFlag, fallbackRow) {
+  const keys = dynIndexKeys(valueKey);
+  const pointer = String(node?.[keys.type] || "CurrentLoop");
+  // «شمارهٔ ثابت» is a literal the author typed for this selector, not a row lookup. It goes into
+  // the selector exactly as entered — and is deliberately NOT clamped to a source's row count,
+  // which used to turn a page index of 10 into 2 on a three-row source.
+  if (pointer === "SpecificRow") {
+    const fixed = Number(node?.[keys.value]);
+    if (Number.isFinite(fixed)) return String(fixed);
+    // No usable literal: fall through so a damaged node still resolves something.
+  }
+  // "TotalLoop" is the run ORDINAL (1, 2, 3 …): the walker already threads it 1-based (`li + 1`),
+  // so it is the one pointer that must NOT be shifted again. Every other pointer names a 0-based
+  // row/index, which the selector needs in 1-based CSS form (`:nth-child`).
+  if (pointer === "TotalLoop") {
+    const ordinal = node?._rowScope?.loopIndex;
+    // `ordinal != null` guards the Number(null) === 0 trap: a missing scope must fall through to
+    // the row fallback, not build `:nth-child(0)`.
+    if (ordinal != null && Number.isFinite(Number(ordinal))) return String(Number(ordinal));
+  }
+  // "CombinedLoop" is the nested-run counter: process iteration × each enclosing group's total,
+  // plus each group's own iteration ordinal. This is what a page list needs when every process
+  // pass consumes the NEXT block of page items (1..P×N instead of restarting at 1).
+  if (pointer === "CombinedLoop") {
+    const base = node?._rowScope?.combinedIndex;
+    if (base != null && Number.isFinite(Number(base))) return String(Number(base) + 1);
+    // No walk scope (should not happen once the walker is involved): fall through to the row.
+  }
+  const raw = resolveRowPointer(node, graph, node?._rowScope || {}, { type: keys.type, specific: keys.value });
+  // `raw != null` is not redundant: Number(null) is 0, and a resolver that cannot answer returns
+  // null — reading that as index 0 would silently build the selector for the wrong row.
+  const resolved = (raw != null && Number.isFinite(Number(raw)))
+    ? Number(raw)
+    // A resolver reached from a path that does not walk through the action runner has no scope on
+    // the node; the row it was handed is then the closest thing to "the current loop index".
+    : (Number.isFinite(Number(fallbackRow)) ? Number(fallbackRow) : null);
+  if (resolved == null) return "";
+  // Every loop and row index inside the engine is 0-based, but the selector is the one place that
+  // number becomes something CSS reads — and `:nth-child()` / `:nth-of-type()` count from 1. The
+  // model stays 0-based; only the substituted text is shifted, so the first item is `1`.
+  return String(resolved + 1);
+}
+/**
+ * The action spec table lives in `action-specs.js`, which BOTH this file and the editor page load.
+ * It used to be four helpers here (`stepReceivesValue`, `stepNeedsSelector`, `stepAllowsElementValue`,
+ * `stepShowsTargetSelector`) plus a second, separately-maintained copy in the editor's flow.js, and
+ * the two had already drifted. One file, one set of answers.
+ *
+ * THE CAPTURE BELOW IS LOAD-BEARING — do not "simplify" it, and do NOT read the flat globals.
+ *
+ * Two traps live here, and the first fix for the second one fell straight into the first:
+ *
+ *   1. Reading `globalThis.actionSpec()` AT CALL TIME cannot work: in a service worker `globalThis`
+ *      IS `self`, the same object these wrappers are declared on, so the lookup resolves to the
+ *      wrapper itself and every call recurses until the stack blows.
+ *   2. Capturing the flat global ONCE does not save it either: a function declaration in THIS
+ *      script is installed on the shared global scope before any statement of the script runs —
+ *      classic-script semantics — so `globalThis.stepNeedsSelector` was already THESE wrappers,
+ *      replacing the flat helper action-specs.js had just published. The capture then read its own
+ *      function, and the run died in the pre-flight (`collectInvalidNodesForPlay`) with "Maximum
+ *      call stack size exceeded" before a single step executed.
+ *
+ * The namespace is the one reliable capture point: `action-specs.js` publishes `ActionSpecs`
+ * (an object assignment, not a function declaration) and this file never declares that name, so
+ * nothing here can shadow it. `importScripts` runs action-specs.js before this file (see the list
+ * in background.js), so it is present at this point and the capture is complete. The null
+ * fallbacks keep this file loadable on its own (tests, the editor's bundling) without the shared
+ * script: without them the file would throw at parse time and take the whole worker down.
+ */
+const _specs = (typeof globalThis !== "undefined" && globalThis.ActionSpecs) ? globalThis.ActionSpecs : null;
+const _sharedActionSpec = _specs && typeof _specs.actionSpec === "function" ? _specs.actionSpec : null;
+const _sharedStepNeedsSelector = _specs && typeof _specs.stepNeedsSelector === "function" ? _specs.stepNeedsSelector : null;
+const _sharedStepReceivesValue = _specs && typeof _specs.stepReceivesValue === "function" ? _specs.stepReceivesValue : null;
+const _sharedStepAllowsElementValue = _specs && typeof _specs.stepAllowsElementValue === "function" ? _specs.stepAllowsElementValue : null;
+const _sharedStepAllowsMemoryValue = _specs && typeof _specs.stepAllowsMemoryValue === "function" ? _specs.stepAllowsMemoryValue : null;
+const _sharedStepAllowsSystemValue = _specs && typeof _specs.stepAllowsSystemValue === "function" ? _specs.stepAllowsSystemValue : null;
+const _sharedStepWritesToSource = _specs && typeof _specs.stepWritesToSource === "function" ? _specs.stepWritesToSource : null;
+const _sharedStepWritesToMemory = _specs && typeof _specs.stepWritesToMemory === "function" ? _specs.stepWritesToMemory : null;
+const _sharedStepReadsCell = _specs && typeof _specs.stepReadsCell === "function" ? _specs.stepReadsCell : null;
+const _sharedStepIsUrlAction = _specs && typeof _specs.stepIsUrlAction === "function" ? _specs.stepIsUrlAction : null;
+
+/** Spec for an action, or an empty spec so an unknown action never crashes a run or a render. */
+function actionSpec(actionType) {
+  return _sharedActionSpec ? _sharedActionSpec(actionType) : {};
+}
+
+function stepNeedsSelector(actionType) {
+  return _sharedStepNeedsSelector ? _sharedStepNeedsSelector(actionType) : false;
+}
+
+function stepReceivesValue(actionType) {
+  return _sharedStepReceivesValue ? _sharedStepReceivesValue(actionType) : false;
+}
+
+function stepAllowsElementValue(actionType) {
+  return _sharedStepAllowsElementValue ? _sharedStepAllowsElementValue(actionType) : false;
+}
+
+function stepAllowsMemoryValue(actionType) {
+  return _sharedStepAllowsMemoryValue ? _sharedStepAllowsMemoryValue(actionType) : false;
+}
+
+function stepAllowsSystemValue(actionType) {
+  return _sharedStepAllowsSystemValue ? _sharedStepAllowsSystemValue(actionType) : false;
+}
+
+function stepWritesToSource(actionType) {
+  return _sharedStepWritesToSource ? _sharedStepWritesToSource(actionType) : false;
+}
+
+function stepWritesToMemory(actionType) {
+  return _sharedStepWritesToMemory ? _sharedStepWritesToMemory(actionType) : false;
+}
+
+function stepReadsCell(actionType) {
+  return _sharedStepReadsCell ? _sharedStepReadsCell(actionType) : false;
+}
+
+function stepIsUrlAction(actionType) {
+  return _sharedStepIsUrlAction ? _sharedStepIsUrlAction(actionType) : actionType === "GoToUrl";
+}
+
+function stepShowsTargetSelector(n) {
+  const at = (n && n.actionType) || "";
+  // A spec only says an action CAN take a selector. Two of them let the author choose a mode where
+  // no element is involved, and only then is the selector dropped:
+  //   LoadContent with a memory target, and ScrollPage with an amount instead of an element.
+  if (at === "LoadContent") return normalizeStepValueSource(n) === "Elements";
+  if (at === "ScrollPage") return String((n && n.scrollType) || "Amount") === "ToElement";
+  return stepNeedsSelector(at);
+}
+
+/**
+ * Where LoadContent puts the value it read: a page element or a memory variable.
+ *
+ * Kept as its own tiny helper because both the validator and the inspector must agree, and the
+ * answer is not derivable from the spec alone (the spec says both destinations are allowed; this
+ * says which one the author chose).
+ */
+function normalizeLoadTarget(n) {
+  const t = n.saveTargetType || n.loadTargetType || "Elements";
+  return t === "Memory" ? "Memory" : "Elements";
+}
+
+/** True when the graph has at least one AlertAccept step. */
+function graphUsesAlertDialog(graph) {
+  return (graph?.nodes || []).some((n) =>
+    isActionNode(n) && n.actionType === "AlertAccept" && n.isActive !== false);
+}
+
+/**
+ * Arm the browser-dialog override for this run, if the graph needs it.
+ *
+ * The override itself lives in the extension (lib/alert-dialog.js) because a JS dialog blocks the
+ * page's own script — see that file for why. This only decides WHETHER to arm, and reports failure
+ * honestly: a tab that cannot take a MAIN-world script (chrome://, a PDF viewer) means the action
+ * cannot work, and saying so here is better than a later step failing with no explanation.
+ */
+async function armAlertDialogsIfNeeded(graph, tabId) {
+  if (!graphUsesAlertDialog(graph)) return;
+  if (tabId == null) return;
+  const first = (graph.nodes || []).find((n) =>
+    isActionNode(n) && n.actionType === "AlertAccept" && n.isActive !== false);
+  const type = String(first?.alertType || "Accept");
+  try {
+    const res = await callBackground({
+      type: "armAlertDialog", tabId, alertType: type
+    });
+    if (res && res.ok === false) {
+      appendPlayLog("warn", `فعال‌سازی پاسخ به دیالوگ مرورگر ناموفق بود: ${res.error || "دلیل نامشخص"}`);
+    }
+  } catch (err) {
+    appendPlayLog("warn", `فعال‌سازی پاسخ به دیالوگ مرورگر ناموفق بود: ${err?.message || err}`);
+  }
+}
+
+/**
+ * Put the armed tab's answer in step with the step about to run.
+ *
+ * Each AlertAccept step carries its own accept/dismiss choice and optional prompt text, so the
+ * answer is pushed on the tab immediately before that step runs rather than fixed once at start.
+ */
+async function setAlertAnswerForStep(tabId, step) {
+  if (tabId == null) return { ok: true };
+  const type = String(step?.alertType || "Accept");
+  const promptText = step?.alertPromptText == null ? "" : String(step.alertPromptText);
+  try {
+    return await callBackground({
+      type: "setAlertAnswer", tabId, alertType: type, alertPromptText: promptText
+    }) || { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Normalize where a step's input value comes from, and report it.
+ *
+ * Only sources the action's spec actually allows are kept; anything else falls back to a constant,
+ * so a graph saved against an older rule set cannot quietly keep a source the action no longer
+ * supports. Returns the effective source: Constant | DataSource | Elements | Memory | System.
+ */
+function normalizeStepValueSource(n) {
+  const at = (n && n.actionType) || "";
+  const spec = actionSpec(at);
+
+  let src = n.contentSourceType;
+  if (!src || src === "None") {
+    // elementVal is a capability, not a default: a step with no source that carries no element
+    // selector is a constant (this is how recorded steps arrive — see the editor's matching rule).
+    src = n.valueFromSource ? "DataSource"
+      : (spec.elementVal && n.equalSelectorValue ? "Elements" : "Constant");
+  }
+
+  const allowed = new Set(["Constant"]);
+  if (spec.readsCell) allowed.add("DataSource");
+  if (spec.elementVal) allowed.add("Elements");
+  if (spec.memoryVal) allowed.add("Memory");
+  if (spec.systemVal) allowed.add("System");
+  if (!allowed.has(src)) src = "Constant";
+
+  n.contentSourceType = src;
+  n.valueFromSource = src === "DataSource";
+  return src;
+}
+
+function conditionNeedsCompare(ct) {
+  // Kept in step with the editor's conditionNeedsCompare in flow.js: the whole-column / whole-row
+  // checks compare their cells against a value, exactly like the single-cell check does.
+  return ["Url", "ElementValue", "SourceValue", "SourceColumnValue", "SourceRowValue", "MemoryValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
+}
+
+function conditionNeedsCompareOperand(ct, eq) {
+  if (!conditionNeedsCompare(ct)) return false;
+  if (eq === "HasValue" || eq === "HasNotValue") return false;
+  return true;
+}
+
+/** Allowed: YYYY-MM-DD (calendar-valid). */
+function isValidUserSystemDateForPlay(v) {
+  const s = String(v || "").trim();
+  if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+}
+
+/** Allowed: HH:mm or HH:mm:ss */
+function isValidUserSystemTimeForPlay(v) {
+  return /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(v || "").trim());
+}
+
+function validateSelectorBlock(n, opts = {}) {
+  const valueKey = opts.valueKey || "selectorValue";
+  const dynFlag = opts.dynFlag || "selectorIsDynamic";
+  const dynCol = opts.dynCol || "selectorDynamicColumn";
+  const hasAttr = opts.hasAttr || "hasAttribute";
+  const attrName = opts.attrName || "attributeName";
+  const attrDyn = opts.attrDynFlag || "attributeValueIsDynamic";
+  const attrCol = opts.attrDynCol || "attributeDynamicColumn";
+  const label = selLabel(opts);
+
+  const sel = String(n[valueKey] || "").trim();
+  if (!sel) return { ok: false, reason: tv("sel.empty", { label }) };
+  if (n[dynFlag] === true) {
+    if (!selectorHasDynPlaceholder(sel)) {
+      return { ok: false, reason: tv("sel.dynNeedsPlaceholder", { label, placeholder: DYN_SEL_PLACEHOLDER }) };
+    }
+    // A loop-index selector gets its number from the run, so only a source-driven one needs a column.
+    if (!dynUsesLoopIndex(n, dynFlag)
+      && sel.includes(DYN_SEL_PLACEHOLDER) && !String(n[dynCol] || "").trim()) {
+      return { ok: false, reason: tv("sel.dynColMissing", { label }) };
+    }
+  }
+  if (n[hasAttr] === true) {
+    if (!String(n[attrName] || "").trim()) {
+      return { ok: false, reason: tv("sel.attrNameEmpty", { label }) };
+    }
+    if (n[attrDyn] === true && !dynUsesLoopIndex(n, attrDyn) && !String(n[attrCol] || "").trim()) {
+      return { ok: false, reason: tv("sel.attrDynColMissing", { label }) };
+    }
+  }
+  return { ok: true };
+}
+
+function validateDataSourcePick(n, opts = {}) {
+  const dsKey = opts.dsKey || "dataSourceId";
+  const colKey = opts.colKey || "dynamicSourceColumnName";
+  const dsId = n[dsKey] || n.sourceId || n.dataSourceId;
+  if (dsId == null || dsId === "") {
+    return { ok: false, reason: opts.dsReason || tv("ds.pickMissing") };
+  }
+  if (!String(n[colKey] || "").trim()) {
+    return { ok: false, reason: opts.colReason || tv("ds.colMissing") };
+  }
+  return { ok: true };
+}
+
+/** Aliases this process can name: `main` plus every tab it opens itself. */
+function collectPlayTabAliases(graph) {
+  const aliases = new Set([PLAY_TAB_MAIN]);
+  for (const node of graph?.nodes || []) {
+    if (!isActionNode(node) || node.isActive === false) continue;
+    if (String(node.actionType || "") !== "GoToUrl" || node.openInNewTab !== true) continue;
+    const v = validatePlayTabAlias(node.newTabAlias);
+    if (v.ok) aliases.add(normalizePlayTabAlias(v.alias));
+  }
+  return aliases;
+}
+
+function validateActionNodeForPlay(n, graph) {
+  const reasons = [];
+  if (n.isActive === false) return { ok: true, reasons };
+  const at = n.actionType || "";
+  if (!at || at === "NoAction") return { ok: true, reasons };
+
+  // PressKey's element is OPTIONAL: no selector means "whatever has focus", a valid target for a
+  // keyboard event (Enter in the field the previous step filled).
+  if (stepShowsTargetSelector(n) && !(at === "PressKey" && !String(n.selectorValue || "").trim())) {
+    const v = validateSelectorBlock(n, { labelKey: "label.targetSelector" });
+    if (!v.ok) reasons.push(v.reason);
+  }
+
+  // Where the step's INPUT value comes from. Every action that takes a value is checked the same
+  // way, whether it then writes that value into a page element, a source cell or a variable — the
+  // old split between "capture" actions and "value" actions was the same question asked twice.
+  if (stepReceivesValue(at)) {
+    const src = normalizeStepValueSource(n);
+    if (src === "Constant") {
+      if (at === "WaitTime" || at === "Hold") {
+        // Both are durations in milliseconds. Hold's default comes from the diagram when the step
+        // leaves the field blank, so only a clearly invalid entry (negative, or not a number) is
+        // rejected rather than an empty one.
+        const raw = String(n.constantValue ?? "").trim();
+        const ms = Number(raw);
+        if (raw !== "" && (!Number.isFinite(ms) || ms < 0)) {
+          reasons.push(tv(at === "Hold" ? "act.holdInvalid" : "act.waitMissing"));
+        } else if (raw === "" && at === "WaitTime") {
+          reasons.push(tv("act.waitMissing"));
+        }
+      } else if (stepIsUrlAction(at)) {
+        const url = String(n.navigateUrl || n.constantValue || "").trim();
+        if (!url) reasons.push(tv("act.urlEmpty"));
+      } else if (at === "ScrollPage") {
+        // A missing amount means "scroll by one screenful", which is the sensible default.
+        const raw = String(n.constantValue ?? "").trim();
+        if (raw !== "" && !Number.isFinite(Number(raw))) reasons.push(tv("act.scrollInvalid"));
+      } else if (!String(n.constantValue || "").trim()) {
+        reasons.push(tv("act.constantEmpty"));
+      }
+    } else if (src === "Elements") {
+      const v = validateSelectorBlock(n, {
+        valueKey: "equalSelectorValue",
+        dynFlag: "equalSelectorIsDynamic",
+        dynCol: "equalSelectorDynamicColumn",
+        hasAttr: "equalHasAttribute",
+        attrName: "equalAttributeName",
+        attrDynFlag: "equalAttributeValueIsDynamic",
+        attrCol: "equalAttributeDynamicColumn",
+        labelKey: stepIsUrlAction(at) ? "label.urlSelector" : "label.valueSourceSelector"
+      });
+      if (!v.ok) reasons.push(v.reason);
+    } else if (src === "DataSource") {
+      const v = validateDataSourcePick(n);
+      if (!v.ok) reasons.push(v.reason);
+    } else if (src === "Memory") {
+      if (!String(n.memoryVariableName || "").trim()) {
+        reasons.push(tv("act.memVarMissing"));
+      }
+    } else if (src === "System") {
+      if (!String(n.systemValueType || "").trim()) {
+        reasons.push(tv("act.sysTypeMissing"));
+      }
+    }
+  }
+
+  // Where the value GOES, for the actions that write somewhere other than the page element they
+  // already target. LoadContent always writes to a chosen target (element or variable);
+  // InsertContent and SetMemory write to a source cell / variable respectively.
+  if (at === "LoadContent") {
+    const dest = normalizeLoadTarget(n);
+    if (dest === "Memory") {
+      if (!String(n.memoryVariableName || "").trim()) reasons.push(tv("act.memDestMissing"));
+    } else {
+      const v = validateSelectorBlock(n, { labelKey: "label.targetSelector" });
+      if (!v.ok) reasons.push(v.reason);
+    }
+    // Its READ side — which cell it reads — is required, and the engine reads exactly these two
+    // fields (dataSourceId + dynamicSourceColumnName | saveColumnName). The source may come from
+    // the process default, but the COLUMN has no default: without it the run cannot read anything.
+    const pick = validateDataSourcePick(
+      {
+        dataSourceId: n.dataSourceId ?? graph?.dataSourceId,
+        dynamicSourceColumnName: n.dynamicSourceColumnName || n.saveColumnName
+      },
+      { dsReason: tv("ds.pickMissing"), colReason: tv("ds.colMissing") }
+    );
+    if (!pick.ok) reasons.push(pick.reason);
+  }
+  if (stepWritesToSource(at)) {
+    const dsId = n.saveDataSourceId != null ? n.saveDataSourceId : n.dataSourceId;
+    const col = n.saveColumnName || n.dynamicSourceColumnName;
+    const v = validateDataSourcePick(
+      { dataSourceId: dsId, dynamicSourceColumnName: col },
+      { dsReason: tv("act.saveDsMissing"), colReason: tv("act.saveColMissing") }
+    );
+    if (!v.ok) reasons.push(v.reason);
+  }
+  if (stepWritesToMemory(at) && at !== "LoadContent") {
+    if (!String(n.memoryVariableName || "").trim()) reasons.push(tv("act.memDestMissing"));
+  }
+
+  // Named tabs: an alias is a contract INSIDE this process. Opening a tab without a usable name
+  // would make it unreachable, and switching to a name no step creates would fail mid-run — both
+  // are authoring mistakes the editor and the engine should refuse before the first action.
+  if (at === "GoToUrl" && n.openInNewTab === true) {
+    const v = validatePlayTabAlias(n.newTabAlias);
+    if (!v.ok) reasons.push(tv(v.reasonKey));
+  }
+  if (at === "SwitchTab") {
+    const target = String(n.switchTabTarget || "Alias");
+    if (target === "Alias") {
+      const raw = String(n.switchTabAlias || "").trim();
+      if (!raw) reasons.push(tv("act.switchTabAliasMissing"));
+      else if (!collectPlayTabAliases(graph).has(normalizePlayTabAlias(raw))) {
+        reasons.push(tv("act.tabAliasUnknown", { alias: raw }));
+      }
+    } else if (target === "Url" || target === "Title") {
+      const pattern = String((target === "Url" ? n.switchTabUrl : n.switchTabTitle) || "").trim();
+      if (!pattern) reasons.push(tv("act.switchTabPatternMissing"));
+    } else if (!["First", "Last", "Next", "Previous"].includes(target)) {
+      reasons.push(tv("act.switchTabTargetBad"));
+    }
+  }
+  if (at === "CloseTab") {
+    const closeTarget = String(n.closeTabTarget || "Last");
+    if (closeTarget === "Alias") {
+      const raw = String(n.closeTabAlias || "").trim();
+      if (!raw) reasons.push(tv("act.closeTabAliasMissing"));
+      else if (!collectPlayTabAliases(graph).has(normalizePlayTabAlias(raw))) {
+        reasons.push(tv("act.tabAliasUnknown", { alias: raw }));
+      }
+    } else if ((closeTarget === "Url" || closeTarget === "Title")
+      && !String((closeTarget === "Url" ? n.closeTabUrl : n.closeTabTitle) || "").trim()) {
+      reasons.push(tv("act.switchTabPatternMissing"));
+    } else if (!["First", "Last", "Next", "Previous", "Current", "Alias", "Url", "Title"].includes(closeTarget)) {
+      reasons.push(tv("act.switchTabTargetBad"));
+    }
+  }
+  // The key name is free text ("Enter", "Tab", "Ctrl+A"), so only "nothing at all" is invalid.
+  if (at === "PressKey" && !String(n.pressKeyName || "").trim()) {
+    reasons.push(tv("run.keyMissing"));
+  }
+
+  // The node's own row pointer (the "ردیف اختصاصی" switch): a pointer that is on but dangling
+  // would silently fall back to the loop row and touch a row the author never chose.
+  validateRowPointerForPlay(n, graph, reasons);
+  // The dynamic selector carries its own switch and its own pointer.
+  validateRowPointerForPlay(n, graph, reasons, SELECTOR_ROW_KEYS, "selectorDedicatedRow");
+
+  return { ok: reasons.length === 0, reasons };
+}
+
+/**
+ * Condition types whose SUBJECT is a data source (a cell, a whole column, a whole row).
+ *
+ * Their subject owns the `sourceId` field — and, for the cell/column checks, the shared
+ * `dynamicSourceColumnName` — so a data-source COMPARE operand would have to borrow those very
+ * fields and overwrite the subject. The editor therefore does not offer that combination either.
+ */
+function conditionSubjectIsSource(ct) {
+  return ct === "SourceValue" || ct === "SourceColumnValue" || ct === "SourceRowValue";
+}
+
+function validateConditionNodeForPlay(n, graph) {
+  const reasons = [];
+  const ct = n.conditionType || "None";
+  if (!ct || ct === "None") {
+    reasons.push(tv("cond.typeMissing"));
+    return { ok: false, reasons };
+  }
+  const eq = n.equalityType || "equal";
+  const src = n.contentSourceType || "Constant";
+
+  if (["FindElement", "NotFindElement", "FindElements", "ElementValue", "ElementVisible", "ElementHidden"].includes(ct)) {
+    const v = validateSelectorBlock(n, { labelKey: "label.conditionSelector" });
+    if (!v.ok) reasons.push(v.reason);
+  }
+  if (ct === "SourceValue" || ct === "SourceColumnValue" || ct === "SourceRowValue") {
+    if (!n.sourceId && !n.dataSourceId) {
+      reasons.push(tv("cond.srcDsMissing"));
+    } else if (ct !== "SourceRowValue" && !String(n.dynamicSourceColumnName || "").trim()) {
+      // The whole-row check names no column — every cell of the row is looked at — so only the cell
+      // and column checks can be missing one.
+      reasons.push(tv("cond.srcColMissing"));
+    }
+  }
+  if (ct === "MemoryValue" && !String(n.memoryVariableName || "").trim()) {
+    // Without a name the condition would compare against "" and quietly take one branch forever.
+    reasons.push(tv("cond.memVarMissing"));
+  }
+
+  if (conditionNeedsCompareOperand(ct, eq)) {
+    if (src === "Constant") {
+      const val = ct === "Url"
+        ? String(n.navigation || n.constantEqualValue || n.constantValue || "").trim()
+        : String(n.constantEqualValue ?? n.constantValue ?? n.navigation ?? "").trim();
+      if (ct === "FindElements" || ct === "DriverTabs") {
+        if (val === "" || !Number.isFinite(Number(val))) {
+          reasons.push(tv("cond.numMissing"));
+        }
+      } else if (!val) {
+        reasons.push(tv("cond.valueEmpty"));
+      }
+    } else if (src === "UserSystemDate") {
+      const val = String(n.constantEqualValue ?? n.userSystemDateValue ?? "").trim();
+      if (!val) {
+        reasons.push(tv("cond.userDateMissing"));
+      } else if (!isValidUserSystemDateForPlay(val)) {
+        reasons.push(tv("cond.userDateBadFormat"));
+      }
+    } else if (src === "UserSystemTime") {
+      const val = String(n.constantEqualValue ?? n.userSystemTimeValue ?? "").trim();
+      if (!val) {
+        reasons.push(tv("cond.userTimeMissing"));
+      } else if (!isValidUserSystemTimeForPlay(val)) {
+        reasons.push(tv("cond.userTimeBadFormat"));
+      }
+    } else if (src === "Elements") {
+      const v = validateSelectorBlock(n, {
+        valueKey: "equalSelectorValue",
+        dynFlag: "equalSelectorIsDynamic",
+        dynCol: "equalSelectorDynamicColumn",
+        hasAttr: "equalHasAttribute",
+        attrName: "equalAttributeName",
+        attrDynFlag: "equalAttributeValueIsDynamic",
+        attrCol: "equalAttributeDynamicColumn",
+        labelKey: "label.compareSelector"
+      });
+      if (!v.ok) reasons.push(v.reason);
+    } else if (src === "DataSource" && !conditionSubjectIsSource(ct)) {
+      const v = validateDataSourcePick(n);
+      if (!v.ok) reasons.push(v.reason);
+    } else if (src === "Memory") {
+      if (!String(n.memoryVariableName || n.sourceMemoryVariableName || "").trim()) {
+        reasons.push(tv("cond.memCompareMissing"));
+      }
+    } else if (src === "System") {
+      if (!String(n.systemValueType || "").trim()) {
+        reasons.push(tv("cond.sysCompareMissing"));
+      }
+    }
+  }
+
+  // Each branch of a condition must lead somewhere. Without this the walk reaches the
+  // condition, finds no edge for the branch it needs, and stops — which reads as the engine
+  // giving up for no reason. Checked before the run so the author sees it up front.
+  //
+  // Both branches are required as soon as either one is wired, and `next` is NOT accepted as a
+  // stand-in. That is deliberate, and the reason is in executeFlow: a condition falls back to
+  // `next` only when it has no success/fail edge at all. Allowing a half-wired condition here
+  // would let an unwired branch silently follow `next` and run the wrong path — the exact bug
+  // that rule was written to stop.
+  //
+  // The exception is a graph that contains a terminal marker. Its presence is the author saying
+  // "a path is allowed to stop", so an unwired branch means "ends here" rather than "forgotten".
+  // Kept in step with validateConditionNode in the editor's flow.js — the two must agree, or the
+  // editor will accept a diagram the player then refuses to run.
+  const outs = ((graph && graph.edges) || []).filter((e) => e.from === n.id);
+  const hasBranchEdges = outs.some((e) => e.kind === "success" || e.kind === "fail");
+  if (hasBranchEdges) {
+    const hasTerminal = (((graph && graph.nodes) || [])).some((x) => x.kind === "end");
+    if (!hasTerminal) {
+      if (!outs.some((e) => e.kind === "success")) reasons.push(tv("cond.noSuccessEdge"));
+      if (!outs.some((e) => e.kind === "fail")) reasons.push(tv("cond.noFailEdge"));
+    }
+  } else if (!outs.some((e) => e.kind === "next")) {
+    reasons.push(tv("cond.noAnyEdge"));
+  }
+
+  // The node's own row pointer — same rule as the action validator, kept in one place — plus the
+  // dynamic selector's own pointer.
+  validateRowPointerForPlay(n, graph, reasons);
+  validateRowPointerForPlay(n, graph, reasons, SELECTOR_ROW_KEYS, "selectorDedicatedRow");
+
+  return { ok: reasons.length === 0, reasons };
+}
+
+function validateStartNodeForPlay(n, graph) {
+  const reasons = [];
+  const rst = n.repeatSourceType || (n.groupNodeId ? "None" : (graph.repeatSourceType || "None"));
+  if (rst === "Loops") {
+    const lc = Number(n.loopCount ?? n.constantValue);
+    if (!Number.isFinite(lc) || lc < 1) reasons.push(tv("start.loopBad"));
+  } else if (rst === "DataSource") {
+    const id = n.dataSourceId ?? graph.dataSourceId;
+    const sources = graph.dataSources || [];
+    const exists = id != null && sources.some((d) => Number(d.id) === Number(id));
+    if (!exists) {
+      reasons.push(tv("start.dsMissing"));
+    }
+  } else if (rst === "Elements") {
+    if (!n.groupNodeId) {
+      reasons.push(tv("start.elementsOnlyInGroup"));
+    } else {
+      const v = validateSelectorBlock(n, { labelKey: "label.repeatSelector" });
+      if (!v.ok) reasons.push(v.reason);
+      // The repeat selector may build itself from a source cell and pin its own row — the same
+      // rule the action and condition selectors follow.
+      validateRowPointerForPlay(n, graph, reasons, SELECTOR_ROW_KEYS, "selectorDedicatedRow");
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+/**
+ * A node's own row pointer — and its dynamic selector's — must be resolvable before a run starts.
+ *
+ * Guarded by each switch (`dedicatedRow` / `selectorDedicatedRow`), so an author who never turned
+ * one on is never blocked by it — exactly the rule the editor applies, so both halves accept the
+ * same diagrams.
+ */
+function validateRowPointerForPlay(n, graph, reasons, keys, gateKey) {
+  if (!n || n[gateKey || "dedicatedRow"] !== true) return;
+  const k = keys || NODE_ROW_KEYS;
+  const pointer = String(n[k.type] || "None");
+  if (!pointer || pointer === "None") {
+    reasons.push(tv("row.pointerMissing"));
+    return;
+  }
+  if (pointer === "SpecificRow") {
+    const idx = Number(n[k.specific]);
+    if (!Number.isFinite(idx) || idx < 0) {
+      reasons.push(tv("row.specificIndexInvalid"));
+    } else {
+      const ds = findRowPointerSource(n, graph);
+      const rc = Number(ds?.rowCount);
+      if (Number.isFinite(rc) && rc > 0 && idx > rc - 1) {
+        reasons.push(tv("row.specificIndexOutOfRange", { idx, max: rc - 1 }));
+      }
+    }
+  }
+  if ((pointer === "FirstRow" || pointer === "LastRow" || pointer === "SpecificRow")
+    && !findRowPointerSource(n, graph)) {
+    reasons.push(tv("row.sourceMissing"));
+  }
+}
+
+/**
+ * Flow edges of a graph, ignoring the structural kinds.
+ *
+ * `contains` (group → its child) and `parent` (group → group) describe nesting, not control flow.
+ * The walk never follows them by `kind`, but a node's own list of OUTGOING edges would otherwise
+ * count them, which matters for the self-reference checks below: a group legitimately has a
+ * `contains` edge pointing at one of its own children and that must not look like a loop.
+ */
+function flowOutgoing(edges, fromId) {
+  return (edges || []).filter(
+    (e) => e.from === fromId && e.kind !== "contains" && e.kind !== "parent"
+  );
+}
+
+/**
+ * Structural integrity of the edges around one node — the checks that keep the WORK walk finite.
+ *
+ * `executeFlow` is a recursive walk: entering a group calls `executeFlow` again for the inner
+ * entry, and the group's `next` edge is followed when that inner walk returns. That makes two
+ * shapes lethal, not merely wrong:
+ *
+ *   - a node whose flow edge points at ITSELF (`from === to`), and
+ *   - a group whose inner entry is the group itself.
+ *
+ * Either one makes the walk re-enter without ever moving on, so the JS call stack overflows and
+ * the run dies with "Maximum call stack size exceeded" — an error that names neither the process
+ * nor the offending node, and that the loop-back budget cannot catch because that budget is
+ * counted per `executeFlow` invocation rather than per graph.
+ *
+ * A graph can reach this state without the editor ever agreeing to it: the editor blocks
+ * self-links interactively (`resolveLink` returns "نمیتوان به خود وصل کرد"), so a stored
+ * self-edge comes from hand-edited GraphJson, an older build, or an import. Reporting it as an
+ * invalid node is the honest answer — it stops the run with a message the user can act on,
+ * which is exactly what the user asked for: an unusable node must be INVALID, never fatal.
+ */
+function validateStructureForPlay(n, graph) {
+  const reasons = [];
+  if (!n) return { ok: true, reasons };
+  const edges = (graph && graph.edges) || [];
+
+  const outs = flowOutgoing(edges, n.id);
+
+  // A node that flows into itself: the walk would step from it straight back to it and, for a
+  // group, recurse into itself. Checked by id equality rather than by kind so it holds for every
+  // node type, including a condition wired success → itself.
+  if (outs.some((e) => sameNodeId(e.to, n.id))) {
+    reasons.push(tv("struct.selfLoop"));
+  }
+
+  // A group whose inner start IS the group, or whose entry edge points back at the group. The
+  // recursive descent would never reach an inner node, so the stack grows until it overflows.
+  if (n.kind === "group") {
+    const nodes = (graph && graph.nodes) || [];
+    const innerStart = nodes.find(
+      (x) => x.kind === "start" && sameNodeId(x.groupNodeId, n.id)
+    );
+    const entryTarget = flowEdge(edges, n.id, ["contains", "next"]);
+    const entryId = innerStart?.id || entryTarget?.to || null;
+    if (entryId && sameNodeId(entryId, n.id)) {
+      reasons.push(tv("struct.groupEntriesItself"));
+    }
+  }
+
+  return { ok: reasons.length === 0, reasons };
+}
+
+function validateNodeLeafForPlay(n, graph) {
+  if (!n) return { ok: true, reasons: [] };
+  // Structure first: the per-action rules below are about settings, and a node that cannot be
+  // walked at all should lead with that rather than with a missing-selector message.
+  const struct = validateStructureForPlay(n, graph);
+  if (!struct.ok) return struct;
+  if (isActionNode(n)) return validateActionNodeForPlay(n, graph);
+  if (n.kind === "condition") return validateConditionNodeForPlay(n, graph);
+  if (n.kind === "start") return validateStartNodeForPlay(n, graph);
+  return { ok: true, reasons: [] };
+}
+
+function graphHasInvalidNodesForPlay(graph) {
+  return collectInvalidNodesForPlay(graph).length > 0;
+}
+
+/** UI culture for engine-generated messages (synced from the portal, defaults to fa). */
+let playCulture = "fa";
+function setPlayCulture(next) {
+  playCulture = next === "en" ? "en" : "fa";
+}
+function playUiCulture() {
+  return playCulture;
+}
+
+/**
+ * Validation/run message catalogue. Call sites pass keys, never literals, so a language
+ * switch reaches every reason string. Keys missing from a pack fall back to fa, then to
+ * the key itself, so a typo degrades visibly instead of silently blanking out.
+ */
+const ENGINE_MSG = {
+  fa: {
+    "sel.empty": "{label} خالی است",
+    "sel.dynNeedsPlaceholder": "{label} پویا باید «{مقدار پویا}» یا {{ستون}} داشته باشد",
+    "sel.dynColMissing": "ستون {label} پویا مشخص نیست",
+    "sel.attrNameEmpty": "نام اتریبیوت {label} خالی است",
+    "sel.attrDynColMissing": "ستون اتریبیوت پویای {label} مشخص نیست",
+    "ds.pickMissing": "منبع داده انتخاب نشده",
+    "ds.colMissing": "ستون منبع داده انتخاب نشده",
+
+    "play.dynSelectorResolved": "سلکتور پویا «{title}» (ردیف {row}) → {selector}",
+
+    "act.constantSaveEmpty": "مقدار ثابت ذخیره خالی است",
+    "act.memSourceMissing": "متغیر منبع حافظه مشخص نیست",
+    "act.sysTypeMissing": "نوع مقدار پیشفرض سیستم مشخص نیست",
+    "act.memDestMissing": "نام متغیر مقصد حافظه مشخص نیست",
+    "act.saveDsMissing": "منبع مقصد ذخیره انتخاب نشده",
+    "act.saveColMissing": "ستون مقصد ذخیره انتخاب نشده",
+    "act.waitMissing": "زمان انتظار مشخص نیست",
+    "act.holdInvalid": "مدت نگه‌داشتن کلیک باید عددی و بزرگ‌تر یا مساوی صفر باشد",
+    "act.scrollInvalid": "میزان اسکرول باید عددی باشد",
+    "act.urlEmpty": "آدرس ثابت خالی است",
+    "act.constantEmpty": "مقدار ثابت خالی است",
+    "act.memVarMissing": "متغیر حافظه مشخص نیست",
+    "act.tabAliasMissing": "نام تب جدید مشخص نیست",
+    "act.tabAliasBad": "نام تب باید با حرف شروع شود و فقط شامل حرف، رقم، خط تیره یا زیرخط باشد (حداکثر ۲۴ نویسه)",
+    "act.tabAliasReserved": "نام «main» برای تب شروع اجرا رزرو شده است؛ نام دیگری انتخاب کنید",
+    "act.switchTabAliasMissing": "نام تب مقصد مشخص نیست",
+    "act.switchTabPatternMissing": "الگوی تب مقصد مشخص نیست",
+    "act.switchTabTargetBad": "نوع هدف سوئیچ تب نامعتبر است",
+    "act.tabAliasUnknown": "تبی با نام «{alias}» در این فرآیند تعریف نشده است؛ ابتدا با «رفتن به آدرس» و گزینهٔ «تب جدید» آن را بسازید",
+    "act.closeTabAliasMissing": "نام تب موردنظر برای بستن مشخص نیست",
+
+    "cond.typeMissing": "نوع شرط انتخاب نشده",
+    "cond.srcDsMissing": "منبع مورد بررسی انتخاب نشده",
+    "cond.srcColMissing": "ستون مورد بررسی انتخاب نشده",
+    "cond.memVarMissing": "متغیر حافظه مورد بررسی انتخاب نشده",
+    "cond.numMissing": "مقدار عددی مقایسه مشخص نیست",
+    "cond.valueEmpty": "مقدار مقایسه خالی است",
+    "cond.userDateMissing": "تاریخ سیستم کاربر مشخص نیست",
+    "cond.userDateBadFormat": "فرمت تاریخ سیستم کاربر نامعتبر است (مجاز: YYYY-MM-DD)",
+    "cond.userTimeMissing": "زمان سیستم کاربر مشخص نیست",
+    "cond.userTimeBadFormat": "فرمت زمان سیستم کاربر نامعتبر است (مجاز: HH:mm یا HH:mm:ss)",
+    "cond.memCompareMissing": "متغیر حافظه مقایسه مشخص نیست",
+    "cond.sysCompareMissing": "نوع مقدار پیشفرض مقایسه مشخص نیست",
+    "cond.noSuccessEdge": "شاخهٔ «موفق» (success) این شرط وصل نشده",
+    "cond.noFailEdge": "شاخهٔ «ناموفق» (fail) این شرط وصل نشده",
+    "cond.noAnyEdge": "هیچ خروجی‌ای از این شرط وصل نشده (نه success، نه fail، نه بعدی)",
+
+    "start.loopBad": "تعداد تکرار حلقه نامعتبر است",
+    "start.dsMissing": "منبع پیشفرض برای تکرار مشخص نشده",
+    "start.elementsOnlyInGroup": "تکرار با المان صفحه فقط داخل گروه مجاز است",
+
+    "row.pointerMissing": "اشاره‌گر ردیف انتخاب نشده",
+    "row.specificIndexInvalid": "شماره ردیف مشخص نامعتبر است",
+    "row.specificIndexOutOfRange": "شماره ردیف مشخص {idx} خارج از بازهٔ منبع است (0 تا {max})",
+    "row.sourceMissing": "برای اشاره‌گر ردیف (اول/آخر/مشخص) منبع داده مشخص نشده",
+
+    "struct.selfLoop": "یال خروجی این نود به خودش وصل است — همین باعث میشد اجرا در حلقهٔ بیپایان گیر کند. اتصال را باز و به نود درست وصل کنید",
+    "struct.groupEntriesItself": "ورودی این گروه به خود گروه برمیگردد و اجرا نمیتواند وارد آن شود — اتصال ورودی گروه را اصلاح کنید",
+
+    "run.tabNotFound": "تب فعلی پیدا نشد.",
+    "run.lastTab": "فقط یک تب باز است؛ قابل بستن نیست.",
+    "run.tabAliasMissing": "تبی با نام «{alias}» در این اجرا ثبت نشده است.",
+    "run.tabAliasClosed": "تب «{alias}» بسته شده است؛ آن را دوباره با «رفتن به آدرس» و گزینهٔ «تب جدید» باز کنید.",
+    "run.tabMatchMissing": "هیچ تبی با «{pattern}» پیدا نشد.",
+    "run.newTabFailed": "تب جدید ساخته نشد.",
+    "run.keyMissing": "کلید موردنظر مشخص نیست.",
+    "run.closeTabMatchMissing": "هیچ تبی با این مشخصات برای بستن پیدا نشد.",
+    "run.memNameEmpty": "نام متغیر خالی است.",
+    "run.saveTargetMissing": "منبع/ستون مقصد ذخیره مشخص نیست.",
+    "run.noResult": "بدون نتیجه",
+    "run.badSelector": "سلکتور نامعتبر: {sel}",
+    "run.removeNone": "المانی برای حذف پیدا نشد: {sel}",
+    "run.alertNotArmed": "گوش‌دادن به پیام هشدار مرورگر برای این تب فعال نیست؛ افزونهٔ Player را دوباره بارگذاری کنید.",
+    "run.alertNone": "پیام هشداری که باید تأیید شود دیده نشد.",
+    "run.selectorEmpty": "سلکتور خالی است.",
+    "run.unsupportedAction": "اکشن پشتیبانینشده: {action}",
+    "run.notSelect": "المان انتخابی یک لیست کشویی (select) نیست.",
+    "run.optionNotFound": "گزینه‌ای با مقدار «{v}» در لیست پیدا نشد.",
+    "run.waitElementTimeout": "المان تا پایان مهلت ظاهر نشد: {sel}",
+    "run.condNoFailBranch": "شاخهٔ «ناموفق» (fail) این شرط وصل نشده و مسیری برای ادامه وجود ندارد — اجرا متوقف شد. برای حلقه، شاخهٔ fail را به مرحلهٔ تکراری وصل کنید.",
+    "run.condNoSuccessBranch": "شاخهٔ «موفق» (success) این شرط وصل نشده و مسیری برای ادامه وجود ندارد — اجرا متوقف شد.",
+    "run.condMissingBranch": "شاخهٔ «{branch}» این شرط وصل نشده و مسیری برای ادامه وجود ندارد — اجرا متوقف شد.",
+    "run.cellBusy": "سلول منبع هنوز آزاد نشده — چند ثانیه بعد دوباره تلاش کنید.",
+    "run.cellSaveFailed": "ذخیرهٔ سلول روی سرور انجام نشد.",
+    "run.sourceLimitExceeded": "امکان درج در منبع نیست: سقف مجاز ردیف/حجم منبع پر شده است. سقف را از سطح کاربری یا لایسنس افزایش دهید.",
+
+    "label.selector": "سلکتور",
+    "label.targetSelector": "سلکتور هدف",
+    "label.conditionSelector": "سلکتور شرط",
+    "label.compareSelector": "سلکتور مقدار مقایسه",
+    "label.urlSelector": "سلکتور آدرس",
+    "label.valueSourceSelector": "سلکتور منبع مقدار",
+    "label.repeatSelector": "سلکتور تکرار",
+    "label.pageElementSelector": "سلکتور المان صفحه"
+  },
+  en: {
+    "sel.empty": "{label} is empty",
+    "sel.dynNeedsPlaceholder": "Dynamic {label} must contain the dynamic token or a {{column}} reference",
+    "sel.dynColMissing": "Dynamic {label} column is not set",
+    "sel.attrNameEmpty": "{label} attribute name is empty",
+    "sel.attrDynColMissing": "Dynamic {label} attribute column is not set",
+    "ds.pickMissing": "No data source selected",
+    "ds.colMissing": "No data source column selected",
+
+    "play.dynSelectorResolved": "Dynamic selector \"{title}\" (row {row}) -> {selector}",
+
+    "act.constantSaveEmpty": "Constant value to save is empty",
+    "act.memSourceMissing": "Source memory variable is not set",
+    "act.sysTypeMissing": "System default value type is not set",
+    "act.memDestMissing": "Destination memory variable name is not set",
+    "act.saveDsMissing": "No destination data source selected",
+    "act.saveColMissing": "No destination column selected",
+    "act.waitMissing": "Wait duration is not set",
+    "act.holdInvalid": "Hold duration must be a number greater than or equal to zero",
+    "act.scrollInvalid": "Scroll amount must be a number",
+    "act.urlEmpty": "Constant URL is empty",
+    "act.constantEmpty": "Constant value is empty",
+    "act.memVarMissing": "Memory variable is not set",
+    "act.tabAliasMissing": "The new tab's name is not set",
+    "act.tabAliasBad": "A tab name must start with a letter and contain only letters, digits, '-' or '_' (max 24 characters)",
+    "act.tabAliasReserved": "\"main\" is reserved for the run's starting tab; choose another name",
+    "act.switchTabAliasMissing": "The destination tab's name is not set",
+    "act.switchTabPatternMissing": "The destination tab's match pattern is not set",
+    "act.switchTabTargetBad": "The switch-tab target type is invalid",
+    "act.tabAliasUnknown": "No tab named \"{alias}\" is defined in this process; create it first with Go to URL + \"open in a new tab\"",
+    "act.closeTabAliasMissing": "The name of the tab to close is not set",
+
+    "cond.typeMissing": "Condition type is not selected",
+    "cond.srcDsMissing": "No data source selected to check",
+    "cond.srcColMissing": "No column selected to check",
+    "cond.memVarMissing": "No memory variable selected to check",
+    "cond.numMissing": "Numeric comparison value is not set",
+    "cond.valueEmpty": "Comparison value is empty",
+    "cond.userDateMissing": "User system date is not set",
+    "cond.userDateBadFormat": "User system date format is invalid (expected YYYY-MM-DD)",
+    "cond.userTimeMissing": "User system time is not set",
+    "cond.userTimeBadFormat": "User system time format is invalid (expected HH:mm or HH:mm:ss)",
+    "cond.memCompareMissing": "Comparison memory variable is not set",
+    "cond.sysCompareMissing": "Comparison system value type is not set",
+    "cond.noSuccessEdge": "This condition's \"success\" branch is not wired",
+    "cond.noFailEdge": "This condition's \"fail\" branch is not wired",
+    "cond.noAnyEdge": "This condition has no outgoing edge (no success, fail or next)",
+
+    "start.loopBad": "Loop repeat count is invalid",
+    "start.dsMissing": "No default data source selected for the repeat",
+    "start.elementsOnlyInGroup": "Repeating by page elements is only allowed inside a group",
+
+    "row.pointerMissing": "No row pointer is selected",
+    "row.specificIndexInvalid": "The fixed row number is invalid",
+    "row.specificIndexOutOfRange": "Fixed row {idx} is outside the source range (0 to {max})",
+    "row.sourceMissing": "No data source is set for the row pointer (first / last / fixed)",
+
+    "struct.selfLoop": "This node's outgoing edge points at itself, which made the run loop forever. Re-wire the edge to the correct node",
+    "struct.groupEntriesItself": "This group's entry leads back to the group itself, so the run cannot descend into it. Fix the group's entry edge",
+
+    "run.tabNotFound": "Current tab not found.",
+    "run.lastTab": "Only one tab is open; it cannot be closed.",
+    "run.tabAliasMissing": "No tab named \"{alias}\" is registered in this run.",
+    "run.tabAliasClosed": "The tab named \"{alias}\" has been closed; reopen it with Go to URL + \"open in a new tab\".",
+    "run.tabMatchMissing": "No tab matched \"{pattern}\".",
+    "run.newTabFailed": "The new tab could not be created.",
+    "run.keyMissing": "No key is specified for this step.",
+    "run.closeTabMatchMissing": "No tab matched the chosen criteria, so nothing was closed.",
+    "run.memNameEmpty": "Variable name is empty.",
+    "run.saveTargetMissing": "Destination source/column is not specified.",
+    "run.noResult": "No result",
+    "run.badSelector": "Invalid selector: {sel}",
+    "run.removeNone": "No element to remove was found: {sel}",
+    "run.alertNotArmed": "Dialog handling is not armed for this tab; reload the Player extension.",
+    "run.alertNone": "No browser dialog was seen to accept.",
+    "run.selectorEmpty": "Selector is empty.",
+    "run.unsupportedAction": "Unsupported action: {action}",
+    "run.notSelect": "The target element is not a dropdown (select).",
+    "run.optionNotFound": "No option with the value \"{v}\" was found in the list.",
+    "run.waitElementTimeout": "The element did not appear before the deadline: {sel}",
+    "run.condNoFailBranch": "This condition has no \"fail\" branch wired and nowhere to continue — the run stopped. For a loop, wire the fail branch to the repeating step.",
+    "run.condNoSuccessBranch": "This condition has no \"success\" branch wired and nowhere to continue — the run stopped.",
+    "run.condMissingBranch": "This condition has no \"{branch}\" branch wired and nowhere to continue — the run stopped.",
+    "run.cellBusy": "Source cell is still locked — try again in a few seconds.",
+    "run.cellSaveFailed": "Could not save the cell on the server.",
+    "run.sourceLimitExceeded": "Cannot insert into the source: its row/size ceiling is reached. Raise the plan or license ceiling.",
+
+    "label.selector": "selector",
+    "label.targetSelector": "target selector",
+    "label.conditionSelector": "condition selector",
+    "label.compareSelector": "comparison value selector",
+    "label.urlSelector": "URL selector",
+    "label.valueSourceSelector": "value source selector",
+    "label.repeatSelector": "repeat selector",
+    "label.pageElementSelector": "page element selector"
+  }
+};
+
+/** Translate an engine message key for the active UI culture. */
+function tv(key, vars) {
+  const pack = ENGINE_MSG[playCulture] || ENGINE_MSG.fa;
+  let text = pack[key] ?? ENGINE_MSG.fa[key] ?? key;
+  if (vars && typeof vars === "object") {
+    for (const k of Object.keys(vars)) {
+      text = text.split("{" + k + "}").join(vars[k] == null ? "" : String(vars[k]));
+    }
+  }
+  return text;
+}
+
+/** Selector label keys — resolved at call time so they follow the culture. */
+const SEL_LABEL_KEYS = {
+  target: "label.targetSelector",
+  condition: "label.conditionSelector",
+  compare: "label.compareSelector",
+  url: "label.urlSelector",
+  valueSource: "label.valueSourceSelector",
+  repeat: "label.repeatSelector",
+  pageElement: "label.pageElementSelector"
+};
+
+/** Resolves validateSelectorBlock's label option (accepts a key, a raw string, or nothing). */
+function selLabel(opts) {
+  if (opts && opts.labelKey) return tv(opts.labelKey);
+  if (opts && typeof opts.label === "string" && opts.label.trim()) return opts.label;
+  return tv("label.selector");
+}
+
+/** Human label for a node kind, used in validation reports. */
+function nodeKindLabel(n) {
+  if (!n) return "نود ناشناس";
+  if (n.kind === "start") return "شروع";
+  if (n.kind === "condition") return "شرط";
+  if (isActionNode(n)) return "اقدام";
+  if (n.kind === "group") return "گروه";
+  return n.kind || "نود";
+}
+
+/** Name of the group a node belongs to (or the process scope for free nodes). */
+function nodeGroupLabel(n, graph) {
+  if (!n) return "—";
+  // A group node's own title is the group name; a node inside a group references its parent.
+  if (n.kind === "group") return n.title || "گروه بدون عنوان";
+  const gid = n.groupNodeId;
+  if (!gid) return "بیرون از گروه (سطح فرآیند)";
+  const g = (graph?.nodes || []).find((x) => x.id === gid);
+  return g ? (g.title || "گروه بدون عنوان") : `گروه نامشخص (${gid})`;
+}
+
+/**
+ * Every node that would fail validation, with node name, owning group, kind and reasons.
+ * Group nodes are containers only — their repeat/selector rules are validated on the group's
+ * start node, so they are skipped here to avoid duplicate reports.
+ */
+function collectInvalidNodesForPlay(graph) {
+  const out = [];
+  for (const n of graph?.nodes || []) {
+    if (n.kind === "group") continue;
+    if (n.isActive === false) continue;
+    const v = validateNodeLeafForPlay(n, graph);
+    if (v.ok) continue;
+    out.push({
+      node: n,
+      id: n.id,
+      title: n.title || nodeKindLabel(n),
+      kind: nodeKindLabel(n),
+      group: nodeGroupLabel(n, graph),
+      reasons: v.reasons?.length ? v.reasons : ["دلیل نامشخص"]
+    });
+  }
+  return out;
+}
+
+/** Builds the detailed, user-facing validation error shown before a run starts. */
+function buildInvalidNodesError(graph, lang) {
+  const items = collectInvalidNodesForPlay(graph);
+  if (!items.length) return "";
+  const en = lang === "en";
+
+  const lines = items.map((it, i) => {
+    const head = en
+      ? `${i + 1}) ${it.kind} «${it.title}» — in group: ${it.group}`
+      : `${i + 1}) ${it.kind} «${it.title}» — در گروه: ${it.group}`;
+    const why = it.reasons.map((r) => `   • ${r}`).join("\n");
+    return `${head}\n${why}`;
+  });
+
+  const title = en
+    ? `Cannot start: ${items.length} node(s) have invalid settings.`
+    : `اجرا ممکن نیست: ${items.length} نود تنظیمات نامعتبر دارد.`;
+  const tail = en
+    ? "Fix the items above in the editor and save, then run again."
+    : "موارد بالا را در ویرایشگر اصلاح و ذخیره کنید، سپس دوباره اجرا بزنید.";
+
+  return `${title}\n\n${lines.join("\n\n")}\n\n${tail}`;
+}
+
+/**
+ * Validation error for a SINGLE-node test, naming only the node under test.
+ *
+ * A probe of one action/condition is not a run of the process, so the rest of the diagram must not be
+ * able to veto it. The node's own leaf validation still applies, and its reasons are reported exactly
+ * as the whole-graph version reports them — this only narrows the SCOPE, it does not relax the rules.
+ */
+function buildScopedNodeError(graph, nodeId, lang) {
+  if (!nodeId) return "";
+  const item = collectInvalidNodesForPlay(graph).find((it) => String(it.id) === String(nodeId));
+  if (!item) return "";
+  const en = lang === "en";
+  const why = item.reasons.map((r) => `   • ${r}`).join("\n");
+  const head = en
+    ? `${item.kind} «${item.title}» — in group: ${item.group}`
+    : `${item.kind} «${item.title}» — در گروه: ${item.group}`;
+  const title = en
+    ? "This node cannot run: its settings are invalid."
+    : "این نود قابل اجرا نیست: تنظیماتش نامعتبر است.";
+  const tail = en
+    ? "Fix it in the editor and save, then test again."
+    : "آن را در ویرایشگر اصلاح و ذخیره کنید، سپس دوباره تست کنید.";
+  return `${title}\n\n${head}\n${why}\n\n${tail}`;
+}
+
+/** Play engine — imported by background via importScripts. */
+
+const RunMode = { Play: 0, Learn: 1 };
+
+let playAbort = false;
+let playPaused = false;
+let playResumeWaiters = [];
+/**
+ * HUD history bounds.
+ *
+ * A run can emit thousands of log lines (one per element retry, tag read, condition poll). Keeping
+ * all of them, copying the tail on every line and broadcasting the whole state to every named tab
+ * made the extension itself the bottleneck on long runs. Thirty lines is what the HUD renders
+ * anyway; older lines cannot help an operator mid-run.
+ */
+const PLAY_LOG_LIMIT = 30;
+const PLAY_HUD_RESULT_LIMIT = 30;
+// Results are kept a little longer than the HUD shows: the end-of-run summary counts ignored
+// failures from them, and the local-sync fallback reads them when the write log is empty.
+const PLAY_RESULT_LIMIT = 80;
+const PLAY_STATE_BROADCAST_MS = 250;
+
+let playLogs = [];
+let playTabId = null;
+
+/**
+ * Named tabs of the CURRENT run.
+ *
+ * A run used to have exactly one tab (`playTabId`), so a process that needed a second system had
+ * to navigate the same tab away and back — losing whatever page state the first system held.
+ * Now a step can open a tab under a name, leave it alive in the background, and come back to it.
+ * The map belongs to the run: it is reset at start and dropped when the run ends, because an alias
+ * is a handle into pages THIS run opened, not a browser bookmark.
+ */
+const PLAY_TAB_MAIN = "main";
+const PLAY_TAB_ALIAS_MAX = 24;
+let playTabs = new Map(); // normalized alias -> { id, name }
+let playTabAutoDiscard = new Map(); // tabId -> previous autoDiscardable value
+let playTabAutoAliasSeq = 0;
+
+function normalizePlayTabAlias(raw) {
+  return String(raw == null ? "" : raw).trim().toLowerCase();
+}
+
+/** Alias syntax shared with the editor: a letter, then letters/digits/_/- (Unicode letters allowed). */
+function validatePlayTabAlias(raw) {
+  const value = String(raw == null ? "" : raw).trim();
+  if (!value) return { ok: false, reasonKey: "act.tabAliasMissing" };
+  if (value.length > PLAY_TAB_ALIAS_MAX) return { ok: false, reasonKey: "act.tabAliasBad" };
+  if (!/^[\p{L}][\p{L}\p{N}_-]*$/u.test(value)) return { ok: false, reasonKey: "act.tabAliasBad" };
+  if (normalizePlayTabAlias(value) === PLAY_TAB_MAIN) {
+    return { ok: false, reasonKey: "act.tabAliasReserved" };
+  }
+  return { ok: true, alias: value };
+}
+
+/** First unused letter (A, B, C, …) for a new tab whose step left the name blank. */
+function nextAutoPlayTabAlias() {
+  for (let i = 0; i < 26; i++) {
+    const alias = String.fromCharCode(65 + ((playTabAutoAliasSeq + i) % 26));
+    if (!playTabs.has(alias.toLowerCase())) {
+      playTabAutoAliasSeq += i + 1;
+      return alias;
+    }
+  }
+  playTabAutoAliasSeq += 1;
+  return `tab${playTabAutoAliasSeq}`;
+}
+
+/** Keep a created/found tab from being discarded while the run still needs its page state. */
+async function protectPlayTab(tabId) {
+  if (tabId == null || playTabAutoDiscard.has(tabId)) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const previous = tab.autoDiscardable !== false;
+    playTabAutoDiscard.set(tabId, previous);
+    if (tab.autoDiscardable !== false) {
+      await chrome.tabs.update(tabId, { autoDiscardable: false });
+    }
+  } catch { /* tab already gone — nothing to protect */ }
+}
+
+async function releasePlayTabProtection(tabId) {
+  if (!playTabAutoDiscard.has(tabId)) return;
+  const previous = playTabAutoDiscard.get(tabId);
+  playTabAutoDiscard.delete(tabId);
+  try { await chrome.tabs.update(tabId, { autoDiscardable: previous }); } catch { /* gone */ }
+}
+
+async function releaseAllPlayTabProtection() {
+  for (const tabId of [...playTabAutoDiscard.keys()]) {
+    await releasePlayTabProtection(tabId);
+  }
+}
+
+function registerPlayTab(alias, tabId) {
+  const key = normalizePlayTabAlias(alias);
+  if (!key || tabId == null) return null;
+  playTabs.set(key, { id: Number(tabId), name: String(alias).trim() });
+  return key;
+}
+
+function forgetPlayTabByTabId(tabId) {
+  for (const [key, entry] of playTabs) {
+    if (Number(entry.id) === Number(tabId)) playTabs.delete(key);
+  }
+}
+
+/** Start-of-run reset: the initial tab is always reachable as `main`. */
+async function resetPlayTabs(initialTabId) {
+  await releaseAllPlayTabProtection();
+  playTabs.clear();
+  playTabAutoAliasSeq = 0;
+  if (initialTabId != null) {
+    registerPlayTab(PLAY_TAB_MAIN, initialTabId);
+    await protectPlayTab(initialTabId);
+  }
+}
+
+/** End-of-run cleanup: release the discard guard but LEAVE the pages open for the operator. */
+async function finalizePlayTabs() {
+  await releaseAllPlayTabProtection();
+  playTabs.clear();
+}
+
+// A tab closed by the user (or by CloseTab) must lose its alias in the same instant; a later step
+// naming it has to fail with "that tab is closed", not switch to a reused tab id.
+if (chrome?.tabs?.onRemoved?.addListener) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    forgetPlayTabByTabId(tabId);
+    playTabAutoDiscard.delete(tabId);
+  });
+}
+
+async function findTabByUrlPattern(pattern) {
+  const needle = String(pattern || "").trim().toLowerCase();
+  if (!needle) return null;
+  const tabs = await chrome.tabs.query({});
+  return tabs.find((tab) =>
+    String(tab.url || tab.pendingUrl || "").toLowerCase().includes(needle)) || null;
+}
+
+async function findTabByTitlePattern(pattern) {
+  const needle = String(pattern || "").trim().toLowerCase();
+  if (!needle) return null;
+  const tabs = await chrome.tabs.query({});
+  return tabs.find((tab) => String(tab.title || "").toLowerCase().includes(needle)) || null;
+}
+
+/**
+ * Resolve the tab a SwitchTab step means.
+ *
+ * Alias is the normal form because it is stable for the whole run. URL/title matching exists for
+ * tabs the operator opened by hand before the run (they have no alias yet) and for processes that
+ * are easier to author against an address than a name.
+ */
+async function resolveSwitchTabTarget(currentTabId, step) {
+  const mode = String(step?.switchTabTarget || "Alias");
+
+  if (mode === "Alias") {
+    const raw = String(step?.switchTabAlias || "").trim();
+    const key = normalizePlayTabAlias(raw);
+    if (!key) return { ok: false, error: tv("act.switchTabAliasMissing") };
+    const entry = playTabs.get(key);
+    if (!entry) return { ok: false, error: tv("run.tabAliasMissing", { alias: raw }) };
+    try {
+      const tab = await chrome.tabs.get(entry.id);
+      return { ok: true, tab, alias: entry.name };
+    } catch {
+      playTabs.delete(key);
+      return { ok: false, error: tv("run.tabAliasClosed", { alias: entry.name }) };
+    }
+  }
+
+  if (mode === "Url" || mode === "Title") {
+    const pattern = String((mode === "Url" ? step?.switchTabUrl : step?.switchTabTitle) || "").trim();
+    if (!pattern) return { ok: false, error: tv("act.switchTabPatternMissing") };
+    const tab = mode === "Url"
+      ? await findTabByUrlPattern(pattern)
+      : await findTabByTitlePattern(pattern);
+    if (!tab) return { ok: false, error: tv("run.tabMatchMissing", { pattern }) };
+    return { ok: true, tab, alias: null };
+  }
+
+  // Positional targets are measured in the window of the tab the run is in, exactly like CloseTab.
+  let baseTab = null;
+  try { baseTab = await chrome.tabs.get(currentTabId); } catch { baseTab = null; }
+  if (!baseTab) return { ok: false, error: tv("run.tabNotFound") };
+  const ordered = (await chrome.tabs.query({ windowId: baseTab.windowId }))
+    .slice()
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  const here = ordered.findIndex((tab) => Number(tab.id) === Number(currentTabId));
+  let tab = null;
+  if (mode === "First") tab = ordered[0] || null;
+  else if (mode === "Last") tab = ordered[ordered.length - 1] || null;
+  else if (mode === "Next") tab = here >= 0 ? ordered[here + 1] || null : null;
+  else if (mode === "Previous") tab = here >= 0 ? ordered[here - 1] || null : null;
+  else return { ok: false, error: tv("act.switchTabTargetBad") };
+  if (!tab) return { ok: false, error: tv("run.tabMatchMissing", { pattern: mode }) };
+  return { ok: true, tab, alias: null };
+}
+
+/**
+ * Switch the run to another named/found tab WITHOUT closing anything.
+ *
+ * `switchTabActivate` only controls browser focus; the run's target changes either way, because
+ * Chrome can script a background tab. Keeping focus off is what lets a run work on B while the
+ * operator watches A.
+ */
+async function runSwitchTabStep(currentTabId, step) {
+  const target = await resolveSwitchTabTarget(currentTabId, step);
+  if (!target.ok) return { ok: false, error: target.error, reason: "tab_switch_failed" };
+
+  const tab = target.tab;
+  if (tab.discarded) {
+    appendPlayLog("warn", `تب «${target.alias || tab.id}» در پس‌زمینه رها شده بود؛ بیدار می‌شود و وضعیت صفحه‌اش ممکن است بازنشانی شود.`);
+    await ensureTabScriptable(tab.id, { force: true });
+  }
+  if (step.switchTabActivate !== false) {
+    try { await chrome.tabs.update(tab.id, { active: true }); } catch { /* gone */ }
+    if (tab.windowId != null) {
+      try { await chrome.windows.update(tab.windowId, { focused: true }); } catch { /* ignore */ }
+    }
+  }
+  await protectPlayTab(tab.id);
+  if (target.alias) registerPlayTab(target.alias, tab.id);
+  appendPlayLog("info", `سوئیچ به تب «${target.alias || tab.id}» (#${tab.id})`);
+  return { ok: true, tabId: tab.id, tabAlias: target.alias || null };
+}
+
+let playAbortPoll = null;
+let playStatus = {
+  playing: false,
+  paused: false,
+  taskId: null,
+  title: null,
+  // Where this run is managed. Undefined/true = server-managed; false = local (set at start from the
+  // task record). Kept on the status object so every cell read/write can consult it without a
+  // second lookup, and so the HUD can show which mode a run is in.
+  runOnServer: true,
+  stepIndex: 0,
+  stepTotal: 0,
+  loopIndex: 0,
+  loopTotal: 1,
+  // The row the process loop is on, kept apart from loopIndex so a row pointer inside a group can
+  // still name the OUTER row. threadRowPointer/executeFlow maintain it per step.
+  processRow: 0,
+  repeatType: "None",
+  currentNodeId: null,
+  lastError: null,
+  lastResult: null,
+  runMode: RunMode.Play,
+  logs: [],
+  results: []
+};
+
+function getPlayStatus() {
+  return {
+    ok: true,
+    ...playStatus,
+    paused: !!playPaused,
+    logs: playLogs.slice(-PLAY_LOG_LIMIT),
+    results: Array.isArray(playStatus.results)
+      ? playStatus.results.slice(-PLAY_HUD_RESULT_LIMIT)
+      : []
+  };
+}
+
+/**
+ * Coalesce log/result updates into at most one broadcast per 250 ms.
+ *
+ * Every broadcast reads storage, walks all tabs and posts a message into each named tab plus the
+ * portal; doing that per log line turned a chatty run into a message storm. State TRANSITIONS
+ * (start/pause/stop/finish) still call broadcastPlayState() directly so the HUD reacts at once.
+ */
+let playStateBroadcastTimer = null;
+function schedulePlayStateBroadcast() {
+  if (playStateBroadcastTimer) return;
+  playStateBroadcastTimer = setTimeout(() => {
+    playStateBroadcastTimer = null;
+    broadcastPlayState();
+  }, PLAY_STATE_BROADCAST_MS);
+}
+
+function wakePlayResumeWaiters() {
+  const waiters = playResumeWaiters.splice(0);
+  for (const resolve of waiters) {
+    try { resolve(); } catch { /* ignore */ }
+  }
+}
+
+function appendPlayLog(level, text) {
+  const entry = {
+    t: Date.now(),
+    level: level || "info",
+    text: String(text || "")
+  };
+  playLogs.push(entry);
+  if (playLogs.length > PLAY_LOG_LIMIT) {
+    playLogs.splice(0, playLogs.length - PLAY_LOG_LIMIT);
+  }
+  playStatus.logs = playLogs;
+  // Mirror warn/error to the player extension service-worker console.
+  const msg = `[DA Player] ${entry.text}`;
+  if (entry.level === "error") console.error(msg);
+  else if (entry.level === "warn") console.warn(msg);
+  schedulePlayStateBroadcast();
+}
+
+function clearPlayLogs() {
+  playLogs = [];
+  playStatus.logs = [];
+  playStatus.results = [];
+  playStatus.lastError = null;
+  playStatus.lastResult = null;
+  broadcastPlayState();
+  return getPlayStatus();
+}
+
+function broadcastPlayState() {
+  // A direct broadcast already carries the newest log/result state, so the pending coalesced one
+  // would only be a duplicate.
+  if (playStateBroadcastTimer) {
+    clearTimeout(playStateBroadcastTimer);
+    playStateBroadcastTimer = null;
+  }
+  const message = { type: "playStateChanged", ...getPlayStatus() };
+  // Every named tab has its own HUD. Sending only to the current one left the other tabs showing
+  // a stale "playing" state after the run switched away from them.
+  const targets = new Set();
+  if (playTabId) targets.add(playTabId);
+  for (const entry of playTabs.values()) targets.add(entry.id);
+  for (const tabId of targets) notifyTab(tabId, message);
+  // Popup / extension pages
+  chrome.runtime.sendMessage(message).catch(() => {});
+  // Designer/portal tabs must get condition results (playTabId is the target page, not the editor).
+  notifyPortalTabs(message);
+}
+
+/** Send a message to Webautomator portal/editor tabs (localhost + stored portalBase). */
+function notifyPortalTabs(message) {
+  chrome.storage.local.get("portalBase").then(({ portalBase }) => {
+    const base = String(portalBase || "").replace(/\/$/, "");
+    return chrome.tabs.query({}).then((tabs) => {
+      for (const tab of tabs) {
+        if (!tab?.id || tab.id === playTabId) continue;
+        const url = String(tab.url || "");
+        if (!/^https?:\/\//i.test(url)) continue;
+        const isPortal = (base && url.startsWith(base))
+          || /:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(url);
+        if (isPortal) notifyTab(tab.id, message);
+      }
+    });
+  }).catch(() => {});
+}
+
+/** Inject pause/stop HUD on the play tab (needed for about:blank and after navigations). */
+async function injectPlayFab(tabId) {
+  if (!tabId) return false;
+  try {
+    // If HUD already mounted, just push fresh state — do not re-init (would no-op / race).
+    const [{ result: existing } = {}] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => !!(window.__daFabInit && document.getElementById("da-player-fab"))
+    }).catch(() => [{ result: false }]);
+    if (existing) {
+      notifyTab(tabId, { type: "playStateChanged", ...getPlayStatus() });
+      return true;
+    }
+
+    // Never mount Player HUD over an active Recorder session on this page.
+    const [{ result: blocked } = {}] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        if (document.documentElement.dataset.daWebautomatorMode === "record") return true;
+        if (document.getElementById("da-recorder-fab")) return true;
+        document.documentElement.dataset.daWebautomatorMode = "play";
+        return false;
+      }
+    }).catch(() => [{ result: false }]);
+    if (blocked) return false;
+
+    await chrome.scripting.insertCSS({
+      target: { tabId },
+      files: ["styles/fab.css"]
+    }).catch(() => {});
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["lib/ext-i18n.js", "content/fab-play.js"]
+    });
+    notifyTab(tabId, { type: "playStateChanged", ...getPlayStatus() });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitIfPaused() {
+  while (playPaused && !playAbort) {
+    await new Promise((resolve) => playResumeWaiters.push(resolve));
+  }
+}
+
+async function sleepInterruptible(ms) {
+  const end = Date.now() + Math.max(0, Number(ms) || 0);
+  while (Date.now() < end) {
+    if (playAbort) return;
+    await waitIfPaused();
+    if (playAbort) return;
+    const left = end - Date.now();
+    if (left <= 0) return;
+    await sleep(Math.min(200, left));
+  }
+}
+
+/** Gap after a finished node — from process start (ms). Only when there is a next node. */
+function resolveStepDelayMs(graph) {
+  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
+  const raw = start?.stepDelayMs ?? graph?.stepDelayMs ?? 0;
+  const n = Number(raw);
+  return Math.max(0, Number.isFinite(n) ? n : 0);
+}
+
+async function delayAfterNode(graph, nextId) {
+  if (!nextId) return;
+  const ms = resolveStepDelayMs(graph);
+  if (ms <= 0) return;
+  await sleepInterruptible(ms);
+}
+
+/** Minimum pause when a back-edge is taken, so a polling loop cannot hammer the page. */
+const LOOP_BACK_MIN_PAUSE_MS = 500;
+
+/** Hold with no duration set: a brief but perceptible press, long enough for a long-press handler. */
+const HOLD_DEFAULT_MS = 500;
+
+/** ScrollPage with no amount set: about one screenful, the usual "next page down" step. */
+const SCROLL_PAGE_DEFAULT_PX = 600;
+
+/**
+ * How long AlertAccept waits for the dialog to appear before reporting that none was seen.
+ *
+ * A dialog is raised by the page in response to an earlier action, usually within a frame or two,
+ * so this is a settle window rather than a real wait. It is short on purpose: the step reports a
+ * miss as a failure, and a long default would make that failure slow to surface.
+ */
+const ALERT_SETTLE_MS = 400;
+
+/**
+ * How long a back/forward step waits for the history navigation to settle.
+ *
+ * The browser fires no event when history.go() completes and the call itself returns immediately,
+ * so there is nothing to await. A short settle is the honest option: the step reports "the command
+ * was issued", not "the page changed", and the per-step selector wait covers any page that is still
+ * loading afterwards.
+ */
+const HISTORY_SETTLE_MS = 600;
+
+/**
+ * Element-wait contract.
+ *
+ * The switch is a BUDGET, not one long in-page sleep: the engine re-tries "resolve the frame
+ * chain + select the element" every ELEMENT_WAIT_POLL_MS until the budget runs out. Re-trying the
+ * whole lookup (not just the DOM query) is what makes a late IFRAME work — the frame itself may
+ * not exist at the first attempt. The editor clamps the field to the same minimum.
+ */
+const ELEMENT_WAIT_MIN_MS = 200;
+const ELEMENT_WAIT_POLL_MS = 200;
+
+/** Wait budget for a node's selector. On with a blank/invalid value means one second. */
+function selectorWaitBudget(node, { equal = false } = {}) {
+  const enabled = equal
+    ? node?.equalSelectorWaitEnabled === true
+    : node?.selectorWaitEnabled === true;
+  if (!enabled) return 0;
+  const raw = Number(equal ? node?.equalSelectorWaitMs : node?.selectorWaitMs);
+  return Math.max(ELEMENT_WAIT_MIN_MS, Number.isFinite(raw) && raw > 0 ? raw : 1000);
+}
+
+/**
+ * Called just before moving to `nextId`. When that node has already run in this walk, the
+ * edge being followed is a loop-back, so this logs the iteration and enforces a floor on the
+ * pause. Without the floor a "wait until the condition is true" loop would re-evaluate as
+ * fast as the page allows — hammering the target site and flooding the log, while also
+ * giving the condition no time to become true.
+ */
+async function paceLoopBack(graph, nextId, visitCounts, loopBackLimits) {
+  if (!nextId) return;
+  const already = visitCounts.get(nextId) || 0;
+  if (already <= 0) return;
+  const node = findGraphNode(graph, nextId);
+  const label = node?.title || node?.conditionType || node?.actionType || nextId;
+  const limit = loopBackLimitFor(node, loopBackLimits);
+  appendPlayLog("info", `↩ بازگشت به «${label}» — تکرار ${already + 1} از حداکثر ${limit}`);
+  // Never let the diagram's own inter-step gap shrink a loop below the floor.
+  const gap = resolveStepDelayMs(graph);
+  const remaining = LOOP_BACK_MIN_PAUSE_MS - gap;
+  if (remaining > 0) await sleepInterruptible(remaining);
+}
+
+/** Process start: highlight border color for targeted elements. */
+function resolveHighlightColor(graph) {
+  // Process-level setting: root start only, then the graph, then the built-in default.
+  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
+  const raw = start?.highlightColor ?? graph?.highlightColor ?? "#ea5455";
+  const s = String(raw || "").trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+    return `#${s[1]}${s[1]}${s[2]}${s[2]}${s[3]}${s[3]}`.toLowerCase();
+  }
+  return "#ea5455";
+}
+
+/** Process start: ignorePlayError defaults to true. */
+function resolveIgnorePlayError(graph) {
+  // ONLY the process-level start owns this switch. A start node inside a group has its own repeat
+  // settings (its inspector does not even show this option), so it must never be read as the
+  // process-wide policy — an old graph that left a stale flag on a grouped start would otherwise
+  // silently override the real setting.
+  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
+  if (start && Object.prototype.hasOwnProperty.call(start, "ignorePlayError")) {
+    return start.ignorePlayError !== false;
+  }
+  if (graph && Object.prototype.hasOwnProperty.call(graph, "ignorePlayError")) {
+    return graph.ignorePlayError !== false;
+  }
+  return true;
+}
+
+/**
+ * Is this step failure an authentication/session failure?
+ *
+ * background.js reports a 401/403 from any server call as `{ error: "auth" }` — a bare marker,
+ * not a sentence — and every server-backed action depends on that session. Treating it like an
+ * ordinary step error is wrong in a way that compounds: with the process default
+ * (`ignorePlayError: true`) the run would CARRY ON against a dead session, so every later
+ * server call failed too and the log filled with unrelated errors instead of one clear cause.
+ *
+ * Matched by exact marker first (that is what the code actually produces), then by the message
+ * text so a wrapped or translated form is still caught.
+ */
+function isAuthFailure(outcome) {
+  if (!outcome) return false;
+  const reason = String(outcome.reason || "").trim().toLowerCase();
+  if (reason === "auth" || reason === "unauthorized" || reason === "unauthenticated") return true;
+  const err = String(outcome.error || "").trim().toLowerCase();
+  if (err === "auth") return true;
+  return /\b(401|403)\b/.test(err) || /unauthor|unauthentic|session expired|نشست منقضی|دسترسی ندارید/.test(err);
+}
+
+/** The message shown when the run stops because the session is gone. */
+const AUTH_FAILURE_MESSAGE =
+  "نشست/دسترسی به سرور معتبر نیست (خطای احراز هویت) — اجرا متوقف شد. " +
+  "ورد پنل را تازه کنید و دوباره اجرا کنید.";
+
+/** Decide after a non-ignored step failure: next loop index vs abort play. */
+function handleStepFailureForLoop(graph, errorMsg, opts = {}) {
+  const msg = errorMsg || "خطای اجرا";
+  // An auth failure is NOT subject to the ignore policies. Those exist so a flaky step does not
+  // abort a long run; an expired session is not flaky — nothing downstream can succeed, so
+  // "continue" only delays the inevitable and buries the real cause under follow-on errors.
+  if (opts.authFailure) {
+    playStatus.lastError = AUTH_FAILURE_MESSAGE;
+    appendPlayLog("error", `توقف اجرا — ${AUTH_FAILURE_MESSAGE}`);
+    return { continueLoop: false, authFailure: true };
+  }
+  if (resolveIgnorePlayError(graph)) {
+    appendPlayLog(
+      "warn",
+      `چشم‌پوشی از خطای اجرا (نود شروع روشن) — ادامه اندیس بعدی حلقه: ${msg}`
+    );
+    playStatus.lastError = null;
+    return { continueLoop: true };
+  }
+  playStatus.lastError = msg;
+  appendPlayLog(
+    "error",
+    `توقف اجرا — چشم‌پوشی از خطای اجرا (نود شروع) خاموش: ${msg}`
+  );
+  return { continueLoop: false };
+}
+
+async function stopPlay(reason) {
+  playAbort = true;
+  playPaused = false;
+  playStatus.playing = false;
+  playStatus.paused = false;
+  wakePlayResumeWaiters();
+  clearPlayCellReadInflight();
+  clearPlayCellWriteChains();
+  // The run ended on purpose, so its liveness record goes with it. Leaving it behind would make a
+  // later worker start read a stale timestamp and report a phantom interruption.
+  await clearPlayHeartbeat();
+  if (playAbortPoll) {
+    clearInterval(playAbortPoll);
+    playAbortPoll = null;
+  }
+  const tid = String(playStatus.taskId || "").trim();
+  appendPlayLog("warn", reason === "canvas_changed"
+    ? "اجرا به‌خاطر تغییر فرآیند متوقف شد"
+    : "اجرا توسط کاربر متوقف شد");
+  // Publish the stopped state BEFORE the portal round-trip. unregisterPlayOnServer is a network
+  // call with its own timeout; awaiting it first left the UI reporting "playing" for the whole
+  // round-trip after the run had already stopped locally. Local truth first, bookkeeping after.
+  await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
+  broadcastPlayState();
+  if (tid) await unregisterPlayOnServer(tid);
+  // NOT `tid` — that is the TASK id. This clears a stamp on the play TAB, so capture the tab
+  // before the storage write above nulls playTabId.
+  await clearAllPlayPageModes();
+  await finalizePlayTabs();
+  return getPlayStatus();
+}
+
+/**
+ * Drop the `daWebautomatorMode="play"` stamp this run put on the target page.
+ *
+ * Mounting the Player HUD stamps the page's <html> so the Recorder HUD knows not to mount on
+ * top of it, and vice versa. `content/fab-play.js` clears it on its own teardown, but that only
+ * runs while that script is alive — a stop from the portal, an extension reload, or a tab-level
+ * teardown leaves the stamp behind. A page left stamped "play" then REFUSES the Recorder FAB
+ * forever (`content/fab-record.js` returns early on that value), and the Player HUD will not
+ * re-init either. So the engine — which owns the stamp — must clear it on stop.
+ *
+ * Best-effort by design: the tab may already be gone, or be a chrome:// page we cannot script.
+ */
+/** Clear the play stamp on EVERY tab of the run, not just the one that happened to be current. */
+async function clearAllPlayPageModes() {
+  const ids = new Set();
+  if (playTabId != null) ids.add(playTabId);
+  for (const entry of playTabs.values()) ids.add(entry.id);
+  for (const id of ids) await clearPlayPageMode(id);
+}
+
+async function clearPlayPageMode(tabId) {
+  const id = tabId != null ? tabId : playTabId;
+  if (id == null) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: id },
+      func: () => {
+        // Only ever clear OUR value: a "record" stamp belongs to the Recorder, and wiping it
+        // here would let the Player HUD mount on top of a live recording.
+        if (document.documentElement.dataset.daWebautomatorMode === "play") {
+          delete document.documentElement.dataset.daWebautomatorMode;
+        }
+      }
+    });
+  } catch { /* tab closed / not scriptable — nothing to clean */ }
+}
+
+async function pausePlay() {
+  if (!playStatus.playing) return { ok: false, error: "اجرایی در جریان نیست." };
+  if (playPaused) return getPlayStatus();
+  playPaused = true;
+  playStatus.paused = true;
+  appendPlayLog("info", "اجرا موقتاً متوقف شد (پاز)");
+  try { await chrome.storage.local.set({ playPaused: true }); } catch { /* ignore */ }
+  broadcastPlayState();
+  return getPlayStatus();
+}
+
+async function resumePlay() {
+  if (!playStatus.playing) return { ok: false, error: "اجرایی در جریان نیست." };
+  if (!playPaused) return getPlayStatus();
+  playPaused = false;
+  playStatus.paused = false;
+  appendPlayLog("info", "ادامه اجرا");
+  try { await chrome.storage.local.set({ playPaused: false }); } catch { /* ignore */ }
+  wakePlayResumeWaiters();
+  broadcastPlayState();
+  return getPlayStatus();
+}
+
+function appendPlayResult(entry) {
+  if (!Array.isArray(playStatus.results)) playStatus.results = [];
+  playStatus.results.push(entry);
+  if (playStatus.results.length > PLAY_RESULT_LIMIT) playStatus.results.shift();
+  playStatus.lastResult = entry;
+  schedulePlayStateBroadcast();
+}
+
+function processStartNode(graph) {
+  // The PROCESS start is the one with no owning group. A start node inside a group is a different
+  // thing (it drives that group's repeat), so falling back to it would let a group's settings stand
+  // in for the process's — the editor reads only the root start, and the two must agree.
+  return (graph.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId) || null;
+}
+
+/**
+ * Narrow a 0-based row-index list to the configured start/end range.
+ *
+ * The range is inclusive at both ends and expressed 1-based in the UI, because that is how the
+ * spreadsheet the rows come from is numbered — an author reading "rows 5 to 10" in Excel must
+ * get rows 5 to 10 here, not 6 to 11.
+ *
+ * A range that is missing, reversed, or outside the data is treated as "no restriction" rather
+ * than as an error: a stale range saved against a source that later shrank must not silently
+ * reduce a run to nothing. An end beyond the last row is clamped, since asking for rows 5..500
+ * of a 20-row source plainly means "5 to the end".
+ */
+function applyIndexRange(indices, fromRaw, toRaw) {
+  const total = indices.length;
+  if (!total) return indices;
+
+  const toOneBased = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : null;
+  };
+  let from = toOneBased(fromRaw);
+  let to = toOneBased(toRaw);
+
+  // Nothing meaningful configured.
+  if (from == null && to == null) return indices;
+
+  if (from == null) from = 1;
+  if (to == null) to = total;
+
+  if (from > to) {
+    // A reversed range is a typo, not an instruction to run nothing.
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+
+  const start = Math.max(1, from);
+  const end = Math.min(total, to);
+  if (start > end) return indices;
+
+  return indices.slice(start - 1, end);
+}
+
+/** Resolve process-level iterations from the root start node. */
+function resolveProcessIterations(graph) {
+  const start = processStartNode(graph);
+  const rst = start?.repeatSourceType || graph.repeatSourceType || "None";
+  // The range lives on the root start node, falling back to the graph, matching how the other
+  // repeat fields are read. Only DataSource repeats have rows to range over.
+  const fromRaw = start?.repeatFromIndex ?? graph.repeatFromIndex;
+  const toRaw = start?.repeatToIndex ?? graph.repeatToIndex;
+  if (rst === "Loops") {
+    const n = Math.max(1, Number(start?.loopCount ?? graph.loopCount ?? graph.constantValue) || 1);
+    return {
+      type: "Loops",
+      indices: Array.from({ length: n }, (_, i) => i),
+      total: n,
+      label: `تعداد ثابت × ${n}`
+    };
+  }
+  if (rst === "DataSource") {
+    const dsId = start?.dataSourceId ?? graph.dataSourceId;
+    const ds = (graph.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+    let count = Number(ds?.rowCount) || 0;
+    if (!count && Array.isArray(ds?.cells) && ds.cells.length) {
+      const idxs = new Set(
+        ds.cells
+          .map((c) => Number(c.index ?? c.Index ?? c.rowIndex))
+          .filter((x) => Number.isFinite(x))
+      );
+      count = idxs.size || 0;
+    }
+    if (!count) {
+      return {
+        type: "DataSource",
+        indices: [0],
+        total: 1,
+        dataSourceId: dsId,
+        label: `منبع پیش‌فرض (بدون ردیف — یک‌بار)`,
+        warn: "منبع پیش‌فرض ردیفی ندارد؛ یک‌بار اجرا می‌شود."
+      };
+    }
+    const allIndices = Array.from({ length: count }, (_, i) => i);
+    const indices = applyIndexRange(allIndices, fromRaw, toRaw);
+    // Only mention the range when it actually narrowed the run, so the ordinary whole-source
+    // case does not grow a label that says "rows 1..N".
+    const ranged = indices.length !== allIndices.length
+      || (fromRaw != null || toRaw != null) && indices.length > 0;
+    const rangeNote = ranged
+      ? ` · ردیف ${indices.length ? allIndices.indexOf(indices[0]) + 1 : "-"} تا ${indices.length ? allIndices.indexOf(indices[indices.length - 1]) + 1 : "-"}`
+      : "";
+    return {
+      type: "DataSource",
+      indices,
+      total: indices.length,
+      sourceRowCount: count,
+      repeatFromIndex: fromRaw ?? null,
+      repeatToIndex: toRaw ?? null,
+      dataSourceId: dsId,
+      label: `منبع «${ds?.title || dsId}» × ${indices.length} ردیف${rangeNote}`
+    };
+  }
+  return { type: "None", indices: [0], total: 1, label: "یک‌بار" };
+}
+
+async function listTasks() {
+  // Return full task objects (including graph) so portal localStorage stays complete.
+  const tasks = await loadUserTasks();
+  return { ok: true, tasks };
+}
+
+/** True if this tab can host play (http(s) page, not chrome internals). */
+async function isReusablePlayTab(url, { allowEmpty = false } = {}) {
+  if (!url) return !!allowEmpty;
+  if (url.startsWith("chrome://") || url.startsWith("chrome-extension://")) return false;
+  if (url.startsWith("edge://") || url.startsWith("devtools://")) return false;
+  if (!/^https?:\/\//i.test(url) && url !== "about:blank") return false;
+  try {
+    const { portalBase } = await chrome.storage.local.get("portalBase");
+    const bases = [
+      String(portalBase || "").replace(/\/$/, ""),
+      "http://localhost:5000",
+      "https://localhost:7201",
+      "http://127.0.0.1:5000"
+    ].filter(Boolean);
+    if (bases.some((b) => url.startsWith(b))) return false;
+  } catch {
+    /* ignore */
+  }
+  return true;
+}
+
+/**
+ * تب جدید فقط وقتی از اپ خودمان (پورتال) Start زده شود (openNewTab).
+ * اگر tabId صریح از ویرایشگر آمده باشد، همان تب را بدون فیلتر سخت‌گیرانه استفاده می‌کنیم.
+ * activateTab:false → فقط شناسه را برمی‌گرداند و تب را فوکوس/فعال نمی‌کند (بررسی شرط).
+ */
+async function resolveExecutionTabId(preferredTabId, opts = {}) {
+  if (opts.openNewTab === true) {
+    const created = await chrome.tabs.create({ url: "about:blank", active: true });
+    if (created?.windowId != null) {
+      try {
+        await chrome.windows.update(created.windowId, { focused: true });
+      } catch { /* ignore */ }
+    }
+    return created?.id || null;
+  }
+
+  const explicitId = preferredTabId != null && preferredTabId !== ""
+    ? Number(preferredTabId)
+    : NaN;
+  const hasExplicit = Number.isFinite(explicitId);
+  const shouldActivate = opts.activateTab !== false;
+
+  const focusWindow = async (winId) => {
+    if (winId == null || !shouldActivate) return;
+    try {
+      await chrome.windows.update(winId, { focused: true });
+    } catch { /* ignore */ }
+  };
+
+  const activate = async (tab) => {
+    if (!tab?.id) return null;
+    let url = tab.url || tab.pendingUrl || "";
+    // New Tab page cannot run content scripts — switch to about:blank first.
+    if (
+      /^chrome:\/\/(newtab|new-tab-page)/i.test(url)
+      || /^edge:\/\/(newtab|new-tab-page)/i.test(url)
+      || url === ""
+    ) {
+      if (!shouldActivate) return null;
+      try {
+        await chrome.tabs.update(tab.id, { url: "about:blank", active: true });
+      } catch {
+        await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+      }
+      await focusWindow(tab.windowId);
+      return tab.id;
+    }
+    if (shouldActivate) {
+      await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+      await focusWindow(tab.windowId);
+    }
+    return tab.id;
+  };
+
+  if (hasExplicit) {
+    try {
+      const tab = await chrome.tabs.get(explicitId);
+      const id = await activate(tab);
+      if (id) return id;
+    } catch (err) {
+      console.warn("[DA Player] explicit tab get failed", explicitId, err?.message || err);
+    }
+    // Fallback: search in all tabs (some Chromium builds are flaky on tabs.get)
+    try {
+      const all = await chrome.tabs.query({});
+      const found = all.find((t) => Number(t.id) === explicitId);
+      const id = await activate(found);
+      if (id) return id;
+    } catch (err) {
+      console.warn("[DA Player] explicit tab query failed", explicitId, err?.message || err);
+    }
+    return null;
+  }
+
+  try {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (active?.id && (await isReusablePlayTab(active.url || active.pendingUrl || ""))) {
+      if (shouldActivate) {
+        await chrome.tabs.update(active.id, { active: true }).catch(() => {});
+      }
+      return active.id;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return null;
+}
+
+/** شرط وابسته به المان صفحه (نیاز به تب هدف برای querySelector). */
+function conditionNeedsPageElement(node) {
+  if (!node || node.kind !== "condition") return false;
+  const ct = node.conditionType || "None";
+  if (["FindElement", "NotFindElement", "FindElements", "ElementValue", "ElementVisible", "ElementHidden"].includes(ct)) return true;
+  if ((node.contentSourceType || "Constant") === "Elements") return true;
+  return false;
+}
+
+/**
+ * آیا ارزیابی این شرط به یک تب مرورگر مشخص نیاز دارد؟
+ *
+ * MUST stay in step with `conditionNeedsBrowser` in the editor's flow.js. The two decide the same
+ * question in two places, and when they disagreed the editor would hide the tab picker for a
+ * condition the engine still insisted on running inside a tab — so the user was asked to choose a
+ * tab by one half of the system and told none was needed by the other.
+ *
+ * Three categories:
+ *   1. page-dependent      -> a tab is REQUIRED (Url, element checks)
+ *   2. page-independent    -> a tab is NOT required (DriverTabs, SystemDate, SystemTime, MemoryValue)
+ *   3. source-dependent    -> only when the comparison value is read from a page element
+ */
+function conditionNeedsBrowserTab(node) {
+  if (!node) return false;
+  const ct = node.conditionType || "None";
+
+  // (1) inherently tied to the page of one tab
+  if (ct === "Url") return true;
+  if (["FindElement", "NotFindElement", "FindElements", "ElementValue", "ElementVisible", "ElementHidden"]
+    .includes(ct)) {
+    return true;
+  }
+
+  // (2) tied to no particular tab. DriverTabs only needs the LIST of tabs, which the background
+  // worker can read without a target — demanding a tab there made the user pick a page the check
+  // never looks at, and made a blank tab look like a valid answer.
+  if (["DriverTabs", "SystemDate", "SystemTime", "MemoryValue"].includes(ct)) return false;
+
+  // (3) everything else (SourceValue, …): only if the comparison operand comes from the page.
+  return (node.contentSourceType || "Constant") === "Elements";
+}
+
+/**
+ * Resolve a tab for a condition that needs one but was not given a target.
+ *
+ * Kept as an explicit, deliberate `null`: this used to return the first http(s) tab it could find,
+ * which meant a check ran against an arbitrary page and returned a confident-looking wrong answer.
+ * Callers must treat null as "no target was chosen" and ask the user, never substitute a tab.
+ */
+async function pickSilentHttpTabId() {
+  return null;
+}
+
+/** Set synchronously by startPlay to claim the run before its first await. */
+let playStarting = false;
+
+async function startPlay(taskId, tabId, runMode, options) {
+  const opts = options || {};
+  // Condition re-check must not be blocked by a stuck previous run.
+  if (playStatus.playing) {
+    if (opts.conditionNodeId) {
+      playAbort = true;
+      playPaused = false;
+      playStatus.playing = false;
+      playStatus.paused = false;
+      wakePlayResumeWaiters();
+      await chrome.storage.local.set({ playing: false, playPaused: false }).catch(() => {});
+      await sleep(40);
+    } else {
+      return { ok: false, error: "پخش در حال اجراست." };
+    }
+  }
+
+  // GUARD MUST BE ATOMIC. `playStatus.playing` is only set to true far below, after several
+  // awaits (checkSession, storage.get, loadUserTasks). Two starts arriving together therefore
+  // both saw `playing === false`, both sailed past the check above, and both ran the graph —
+  // a double-start that showed up as duplicated actions against the live page. Claim the run
+  // HERE, synchronously, with no await in between, so only the first caller can proceed.
+  //
+  // The condition path above deliberately dropped a stale run, so it must be allowed to start:
+  // it reaches this line with `playStarting` false (we never set it), and that is intended.
+  if (playStarting) return { ok: false, error: "پخش در حال اجراست." };
+  playStarting = true;
+  // From here on every early return MUST release the claim — hence the try/finally.
+  try {
+    return await startPlayInner(taskId, tabId, runMode, opts);
+  } finally {
+    playStarting = false;
+  }
+}
+
+async function startPlayInner(taskId, tabId, runMode, opts) {
+  await checkSession();
+
+  const { recording } = await chrome.storage.local.get("recording");
+  if (recording) return { ok: false, error: "ابتدا ضبط را متوقف کنید." };
+
+  const tasks = await loadUserTasks();
+  let graph = tasks.find((t) => String(t.id) === String(taskId))?.graph || null;
+  if (!graph) {
+    // Last chance: re-read storage (portal sync may have just landed).
+    await new Promise((r) => setTimeout(r, 120));
+    const again = await loadUserTasks();
+    graph = again.find((t) => String(t.id) === String(taskId))?.graph || null;
+  }
+  if (!graph) {
+    return { ok: false, error: "فرآیند در حافظهٔ محلی پیدا نشد. صفحهٔ فرآیندها را رفرش کنید و دوباره اجرا بزنید." };
+  }
+
+  // A single-node test validates ONLY the node under test. Whole-graph validation is for a whole-graph
+  // run: refusing to probe one action because an unrelated node is unfinished made the menu entry
+  // unusable, and it contradicted the editor, which already scopes its own check the same way.
+  // "from this node onward" is NOT scoped — it walks the graph, so every node it can reach must be valid.
+  const isSingleNodeTest = !opts.nextFromNodeId && !!(opts.stepNodeId || opts.conditionNodeId);
+  const validationError = isSingleNodeTest
+    ? buildScopedNodeError(graph, opts.stepNodeId || opts.conditionNodeId, playUiCulture())
+    : buildInvalidNodesError(graph, playUiCulture());
+  if (validationError) {
+    return {
+      ok: false,
+      error: validationError,
+      invalidNodes: (isSingleNodeTest
+        ? collectInvalidNodesForPlay(graph).filter((it) => String(it.id) === String(opts.stepNodeId || opts.conditionNodeId))
+        : collectInvalidNodesForPlay(graph)
+      ).map((it) => ({
+        id: it.id,
+        title: it.title,
+        kind: it.kind,
+        group: it.group,
+        reasons: it.reasons
+      }))
+    };
+  }
+
+  clearPlayCellReadInflight();
+
+  const entryId = resolvePlayEntryId(graph, opts);
+  if (!entryId) {
+    return { ok: false, error: "نود شروع فرآیند پیدا نشد." };
+  }
+  // Estimate steps along the happy-path (success) for HUD totals; runtime may branch.
+  const steps = collectPlaySteps(graph, opts);
+  const singleCondRaw = opts.conditionNodeId
+    ? findGraphNode(graph, opts.conditionNodeId)
+    : null;
+  const singleCond = singleCondRaw && singleCondRaw.kind === "condition" ? singleCondRaw : null;
+  const singleStep = opts.stepNodeId
+    ? findGraphNode(graph, opts.stepNodeId)
+    : null;
+  const playScope = opts.playScope
+    || (opts.conditionNodeId || (singleStep && singleStep.kind === "condition")
+      ? "condition"
+      : opts.nextFromNodeId
+        ? "next"
+        : opts.stepNodeId
+          ? "step"
+          : opts.groupNodeId
+            ? "group"
+            : "task");
+  opts.playScope = playScope;
+  // Never walk the full diagram for a scoped step/condition play.
+  //
+  // "from this node onward" is deliberately NOT included: its whole point is to start at one node
+  // and then follow the edges, so limiting it to a single visit would make it behave exactly like
+  // the plain single-node run and the two menu entries would be indistinguishable.
+  const scopedSingle = !opts.nextFromNodeId && (playScope === "step" || playScope === "condition"
+    || !!(opts.stepNodeId || opts.conditionNodeId));
+  if (steps.length === 0 && !opts.stepNodeId && !singleCond) {
+    // Still allow walk — conditions/groups may expand at runtime; but warn if no actions exist at all.
+    const anyAction = (graph.nodes || []).some((n) => isActionNode(n));
+    if (!anyAction) return { ok: false, error: "هیچ استپی برای اجرا نیست." };
+  }
+  if (opts.stepNodeId && steps.length === 0) {
+    // Allow condition-as-stepNodeId for «بررسی در مرورگر»
+    if (!(singleStep && singleStep.kind === "condition") && !singleCond) {
+      return { ok: false, error: "استپ انتخاب‌شده برای اجرا پیدا نشد." };
+    }
+  }
+  if (opts.conditionNodeId && !singleCond) {
+    return { ok: false, error: "شرط انتخاب‌شده پیدا نشد." };
+  }
+
+  // From FAB/popup on a real page → reuse that tab.
+  // From portal with explicit tabId (ctx menu) → that tab (no focus for condition check).
+  // From portal Start → fresh about:blank when openNewTab.
+  // بررسی شرط: تب را فعال/سوییچ نکن.
+  if (opts.conditionNodeId || (singleStep && singleStep.kind === "condition")) {
+    opts.activateTab = false;
+  }
+  const requestedTabId = tabId;
+  const condNode = singleCond || (singleStep && singleStep.kind === "condition" ? singleStep : null);
+  tabId = await resolveExecutionTabId(tabId, opts);
+  if (!tabId && condNode && !conditionNeedsBrowserTab(condNode)) {
+    // DriverTabs / SystemDate / SystemTime / MemoryValue / a constant operand — evaluable with no
+    // tab at all, so do not block here and do not borrow someone else's tab.
+    tabId = null;
+  } else if (!tabId && condNode) {
+    // The condition DOES need a page, but no target was supplied. Do not guess: refusing is the only
+    // honest answer, because any tab we picked could be showing a different page and the result
+    // would look authoritative while being wrong.
+    return {
+      ok: false,
+      error: "این شرط به صفحه وابسته است و نیاز به یک تب هدف دارد. در منوی راست‌کلیک یک تب انتخاب کنید."
+    };
+  }
+  if (!tabId && !(condNode && !conditionNeedsBrowserTab(condNode))) {
+    const wanted = Number(requestedTabId);
+    return {
+      ok: false,
+      error: opts.openNewTab
+        ? "تب جدید ساخته نشد."
+        : (opts.stepNodeId || opts.groupNodeId || opts.conditionNodeId
+          ? `تب انتخاب‌شده پیدا نشد${Number.isFinite(wanted) ? ` (#${wanted})` : ""}. تب را باز نگه دارید و دوباره انتخاب کنید.`
+          : "روی صفحهٔ هدف اجرا کنید (از FAB)، یا از پورتال Start بزنید تا تب جدید باز شود.")
+    };
+  }
+  await ensurePlayMemory(graph);
+
+  // Arm browser-dialog handling only when this graph actually contains an AlertAccept step.
+  //
+  // Arming unconditionally would mean overriding window.alert/confirm/prompt for EVERY run, so a
+  // dialog the author never asked about would be answered silently instead of shown — a bug that
+  // only appears on the pages that happen to raise one. Scoping it to the runs that use it keeps
+  // every other run behaving exactly as before.
+  await armAlertDialogsIfNeeded(graph, tabId);
+
+  // Where this run is managed, chosen PER RUN by the portal's run-type menu (or the editor, whose
+  // runs are always server runs — the diagram being open is the operator's concurrency guarantee).
+  // Absent field = server run: that keeps every existing caller (editor context menus, FAB restarts
+  // of server runs, condition checks) exactly as it was. No stored per-process switch exists anymore,
+  // so a run can never disagree with a switch about its own mode.
+  //
+  // DECLARED HERE, before the first use below: `lastPlayRequest` records the mode, and a `const`
+  // declared further down would be in its temporal dead zone at that point — reading it threw
+  // "Cannot access 'runOnServer' before initialization" and the run died before any step.
+  const runOnServer = opts?.runOnServer !== false;
+
+  const lastPlayRequest = {
+    taskId: String(graph.taskId || taskId || ""),
+    runMode: runMode === RunMode.Learn ? RunMode.Learn : RunMode.Play,
+    groupNodeId: opts.groupNodeId || null,
+    stepNodeId: opts.stepNodeId || null,
+    conditionNodeId: opts.conditionNodeId || null,
+    playScope: opts.playScope || null,
+    title: graph.title || null,
+    tabId: tabId != null ? tabId : null,
+    openNewTab: opts.openNewTab === true,
+    // Remembered so the HUD's restart button repeats the SAME kind of run (a local run stays local).
+    runOnServer
+  };
+  await chrome.storage.local.set({ lastPlayRequest });
+
+  // Claim the run with a liveness record, so a worker that is killed mid-run can be told apart
+  // from one that is simply busy.
+  //
+  // MV3 terminates an idle service worker, and a long step (an upload, a slow page) can look idle
+  // to Chrome even though our promise chain is very much alive. When that happens the worker is
+  // torn down and the run stops dead: `playing` stays true forever, the target page keeps the HUD,
+  // and the operator sees a run that says "running" and never moves. Nothing in the run can catch
+  // that from the inside — being killed is not an exception.
+  //
+  // A heartbeat is the standard answer: a timestamp the run refreshes as it progresses. On the next
+  // worker start we can compare it against the wall clock and know whether we were interrupted. It
+  // is written at start here and refreshed by the abort watch below, which already ticks.
+  await markPlayHeartbeat(graph.taskId || taskId, 1);
+
+  playAbort = false;
+  playPaused = false;
+  playResumeWaiters = [];
+  // Every run starts with a CLEAN log — including the context menu's single-step and «from this
+  // node on» runs, which are re-run repeatedly while debugging. Mixing their output with a
+  // previous run's (often another task's) made a fresh failure unreadable in the HUD and in the
+  // worker console. clearPlayLogs() also drops the previous results/lastError, so the HUD cannot
+  // display two runs at once.
+  clearPlayLogs();
+  await resetPlayTabs(tabId);
+  playTabId = tabId;
+  // nextFromNodeId is excluded here too: it is a full walk from a different entry point, so it keeps
+  // the process-level repeat (a spreadsheet source still drives one iteration per row).
+  const limited = !opts.nextFromNodeId
+    && (scopedSingle || !!(opts.groupNodeId || opts.stepNodeId || opts.conditionNodeId));
+  const iterations = limited
+    ? { type: "None", indices: [0], total: 1, label: "اجرای محدود (بدون تکرار فرآیند)" }
+    : resolveProcessIterations(graph);
+  const priorResults = Array.isArray(playStatus.results) ? playStatus.results.slice() : [];
+  const scopeLabel = playScope === "condition" || (singleStep && singleStep.kind === "condition")
+    ? "condition"
+    : playScope === "step" || opts.stepNodeId
+      ? "step"
+      : opts.groupNodeId
+        ? "group"
+        : "task";
+  playStatus = {
+    playing: true,
+    paused: false,
+    taskId: graph.taskId || taskId,
+    title: graph.title,
+    stepIndex: 0,
+    stepTotal: scopedSingle ? 1 : Math.max(steps.length, 1),
+    loopIndex: 0,
+    loopTotal: iterations.total,
+    processRow: 0,
+    repeatType: iterations.type,
+    currentNodeId: null,
+    lastError: null,
+    lastResult: null,
+    runMode: runMode === RunMode.Learn ? RunMode.Learn : RunMode.Play,
+    scope: scopeLabel,
+    logs: playLogs.slice(-PLAY_LOG_LIMIT),
+    results: priorResults
+  };
+  await chrome.storage.local.set({ playing: true, playTabId: tabId, playPaused: false });
+  // Every run starts with an empty write log, so a previous run's local writes are never re-synced.
+  resetLocalRunWrites();
+  initLocalServerRowMap(graph);
+  // The graph of THIS run; the per-source records are refreshed from it as the run progresses.
+  localRunGraph = null;
+  playStatus.runOnServer = runOnServer;
+  // The watch runs for a LOCAL run too. A local run registers nothing with the server, but an
+  // administrator can still put a stop to it - the stop-all switch, or closing the session itself -
+  // and a poll is the only channel to a browser that never registered. Only the registration half is
+  // skipped in local mode, which is what "local" means.
+  startPlayAbortWatch(String(graph.taskId || taskId), runOnServer);
+  if (!runOnServer) {
+    // Local mode still needs the in-memory HUD/liveness bookkeeping, just none of the server halves.
+    await markPlayHeartbeat(graph.taskId || taskId, 1);
+    // The values this run will read, fetched once here so the run itself stays off the wire.
+    await ensureLocalSourceValues(String(graph.taskId || taskId), graph);
+    // Publish "this process now has a local copy the server has not seen" BEFORE the first step. The
+    // lists (processes, sources, the editor's start node) decide from this flag whether to offer the
+    // two data views, and waiting for the end-of-run write meant the second button only appeared
+    // after the operator stopped the run — i.e. exactly when the results were no longer live.
+    await markLocalRunStarted(String(graph.taskId || taskId));
+    appendPlayLog("info", "اجرای محلی: روی سرور ثبت نمی‌شود و منابع غیرعمومی محلی خوانده/نوشته می‌شوند.");
+  }
+  // HUD (pause/stop + results) on the execution tab — skip for condition-only check.
+  if (scopeLabel !== "condition") {
+    // This tab OWNS the HUD until the user closes it by hand or closes the tab. A run commonly ends
+    // with a click that reloads the page (a submit/confirm button), and the fresh document must
+    // re-mount the HUD from this marker instead of reading as "no session". Overwritten by the next
+    // run's tab; cleared by the HUD's close button or the tab's own close.
+    await chrome.storage.local.set({ playSessionTabId: tabId });
+    await injectPlayFab(tabId);
+  }
+  appendPlayLog("info", `شروع اجرا: ${graph.title || taskId}`);
+  appendPlayLog("info", `تکرار فرآیند: ${iterations.label}`);
+  {
+    const gap = resolveStepDelayMs(graph);
+    if (gap > 0) appendPlayLog("info", `فاصله بین مراحل: ${gap}ms`);
+  }
+  appendPlayLog("info", resolveIgnorePlayError(graph)
+    ? "چشم‌پوشی از خطای اجرا: روشن (ادامه حلقه با خطا)"
+    : "چشم‌پوشی از خطای اجرا: خاموش (توقف با خطا)");
+  if (iterations.warn) appendPlayLog("warn", iterations.warn);
+  appendPlayLog("info", `پیمایش دیاگرام از «${entryId}» (~${steps.length} اقدام در مسیر موفق)`);
+
+  runPlayLoop(tabId, graph, steps, iterations, opts).catch(async (err) => {
+    playStatus.lastError = err.message || String(err);
+    playStatus.playing = false;
+    playStatus.paused = false;
+    playPaused = false;
+    appendPlayLog("error", playStatus.lastError);
+    if (playAbortPoll) {
+      clearInterval(playAbortPoll);
+      playAbortPoll = null;
+    }
+    // Local state first (see stopPlay): the UI must not keep claiming a run while the portal
+    // round-trip is in flight — most visibly on a failure, when the user is waiting for it.
+    await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
+    broadcastPlayState();
+    const failedTaskId = String(graph.taskId || taskId || "").trim();
+    if (failedTaskId) await unregisterPlayOnServer(failedTaskId);
+    await clearAllPlayPageModes();
+    await finalizePlayTabs();
+  });
+
+  return getPlayStatus();
+}
+
+async function ensurePlayTab(tabId, steps) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const portal = await portalBase();
+    const url = tab.url || "";
+    const onPortal = url.startsWith(portal)
+      || /:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(url);
+    if (!onPortal) return tabId;
+    const nav = steps.find((s) =>
+      s.actionType === "GoToUrl" && (s.navigateUrl || s.constantValue));
+    const target = nav?.navigateUrl || nav?.constantValue || "about:blank";
+    const created = await chrome.tabs.create({ url: target, active: true });
+    return created.id || tabId;
+  } catch {
+    return tabId;
+  }
+}
+
+async function runPlayLoop(tabId, graph, steps, iterations, options) {
+  let activeTabId = tabId;
+  playTabId = tabId;
+  const opts = options || {};
+  const iters = iterations || resolveProcessIterations(graph);
+  try {
+    for (let li = 0; li < iters.indices.length; li++) {
+      if (playAbort) break;
+      const rowIndex = iters.indices[li];
+      playStatus.loopIndex = li + 1;
+      playStatus.loopTotal = iters.total;
+      appendPlayLog("info", `──── حلقه ${li + 1} / ${iters.total} (اندیس ${rowIndex}) ────`);
+      broadcastPlayState();
+
+      // Single-step / single-condition scope: never continue along diagram edges.
+      // Same exclusion as the planner above: "from this node onward" is a full walk, so it must not
+      // take the single-node branch. Guarding only the planner left this second check to strip the
+      // walk out again at run time.
+      const scopedSingle = !opts.nextFromNodeId
+        && (opts.playScope === "step" || opts.playScope === "condition"
+          || !!(opts.conditionNodeId || opts.stepNodeId));
+      if (scopedSingle) {
+        const nodeId = opts.conditionNodeId || opts.stepNodeId;
+        const step = findGraphNode(graph, nodeId);
+        if (!step) {
+          playStatus.lastError = "نود پیدا نشد.";
+          break;
+        }
+        playStatus.stepIndex = 1;
+        playStatus.stepTotal = 1;
+        playStatus.currentNodeId = step.id;
+        broadcastPlayState();
+        if (step.kind === "condition" || opts.playScope === "condition") {
+          const title = step.title || step.conditionType || step.id;
+          const checkId = Date.now();
+          appendPlayLog("info", `بررسی شرط «${title}»…`);
+          let pass = false;
+          try {
+            if (conditionNeedsPageElement(step) && activeTabId) {
+              const ready = await pingTabScriptable(activeTabId);
+              if (!ready) {
+                appendPlayLog("warn", `تب #${activeTabId} برای اسکریپت آماده نشد`);
+              }
+            }
+            const waitBudget = selectorWaitBudget(step);
+            const evalMs = Math.max(5000, waitBudget + 4000);
+            // A single-condition check honours the node's own row pointer too; there is no group
+            // stack here, so the loop row doubles as the parent/process row. Its selector may pin
+            // a row of its own as well.
+            const scopedCtx = {
+              groupRow: rowIndex,
+              parentRow: rowIndex,
+              processRow: rowIndex,
+              loopIndex: li + 1,
+              combinedIndex: li
+            };
+            const scopedCondRow = resolveRowPointer(step, graph, scopedCtx) ?? rowIndex;
+            const scopedSelRow = resolveRowPointer(step, graph, scopedCtx, SELECTOR_ROW_KEYS);
+            // Same scope the walker gives a condition: its loop-index selector must be able to name
+            // the parent/process/overall loop even in a single-condition test.
+            const scopedCondNode = {
+              ...step,
+              ...(scopedSelRow != null ? { _selectorRow: scopedSelRow } : {}),
+              _rowScope: scopedCtx
+            };
+            pass = await Promise.race([
+              evaluateCondition(activeTabId, scopedCondNode, graph, scopedCondRow),
+              sleep(evalMs).then(() => {
+                appendPlayLog("warn", `مهلت بررسی شرط «${title}» تمام شد (${evalMs}ms)`);
+                return false;
+              })
+            ]);
+          } catch (err) {
+            lastConditionError = err?.message || String(err);
+            appendPlayLog("warn", `خطا در بررسی شرط: ${lastConditionError}`);
+            pass = false;
+          }
+          playStatus.lastResult = {
+            ok: true,
+            conditionPass: !!pass,
+            nodeId: step.id,
+            checkId
+          };
+          // Distinguish "the condition is false" from "the condition could not be checked".
+          // Both report a fail branch, but only the second one is an operational problem the
+          // author needs to hear about — the old wording called them the same thing.
+          const verdict = pass
+            ? `نتیجه شرط «${title}»: برقرار (موفق)`
+            : lastConditionError
+              ? `نتیجه شرط «${title}»: بررسی ممکن نشد — ${lastConditionError} (شاخه fail)`
+              : `نتیجه شرط «${title}»: برقرار نیست (ناموفق)`;
+          appendPlayLog(pass ? "info" : "warn", verdict);
+          // Mark finished before final finally so portal can show result immediately.
+          playStatus.playing = false;
+          broadcastPlayState();
+          // Dedicated signal so editor always gets pass/fail even if a later broadcast races.
+          notifyPortalTabs({
+            type: "conditionCheckResult",
+            pass: !!pass,
+            nodeId: step.id,
+            checkId,
+            message: pass
+              ? "نتیجه شرط: برقرار (موفق)"
+              : "نتیجه شرط: برقرار نیست (ناموفق)"
+          });
+        } else if (isActionNode(step)) {
+          appendPlayLog("info", `اجرای تک‌اقدام «${step.title || step.actionType || step.id}» (بدون ادامهٔ دیاگرام)`);
+          const outcome = await runOneAction(activeTabId, graph, { ...step, _processRow: rowIndex, _ordinalBase: li }, rowIndex, li + 1, iters.total, 1, 1);
+          if (outcome.tabId) activeTabId = outcome.tabId;
+          if (!outcome.ok) {
+            const decision = handleStepFailureForLoop(graph, outcome.error, {
+              authFailure: outcome.authFailure === true
+            });
+            if (decision.continueLoop) continue;
+            break;
+          }
+          // Explicit stop — do not follow next/success edges after a scoped action.
+        } else {
+          playStatus.lastError = "این نود قابل اجرا در مرورگر نیست.";
+          break;
+        }
+      } else {
+        const entryId = resolvePlayEntryId(graph, opts);
+        const walked = await executeFlow(activeTabId, graph, entryId, rowIndex, li + 1, iters.total, opts);
+        activeTabId = walked.tabId || activeTabId;
+        if (walked.stepFailed) {
+          const decision = handleStepFailureForLoop(graph, walked.error, {
+            authFailure: walked.authFailure === true
+          });
+          if (decision.continueLoop) continue;
+          break;
+        }
+      }
+
+      if (playStatus.lastError) break;
+    }
+    if (!playAbort && !playStatus.lastError) {
+      // "Successfully finished" must not paper over steps that failed and were skipped.
+      //
+      // ignoreError (per step) and ignorePlayError (per process) deliberately let a run continue
+      // past a failure, and each such step is already marked `ignoredError` in its own result row.
+      // But the summary only counted loops, so a run in which several steps failed — and whose
+      // actual work therefore never happened — announced an unqualified success. An operator
+      // reading «اجرا با موفقیت تمام شد» had no way to know the run was only partly effective.
+      //
+      // Counted from the results we already keep, rather than a new counter, so the number cannot
+      // drift from the rows the operator can inspect.
+      const rows = Array.isArray(playStatus.results) ? playStatus.results : [];
+      const ignoredCount = rows.filter((r) => r && r.ignoredError).length;
+      if (ignoredCount > 0) {
+        appendPlayLog(
+          "warn",
+          `اجرا تمام شد — اما ${ignoredCount} مرحله خطا داشت و طبق تنظیم «چشم‌پوشی از خطا» رد شد. ` +
+          `نتیجهٔ کامل حاصل نشده است؛ جزئیات در فهرست نتایج.`
+        );
+      } else {
+        appendPlayLog("info", `اجرا با موفقیت تمام شد (${iters.total} حلقه)`);
+      }
+    }
+  } finally {
+    playStatus.playing = false;
+    playStatus.paused = false;
+    playStatus.currentNodeId = null;
+    playPaused = false;
+    wakePlayResumeWaiters();
+    // Reached on success, on failure, and on stop — every way a run ends normally. The only way
+    // this is skipped is the worker being killed, which is exactly the case the heartbeat exists
+    // to catch, so clearing it here is what makes the two distinguishable.
+    await clearPlayHeartbeat();
+    if (playAbortPoll) {
+      clearInterval(playAbortPoll);
+      playAbortPoll = null;
+    }
+    // Local state first (see stopPlay): publish "finished" before the portal round-trip so the
+    // HUD flips immediately instead of waiting on a network call to agree.
+    await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
+    broadcastPlayState();
+    const finishedTaskId = String(playStatus.taskId || graph?.taskId || "").trim();
+    // Only a server-managed run has a registration to clear. A local run was never registered, so
+    // there is nothing to unregister -- instead it records that its results are not on the server
+    // yet, which is what makes the Sync button appear in the processes list.
+    if (finishedTaskId) {
+      if (playStatus.runOnServer !== false) {
+        await unregisterPlayOnServer(finishedTaskId);
+      } else {
+        // A local run's writes never reached the server, so they must be recorded for the Sync
+        // button — even when the run was stopped or errored mid-way, because the cells it already
+        // wrote are real and a refresh must not lose them. Only a run that wrote nothing at all is
+        // recorded conditionally on a clean finish, so a mere stop raises no badge for nothing.
+        const wroteSomething = collectLocalRunWrites().length > 0;
+        if (wroteSomething || (!playAbort && !playStatus.lastError)) {
+          await markLocalRunPendingSync(finishedTaskId, playStatus.results || []);
+        }
+      }
+    }
+    await clearAllPlayPageModes();
+    await finalizePlayTabs();
+  }
+}
+
+function resolvePlayEntryId(graph, opts = {}) {
+  // "from this node onward": begin at the named node and then walk the graph normally. Checked
+  // before stepNodeId/groupNodeId because it is the broader scope — those two mean "only this
+  // node", while this one means "this node and everything reachable from it".
+  if (opts.nextFromNodeId) {
+    const n = findGraphNode(graph, opts.nextFromNodeId);
+    return n?.id || opts.nextFromNodeId;
+  }
+  if (opts.stepNodeId) {
+    const n = findGraphNode(graph, opts.stepNodeId);
+    return n?.id || opts.stepNodeId;
+  }
+  if (opts.groupNodeId) {
+    const gStart = (graph.nodes || []).find((n) => n.kind === "start" && sameNodeId(n.groupNodeId, opts.groupNodeId));
+    return gStart?.id || opts.groupNodeId;
+  }
+  return processStartNode(graph)?.id || null;
+}
+
+/**
+ * First edge from `fromId` whose kind is in `preferredKinds`.
+ *
+ * A SELF-EDGE IS NEVER RETURNED. That is the one rule this helper owns, and it is a safety rule
+ * rather than a preference: the walk in executeFlow uses the result to decide where to go next, so
+ * returning `fromId → fromId` makes it step onto the node it is already standing on. For a group
+ * that means recursing into itself, which grows the JS stack with no bound and ends the run with
+ * "Maximum call stack size exceeded".
+ *
+ * Nothing legitimate is lost. A node that flows into itself is never a valid shape — the editor
+ * refuses to create one ("نمیتوان به خود وصل کرد") — so the only graphs that contain one are
+ * hand-edited, imported, or written by an older build. For those, stopping here is what keeps the
+ * failure diagnosable; the graph is also reported as invalid before the run starts, by
+ * validateStructureForPlay.
+ *
+ * Skipping rather than returning is deliberate: an author who wired `A → A` most likely meant to
+ * wire the NEXT edge and left the self-edge behind, so continuing to a later valid edge is closer
+ * to their intent than declaring the node terminal.
+ */
+function flowEdge(edges, fromId, preferredKinds) {
+  for (const kind of preferredKinds) {
+    const e = (edges || []).find(
+      (x) => x.from === fromId && x.kind === kind && !sameNodeId(x.to, fromId)
+    );
+    if (e) return e;
+  }
+  return null;
+}
+
+/** Bounds the per-condition loop budget; must agree with the editor's clamp. */
+const LOOP_BACK_MIN = 1;
+const LOOP_BACK_MAX = 1000;
+const LOOP_BACK_DEFAULT = 100;
+
+function clampLoopBackLimit(value, fallback) {
+  const f = Number(fallback);
+  const fb = Number.isFinite(f) && f > 0
+    ? Math.min(LOOP_BACK_MAX, Math.max(LOOP_BACK_MIN, Math.floor(f)))
+    : LOOP_BACK_DEFAULT;
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return fb;
+  return Math.min(LOOP_BACK_MAX, Math.max(LOOP_BACK_MIN, Math.floor(raw)));
+}
+
+/**
+ * The per-walk loop-back budgets.
+ *
+ * The setting lives on CONDITION nodes now: the condition is where a loop's exit test is written,
+ * so "how many rounds may this loop take" belongs to it. A condition without its own value falls
+ * back to the historical root-start / graph value, then 100, so existing graphs keep the limit they
+ * were saved with.
+ *
+ * The other nodes of the loop (condition --fail--> step --> same condition) are revisited once per
+ * round too. They get the LARGEST configured condition budget, otherwise a condition set to 500
+ * would still be cut off at the step's old 100 before its own budget was reached.
+ */
+function resolveLoopBackLimits(graph) {
+  const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
+  const legacy = clampLoopBackLimit(start?.loopBackLimit ?? graph?.loopBackLimit);
+  let max = legacy;
+  for (const n of graph?.nodes || []) {
+    if (n.kind !== "condition") continue;
+    const v = clampLoopBackLimit(n.loopBackLimit, legacy);
+    if (v > max) max = v;
+  }
+  return { defaultLimit: legacy, maxLimit: max };
+}
+
+/** The visit budget this node gets in one walk. */
+function loopBackLimitFor(node, limits) {
+  const fallback = limits?.defaultLimit ?? LOOP_BACK_DEFAULT;
+  if (node?.kind === "condition") {
+    return clampLoopBackLimit(node.loopBackLimit, fallback);
+  }
+  return limits?.maxLimit ?? fallback;
+}
+
+/**
+ * How deep groups may nest before the walk refuses to descend any further.
+ *
+ * Descending into a group calls executeFlow again, so the group nesting depth IS the recursion
+ * depth. Nothing in the diagram format bounds it, and a graph whose groups reference each other in
+ * a cycle (A contains B, B's entry leads back into A) never returns from the descent — the stack
+ * grows until the engine dies with "Maximum call stack size exceeded".
+ *
+ * The per-node visit budget cannot help here: it is counted per executeFlow invocation, so each
+ * fresh descent starts from zero and the cycle is invisible to it. This backstop is a property of
+ * the walk as a whole, which is what the failure actually is.
+ *
+ * 50 is far beyond any real automation flow (the editor's own nesting is a handful of levels) and
+ * still shallow enough that the stack has room for the frames a step adds on top.
+ */
+const MAX_GROUP_DEPTH = 50;
+
+/**
+ * Walk the flow diagram from entryId — ITERATIVELY, with an explicit frame stack.
+ *
+ * start → next, action → next, condition → success|fail, group → inner then next.
+ *
+ * WHY THIS IS NOT RECURSIVE.
+ *
+ * It used to call itself to descend into a group. That made the group NESTING depth equal to the
+ * JS call-stack depth, and a graph whose groups reference each other in a cycle therefore grew the
+ * stack until the browser threw "Maximum call stack size exceeded" — an error that named neither
+ * the process nor the offending node, and which no amount of validation could reliably prevent,
+ * because the failure is a property of the walk rather than of any one node.
+ *
+ * The descent is now a `stack` of frames in a `while` loop. Every frame is heap data, so the walk
+ * can nest as deeply as the diagram says and the browser's stack is never touched. `MAX_GROUP_DEPTH`
+ * is kept, but as a DIAGNOSTIC limit on a diagram that is almost certainly cyclic rather than as
+ * the only thing standing between a bad graph and a crash.
+ *
+ * Re-entering a node is allowed (a loop-back edge is a supported shape) and bounded by a per-node
+ * visit budget — see resolveLoopBackLimits. The budget is now counted in ONE map for the whole walk
+ * rather than per invocation, which is what finally makes a group-cycle detectable: previously each
+ * descent started a fresh counter, so a cycle was invisible to it.
+ *
+ * @returns {{tabId:number, stepFailed?:boolean, error?:string, authFailure?:boolean}}
+ */
+async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal, opts = {}) {
+  const nodes = new Map((graph.nodes || []).map((n) => [n.id, n]));
+  const edges = graph.edges || [];
+  let activeTabId = tabId;
+  let stepOrdinal = 0;
+
+  // ONE visit budget for the entire walk, so a cycle that crosses a group boundary is still seen.
+  const visitCounts = new Map();
+  // Per-condition budgets (with the old start/graph value as the fallback), resolved once.
+  const loopBackLimits = resolveLoopBackLimits(graph);
+  // Total node steps, a second independent backstop against a walk that never settles.
+  let guard = 0;
+
+  /**
+   * One nesting level. `cur` is the next node to visit at this level; when a `next` edge is taken
+   * the frame is updated in place, and when the level's chain ends the frame is popped and the
+   * parent continues with ITS pending successor.
+   */
+  const stack = [{
+    cur: entryId,
+    // Row context for this level. A group's repeat may rebind the row for the level below.
+    row: rowIndex,
+    // The PROCESS row this walk was started for. It is deliberately separate from `row`: a group
+    // re-binds `row` for the level below, but the process row never changes — that is what lets a
+    // row pointer set to "ProcessLoop" name the outer row from any nesting depth.
+    outerRow: Number.isFinite(Number(opts && opts._processRow)) ? Number(opts._processRow) : rowIndex,
+    // 0-based position of this process iteration in the whole run. "Combined index" multiplies
+    // into it (p × N1 + i1) × N2 + i2 …, so it must stay a plain ordinal, never a row value.
+    ordinalBase: Number.isFinite(Number(loopIndex)) ? Math.max(0, Number(loopIndex) - 1) : 0,
+    insideGroupId: (opts && opts._insideGroupId) || null,
+    // Remaining group iterations at this level: [] means this is a plain (non-group) level.
+    pendingGroupRows: null,
+    pendingGroupIndex: 0,
+    pendingGroupTotal: 0,
+    moveLoop: true,
+    groupStart: null,
+    groupNodeId: null
+  }];
+
+  while (stack.length && !playAbort && !playStatus.lastError && guard++ < 100000) {
+    await waitIfPaused();
+    if (playAbort) break;
+
+    const frame = stack[stack.length - 1];
+
+    // --- a group level that still has iterations to run -------------------------------------
+    if (frame.pendingGroupRows && frame.cur == null) {
+      if (frame.pendingGroupIndex >= frame.pendingGroupRows.length) {
+        // Iterations exhausted: the group is done and the walk continues on the edge AFTER it —
+        // at EVERY level, including the top one.
+        //
+        // The frame that drove the group is the same frame that was walking this level's chain
+        // when it met the group, so it now turns back into a plain walker and follows the group's
+        // outgoing edge itself. The earlier version popped the frame and handed the edge to the
+        // parent — which worked one level down but silently dropped the edge when the group sat at
+        // the top level (no parent to hand it to): every step after a root-level group was skipped.
+        const afterId = flowEdge(edges, frame.groupNodeId, ["next"])?.to || null;
+        frame.pendingGroupRows = null;
+        frame.pendingGroupIndex = 0;
+        frame.pendingGroupTotal = 0;
+        frame.moveLoop = true;
+        frame.groupStart = null;
+        frame.groupNodeId = null;
+        frame.cur = afterId;
+        if (!afterId) continue;   // chain ends here; the next iteration pops this level
+        await delayAfterNode(graph, afterId);
+        await paceLoopBack(graph, afterId, visitCounts, loopBackLimits);
+        continue;
+      }
+      const gi = frame.pendingGroupIndex++;
+      const gRow = frame.pendingGroupRows[gi];
+      const parentRow = frame.row;
+      // No row pinning happens at this level any more: a row pointer belongs to the NODE that
+      // reads or writes a source row (resolved when that node runs), not to the group around it.
+      const effectiveRow = frame.moveLoop ? gRow : parentRow;
+      if (frame.pendingGroupTotal > 1) {
+        appendPlayLog(
+          "info",
+          `تکرار گروه «${frame.groupStart?.title || frame.groupNodeId}» ${gi + 1}/${frame.pendingGroupTotal} (${frame.groupStart?.repeatSourceType || ""})`
+        );
+      }
+      // Descend: the group's own iterations are driven by this same frame, and the inner chain
+      // gets a fresh child frame.
+      stack.push({
+        cur: frame.entryId,
+        row: effectiveRow,
+        // The process row travels down UNCHANGED through every nesting level.
+        outerRow: frame.outerRow,
+        // Combined index base for this level: parent base × this group's total + the iteration's
+        // ORDINAL (gi), not its row value — a group repeating rows 5..7 must still count 1,2,3.
+        ordinalBase: frame.ordinalBase * Math.max(1, Number(frame.pendingGroupTotal) || 1) + gi,
+        insideGroupId: frame.groupNodeId,
+        pendingGroupRows: null,
+        pendingGroupIndex: 0,
+        pendingGroupTotal: 0,
+        moveLoop: true,
+        groupStart: null,
+        groupNodeId: null
+      });
+      continue;
+    }
+
+    const cur = frame.cur;
+    if (!cur) {
+      stack.pop();
+      continue;
+    }
+
+    const node = nodes.get(cur);
+    if (!node) {
+      stack.pop();
+      continue;
+    }
+
+    const loopBackLimit = loopBackLimitFor(node, loopBackLimits);
+    const visits = (visitCounts.get(cur) || 0) + 1;
+    visitCounts.set(cur, visits);
+    if (visits > loopBackLimit) {
+      const label = node.title || node.conditionType || node.actionType || cur;
+      appendPlayLog(
+        "error",
+        `«${label}» بیش از ${loopBackLimit} بار اجرا شد و شرط خروج آن برقرار نشد — اجرا متوقف شد. ` +
+        `(سقف تکرار را از نود شرط → «حداکثر بازگشت حلقه» تغییر دهید)`
+      );
+      playStatus.lastError = `حداکثر بازگشت حلقه در نود «${label}» رد شد`;
+      break;
+    }
+
+    if (node.kind === "end") {
+      // Terminal marker: the author has said this path stops here. It carries no work and no
+      // outgoing edge, so this level's chain ends — and ends as a SUCCESS, not an error. Logged
+      // explicitly because a silent stop would look identical to a graph that fell off the end of
+      // its edges, which is the failure mode this node exists to make deliberate.
+      appendPlayLog("info", `نود «پایان» — مسیر در «${node.title || "پایان"}» خاتمه یافت.`);
+      frame.cur = null;
+      continue;
+    }
+
+    if (node.kind === "start") {
+      const e = flowEdge(edges, cur, ["next"]);
+      // No delay after start — first step runs immediately; delay is after real steps.
+      frame.cur = e?.to || null;
+      continue;
+    }
+
+    if (isActionNode(node)) {
+      stepOrdinal += 1;
+      playStatus.stepIndex = stepOrdinal;
+      if (stepOrdinal > playStatus.stepTotal) playStatus.stepTotal = stepOrdinal;
+      playStatus.currentNodeId = node.id;
+      // The row the process loop is on travels with the step so a row pointer inside a group can
+      // still mean the OUTER row rather than the group's. Taken from `outerRow`, not `row`: inside
+      // a group `row` has been re-bound to the group's own repeat row.
+      const processRow = Number.isFinite(Number(frame.outerRow)) ? Number(frame.outerRow) : rowIndex;
+      playStatus.processRow = processRow;
+      // The row of the level ABOVE this one, so a node pointer set to "parent loop" still names
+      // the outer group's row from inside a nested group. Same marker trick as _processRow.
+      const parentRowForNode = stack.length >= 2 ? stack[stack.length - 2].row : frame.row;
+      const outcome = await runOneAction(
+        activeTabId, graph, {
+          ...node,
+          _processRow: processRow,
+          _parentRow: parentRowForNode,
+          // 0-based combined position (process × groups) for the selector's "combined" mode.
+          _ordinalBase: Number.isFinite(Number(frame.ordinalBase)) ? Number(frame.ordinalBase) : null
+        },
+        frame.row, loopIndex, loopTotal, stepOrdinal, playStatus.stepTotal
+      );
+      if (outcome.tabId) {
+        activeTabId = outcome.tabId;
+        playTabId = activeTabId;
+      }
+      if (!outcome.ok) {
+        // Non-ignored step error → end the whole run; the outer loop's policy decides whether to
+        // continue to the next row. `authFailure` travels with it so that policy cannot override a
+        // dead session.
+        return {
+          tabId: activeTabId,
+          stepFailed: true,
+          error: outcome.error || "خطای مرحله",
+          authFailure: outcome.authFailure === true
+        };
+      }
+      const nextId = flowEdge(edges, node.id, ["next"])?.to || null;
+      // Delay after the step finished, before the next node.
+      await delayAfterNode(graph, nextId);
+      await paceLoopBack(graph, nextId, visitCounts, loopBackLimits);
+      frame.cur = nextId;
+      continue;
+    }
+
+    if (node.kind === "condition") {
+      playStatus.currentNodeId = node.id;
+      broadcastPlayState();
+      // Conditions never fail the run: any exception → false (fail branch).
+      let pass = false;
+      const condParentRow = stack.length >= 2 ? stack[stack.length - 2].row : frame.row;
+      const condCtx = {
+        groupRow: frame.row,
+        parentRow: condParentRow,
+        processRow: Number.isFinite(Number(frame.outerRow)) ? Number(frame.outerRow) : rowIndex,
+        loopIndex,
+        // 0-based combined position (process × groups) for the selector's "combined" mode.
+        combinedIndex: Number.isFinite(Number(frame.ordinalBase)) ? Number(frame.ordinalBase) : null
+      };
+      // A source-reading condition honours its own row pointer; without one the basis is the
+      // PROCESS loop's current row (same rule as actions — not the level's own row).
+      const condRow = resolveRowPointer(node, graph, condCtx)
+        ?? (Number.isFinite(Number(condCtx.processRow)) ? Number(condCtx.processRow) : frame.row);
+      // ...and its dynamic selector may pin a row of its own. Its loop-index mode needs the same
+      // scope numbers the actions get, otherwise "parent / group / process" all collapse into the
+      // one row handed to the condition.
+      const condSelectorRow = resolveRowPointer(node, graph, condCtx, SELECTOR_ROW_KEYS);
+      const condNode = {
+        ...node,
+        ...(condSelectorRow != null ? { _selectorRow: condSelectorRow } : {}),
+        _rowScope: condCtx
+      };
+      try {
+        pass = await evaluateCondition(activeTabId, condNode, graph, condRow);
+      } catch (err) {
+        lastConditionError = err?.message || String(err);
+        appendPlayLog("warn", `شرط «${node.title || node.id}»: اکسپشن → fail — ${lastConditionError}`);
+        pass = false;
+      }
+      // Say WHICH kind of fail this is. A check that could not run and a check that is simply
+      // false take the same branch, but only one of them means "go fix your diagram".
+      appendPlayLog(
+        lastConditionError ? "warn" : "info",
+        lastConditionError
+          ? `شرط «${node.title || node.id}»: بررسی ممکن نشد (${lastConditionError}) → شاخه fail`
+          : `شرط «${node.title || node.id}»: ${pass ? "موفق (success)" : "ناموفق (fail)"}`
+      );
+      appendPlayResult({
+        t: Date.now(),
+        loop: loopIndex,
+        loopTotal,
+        rowIndex: condRow,
+        step: stepOrdinal,
+        stepTotal: playStatus.stepTotal,
+        title: node.title || "شرط",
+        actionType: "Condition",
+        ok: true,
+        detail: pass ? "شاخه success" : "شاخه fail"
+      });
+      // Resolve the outgoing edge. A condition has two logical branches (success / fail)
+      // and each must be wired by the author. Falling back from a missing branch to the
+      // generic `next` edge is what previously let a condition take the WRONG path: an
+      // unwired `fail` silently followed whatever `next` pointed at, so a failed check ran
+      // the success work. A `next` edge is therefore only honoured when the condition has
+      // no success/fail edges at all, which is a condition used as a plain sequential step.
+      const hasBranchEdges = edges.some(
+        (x) => x.from === cur && (x.kind === "success" || x.kind === "fail")
+      );
+      const wanted = pass ? "success" : "fail";
+      const e = flowEdge(edges, cur, hasBranchEdges ? [wanted] : ["next"]);
+
+      if (!e && hasBranchEdges) {
+        // An unwired branch is only an error when the graph has no terminal marker. With an
+        // `end` node present the author has declared that paths may stop, so an unwired branch
+        // means "this path ends here" — treated as a clean termination and logged as such.
+        // Mirrors validateConditionNodeForPlay above; the two must agree.
+        const hasTerminal = ((graph && graph.nodes) || []).some((x) => x.kind === "end");
+        if (hasTerminal) {
+          appendPlayLog(
+            "info",
+            `شرط «${node.title || node.id}»: نتیجهٔ ${pass ? "موفق" : "ناموفق"} شد و شاخهٔ ` +
+            `«${pass ? "موفق" : "ناموفق"}» وصل نیست — مسیر خاتمه یافت.`
+          );
+          frame.cur = null;
+          continue;
+        }
+      }
+
+      if (!e) {
+        // Nothing to follow: either the branch we need is unwired, or the condition is a
+        // terminal node. Either way the run cannot continue, and ending silently is what
+        // made this look like the engine "stopping for no reason".
+        const label = node.title || node.id;
+        if (hasBranchEdges) {
+          const other = pass ? "fail" : "success";
+          appendPlayLog(
+            "warn",
+            `شرط «${label}»: نتیجهٔ ${pass ? "موفق" : "ناموفق"} شد ولی شاخهٔ «${wanted}» وصل نشده ` +
+            `(شاخهٔ «${other}» وصل است) — اجرا متوقف شد.`
+          );
+          playStatus.lastError = tv("run.condMissingBranch", {
+            branch: pass ? "موفق" : "ناموفق"
+          });
+        } else {
+          appendPlayLog("warn", `شرط «${label}»: ${tv(
+            pass ? "run.condNoSuccessBranch" : "run.condNoFailBranch"
+          )}`);
+          playStatus.lastError = tv(
+            pass ? "run.condNoSuccessBranch" : "run.condNoFailBranch"
+          );
+        }
+        appendPlayResult({
+          t: Date.now(),
+          loop: loopIndex,
+          loopTotal,
+          rowIndex: condRow,
+          step: stepOrdinal,
+          stepTotal: playStatus.stepTotal,
+          title: node.title || "شرط",
+          actionType: "Condition",
+          ok: false,
+          severity: "error",
+          detail: `شاخهٔ ${wanted} وصل نشده`
+        });
+        break;
+      }
+
+      const nextId = e.to || null;
+      await delayAfterNode(graph, nextId);
+      await paceLoopBack(graph, nextId, visitCounts, loopBackLimits);
+      frame.cur = nextId;
+      continue;
+    }
+
+    if (node.kind === "group") {
+      playStatus.currentNodeId = node.id;
+      broadcastPlayState();
+      // Nesting depth is now measured from the frame stack — see MAX_GROUP_DEPTH. Reported as a
+      // likely-cyclic diagram rather than left to overflow the JS stack.
+      if (stack.length > MAX_GROUP_DEPTH) {
+        const label = node.title || node.id;
+        appendPlayLog(
+          "error",
+          `عمق تودرتویی گروه‌ها از ${MAX_GROUP_DEPTH} گذشت (گروه «${label}») — احتمالاً گروه‌ها به هم بازمی‌گردند. اجرا متوقف شد.`
+        );
+        playStatus.lastError = `عمق تودرتویی گروه‌ها بیش از حد مجاز است (گروه «${label}»)`;
+        break;
+      }
+      appendPlayLog("info", `ورود به گروه «${node.title || node.id}»`);
+      const innerEntry = (graph.nodes || []).find((n) => n.kind === "start" && n.groupNodeId === node.id)?.id
+        || flowEdge(edges, node.id, ["contains"])?.to
+        || findGroupEntryFallback(graph, node.id);
+      if (!innerEntry) {
+        appendPlayLog("warn", `گروه «${node.title || node.id}» ورودی ندارد`);
+        const afterId = flowEdge(edges, node.id, ["next"])?.to || null;
+        await delayAfterNode(graph, afterId);
+        await paceLoopBack(graph, afterId, visitCounts, loopBackLimits);
+        frame.cur = afterId;
+        continue;
+      }
+      const gStart = (graph.nodes || []).find((n) => n.kind === "start" && sameNodeId(n.groupNodeId, node.id))
+        || findGraphNode(graph, innerEntry);
+      // The group start's selector may build itself from a source cell; carry the entering row
+      // context so its own row pointer can name CurrentLoop / ParentLoop / ProcessLoop.
+      const groupIters = await expandGroupByRepeatSource(activeTabId, gStart || node, graph, {
+        groupRow: frame.row,
+        parentRow: stack.length >= 2 ? stack[stack.length - 2].row : frame.row,
+        processRow: Number.isFinite(Number(frame.outerRow)) ? Number(frame.outerRow) : rowIndex,
+        loopIndex,
+        // The group's own selector is resolved at entry, so its "combined" position is the
+        // position of the level that contains it.
+        combinedIndex: Number.isFinite(Number(frame.ordinalBase)) ? Number(frame.ordinalBase) : null
+      });
+      // Turn this frame into the group's driver: it now owns the remaining iterations and the
+      // entry node for each. The frame's `cur` is cleared so the driver branch runs next.
+      frame.cur = null;
+      frame.pendingGroupRows = groupIters.indices;
+      frame.pendingGroupIndex = 0;
+      frame.pendingGroupTotal = groupIters.total;
+      frame.moveLoop = gStart?.moveLoop !== false && node.moveLoop !== false;
+      frame.groupStart = gStart || node;
+      frame.groupNodeId = node.id;
+      frame.entryId = innerEntry;
+      continue;
+    }
+
+    appendPlayLog("warn", `نود ناشناخته: ${node.kind} (${node.id})`);
+    break;
+  }
+
+  return { tabId: activeTabId };
+}
+
+function findGroupEntryFallback(graph, groupId) {
+  const nodes = graph.nodes || [];
+  const edges = graph.edges || [];
+  const kids = nodes.filter((n) =>
+    n.groupNodeId === groupId && (isActionNode(n) || n.kind === "condition" || n.kind === "group")
+  );
+  if (!kids.length) return null;
+  const kidIds = new Set(kids.map((k) => k.id));
+  const targeted = new Set(
+    edges
+      .filter((e) => kidIds.has(e.to) && (e.kind === "next" || e.kind === "success" || e.kind === "fail"))
+      .map((e) => e.to)
+  );
+  const entry = kids.find((k) => !targeted.has(k.id)) || kids[0];
+  return entry?.id || null;
+}
+
+async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, stepIndex, stepTotal) {
+  await waitIfPaused();
+  if (playAbort) return { ok: false, stepFailed: true, error: "اجرا متوقف شد", tabId };
+
+  // The node's own row pointer, if it has one: the value reads and cell writes THIS node makes
+  // happen on that row. Resolved here, at the single entry point, so the walker, a single-step
+  // run and any future caller all agree.
+  // The row of the LEVEL this node sits on — the loop's row, before this node's own pointer is
+  // applied. "CurrentLoop" for the node, for its selector and for a loop-index selector all mean
+  // THIS row; the node's own pointer only rebinds the row its values are read/written on.
+  const levelRow = rowIndex;
+  const stepProcessRow = processStatusRow(step, rowIndex);
+  const ownRow = resolveRowPointer(step, graph, {
+    groupRow: levelRow,
+    parentRow: step?._parentRow,
+    processRow: stepProcessRow,
+    loopIndex
+  });
+  if (ownRow != null) rowIndex = ownRow;
+  // The switch off is a REAL choice, not "whatever level this node happens to sit on": the basis
+  // is the PROCESS loop's current row, at every nesting depth. A group rebinds the level's row to
+  // its own iteration, so without this an action inside a one-shot group nested in a process
+  // loop would read and write row 0 instead of the row actually being processed.
+  else if (Number.isFinite(Number(stepProcessRow))) rowIndex = Number(stepProcessRow);
+
+  // The dynamic selector's OWN pointer (the second switch) overrides the row only for this node's
+  // selector resolution; without it the selector keeps following the node's row, exactly as it did
+  // before the selector switch existed. Its "CurrentLoop" means the loop's row, not the row the
+  // node's own pointer may have rebound — otherwise the two switches would contradict each other.
+  const selectorRow = resolveRowPointer(step, graph, {
+    groupRow: levelRow,
+    parentRow: step?._parentRow,
+    processRow: stepProcessRow,
+    loopIndex
+  }, SELECTOR_ROW_KEYS);
+  if (selectorRow != null) step = { ...step, _selectorRow: selectorRow };
+
+  // The scope numbers a loop-index-driven selector needs ("the current / parent / overall loop
+  // index"). Same marker trick as `_selectorRow`: the selector resolver cannot see the walker's
+  // stack, so the numbers travel on the node. `groupRow` is the LEVEL row (pre-pointer), so
+  // "current loop" and "group run row" cannot silently become the node's own pinned row.
+  step = {
+    ...step,
+    _rowScope: {
+      groupRow: levelRow,
+      parentRow: step?._parentRow,
+      processRow: stepProcessRow,
+      loopIndex,
+      // 1-based when substituted (see dynIndexText); null outside a walk that carries it.
+      combinedIndex: Number.isFinite(Number(step?._ordinalBase)) ? Number(step._ordinalBase) : null
+    }
+  };
+
+  playStatus.currentNodeId = step.id;
+  const label = step.title || step.actionType || `مرحله ${stepIndex}`;
+  appendPlayLog("step", `[حلقه ${loopIndex}] ${stepIndex}/${stepTotal} — ${label}`);
+  broadcastPlayState();
+
+  if (step.isActive === false) {
+    appendPlayLog("info", `رد شد (غیرفعال): ${label}`);
+    appendPlayResult({
+      t: Date.now(),
+      loop: loopIndex,
+      loopTotal,
+      rowIndex,
+      step: stepIndex,
+      stepTotal,
+      title: label,
+      actionType: step.actionType || "",
+      ok: true,
+      detail: "غیرفعال — اجرا نشد"
+    });
+    return { ok: true, skipped: true, inactive: true, tabId };
+  }
+
+  // A step that THROWS must be treated as a step that FAILED, not as a reason to kill the run.
+  //
+  // runStep reaches the page through chrome.scripting, evaluates author-supplied selectors
+  // (including regexes), and dereferences a lot of node fields. Any of those can throw for
+  // reasons the inner helpers do not catch — an invalid pattern, a rejected script injection, a
+  // node shape an older graph saved. Without this guard the exception unwound straight out of
+  // runOneAction and executeFlow, so the loop's own failure policy (ignoreError, "continue to the
+  // next loop index", the per-step result row) was skipped entirely: one bad step ended the whole
+  // run and the log showed a stack trace instead of a step error.
+  //
+  // Catching here gives a thrown step exactly the same treatment as one that returned
+  // { ok: false } — same result row, same ignoreError handling, same loop decision.
+  let outcome;
+  try {
+    outcome = await runStep(tabId, graph.taskId, step, playStatus.runMode, graph, rowIndex);
+  } catch (err) {
+    const detail = err?.stack || err?.message || String(err);
+    outcome = {
+      ok: false,
+      error: `خطای غیرمنتظره در اجرای مرحله: ${err?.message || String(err)}`,
+      reason: "step_exception"
+    };
+    appendPlayLog("warn", `مرحله «${label}» با اکسپشن متوقف شد — ${detail}`);
+  }
+  const failed = !outcome?.ok;
+  // An auth failure must never be swallowed by ignoreError (step) / ignorePlayError (process).
+  // See isAuthFailure(): continuing against a dead session fails everything downstream.
+  const authFailure = failed && isAuthFailure(outcome);
+  const ignored = failed && !authFailure && step.ignoreError !== false;
+  const errMsg = authFailure
+    ? AUTH_FAILURE_MESSAGE
+    : (outcome?.error || "توقف به‌خاطر واگرایی");
+  const reason = authFailure ? "auth" : (outcome?.reason || outcome?.unexpected?.reason || "");
+  const errDetail = reason && !authFailure ? `${errMsg} [${reason}]` : errMsg;
+
+  const result = {
+    t: Date.now(),
+    loop: loopIndex,
+    loopTotal,
+    rowIndex,
+    step: stepIndex,
+    stepTotal,
+    title: label,
+    actionType: step.actionType || "",
+    ok: !failed,
+    severity: failed ? (ignored ? "warn" : "error") : "ok",
+    ignoredError: ignored,
+    detail: !failed
+      ? (outcome.waitMs ? `انتظار ${outcome.waitMs}ms` : "موفق")
+      : (ignored ? `چشم‌پوشی از خطا: ${errDetail}` : errDetail)
+  };
+  appendPlayResult(result);
+
+  // SetMemory stores into the run's variable table rather than touching the page, so the
+  // write happens here where the table lives.
+  if (outcome?.memorySet) {
+    await setPlayMemoryVar(outcome.memorySet.name, outcome.memorySet.value);
+    appendPlayLog("ok", `مقدار «${outcome.memorySet.name}» ذخیره شد`);
+  }
+
+  if (failed) {
+    if (ignored) {
+      appendPlayLog("warn", `چشم‌پوشی از خطای مرحله «${label}»: ${errDetail}`);
+      // Continue to next node in the diagram.
+      return { ok: true, ignoredError: true, error: errDetail, tabId };
+    }
+    appendPlayLog("error", `خطا در مرحله «${label}»: ${errDetail}`);
+    // End current iteration (caller / loop decides continue vs abort). `authFailure` rides along
+    // so the loop can refuse to continue even when its own ignore policy is switched on.
+    return { ok: false, stepFailed: true, error: errDetail, authFailure, tabId };
+  }
+
+  let activeTabId = tabId;
+  if (outcome.tabId && outcome.tabId !== tabId) {
+    activeTabId = outcome.tabId;
+    playTabId = activeTabId;
+    // The HUD follows the tab the run is ACTUALLY working on. Without this, a process that
+    // switched to another tab kept a session marker on the first one, so the new tab's fresh
+    // document could not re-mount the HUD after a navigation.
+    await chrome.storage.local.set({ playTabId: activeTabId, playSessionTabId: activeTabId });
+    await injectPlayFab(activeTabId);
+  } else if (outcome.navigated || step.actionType === "GoToUrl") {
+    await injectPlayFab(activeTabId);
+  }
+  appendPlayLog("ok", `انجام شد: ${label}`);
+  // Action-specific wait (e.g. WaitTime). Inter-node gap is applied by executeFlow.
+  if (outcome.waitMs) await sleepInterruptible(outcome.waitMs);
+  return { ok: true, tabId: activeTabId };
+}
+
+/**
+ * Why the last evaluateCondition() call ended the way it did.
+ *
+ * A condition has only two branches, so a thrown error has to become one of them — the fail
+ * branch, by long-standing design. The harm is not the branch, it is the REPORTING: an
+ * exception was logged as «ناموفق (fail)» exactly like a legitimate false, so an author would
+ * go and re-check a selector when the real fault was an unreachable tab or a thrown helper.
+ * This side-channel lets the callers say "the check could not run" instead of "the check is
+ * false", while the branch taken stays identical.
+ *
+ * `null` means "no error — the boolean is a real answer".
+ */
+let lastConditionError = null;
+
+async function evaluateCondition(tabId, node, graph, rowIndex) {
+  const ct = node.conditionType || "None";
+  lastConditionError = null;
+  try {
+    if (ct === "None") return true;
+
+    if (ct === "Url") {
+      let actual = "";
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        actual = tab.url || "";
+      } catch (err) {
+        // The tab is gone (closed, or a frame we cannot reach). That is NOT "the page URL does
+        // not match" — reporting it as a plain fail sent the author hunting for a wrong URL.
+        lastConditionError = `تب موردنظر در دسترس نیست (${err?.message || err})`;
+        appendPlayLog("warn", `شرط «آدرس صفحه»: ${lastConditionError} → شاخه fail`);
+        return false;
+      }
+      const expected = await resolveConditionCompareValue(tabId, node, graph, rowIndex, { preferUrl: true });
+      return compareConditionValues(actual, expected, node.equalityType || "equal");
+    }
+
+    if (ct === "DriverTabs") {
+      let count = 0;
+      try {
+        const tabs = await chrome.tabs.query({});
+        count = tabs.filter((t) => t.id).length;
+      } catch (err) {
+        lastConditionError = `فهرست تب‌ها خوانده نشد (${err?.message || err})`;
+        appendPlayLog("warn", `شرط «تعداد تب‌ها»: ${lastConditionError} → شاخه fail`);
+        return false;
+      }
+      const expected = Number(
+        node.constantEqualValue ?? node.constantValue ?? node.navigation
+      ) || 0;
+      return compareConditionValues(count, expected, node.equalityType || "equal");
+    }
+
+    if (ct === "FindElement" || ct === "NotFindElement" || ct === "ElementVisible" || ct === "ElementHidden") {
+      const selector = (await resolveDynamicSelectorAsync(node, graph, rowIndex))
+        || node.selectorValue || "";
+      const negate = ct === "NotFindElement" || ct === "ElementHidden";
+      if (!selector) return negate;
+      const waitMs = selectorWaitBudget(node);
+      // Visibility is the only difference from a plain existence check: "found" must
+      // also be rendered and on-screen, which is what makes this useful for a page that
+      // keeps a hidden copy of a node it swaps in later.
+      const wantVisible = ct === "ElementVisible" || ct === "ElementHidden";
+      const req = wantVisible
+        ? { ...selectorStateReqs(node), requireVisible: true }
+        : selectorStateReqs(node);
+      const found = await elementExistsInTab(
+        tabId,
+        selector,
+        parseFramePath(node.framePathJson),
+        waitMs,
+        req
+      );
+      return negate ? !found : !!found;
+    }
+
+    if (ct === "FindElements") {
+      const selector = (await resolveDynamicSelectorAsync(node, graph, rowIndex))
+        || node.selectorValue || "";
+      const expected = Number(
+        node.constantEqualValue ?? node.constantValue ?? node.navigation
+      ) || 0;
+      const eq = node.equalityType || "equal";
+      if (!selector) return compareConditionValues(0, expected, eq);
+      // A count condition with the wait switch on polls until the comparison is TRUE (not merely
+      // until one element exists): "wait until 3 rows are there" is what the author means, and a
+      // one-shot count made the switch inert for exactly this condition type.
+      const deadline = Date.now() + selectorWaitBudget(node);
+      for (;;) {
+        const count = await elementCountInTab(
+          tabId, selector, parseFramePath(node.framePathJson), selectorStateReqs(node));
+        if (compareConditionValues(count, expected, eq)) return true;
+        if (Date.now() >= deadline) return false;
+        await sleep(ELEMENT_WAIT_POLL_MS);
+      }
+    }
+
+    if (ct === "ElementValue" || ct === "SourceValue") {
+      const left = ct === "SourceValue"
+        ? ((await resolveStepParamAsync(node, graph, rowIndex)) || "")
+        : (await readElementText(tabId, node, graph, rowIndex));
+      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
+      return compareConditionValues(left, right, node.equalityType || "equal");
+    }
+
+    // Whole-column / whole-row checks: the same comparison, asked of every cell of a column (or of
+    // the row the pointer chose) instead of one cell. "Is this value anywhere in that column?" is a
+    // different question from "is it in this cell", and it is the one an author asks before
+    // inserting: has this row been written before at all?
+    if (ct === "SourceColumnValue" || ct === "SourceRowValue") {
+      const ds = findDataSourceForValue(node, graph);
+      const col = String(node.dynamicSourceColumnName || "").trim();
+      if (!ds) {
+        lastConditionError = "منبع مورد بررسی برای این شرط مشخص نیست";
+        appendPlayLog("warn", `شرط «${node.title || node.id}»: ${lastConditionError} → شاخه fail`);
+        return false;
+      }
+      if (ct === "SourceColumnValue" && !col) {
+        lastConditionError = "ستون مورد بررسی برای این شرط مشخص نیست";
+        appendPlayLog("warn", `شرط «${node.title || node.id}»: ${lastConditionError} → شاخه fail`);
+        return false;
+      }
+      // The compare operand is read FIRST: a failure there is the author's setup, and it must not
+      // look like "the column does not contain the value".
+      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
+      const values = ct === "SourceColumnValue"
+        ? await readSourceColumnForCheck(ds, col)
+        : await readSourceRowForCheck(ds, rowIndex);
+      if (values == null) {
+        lastConditionError = ct === "SourceColumnValue"
+          ? `مقادیر ستون «${col}» از سرور خوانده نشد`
+          : `مقادیر ردیف ${(Number(rowIndex) || 0) + 1} از سرور خوانده نشد`;
+        appendPlayLog("warn", `شرط «${node.title || node.id}»: ${lastConditionError} → شاخه fail`);
+        return false;
+      }
+      return collectionMatches(node.equalityType || "equal", values, right);
+    }
+
+    // The subject is a memory variable, so this condition needs no page and no tab: it compares
+    // what an earlier step stored against the compare operand, just like SourceValue does for a
+    // source cell. An unset variable is "" so a HasValue/HasNotValue check still means something.
+    if (ct === "MemoryValue") {
+      const name = String(node.memoryVariableName || "").trim();
+      if (!name) {
+        // A misconfigured node, not a legitimate false: say so.
+        lastConditionError = "شرط متغیر حافظه بدون نام متغیر است";
+        appendPlayLog("warn", `${lastConditionError} — شاخه fail`);
+        return false;
+      }
+      const vars = await getPlayMemoryVars();
+      const left = vars[name] != null ? String(vars[name]) : "";
+      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
+      return compareConditionValues(left, right, node.equalityType || "equal");
+    }
+
+    // System date / system time: the left operand is the machine clock formatted
+    // with the condition's own format, the right operand is the compare value.
+    // Formatting is explicit so a comparison is predictable regardless of the
+    // UI locale (fa-IR digits would otherwise never match a stored literal).
+    if (ct === "SystemDate" || ct === "SystemTime") {
+      const left = formatSystemClock(ct, node.systemClockFormat);
+      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
+      return compareConditionValues(left, right, node.equalityType || "equal");
+    }
+
+    // Unknown type — take success path so flow continues.
+    appendPlayLog("info", `نوع شرط پشتیبانی‌نشده: ${ct} — شاخه success`);
+    return true;
+  } catch (err) {
+    // Never surface as a play error: an exception still means the fail branch, because a
+    // condition must always resolve to a branch. What changes is that we now REMEMBER the
+    // failure, so the caller can report «بررسی ممکن نشد» rather than a bare «ناموفق» — the two
+    // look identical to the user otherwise, and only one of them is the author's bug.
+    const detail = err?.stack || err?.message || String(err);
+    lastConditionError = err?.message || String(err);
+    appendPlayLog("warn", `ارزیابی شرط با خطا ممکن نشد → شاخه fail — ${detail}`);
+    return false;
+  }
+}
+
+/** Resolve the compare operand for a condition; failures yield "" (never throw as play error). */
+async function resolveConditionCompareValue(tabId, node, graph, rowIndex, opts = {}) {
+  try {
+    const src = node.contentSourceType || "Constant";
+    if (src === "System") {
+      return resolveSystemValue(node.systemValueType || "CurrentDateTime");
+    }
+    if (src === "UserSystemDate" || src === "UserSystemTime") {
+      return String(node.constantEqualValue || node.constantValue || "").trim();
+    }
+    if (src === "Memory") {
+      const name = String(node.memoryVariableName || node.sourceMemoryVariableName || "").trim();
+      if (!name) return "";
+      const vars = await getPlayMemoryVars();
+      return vars[name] != null ? String(vars[name]) : "";
+    }
+    if (src === "DataSource" && !conditionSubjectIsSource(node.conditionType)) {
+      // A source-subject condition cannot take a data-source operand: `resolveStepParamAsync` would
+      // read the subject cell (the same fields the subject owns) and the condition would compare the
+      // cell with itself — always true. The editor does not offer the combination; an older save or
+      // hand-edited graph may still carry it, so the constant is what is actually compared.
+      return (await resolveStepParamAsync(node, graph, rowIndex))
+        || node.constantEqualValue || node.constantValue || "";
+    }
+    if (src === "Elements") {
+      const sel = (await resolveDynamicSelectorAsync(node, graph, rowIndex, {
+        valueKey: "equalSelectorValue",
+        dynFlag: "equalSelectorIsDynamic",
+        dynDs: "equalSelectorDataSourceId",
+        dynCol: "equalSelectorDynamicColumn",
+        hasAttr: "equalHasAttribute",
+        attrName: "equalAttributeName",
+        attrDynFlag: "equalAttributeValueIsDynamic",
+        attrValue: "equalAttributeValue",
+        attrDynCol: "equalAttributeDynamicColumn",
+        attrDynDs: "equalAttributeDataSourceId"
+      })) || node.equalSelectorValue || "";
+      if (!sel) return "";
+      const framePath = parseFramePath(node.framePathJson);
+      try {
+        const frameId = await resolveFramePath(tabId, framePath);
+        // Which part of the element is compared: the same vocabulary the value readers use, so a
+        // condition can check a link's href or a card's attribute instead of its text.
+        const mode = normalizeElementValueMode(node.equalElementValueMode);
+        const attrName = mode === "Attribute"
+          ? String(node.equalElementValueAttribute || "").trim()
+          : "";
+        const [{ result } = {}] = await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [frameId] },
+          func: (s, m, a) => {
+            try {
+              const el = document.querySelector(s);
+              if (!el) return "";
+              const requested = String(m || "auto").toLowerCase();
+              if (requested === "value") return el.value != null ? String(el.value) : "";
+              if (requested === "attribute") {
+                const name = String(a || "").trim();
+                if (!name) return "";
+                const got = el.getAttribute(name);
+                return got == null ? "" : String(got);
+              }
+              if (requested === "innerhtml") return el.innerHTML || "";
+              if (requested === "outerhtml") return el.outerHTML || "";
+              if (requested === "innertext") return (el.innerText || "").trim();
+              if (requested === "text") return (el.textContent || "").trim();
+              if (requested === "auto") {
+                if (el.value != null) return String(el.value);
+                return (el.textContent || "").trim();
+              }
+              const attr = el.getAttribute(requested);
+              return attr == null ? "" : String(attr);
+            } catch {
+              return "";
+            }
+          },
+          args: [sel, mode.toLowerCase(), attrName]
+        }) || [];
+        return result == null ? "" : String(result);
+      } catch {
+        return "";
+      }
+    }
+    if (opts.preferUrl) {
+      return node.navigation || node.constantEqualValue || node.constantValue || "";
+    }
+    return node.constantEqualValue || node.constantValue || node.navigation || "";
+  } catch {
+    return "";
+  }
+}
+
+function compareConditionValues(left, right, equalityType) {
+  try {
+    const a = left == null ? "" : String(left);
+    const b = right == null ? "" : String(right);
+    const eqRaw = String(equalityType || "equal").trim();
+    const eq = eqRaw.toLowerCase().replace(/[_\s-]+/g, "");
+
+    if (eq === "hasvalue") return a.trim() !== "";
+    if (eq === "hasnotvalue") return a.trim() === "";
+
+    if (eq === "notequal" || eq === "!=") return a !== b;
+    if (eq === "contain" || eq === "contains") return a.includes(b);
+    if (eq === "notcontain" || eq === "notcontains") return !a.includes(b);
+    if (eq === "startswith") return a.startsWith(b);
+    if (eq === "endswith") return a.endsWith(b);
+
+    if (eq === "biggerthan" || eq === "gt" || eq === ">") {
+      const na = Number(a);
+      const nb = Number(b);
+      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+      return na > nb;
+    }
+    if (eq === "smallerthan" || eq === "lt" || eq === "<") {
+      const na = Number(a);
+      const nb = Number(b);
+      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+      return na < nb;
+    }
+    if (eq === "gte" || eq === ">=") {
+      const na = Number(a);
+      const nb = Number(b);
+      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+      return na >= nb;
+    }
+    if (eq === "lte" || eq === "<=") {
+      const na = Number(a);
+      const nb = Number(b);
+      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
+      return na <= nb;
+    }
+
+    return a === b;
+  } catch {
+    return false;
+  }
+}
+
+function selectorStateReqs(step, { equal = false } = {}) {
+  if (!step) return { requireVisible: false, requireEnabled: false, requireClickable: false };
+  if (equal) {
+    return {
+      requireVisible: step.equalSelectorRequireVisible === true,
+      requireEnabled: step.equalSelectorRequireEnabled === true,
+      requireClickable: step.equalSelectorRequireClickable === true
+    };
+  }
+  return {
+    requireVisible: step.selectorRequireVisible === true,
+    requireEnabled: step.selectorRequireEnabled === true,
+    requireClickable: step.selectorRequireClickable === true
+  };
+}
+
+/**
+ * Read one element's value INSIDE the page.
+ *
+ * A standalone function on purpose: `chrome.scripting.executeScript` serialises the source, so an
+ * injected function cannot call anything else in this file. `mode` says which part of the element
+ * carries the value — `auto` keeps the historic guess (a form field's value, otherwise its text)
+ * while the named modes read exactly what the author picked (a link's href, an attribute, markup…).
+ */
+function readElementValueSelfContained(el, mode, attrName) {
+  const m = String(mode || "auto").toLowerCase();
+  if (m === "value") return el.value != null ? String(el.value) : "";
+  if (m === "attribute") {
+    const name = String(attrName || "").trim();
+    if (!name) return { __err: "missing_value_attribute" };
+    const v = el.getAttribute(name);
+    return v == null ? "" : String(v);
+  }
+  if (m === "innerhtml") return el.innerHTML || "";
+  if (m === "outerhtml") return el.outerHTML || "";
+  if (m === "innertext") return (el.innerText || "").trim();
+  if (m === "text") return (el.textContent || "").trim();
+  if (m === "auto") {
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+      return el.value || "";
+    }
+    return (el.innerText || el.textContent || "").trim();
+  }
+  // href / src / title and every other attribute an author may name later.
+  const v = el.getAttribute(m);
+  return v == null ? "" : String(v);
+}
+
+/** Injected into pages — find first element matching CSS + optional state filters. */
+function pageFindMatchingElement(sel, req) {
+  const need = req || {};
+  let nodes;
+  try {
+    nodes = Array.from(document.querySelectorAll(sel));
+  } catch {
+    return { ok: false, badSelector: true };
+  }
+  for (const el of nodes) {
+    if (!(el instanceof Element)) continue;
+    if (need.requireVisible || need.requireClickable) {
+      const st = window.getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) continue;
+      if (!(r.width > 0 && r.height > 0)) continue;
+    }
+    if (need.requireEnabled) {
+      if (el.disabled === true) continue;
+      if (el.getAttribute("aria-disabled") === "true") continue;
+      if (el.getAttribute("disabled") != null && el.getAttribute("disabled") !== "false") continue;
+    }
+    if (need.requireClickable) {
+      const st = window.getComputedStyle(el);
+      if (st.pointerEvents === "none") continue;
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) continue;
+      try {
+        const top = document.elementFromPoint(x, y);
+        if (top && top !== el && !el.contains(top) && !top.contains?.(el)) continue;
+      } catch { /* ignore hit-test failures */ }
+    }
+    return { ok: true, found: true };
+  }
+  return { ok: true, found: false };
+}
+
+async function elementExistsInTab(tabId, selector, framePath, waitTimeoutMs = 0, stateReq = null) {
+  if (!tabId || !selector) return false;
+  const req = stateReq || {};
+  try {
+    await pingTabScriptable(tabId);
+    const maxMs = Math.max(0, Number(waitTimeoutMs) || 0);
+    const deadline = Date.now() + maxMs;
+    let injectFails = 0;
+    for (;;) {
+      // The frame chain is resolved on EVERY attempt. Resolving it once made a late iframe a
+      // permanent miss: the wait never even started for a document that was still loading.
+      let frameId = null;
+      try {
+        frameId = await resolveFramePath(tabId, framePath || []);
+      } catch { frameId = null; }
+      if (frameId != null) {
+        try {
+          const [{ result } = {}] = await chrome.scripting.executeScript({
+            target: { tabId, frameIds: [frameId] },
+            func: pageFindMatchingElement,
+            args: [selector, req]
+          });
+          injectFails = 0;
+          if (result?.badSelector) return false;
+          if (result?.found) return true;
+        } catch (err) {
+          injectFails += 1;
+          console.warn("[DA Player] elementExistsInTab inject failed", tabId, err?.message || err);
+          if (injectFails === 1) {
+            await pingTabScriptable(tabId);
+            continue;
+          }
+          return false;
+        }
+      }
+      if (Date.now() >= deadline) return false;
+      await sleep(ELEMENT_WAIT_POLL_MS);
+    }
+  } catch (err) {
+    console.warn("[DA Player] elementExistsInTab", err?.message || err);
+    return false;
+  }
+}
+
+/**
+ * Make sure the tab can run scripting without leaving the user on that tab.
+ * Discarded / unresponsive tabs are woken briefly then focus is restored.
+ */
+async function ensureTabScriptable(tabId, opts = {}) {
+  if (!tabId) return false;
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return false;
+  }
+  const needsWake = !!(opts.force || tab.discarded || tab.status === "unloaded");
+  if (!needsWake) return true;
+
+  let prevTabId = null;
+  let prevWinId = null;
+  try {
+    const [prev] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (prev?.id && prev.id !== tabId) {
+      prevTabId = prev.id;
+      prevWinId = prev.windowId;
+    }
+  } catch { /* ignore */ }
+
+  try {
+    await chrome.tabs.update(tabId, { active: true });
+  } catch { /* ignore */ }
+
+  const start = Date.now();
+  while (Date.now() - start < 2000) {
+    try {
+      const t = await chrome.tabs.get(tabId);
+      if (t && !t.discarded && (t.status === "complete" || t.status === "loading")) break;
+    } catch { break; }
+    await sleep(80);
+  }
+  // Give the renderer a beat after wake.
+  await sleep(120);
+
+  if (prevTabId) {
+    try {
+      await chrome.tabs.update(prevTabId, { active: true });
+      if (prevWinId != null) {
+        await chrome.windows.update(prevWinId, { focused: true }).catch(() => {});
+      }
+    } catch { /* ignore */ }
+  }
+  return true;
+}
+
+/** Probe scripting; on failure wake the tab and retry once. */
+async function pingTabScriptable(tabId) {
+  if (!tabId) return false;
+  const probe = async () => {
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => true
+    });
+    return !!result;
+  };
+  try {
+    if (await probe()) return true;
+  } catch {
+    /* wake and retry */
+  }
+  await ensureTabScriptable(tabId, { force: true });
+  try {
+    return await probe();
+  } catch (err) {
+    console.warn("[DA Player] pingTabScriptable failed", tabId, err?.message || err);
+    return false;
+  }
+}
+
+async function elementCountInTab(tabId, selector, framePath, stateReq = null) {
+  const req = stateReq || {};
+  try {
+    await pingTabScriptable(tabId);
+    const frameId = await resolveFramePath(tabId, framePath || []);
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: (sel, need) => {
+        try {
+          const nodes = Array.from(document.querySelectorAll(sel));
+          if (!need || !(need.requireVisible || need.requireEnabled || need.requireClickable)) {
+            return nodes.length;
+          }
+          let n = 0;
+          for (const el of nodes) {
+            if (!(el instanceof Element)) continue;
+            if (need.requireVisible || need.requireClickable) {
+              const st = getComputedStyle(el);
+              const r = el.getBoundingClientRect();
+              if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) continue;
+              if (!(r.width > 0 && r.height > 0)) continue;
+            }
+            if (need.requireEnabled) {
+              if (el.disabled === true) continue;
+              if (el.getAttribute("aria-disabled") === "true") continue;
+            }
+            if (need.requireClickable) {
+              const st = getComputedStyle(el);
+              if (st.pointerEvents === "none") continue;
+            }
+            n += 1;
+          }
+          return n;
+        } catch {
+          return 0;
+        }
+      },
+      args: [selector, req]
+    });
+    return Number(result) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function readElementText(tabId, node, graph, rowIndex) {
+  const selector = (await resolveDynamicSelectorAsync(node, graph, rowIndex))
+    || node.selectorValue || "";
+  if (!selector) return "";
+  const req = selectorStateReqs(node);
+  try {
+    await pingTabScriptable(tabId);
+    const waitMs = selectorWaitBudget(node);
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      let frameId = null;
+      try {
+        frameId = await resolveFramePath(tabId, parseFramePath(node.framePathJson));
+      } catch { frameId = null; }
+      if (frameId != null) {
+        try {
+          const [{ result } = {}] = await chrome.scripting.executeScript({
+            target: { tabId, frameIds: [frameId] },
+            func: (sel, need) => {
+              let nodes;
+              try { nodes = Array.from(document.querySelectorAll(sel)); } catch { return ""; }
+              for (const el of nodes) {
+                if (!(el instanceof Element)) continue;
+                if (need.requireVisible || need.requireClickable) {
+                  const st = getComputedStyle(el);
+                  const r = el.getBoundingClientRect();
+                  if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) continue;
+                  if (!(r.width > 0 && r.height > 0)) continue;
+                }
+                if (need.requireEnabled) {
+                  if (el.disabled === true) continue;
+                  if (el.getAttribute("aria-disabled") === "true") continue;
+                }
+                if (need.requireClickable) {
+                  const st = getComputedStyle(el);
+                  if (st.pointerEvents === "none") continue;
+                }
+                if (el.value != null) return String(el.value);
+                return (el.textContent || "").trim();
+              }
+              return null;
+            },
+            args: [selector, req]
+          });
+          if (result != null) return String(result);
+        } catch { /* this attempt missed; retry until the deadline */ }
+      }
+      if (Date.now() >= deadline) return "";
+      await sleep(ELEMENT_WAIT_POLL_MS);
+    }
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Close one tab of the run's own window.
+ *
+ * `target` is one of First | Last | Next | Previous. First and Last are absolute positions in the
+ * window; Next and Previous are measured from the tab the run is executing in, which is what an
+ * author means by "the tab after this one" — the alternative, the browser's active tab, changes
+ * whenever the user clicks somewhere and would make the step unpredictable.
+ *
+ * The run's tab is not protected: if it is the target it is closed, and the caller is told which
+ * tab to continue in. Closing the LAST tab of a window is refused rather than silently ending the
+ * session, because Chrome would close the window with it.
+ */
+async function closeWindowTab(currentTabId, target, alias, step) {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(currentTabId);
+  } catch {
+    return { ok: false, error: tv("run.tabNotFound"), reason: "tab_missing" };
+  }
+  const winId = tab.windowId;
+  const tabs = await chrome.tabs.query({ windowId: winId });
+  const ordered = tabs.slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  const targetMode = String(target || "Last");
+  const aliasMode = targetMode === "Alias";
+  if (!aliasMode && ordered.length <= 1) {
+    return { ok: false, error: tv("run.lastTab"), reason: "last_tab" };
+  }
+
+  const here = ordered.findIndex((t) => Number(t.id) === Number(currentTabId));
+  let victim = null;
+  let closedAliasKey = null;
+
+  if (aliasMode) {
+    const raw = String(alias || "").trim();
+    closedAliasKey = normalizePlayTabAlias(raw);
+    if (!closedAliasKey) {
+      return { ok: false, error: tv("act.closeTabAliasMissing"), reason: "missing_tab_alias" };
+    }
+    const entry = playTabs.get(closedAliasKey);
+    if (!entry) {
+      return { ok: false, error: tv("run.tabAliasMissing", { alias: raw }), reason: "tab_alias_missing" };
+    }
+    try {
+      victim = await chrome.tabs.get(entry.id);
+    } catch {
+      playTabs.delete(closedAliasKey);
+      return { ok: false, error: tv("run.tabAliasClosed", { alias: entry.name }), reason: "tab_alias_closed" };
+    }
+    // Refuse to close the last tab of the victim's window, whichever window the named tab is in.
+    const victimWindowTabs = await chrome.tabs.query({ windowId: victim.windowId });
+    if (victimWindowTabs.length <= 1) {
+      return { ok: false, error: tv("run.lastTab"), reason: "last_tab" };
+    }
+  } else if (targetMode === "Url" || targetMode === "Title") {
+    // "Close the tab showing X", the same matching SwitchTab offers. It is the natural companion of
+    // a URL/title switch: a process that opens a tab for a system knows the system, not a tab id.
+    const pattern = String((targetMode === "Url" ? step?.closeTabUrl : step?.closeTabTitle) || "").trim();
+    if (!pattern) return { ok: false, error: tv("act.switchTabPatternMissing"), reason: "missing_pattern" };
+    const found = targetMode === "Url"
+      ? await findTabByUrlPattern(pattern)
+      : await findTabByTitlePattern(pattern);
+    if (!found) return { ok: false, error: tv("run.closeTabMatchMissing"), reason: "no_such_tab" };
+    victim = found;
+    for (const [aliasKey, aliasEntry] of playTabs) {
+      if (Number(aliasEntry.id) === Number(found.id)) closedAliasKey = aliasKey;
+    }
+    const victimWindowTabs = await chrome.tabs.query({ windowId: victim.windowId });
+    if (victimWindowTabs.length <= 1) {
+      return { ok: false, error: tv("run.lastTab"), reason: "last_tab" };
+    }
+  } else {
+    switch (targetMode) {
+      case "First":
+        victim = ordered[0];
+        break;
+      case "Next":
+        victim = here >= 0 ? ordered[here + 1] || null : null;
+        break;
+      case "Previous":
+        victim = here >= 0 ? ordered[here - 1] || null : null;
+        break;
+      // The run's own tab. The walker is told which tab to continue in (below), so the run moves to a
+      // neighbour instead of dying with the tab it just closed.
+      case "Current":
+        victim = here >= 0 ? ordered[here] : null;
+        break;
+      case "Last":
+      default:
+        victim = ordered[ordered.length - 1];
+        break;
+    }
+  }
+
+  if (!victim) {
+    // Next from the last tab, or Previous from the first: there is nothing there. Reported as a
+    // step failure rather than quietly closing a different tab, which would be the worse surprise.
+    const missing = target === "Next" ? tv("run.noNextTab")
+      : target === "Current" ? tv("run.tabNotFound")
+      : tv("run.noPrevTab");
+    return { ok: false, error: missing, reason: "no_such_tab" };
+  }
+
+  // Closing the run's own tab would leave the walk with no page to act on. Chrome would also pick a
+  // neighbour for us, which is not necessarily the one the diagram expects, so the caller is told
+  // explicitly which tab to continue in.
+  const next = ordered.find((t) => t.id !== victim.id) || null;
+  await chrome.tabs.remove(victim.id);
+  if (closedAliasKey) playTabs.delete(closedAliasKey);
+  const continueId = victim.id === currentTabId ? (next ? next.id : null) : currentTabId;
+  if (continueId) {
+    try { await chrome.tabs.update(continueId, { active: true }); } catch { /* ignore */ }
+  }
+  return { ok: true, tabId: continueId };
+}
+
+/**
+ * Walk one entry back or forward in the tab's own browser history.
+ *
+ * This is `history.back()` / `history.forward()` on the target tab, not a tab switch: the two are
+ * easy to confuse and the action names would be ambiguous otherwise, so the choice is documented
+ * here and in the action's description.
+ *
+ * The injected call cannot tell whether history actually moved — the browser exposes no event for
+ * that — so the step waits for the document to settle and reports that instead of claiming a
+ * navigation happened.
+ */
+/**
+ * PressKey on a tab: the page-side branch does the dispatching, this only resolves the frame.
+ *
+ * Chrome gives no way to inject a TRUSTED key, so this cannot move focus or submit by itself. What
+ * it does is what the author is after on an automation page: make the page's own key handler run
+ * (Enter-to-submit, Escape-to-close, arrow-key navigation in a custom widget).
+ */
+async function runPressKeyStep(tabId, step) {
+  const key = String(step?.pressKeyName || "").trim();
+  if (!key) return { ok: false, error: tv("run.keyMissing"), reason: "missing_key" };
+  const selector = String(step?.selectorValue || "").trim();
+  // The element selector is optional: with none, the focused element (or the document) is the target.
+  const target = { tabId };
+  try {
+    const hopFrame = await resolveFramePath(tabId, parseFramePath(step?.framePathJson));
+    if (hopFrame != null) target.frameIds = [hopFrame];
+  } catch { /* top document */ }
+  try {
+    // The key table is resolved HERE (the worker knows it); the injected function only builds the
+    // events, because its source is serialised and cannot reach helpers in this scope.
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target,
+      func: pressKeySelfContained,
+      args: [selector, key, keyCodeFor(key)]
+    });
+    return result || { ok: false, error: tv("run.keyMissing"), reason: "press_key_failed" };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err), reason: "press_key_failed" };
+  }
+}
+
+/**
+ * The same helper, callable from injected code.
+ *
+ * `chrome.scripting.executeScript` serialises a function to its own source, so a page-side function
+ * cannot call module-level helpers (`keyCodeFor`) at run time. Simple key names are resolved here,
+ * in the worker, and the page side only builds the events.
+ */
+function pressKeySelfContained(selector, key, info) {
+  const el = selector ? document.querySelector(selector) : null;
+  if (selector && !el) return { ok: false, error: `عنصر پیدا نشد: ${selector}`, reason: "element_not_found" };
+  const target = el || document.activeElement || document.body;
+  const k = info || { key: key, code: key, keyCode: 0 };
+  try { target.focus({ preventScroll: true }); } catch { /* not focusable */ }
+  const init = {
+    key: k.key, code: k.code, keyCode: k.keyCode, which: k.keyCode,
+    bubbles: true, cancelable: true, composed: true,
+    ctrlKey: !!k.ctrl, shiftKey: !!k.shift, altKey: !!k.alt, metaKey: !!k.meta
+  };
+  const proceed = target.dispatchEvent(new KeyboardEvent("keydown", init));
+  if (proceed && (k.key.length === 1 || k.key === "Enter")) {
+    target.dispatchEvent(new KeyboardEvent("keypress", init));
+  }
+  target.dispatchEvent(new KeyboardEvent("keyup", init));
+  return { ok: true, key: k.key };
+}
+
+async function runHistoryStep(tabId, direction, step) {
+  const dir = direction === "back" ? -1 : 1;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (d) => { try { window.history.go(d); } catch { /* ignore */ } },
+      args: [dir]
+    });
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err), reason: "history_failed" };
+  }
+  // History navigation is asynchronous and has no completion event we can await, so settle briefly.
+  await sleepInterruptible(Math.max(0, Number(step?.waitMaxMs) || 0) || HISTORY_SETTLE_MS);
+  return { ok: true, navigated: true };
+}
+
+async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
+  const actionType = step.actionType || "Click";
+  const framePath = parseFramePath(step.framePathJson);
+  const resolvedSelector = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0);
+  // The step's URL is resolved INSIDE the GoToUrl branch below, not here. This used to run for
+  // EVERY action, so a non-value action carrying leftover source fields (a Click recorded against
+  // an older rule set) read a cell it has no field for — and a missing column failed the whole
+  // run on a setting the editor never even shows. Value resolution stays scoped to the actions
+  // that take a value; see also `needsAsyncValue` further down.
+
+  logDynamicSelectorResolution(step, resolvedSelector, rowIndex ?? 0);
+
+  // One close-tab action with a target, replacing the old first/last pair who differed only here.
+  if (actionType === "CloseTab") {
+    return closeWindowTab(tabId, step.closeTabTarget || "Last", step.closeTabAlias, step);
+  }
+
+  // Switch the run to another live tab. Nothing is closed and no navigation happens: the page in
+  // the target tab keeps exactly the state it had, which is the whole point of a named tab.
+  if (actionType === "SwitchTab") {
+    return runSwitchTabStep(tabId, step);
+  }
+
+  // PressKey is a keyboard event on the page. It takes no target selector when the author means
+  // "the field that is already focused", so it must return before the selector plumbing below.
+  if (actionType === "PressKey") {
+    return runPressKeyStep(tabId, step);
+  }
+
+  // Back / forward in the tab's own history (not a tab switch — see runHistoryStep).
+  if (actionType === "GoBack") return runHistoryStep(tabId, "back", step);
+  if (actionType === "GoForward") return runHistoryStep(tabId, "forward", step);
+
+  if (actionType === "GoToUrl") {
+    let url = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { preferUrl: true });
+    const cst0 = step.contentSourceType || "";
+    if (cst0 === "Memory" || cst0 === "Elements" || cst0 === "System" || cst0 === "DataSource") {
+      url = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
+    }
+    if (!url) {
+      return onUnexpected(runMode, {
+        taskId,
+        stepId: step.entityId,
+        reason: "missing_url",
+        expectedSelector: resolvedSelector,
+        actualUrl: null,
+        framePathJson: step.framePathJson
+      });
+    }
+    // A named tab is created on first use and REUSED afterwards. Opening a second tab under an
+    // alias that is still alive would make every loop iteration grow the window, and "return to
+    // system B" would stop meaning the page that is already logged in.
+    if (step.openInNewTab === true) {
+      const rawAlias = String(step.newTabAlias || "").trim();
+      const checked = validatePlayTabAlias(rawAlias);
+      if (rawAlias && !checked.ok) {
+        return { ok: false, error: tv(checked.reasonKey), reason: "bad_tab_alias" };
+      }
+      const alias = checked.ok ? checked.alias : nextAutoPlayTabAlias();
+      const key = normalizePlayTabAlias(alias);
+      const shouldSwitch = step.switchToNewTab !== false;
+
+      const existing = playTabs.get(key);
+      if (existing) {
+        let existingTab = null;
+        try { existingTab = await chrome.tabs.get(existing.id); } catch { existingTab = null; }
+        if (existingTab) {
+          await chrome.tabs.update(existing.id, shouldSwitch ? { url, active: true } : { url });
+          await waitTabComplete(existing.id, resolveNavigationWaitMs(step));
+          await protectPlayTab(existing.id);
+          await injectPlayFab(existing.id);
+          if (shouldSwitch && existingTab.windowId != null) {
+            try { await chrome.windows.update(existingTab.windowId, { focused: true }); } catch { /* ignore */ }
+          }
+          appendPlayLog("info", `تب «${existing.name}» دوباره استفاده شد (#${existing.id})`);
+          return { ok: true, tabId: shouldSwitch ? existing.id : tabId, navigated: true, tabAlias: existing.name };
+        }
+        playTabs.delete(key);
+      }
+
+      const created = await chrome.tabs.create({ url, active: shouldSwitch });
+      if (!created?.id) {
+        return { ok: false, error: tv("run.newTabFailed"), reason: "new_tab_failed" };
+      }
+      registerPlayTab(alias, created.id);
+      await protectPlayTab(created.id);
+      await waitTabComplete(created.id, resolveNavigationWaitMs(step));
+      await injectPlayFab(created.id);
+      if (shouldSwitch && created.windowId != null) {
+        try { await chrome.windows.update(created.windowId, { focused: true }); } catch { /* ignore */ }
+      }
+      appendPlayLog("info", `تب «${alias}» باز شد (#${created.id})`);
+      return { ok: true, tabId: shouldSwitch ? created.id : tabId, navigated: true, tabAlias: alias };
+    }
+
+    await chrome.tabs.update(tabId, { url });
+    await waitTabComplete(tabId, resolveNavigationWaitMs(step));
+    return { ok: true };
+  }
+
+  if (actionType === "WaitTime") {
+    let ms = 0;
+    const cst0 = step.contentSourceType || "";
+    if (cst0 === "Memory" || cst0 === "DataSource" || cst0 === "System") {
+      const v = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
+      ms = Number(v) || 0;
+    } else {
+      ms = Number(await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath })) || 0;
+    }
+    return { ok: true, waitMs: ms };
+  }
+
+  // Writes a value the flow computed into the run's variable table. There is no page
+  // interaction at all, so this returns before the selector/frame plumbing below —
+  // requiring a selector here would make the step impossible to author.
+  if (actionType === "SetMemory") {
+    const name = String(step.memoryVariableName || "").trim();
+    const value = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
+    const saved = await setPlayMemoryVar(name, value);
+    if (!saved?.ok) {
+      return onUnexpected(runMode, {
+        taskId,
+        stepId: step.entityId,
+        reason: saved?.reason || "missing_memory_name",
+        expectedSelector: null,
+        actualUrl: null
+      });
+    }
+    return { ok: true, memorySet: { name, value: value == null ? "" : String(value) } };
+  }
+
+  // Removes one row from a library data source. The server owns the store, so this is a plain
+  // request; the row is picked with the same pointer vocabulary the inspector offers.
+  // DeleteRow / InsertRow share everything except the server call: the source, and which row the
+  // pointer selects. The pointer vocabulary — first / last / the process loop's row / the group
+  // loop's row / a fixed index — means the same thing either way, so it is resolved once and only
+  // the operation differs.
+  if (actionType === "DeleteRow" || actionType === "InsertRow") {
+    const isInsert = actionType === "InsertRow";
+    const dsId = Number(step.dataSourceId || step.saveDataSourceId || 0);
+    if (!dsId) {
+      return onUnexpected(runMode, {
+        taskId, stepId: step.entityId, reason: "missing_source",
+        expectedSelector: null, actualUrl: null
+      });
+    }
+    // rowIndex is the row THIS node works on: runOneAction resolved its own pointer (loop row /
+    // process row / first / last / fixed) before dispatching here, so there is nothing left to
+    // resolve and the old step-level lookup was a second, diverging answer to the same question.
+    const targetRow = Number(rowIndex) || 0;
+    // A LOCAL run of a private source owns its rows: inserting or deleting is a repack of the copy
+    // this machine loaded. Sending it to the server would create/remove a row for everyone (the
+    // opposite of local mode), and its reply would then wipe the cached cells — which is what made
+    // the rest of the run write into an empty grid and leave "rows with no values" behind.
+    const rowDsLocal = (graph?.dataSources || []).find((d) => Number(d.id) === dsId);
+    if (playStatus.runOnServer === false && rowDsLocal && !isPublicSource(rowDsLocal, graph)) {
+      // The copy shifts now, the server's rows do not: remember the shift so every later write and
+      // the sync payload can map a local index back to the server row it really belongs to.
+      noteLocalRowShift(dsId, targetRow, isInsert);
+      applyLocalRowShift(rowDsLocal, targetRow, isInsert);
+      appendPlayLog("info", isInsert
+        ? `ردیف خالی در نسخهٔ محلی منبع ${dsId} در جای ${targetRow} درج شد (سرور دست‌نخورده — با سینک در همان جای سرور درج می‌شود)`
+        : `ردیف ${targetRow} از نسخهٔ محلی منبع ${dsId} حذف شد (سرور دست‌نخورده)`);
+      // Tell this machine's viewers the grid moved — the same window event a cell write uses, with no
+      // server hop, and awaited so the next step's read cannot land on the pre-shift numbering.
+      await emitDataSourceCellEvent(
+        graph, rowDsLocal, "", targetRow,
+        isInsert ? "insert" : "delete", null, step?.title, { wait: true });
+      return isInsert
+        ? { ok: true, rowInserted: { dataSourceId: dsId, rowIndex: targetRow } }
+        : { ok: true, rowDeleted: { dataSourceId: dsId, rowIndex: targetRow } };
+    }
+    const res = await callBackground({
+      type: isInsert ? "insertDataSourceRow" : "deleteDataSourceRow",
+      dataSourceId: dsId,
+      rowIndex: targetRow
+    }).catch(() => null);
+    if (!res?.ok) {
+      return onUnexpected(runMode, {
+        taskId, stepId: step.entityId,
+        reason: res?.limit ? "source_limit" : (res?.error || (isInsert ? "insert_row_failed" : "delete_row_failed")),
+        expectedSelector: null, actualUrl: null
+      }, res?.message || null);
+    }
+    appendPlayLog("info", isInsert
+      ? `ردیف خالی در جای ${targetRow} منبع ${dsId} درج شد`
+      : `ردیف ${targetRow} از منبع ${dsId} حذف شد`);
+    // The row grid moved, so the run's own mirror of the source is now wrong at every index from
+    // `targetRow` down. Drop the cached cells (a later read falls back to the server, which now
+    // holds the shifted values) and take the new row count from the server's answer — the LastRow
+    // pointer reads it, and a stale count would address a row that no longer exists.
+    const rowDs = (graph?.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+    if (rowDs) {
+      rowDs.cells = [];
+      const rc = Number(res?.body?.rowCount ?? res?.body?.RowCount);
+      if (Number.isFinite(rc) && rc >= 0) rowDs.rowCount = rc;
+      else rowDs.rowCount = Math.max(0, (Number(rowDs.rowCount) || 0) + (isInsert ? 1 : -1));
+    }
+    // Tell the live viewers the grid moved — and wait for it, so the next step's read/write flash
+    // cannot arrive first and be applied to a row that is about to shift.
+    await emitDataSourceCellEvent(
+      graph, rowDs || { id: dsId }, "", targetRow,
+      isInsert ? "insert" : "delete", null, step?.title, { wait: true });
+    return isInsert
+      ? { ok: true, rowInserted: { dataSourceId: dsId, rowIndex: targetRow } }
+      : { ok: true, rowDeleted: { dataSourceId: dsId, rowIndex: targetRow } };
+  }
+
+  // LoadContent: read one source cell and write it into a page element OR a memory variable.
+  // Its value comes from the source, so it never reads the step's own value plumbing.
+  if (actionType === "LoadContent") {
+    return runLoadContentStep(tabId, taskId, step, runMode, graph, rowIndex, framePath);
+  }
+
+  // InsertContent: write a value INTO one cell of a data source. It touches the server store and
+  // the current page only as a VALUE SOURCE, so it takes no target selector.
+  if (actionType === "InsertContent") {
+    return runInsertContentStep(tabId, taskId, step, runMode, graph, rowIndex, framePath);
+  }
+
+  // AlertAccept: answer a browser dialog. It touches neither the page nor a selector — a JS dialog
+  // blocks the page outright, so the extension arms the tab (see armAlertDialogsIfNeeded) and this
+  // step only sets which way to answer, then reports what was actually seen.
+  if (actionType === "AlertAccept") {
+    return runAlertAcceptStep(tabId, taskId, step, runMode);
+  }
+
+  const cst = step.contentSourceType || "";
+  // A step resolves an input value at all ONLY when its action takes one (a Click takes none).
+  // Leftover source fields from an older rule set — contentSourceType/valueFromSource/dataSourceId
+  // left on an action that no longer offers a value field — must not make the run read a cell:
+  // the editor shows no field for them there, so the read could only fail the whole run on a
+  // setting the author cannot even see. Keep this gate in step with `if (stepReceivesValue(at))`
+  // in the editor's validateActionNode — the two sides must agree about which steps read a source.
+  const needsAsyncValue = stepReceivesValue(actionType) && (
+    stepUsesDataSourceValue(step)
+    || cst === "Memory" || cst === "Elements" || cst === "System"
+    || (actionType === "InputContent" || actionType === "SelectOption" || actionType === "Hold")
+  );
+
+  let valueForAction;
+  if (needsAsyncValue) {
+    valueForAction = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath }) || "";
+  } else if (actionType === "Hold") {
+    // A blank duration is not an error: fall back to the diagram's inter-step gap so a Hold step
+    // still means something the moment it is dropped on the canvas.
+    const raw = String(step.constantValue ?? "").trim();
+    valueForAction = raw === "" ? String(resolveStepDelayMs(graph) || HOLD_DEFAULT_MS) : raw;
+  } else if (actionType === "ScrollPage") {
+    const raw = String(step.constantValue ?? "").trim();
+    valueForAction = raw === "" ? String(SCROLL_PAGE_DEFAULT_PX) : raw;
+  } else {
+    valueForAction = step.constantValue || "";
+  }
+
+  // Frame lookup and element selection are BOTH retried inside the budget — a late iframe is as
+  // much "the element is not there yet" as a late node in the current document.
+  const waitTimeoutMs = selectorWaitBudget(step);
+  const stateReq = selectorStateReqs(step);
+  const payload = {
+    actionType,
+    selectorValue: resolvedSelector,
+    constantValue: valueForAction,
+    navigateUrl: step.navigateUrl,
+    // SelectOption matches by value, label or position; every RemoveElements run needs to know
+    // whether one match or all of them go.
+    // ScrollPage's mode, and InputContent's typing mode, both travel with the step.
+    scrollType: step.scrollType || "Amount",
+    typeMode: step.typeMode || "Instant",
+    typeDelayMs: Math.max(0, Number(step.typeDelayMs) || 0),
+    // Click's dispatch mode: "Synthetic" (plain el.click()) or "RealMouse" (full down/up
+    // sequence) — the bypass for frameworks that ignore a machine-generated click.
+    clickMode: step.clickMode || "Synthetic",
+    removeAllMatches: step.removeAllMatches !== false,
+    highlightColor: resolveHighlightColor(graph),
+    requireVisible: !!stateReq.requireVisible,
+    requireEnabled: !!stateReq.requireEnabled,
+    requireClickable: !!stateReq.requireClickable
+  };
+
+  // ONE execution path, deliberately.
+  //
+  // This used to try chrome.tabs.sendMessage into a content-script engine first and fall back to
+  // executeInFrame. The two engines had drifted — the content script never learned every action —
+  // so whether a step worked depended on which path won the race. The injected engine is the
+  // complete one and needs no content script to be present, so it is now the only path.
+  const result = await executeInFrameWithWait(tabId, framePath, payload, waitTimeoutMs);
+
+  if (!result || !result.ok) {
+    return onUnexpected(runMode, {
+      taskId,
+      stepId: step.entityId,
+      reason: result?.reason || "action_failed",
+      expectedSelector: resolvedSelector,
+      actualUrl: result?.url || null,
+      framePathJson: step.framePathJson || JSON.stringify(framePath)
+    }, result?.error);
+  }
+
+  if (result.navigated) await waitTabComplete(tabId);
+  return result;
+}
+
+/**
+ * LoadContent — read ONE cell of a data source and put it into a target.
+ *
+ * The target is either a page element (the cell's text is typed into it) or a memory variable
+ * (the cell's text is stored). The value always comes from the source, which is why this action
+ * does not read the step's own value-source plumbing — reading a cell into a cell would be
+ * InsertContent with a source-to-source copy, and that is not what this action is for.
+ *
+ * A failed read is a step error, never a silent empty string: substituting "" here would type
+ * nothing into a real form and look like it worked.
+ */
+async function runLoadContentStep(tabId, taskId, step, runMode, graph, rowIndex, framePath) {
+  const ds = findDataSourceForValue(step, graph);
+  const column = step.dynamicSourceColumnName || step.saveColumnName;
+  const text = await readDataSourceCellForPlay(ds, column, rowIndex ?? 0, step, graph);
+  if (text === undefined) {
+    // readDataSourceCellForPlay has already logged the reason; surface it as the step error.
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "data_source_unavailable",
+      expectedSelector: step.selectorValue || null, actualUrl: null,
+      framePathJson: step.framePathJson
+    }, dataSourceUnavailable(step, ds, column, rowIndex).message);
+  }
+
+  const target = normalizeLoadTarget(step);
+  if (target === "Memory") {
+    const name = String(step.memoryVariableName || "").trim();
+    const saved = await setPlayMemoryVar(name, text);
+    if (!saved?.ok) {
+      return onUnexpected(runMode, {
+        taskId, stepId: step.entityId,
+        reason: saved?.reason || "missing_memory_name",
+        expectedSelector: null, actualUrl: null
+      });
+    }
+    appendPlayLog("info", `مقدار سلول «${column}» در متغیر «${name}» ذخیره شد`);
+    return { ok: true, text, memorySet: { name, value: text } };
+  }
+
+  // Target is a page element: type the cell's value into it, exactly as InputContent would.
+  const resolvedSelector = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0);
+  if (!resolvedSelector) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "missing_selector",
+      expectedSelector: "", actualUrl: null, framePathJson: step.framePathJson
+    }, "سلکتور المان مقصد خالی است");
+  }
+  const waitTimeoutMs = selectorWaitBudget(step);
+  const stateReq = selectorStateReqs(step);
+  const payload = {
+    // The page-side branch is InputContent's: both write a value into a field, so LoadContent
+    // inherits its typing mode rather than having a second implementation of it.
+    actionType: "InputContent",
+    selectorValue: resolvedSelector,
+    constantValue: text,
+    typeMode: step.typeMode || "Instant",
+    typeDelayMs: Math.max(0, Number(step.typeDelayMs) || 0),
+    highlightColor: resolveHighlightColor(graph),
+    requireVisible: !!stateReq.requireVisible,
+    requireEnabled: !!stateReq.requireEnabled,
+    requireClickable: !!stateReq.requireClickable
+  };
+  // Same single-path rule and same frame-aware wait as runStep above.
+  const result = await executeInFrameWithWait(tabId, framePath || [], payload, waitTimeoutMs);
+  if (!result || !result.ok) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId,
+      reason: result?.reason || "action_failed",
+      expectedSelector: resolvedSelector,
+      actualUrl: result?.url || null,
+      framePathJson: step.framePathJson
+    }, result?.error);
+  }
+  return { ok: true, text, captured: true };
+}
+
+/**
+ * AlertAccept — answer a browser dialog (alert / confirm / prompt).
+ *
+ * The dialog cannot be answered from inside the page: a JS dialog blocks the page's own script, so
+ * by the time any injected code runs only the browser could dismiss it. The extension therefore
+ * overrides window.alert/confirm/prompt on the target tab while a run that uses this action is
+ * active (see lib/alert-dialog.js), and this step tells that override which way to answer.
+ *
+ * Contract, deliberately the same as every other action:
+ *   ok:true            a dialog was seen and answered
+ *   ok:false           no dialog was found, or the tab could not be armed
+ * The caller applies the step's «چشمپوشی از خطا» switch, so whether a miss stops the run is the
+ * author's choice rather than a special case hidden in here.
+ */
+async function runAlertAcceptStep(tabId, taskId, step, runMode) {
+  const armed = await setAlertAnswerForStep(tabId, step);
+  if (armed && armed.ok === false) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "alert_not_armed",
+      expectedSelector: null, actualUrl: null
+    }, armed.error);
+  }
+
+  // A short settle window: the dialog is raised by the page in response to an earlier action, so it
+  // is normally already there. Waiting briefly avoids reporting a miss on a one-frame delay.
+  const waitMs = Math.max(0, Number(step.alertWaitMs) || 0) || ALERT_SETTLE_MS;
+  await sleepInterruptible(waitMs);
+
+  let res;
+  try {
+    res = await callBackground({ type: "readAlertResult", tabId });
+  } catch (err) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "alert_read_failed",
+      expectedSelector: null, actualUrl: null
+    }, err?.message || String(err));
+  }
+
+  if (res && res.armed === false) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "alert_not_armed",
+      expectedSelector: null, actualUrl: null
+    }, tv("run.alertNotArmed"));
+  }
+
+  const seen = res?.dialog || null;
+  if (!seen) {
+    // No dialog. A failure, not a quiet pass: the step exists to answer one, so finding none means
+    // the page did not do what the diagram expected.
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId, reason: "alert_not_found",
+      expectedSelector: null, actualUrl: null
+    }, tv("run.alertNone"));
+  }
+
+  const dismissing = String(step.alertType || "Accept") === "Dismiss";
+  appendPlayLog("info", `دیالوگ مرورگر «${seen.kind || "alert"}» ${dismissing ? "رد" : "تأیید"} شد`);
+  return { ok: true, alertHandled: { kind: seen.kind, message: seen.message, answer: dismissing ? "Dismiss" : "Accept" } };
+}
+
+/**
+ * InsertContent — write the step's resolved value into ONE cell of a data source.
+ *
+ * The value comes from wherever the author chose (constant / page element / memory / system).
+ * An empty value is written as an empty cell rather than refused: blanking a cell is a legitimate
+ * thing to want, and it is the author's explicit choice.
+ */
+async function runInsertContentStep(tabId, taskId, step, runMode, graph, rowIndex, framePath) {
+  const text = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
+  const dsId = step.saveDataSourceId != null ? step.saveDataSourceId : step.dataSourceId;
+  const column = step.saveColumnName || step.dynamicSourceColumnName;
+  const sources = graph?.dataSources || [];
+  const ds = (dsId != null && sources.find((d) => Number(d.id) === Number(dsId)))
+    || findDataSourceForValue(step, graph);
+
+  const store = await storeCapturedContent(
+    { ...step, saveTargetType: "DataSource", saveColumnName: column },
+    graph, text, rowIndex ?? 0
+  );
+  if (!store.ok) {
+    return onUnexpected(runMode, {
+      taskId, stepId: step.entityId,
+      reason: store.reason || "capture_store_failed",
+      expectedSelector: null, actualUrl: null, framePathJson: step.framePathJson
+    }, store.error);
+  }
+  appendPlayLog("info", `مقدار در سلول «${column}» منبع ${ds?.id ?? dsId} درج شد`);
+  // Prepend/Append composed a longer value than the step produced, so report what was really stored.
+  return { ok: true, text: store.value ?? text, inserted: true };
+}
+
+/**
+ * The row a node's dynamic selector reads from.
+ *
+ * The selector's own pointer (the second switch) wins when it is set; otherwise the selector keeps
+ * following the row the node itself works on — which is what it did before the selector switch
+ * existed, so an existing graph does not change meaning.
+ */
+function selectorRowFor(step, rowIndex) {
+  const own = Number(step?._selectorRow);
+  return Number.isFinite(own) ? own : (rowIndex ?? 0);
+}
+
+/**
+ * Log the selector a dynamic step actually resolved to.
+ *
+ * When a selector is built from data (a source cell or a captured value) the raw
+ * `selectorValue` in the graph is only a template, so the play log used to show nothing
+ * about which element the run really targeted. If the step then failed, there was no way
+ * to tell which row's value produced the selector, or what it looked like. This logs the
+ * template, the resolved selector and the row, so a failure can be traced back.
+ *
+ * Nothing is logged for ordinary static selectors, which are already visible in the graph.
+ */
+function logDynamicSelectorResolution(step, resolvedSelector, rowIndex) {
+  if (!step || !resolvedSelector) return;
+  const valueKey = "selectorValue";
+  const raw = String(step[valueKey] || "");
+  const hasLegacy = /\{\{[^}]+\}\}/.test(raw);
+  const hasPh = raw.includes(DYN_SEL_PLACEHOLDER);
+  if (!step.selectorIsDynamic && !hasLegacy && !hasPh) return;
+  // A template that resolved to itself adds no information.
+  if (raw === resolvedSelector && !step.selectorIsDynamic) return;
+
+  const title = step.title || step.actionType || "";
+  appendPlayLog("info", tv("play.dynSelectorResolved", {
+    title,
+    row: Number(rowIndex) + 1,
+    selector: resolvedSelector
+  }));
+}
+
+function resolveDynamicSelector(step, graph, rowIndex, opts = {}) {
+  const valueKey = opts.valueKey || "selectorValue";
+  const dynFlag = opts.dynFlag || "selectorIsDynamic";
+  const dynDs = opts.dynDs || "selectorDataSourceId";
+  const dynCol = opts.dynCol || "selectorDynamicColumn";
+
+  let sel = step[valueKey] || "";
+  if (!sel) return sel;
+  const hasLegacy = /\{\{[^}]+\}\}/.test(sel);
+  const hasPh = sel.includes(DYN_SEL_PLACEHOLDER);
+  if (step[dynFlag] || hasLegacy || hasPh) {
+    const sources = graph?.dataSources || [];
+    let ds = null;
+    if (step[dynDs] != null) {
+      ds = sources.find((d) => Number(d.id) === Number(step[dynDs])) || null;
+    }
+    if (!ds) ds = findDataSourceForStep(step, graph);
+    const row = selectorRowFor(step, rowIndex);
+    const col = step[dynCol];
+
+    if (hasPh) {
+      // A loop-index selector reads no cell at all, so the source/column plumbing stays untouched.
+      const val = dynUsesLoopIndex(step, dynFlag)
+        ? dynIndexText(step, graph, valueKey, dynFlag, row)
+        : (col && ds)
+          ? (cellValue(ds, col, row, { emitRead: true, graph, stepTitle: step?.title }) ?? "")
+          : "";
+      sel = sel.split(DYN_SEL_PLACEHOLDER).join(val);
+    }
+    if (/\{\{[^}]+\}\}/.test(sel)) {
+      sel = sel.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) =>
+        cellValue(ds, key, row, { emitRead: true, graph, stepTitle: step?.title }) ?? "");
+    }
+  }
+  return appendAttributeFilter(sel, step, graph, rowIndex, opts);
+}
+
+async function resolveDynamicSelectorAsync(step, graph, rowIndex, opts = {}) {
+  const valueKey = opts.valueKey || "selectorValue";
+  const dynFlag = opts.dynFlag || "selectorIsDynamic";
+  const dynDs = opts.dynDs || "selectorDataSourceId";
+  const dynCol = opts.dynCol || "selectorDynamicColumn";
+
+  let sel = step[valueKey] || "";
+  if (!sel) return sel;
+  const hasLegacy = /\{\{[^}]+\}\}/.test(sel);
+  const hasPh = sel.includes(DYN_SEL_PLACEHOLDER);
+  if (step[dynFlag] || hasLegacy || hasPh) {
+    const sources = graph?.dataSources || [];
+    let ds = null;
+    if (step[dynDs] != null) {
+      ds = sources.find((d) => Number(d.id) === Number(step[dynDs])) || null;
+    }
+    if (!ds) ds = findDataSourceForStep(step, graph);
+    const row = selectorRowFor(step, rowIndex);
+    const col = step[dynCol];
+
+    if (hasPh) {
+      let val = "";
+      if (dynUsesLoopIndex(step, dynFlag)) {
+        val = dynIndexText(step, graph, valueKey, dynFlag, row);
+      } else if (col && ds) {
+        const got = await readDataSourceCellForPlay(ds, col, row, step, graph);
+        // A selector is the most dangerous place to accept a missing value: dropping the
+        // placeholder yields a selector that still PARSES but points somewhere else, so the
+        // click lands on the wrong element and nothing reports a problem.
+        if (got === undefined) throw dataSourceUnavailable(step, ds, col, row);
+        val = got;
+      }
+      sel = sel.split(DYN_SEL_PLACEHOLDER).join(val);
+    }
+    if (/\{\{[^}]+\}\}/.test(sel)) {
+      const parts = sel.split(/(\{\{\s*[^}]+\s*\}\})/g);
+      const out = [];
+      for (const part of parts) {
+        const m = part.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+        if (m) {
+          const got = await readDataSourceCellForPlay(ds, m[1], row, step, graph);
+          if (got === undefined) throw dataSourceUnavailable(step, ds, m[1], row);
+          out.push(got);
+        } else {
+          out.push(part);
+        }
+      }
+      sel = out.join("");
+    }
+  }
+  return appendAttributeFilterAsync(sel, step, graph, rowIndex, opts);
+}
+
+/** Appends [attr="value"] when hasAttribute (or equalHasAttribute) is on. */
+function appendAttributeFilter(sel, step, graph, rowIndex, opts = {}) {
+  const hasAttrKey = opts.hasAttr || "hasAttribute";
+  if (!step[hasAttrKey] || !sel) return sel;
+  const attrName = String(step[opts.attrName || "attributeName"] || "").trim();
+  if (!attrName) return sel;
+
+  const attrDynFlag = opts.attrDynFlag || "attributeValueIsDynamic";
+  let attrVal = "";
+  if (step[attrDynFlag]) {
+    const dynDsKey = opts.attrDynDs || "attributeDataSourceId";
+    const dynColKey = opts.attrDynCol || "attributeDynamicColumn";
+    const sources = graph?.dataSources || [];
+    let ds = null;
+    if (step[dynDsKey] != null) {
+      ds = sources.find((d) => Number(d.id) === Number(step[dynDsKey])) || null;
+    }
+    if (!ds) ds = findDataSourceForStep(step, graph);
+    attrVal = dynUsesLoopIndex(step, attrDynFlag)
+      ? dynIndexText(step, graph, opts.attrValue || "attributeValue", attrDynFlag, rowIndex ?? 0)
+      : cellValue(ds, step[dynColKey], rowIndex ?? 0, {
+          emitRead: true, graph, stepTitle: step?.title
+        }) ?? "";
+  } else {
+    attrVal = step[opts.attrValue || "attributeValue"] ?? "";
+  }
+  const escapedName = String(attrName).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escapedVal = String(attrVal).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `${sel}[${escapedName}="${escapedVal}"]`;
+}
+
+async function appendAttributeFilterAsync(sel, step, graph, rowIndex, opts = {}) {
+  const hasAttrKey = opts.hasAttr || "hasAttribute";
+  if (!step[hasAttrKey] || !sel) return sel;
+  const attrName = String(step[opts.attrName || "attributeName"] || "").trim();
+  if (!attrName) return sel;
+
+  const attrDynFlag = opts.attrDynFlag || "attributeValueIsDynamic";
+  let attrVal = "";
+  if (step[attrDynFlag]) {
+    const dynDsKey = opts.attrDynDs || "attributeDataSourceId";
+    const dynColKey = opts.attrDynCol || "attributeDynamicColumn";
+    const sources = graph?.dataSources || [];
+    let ds = null;
+    if (step[dynDsKey] != null) {
+      ds = sources.find((d) => Number(d.id) === Number(step[dynDsKey])) || null;
+    }
+    if (!ds) ds = findDataSourceForStep(step, graph);
+    if (dynUsesLoopIndex(step, attrDynFlag)) {
+      attrVal = dynIndexText(step, graph, opts.attrValue || "attributeValue", attrDynFlag, rowIndex ?? 0);
+    } else {
+      // The attribute value is part of the selector, so an unavailable value would produce a
+      // selector matching the wrong element (e.g. [data-id=""]). Refuse rather than guess.
+      const got = await readDataSourceCellForPlay(ds, step[dynColKey], rowIndex ?? 0, step, graph);
+      if (got === undefined) throw dataSourceUnavailable(step, ds, step[dynColKey], rowIndex);
+      attrVal = got;
+    }
+  } else {
+    attrVal = step[opts.attrValue || "attributeValue"] ?? "";
+  }
+  const escapedName = String(attrName).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escapedVal = String(attrVal).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `${sel}[${escapedName}="${escapedVal}"]`;
+}
+
+function resolveSystemValue(kind) {
+  const k = String(kind || "CurrentDateTime");
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  if (k === "CurrentDate") {
+    try { return d.toLocaleDateString("fa-IR"); } catch { return d.toISOString().slice(0, 10); }
+  }
+  if (k === "CurrentTime") {
+    try { return d.toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
+    catch { return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; }
+  }
+  if (k === "CurrentDateTime") {
+    try { return d.toLocaleString("fa-IR"); } catch { return d.toISOString(); }
+  }
+  if (k === "Timestamp") return String(Date.now());
+  if (k === "Uuid") {
+    try {
+      if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+    } catch { /* ignore */ }
+    return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+  if (k === "RandomInt") return String(Math.floor(Math.random() * 1e9));
+  return "";
+}
+
+/**
+ * Format the machine clock for the SystemDate / SystemTime condition types.
+ * Kept to ASCII digits on purpose: comparing against a constant typed in the
+ * editor must not depend on the browser's locale digits.
+ * Supported formats — date: `yyyy-MM-dd` (default), `yyyy/MM/dd`, `dd-MM-yyyy`,
+ * `yyyyMMdd`, `Timestamp`; time: `HH:mm:ss` (default), `HH:mm`, `HHmmss`.
+ */
+function formatSystemClock(kind, format) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const yyyy = String(d.getFullYear());
+  const MM = p(d.getMonth() + 1);
+  const dd = p(d.getDate());
+  const HH = p(d.getHours());
+  const mm = p(d.getMinutes());
+  const ss = p(d.getSeconds());
+  const fmt = String(format || "").trim();
+
+  if (kind === "SystemDate") {
+    switch (fmt) {
+      case "yyyy/MM/dd": return `${yyyy}/${MM}/${dd}`;
+      case "dd-MM-yyyy": return `${dd}-${MM}-${yyyy}`;
+      case "yyyyMMdd": return `${yyyy}${MM}${dd}`;
+      case "Timestamp": return String(d.getTime());
+      case "yyyy-MM-dd":
+      default: return `${yyyy}-${MM}-${dd}`;
+    }
+  }
+  switch (fmt) {
+    case "HH:mm": return `${HH}:${mm}`;
+    case "HHmmss": return `${HH}${mm}${ss}`;
+    case "Timestamp": return String(d.getTime());
+    case "HH:mm:ss":
+    default: return `${HH}:${mm}:${ss}`;
+  }
+}
+
+function resolveStepParam(step, graph, rowIndex, opts = {}) {
+  const cst = step.contentSourceType || "";
+  if (cst === "System") {
+    return resolveSystemValue(step.systemValueType || "CurrentDateTime");
+  }
+  // `sourceId` is the CONDITION inspector's name for the same idea; a step saved by the editor may
+  // carry either, and both mean "read this cell". An EXPLICIT value type wins over those fields:
+  // the legacy fallback applies only to a node that carries no type at all, so a stale source pair
+  // left on a «ثابت» node cannot hijack the value the author sees in the editor.
+  if (cst === "DataSource"
+    || (!cst && (step?.valueFromSource === true
+      || !!((step?.dataSourceId || step?.sourceId) && step?.dynamicSourceColumnName)))) {
+    const ds = findDataSourceForValue(step, graph);
+    const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0, {
+      emitRead: true, graph, stepTitle: step?.title
+    });
+    if (v != null && String(v).trim() !== "") return String(v);
+  }
+  const raw = opts.preferUrl
+    ? (step.navigateUrl || step.constantValue || "")
+    : (step.constantValue || step.navigateUrl || "");
+  return resolveDynamicText(raw, step, graph, rowIndex ?? 0);
+}
+
+/**
+ * How a value is read out of an element.
+ *
+ * `Auto` keeps the old behaviour (a form field's value, otherwise the trimmed text) so every existing
+ * process means what it meant before. The rest name the part the author actually wants, because a
+ * link's `href`, a card's `title` or an element's markup are all legitimate — and previously
+ * unreachable — values.
+ */
+const ELEMENT_VALUE_MODES = [
+  "Auto", "Value", "Text", "InnerText", "InnerHtml", "OuterHtml", "Attribute", "Href", "Title", "Src"
+];
+
+function normalizeElementValueMode(mode) {
+  const raw = String(mode || "").trim();
+  const hit = ELEMENT_VALUE_MODES.find((m) => m.toLowerCase() === raw.toLowerCase());
+  return hit || "Auto";
+}
+
+/** The attribute name a `Attribute` read uses; supports the dynamic (source/loop) placeholder. */
+async function resolveElementValueAttribute(step, graph, rowIndex) {
+  const mode = normalizeElementValueMode(step?.elementValueMode);
+  if (mode === "Href") return "href";
+  if (mode === "Src") return "src";
+  if (mode === "Title") return "title";
+  if (mode !== "Attribute") return "";
+  const raw = String(step?.elementValueAttribute || "").trim();
+  if (!raw) return "";
+  // The attribute NAME is usually a constant. It is allowed to come from a cell (a loop over
+  // "read this attribute" rows); a missing cell must fail loudly there, like every other dynamic
+  // selector, rather than silently reading a different attribute.
+  if (!step?.elementValueAttributeIsDynamic) return raw;
+  return String(await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0, {
+    valueKey: "elementValueAttribute",
+    dynFlag: "elementValueAttributeIsDynamic",
+    dynDs: "elementValueAttributeDataSourceId",
+    dynCol: "elementValueAttributeDynamicColumn"
+  }) || "").trim();
+}
+
+async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
+  const cst = step.contentSourceType || "";
+  if (cst === "System") {
+    return resolveSystemValue(step.systemValueType || "CurrentDateTime");
+  }  if (stepUsesDataSourceValue(step)) {
+    const ds = findDataSourceForValue(step, graph);
+    const v = await readDataSourceCellForPlay(
+      ds, step.dynamicSourceColumnName, rowIndex ?? 0, step, graph
+    );
+    // A REAL value (including a legitimately empty one) is used as-is.
+    if (v !== undefined) return String(v);
+    // The value could NOT be obtained. Falling through to `constantValue` here is what made a
+    // server outage indistinguishable from live data: the step silently ran on the author's
+    // stored constant. Surface it instead — the caller decides (see the strict consumers).
+    throw dataSourceUnavailable(step, ds, step.dynamicSourceColumnName, rowIndex);
+  }
+  if (cst === "Memory") {
+    const nameKey = opts.memoryNameKey || "memoryVariableName";
+    const name = String(step[nameKey] || step.memoryVariableName || "").trim();
+    if (!name) return "";
+    const vars = await getPlayMemoryVars();
+    return vars[name] != null ? String(vars[name]) : "";
+  }
+  if (cst === "Elements") {
+    const tabId = opts.tabId;
+    if (!tabId) return "";
+    const valueSel = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0, {
+      valueKey: "equalSelectorValue",
+      dynFlag: "equalSelectorIsDynamic",
+      dynDs: "equalSelectorDataSourceId",
+      dynCol: "equalSelectorDynamicColumn",
+      hasAttr: "equalHasAttribute",
+      attrName: "equalAttributeName",
+      attrDynFlag: "equalAttributeValueIsDynamic",
+      attrValue: "equalAttributeValue",
+      attrDynCol: "equalAttributeDynamicColumn",
+      attrDynDs: "equalAttributeDataSourceId"
+    });
+    if (!valueSel) return "";
+    const eqReq = selectorStateReqs(step, { equal: true });
+    // WHERE in the element the value lives. Without it the reader guessed: `.value` for form fields,
+    // trimmed text for everything else — which cannot read `href` off a link, an attribute of a card,
+    // or the raw markup. The step carries the choice; the injector below applies it.
+    const valueMode = normalizeElementValueMode(step.elementValueMode);
+    const valueAttr = await resolveElementValueAttribute(step, graph, rowIndex ?? 0);
+    const payload = {
+      // Internal verb: read an element's text as a VALUE. It is not an ActionType — reading a
+      // field is a sub-step of the actions that need a value, never something the author picks.
+      actionType: "ReadElementValue",
+      selectorValue: valueSel,
+      constantValue: "",
+      valueMode,
+      valueAttribute: valueAttr,
+      requireVisible: !!eqReq.requireVisible,
+      requireEnabled: !!eqReq.requireEnabled,
+      requireClickable: !!eqReq.requireClickable
+    };
+    // The value selector's own wait switch gets the same frame-aware retry as a target selector.
+    const result = await executeInFrameWithWait(
+      tabId, opts.framePath || [], payload, selectorWaitBudget(step, { equal: true }));
+    if (result?.reason === "missing_value_attribute") {
+      throw new Error(tv("run.valueAttrMissing"));
+    }
+    return result?.text != null ? String(result.text) : "";
+  }
+  return resolveStepParam(step, graph, rowIndex, opts);
+}
+
+const PLAY_MEMORY_SCHEMA = 1;
+
+function memoryStructureKey(graph) {
+  const parts = (graph?.nodes || [])
+    .filter((n) => isActionNode(n))
+    .map((n) => [
+      n.id,
+      n.actionType || "",
+      n.contentSourceType || "",
+      n.memoryVariableName || "",
+      n.dataSourceId ?? "",
+      n.dynamicSourceColumnName || ""
+    ].join(":"))
+    .sort();
+  return `${PLAY_MEMORY_SCHEMA}|${graph?.taskId || ""}|${parts.join("|")}`;
+}
+
+async function clearPlayMemory(reason) {
+  await chrome.storage.local.remove("playMemory");
+  if (reason) console.info("[DA] playMemory cleared:", reason);
+  return { ok: true };
+}
+
+async function ensurePlayMemory(graph) {
+  const key = memoryStructureKey(graph);
+  const { playMemory } = await chrome.storage.local.get("playMemory");
+  if (!playMemory
+    || playMemory.schema !== PLAY_MEMORY_SCHEMA
+    || playMemory.structureKey !== key) {
+    await chrome.storage.local.set({
+      playMemory: { schema: PLAY_MEMORY_SCHEMA, structureKey: key, vars: {} }
+    });
+    if (playMemory) console.info("[DA] playMemory reset (structure/schema change)");
+  }
+}
+
+async function getPlayMemoryVars() {
+  const { playMemory } = await chrome.storage.local.get("playMemory");
+  return playMemory?.vars || {};
+}
+
+async function setPlayMemoryVar(name, value) {
+  const key = String(name || "").trim();
+  if (!key) return { ok: false, error: tv("run.memNameEmpty"), reason: "missing_memory_name" };
+  const { playMemory } = await chrome.storage.local.get("playMemory");
+  const mem = playMemory && playMemory.schema === PLAY_MEMORY_SCHEMA
+    ? playMemory
+    : { schema: PLAY_MEMORY_SCHEMA, structureKey: "", vars: {} };
+  mem.vars = mem.vars || {};
+  mem.vars[key] = value == null ? "" : String(value);
+  await chrome.storage.local.set({ playMemory: mem });
+  return { ok: true };
+}
+
+const playCellWriteChains = new Map();
+/** In-flight GET /cells dedupe (same key → one network call). */
+const playCellReadInflight = new Map();
+
+function clearPlayCellReadInflight() {
+  playCellReadInflight.clear();
+}
+
+/**
+ * Drop the per-cell write queues at the end of a run.
+ *
+ * `playCellWriteChains` serialises concurrent writes to the same cell so two steps cannot
+ * clobber each other's revision. The queue is keyed by (dsId,row,column) and each entry is a
+ * promise chain. Nothing cleared it, so across a long browser session the map grew without
+ * bound, and — worse — a NEW run could pick up a chain left over from a run that had already
+ * been stopped, serialising fresh writes behind a dead run's promise.
+ *
+ * We only drop our references; any in-flight write still settles on its own (it is awaited by
+ * its own caller, and `stopPlay` already set `playAbort`, so its retry loop will not spin on).
+ */
+function clearPlayCellWriteChains() {
+  playCellWriteChains.clear();
+}
+
+function playCellKey(dsId, rowIndex, columnKey) {
+  return `${dsId}|${rowIndex}|${columnKey}`;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Talk to the background message handlers.
+ *
+ * The engine IS the extension's service worker in production (background.js importScripts this
+ * file), and a worker cannot message itself: `chrome.runtime.sendMessage` FROM the worker is not
+ * delivered to its own `onMessage` listener, so with no other extension context open the send
+ * failed with «Could not establish connection. Receiving end does not exist.» — and every server
+ * read/write a run needed failed with it mid-run («خواندن سلول … از سرور ناموفق بود»). When the
+ * dispatcher is in scope (the worker), call it directly; contexts without it (tests, other pages)
+ * keep the messaging path unchanged.
+ */
+async function callBackground(message) {
+  try {
+    if (typeof handleMessage === "function") {
+      return await handleMessage(message, null);
+    }
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Read one cell from the server.
+ *
+ * Returns the RAW message result so the caller can tell the three cases apart:
+ *   { ok:true,  body:{ cellValue } }  — read succeeded; cellValue may legitimately be ""
+ *   { ok:false, error:"…" }           — the read FAILED (network, http, auth)
+ *
+ * It used to collapse a failure into `null` here, which made "the server is unreachable" and
+ * "the cell is empty" the same value. That is what let a run continue with the node's stored
+ * constant in place of live data, with nothing in the log to say so. Keeping the failure
+ * distinct is the whole point; see fetchServerCellForPlay.
+ */
+async function readServerCell(dataSourceId, rowIndex, columnKey) {
+  try {
+    return await callBackground({
+      type: "readDataSourceCell",
+      dataSourceId,
+      rowIndex,
+      columnKey
+    });
+  } catch (err) {
+    // The worker or the page is gone. Still a failure, not an empty cell.
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Load a LOCAL run's private source values from the server, once per process revision.
+ *
+ * Local mode exists to keep traffic off the wire, and it can only do that if the cells a step reads
+ * are already in the browser: without them every read would fall back to the server (see
+ * readCellForRun) and the run would cost MORE than a server run, not less. So this is the one load
+ * that happens, and it happens at the start of a local run, for private sources only, and never twice
+ * for the same revision of the process — starting a process nobody edited reads nothing at all.
+ *
+ * Shared sources are deliberately skipped: they stay server-backed in both modes.
+ */
+let localRunGraph = null;
+
+/**
+ * The loaded copy of each private source, as its OWN record on the process.
+ *
+ * `localSourceCopies[sourceId]` is deliberately separate from `graph.dataSources[].cells`. The graph
+ * is STRUCTURE: the portal replaces it whenever it pulls the canvas (which carries no cells at all),
+ * so anything stored there is routinely lost — which is what made the local data viewer show a single
+ * partial row (only the cells a run happened to touch). Here each source is an entity of its own:
+ * keyed by source id, complete, replaced only by a fresh read of that same source, and untouched by
+ * any graph reload.
+ */
+function snapshotLocalSourceCopies(graph, task, onlyIds, opts = {}) {
+  const sources = Array.isArray(graph?.dataSources) ? graph.dataSources : [];
+  const previous = (task && task.localSourceCopies && typeof task.localSourceCopies === "object")
+    ? task.localSourceCopies
+    : {};
+  if (!sources.length) return previous;
+  // Optional narrow scope: refreshing every source's record on every flush would serialise megabytes
+  // per second during a long run, while only the touched sources can have changed.
+  const filter = onlyIds instanceof Set && onlyIds.size ? onlyIds : null;
+  const copies = { ...previous };
+  sources.forEach((ds) => {
+    const id = Number(ds?.id);
+    if (!Number.isFinite(id) || id <= 0) return;
+    if (filter && !filter.has(id)) return;
+    // `onlyMissing`: the graph here came from the PORTAL (which may put the server's rows into it
+    // when a viewer is opened), so it is not evidence about the browser copy. An existing record is
+    // kept — overwriting it would silently replace the local results a sync still has to send.
+    if (opts.onlyMissing && previous[String(id)]) return;
+    // Shared sources stay server-backed in both modes, so caching one would let this machine drift
+    // from everyone else's data — the one thing a public source must never do.
+    if (isPublicSource(ds, graph)) return;
+    if (!Array.isArray(ds.cells)) return;
+    copies[String(id)] = {
+      // Copied, not referenced: chrome.storage serialises asynchronously while the run keeps mutating
+      // `ds.cells`, and a shared array would let a later write slip into the saved snapshot.
+      cells: ds.cells.map((c) => ({ ...c })),
+      columns: Array.isArray(ds.columns) ? ds.columns.map((c) => ({ ...c })) : [],
+      columnKeys: Array.isArray(ds.columnKeys) ? ds.columnKeys.slice() : [],
+      rowCount: Number(ds.rowCount) || 0,
+      columnCount: Number(ds.columnCount)
+        || (Array.isArray(ds.columnKeys) ? ds.columnKeys.length : 0),
+      title: ds.title || null,
+      fileName: ds.fileName || null,
+      savedAtUtc: new Date().toISOString()
+    };
+  });
+  return copies;
+}
+
+async function ensureLocalSourceValues(taskId, graph) {
+  const sources = Array.isArray(graph?.dataSources) ? graph.dataSources : [];
+  if (!sources.length || playStatus.runOnServer !== false) return;
+  // Remember the graph this run works on, so every later persistence (progress, end of run) can
+  // refresh the per-source records without threading the graph through the whole call chain.
+  localRunGraph = graph;
+
+  // Shared sources are left alone on purpose: they stay server-backed in both modes, so copying them
+  // here would add traffic AND invite this machine to disagree with everyone else.
+  const privateSources = sources.filter((ds) => Number(ds?.id) > 0 && !isPublicSource(ds, graph));
+  if (!privateSources.length) return;
+
+  const missing = privateSources.filter((ds) => !Array.isArray(ds.cells));
+  const stamp = String(graph.updatedAtUtc || graph.updatedAt || "");
+  const tasks = await loadUserTasks();
+  const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
+  const task = idx >= 0 ? tasks[idx] : null;
+  const stampMatches = !!stamp && String(task?.localValuesStamp || "") === stamp;
+
+  if (!missing.length) {
+    // Values are already in hand; only the revision marker may need writing down — and the records
+    // themselves, which a process cached by an older build does not have yet.
+    const staleRecords = !task?.localSourceCopies;
+    if (task && (stamp ? (!stampMatches || staleRecords) : true)) {
+      tasks[idx] = {
+        ...task,
+        localValuesStamp: stamp || task.localValuesStamp || "",
+        // Even a run that reads nothing refreshes the per-source records: they are what the data
+        // viewers draw, and a stale record is exactly what shows pre-run rows after a run. Missing
+        // records are created here, but an existing one is NOT overwritten from a graph the portal
+        // may have handed us (see `onlyMissing`).
+        localSourceCopies: snapshotLocalSourceCopies(graph, task, null, { onlyMissing: true })
+      };
+      await saveUserTasks(tasks);
+    }
+    return;
+  }
+  // A process whose values were already loaded for THIS revision does not load them again: that is
+  // what makes starting an unchanged process cost no traffic.
+  if (stampMatches) return;
+
+  let loaded = 0;
+  for (const ds of missing) {
+    try {
+      const res = await callBackground({ type: "readDataSourceContent", dataSourceId: Number(ds.id) });
+      const body = res?.ok ? res.body : null;
+      if (!body) continue;
+      ds.cells = Array.isArray(body.cells) ? body.cells : [];
+      if (Array.isArray(body.columns)) ds.columns = body.columns;
+      if (Array.isArray(body.columnKeys)) ds.columnKeys = body.columnKeys;
+      if (body.rowCount != null) ds.rowCount = body.rowCount;
+      if (body.dataRevision != null) ds.dataRevision = body.dataRevision;
+      loaded += 1;
+    } catch { /* unreadable source: each cell read falls back to the server, and the run still works */ }
+  }
+
+  if (idx >= 0) {
+    // Remember the revision these values came from AND persist them, so the next local run of an
+    // unchanged process reads nothing at all. The per-source records travel with them: they are the
+    // copy the local data viewers show, so they must describe the data the run started from.
+    tasks[idx] = {
+      ...tasks[idx],
+      localValuesStamp: stamp,
+      graph,
+      localSourceCopies: snapshotLocalSourceCopies(graph, tasks[idx])
+    };
+    await saveUserTasks(tasks);
+  }
+  appendPlayLog("info", loaded
+    ? `اجرای محلی: مقدار ${loaded} منبع غیرعمومی یک‌بار خوانده و در حافظهٔ مرورگر نگه داشته شد.`
+    : "اجرای محلی: مقدار منابع غیرعمومی خوانده نشد؛ اگر لازم شود هر خانه جداگانه از سرور خوانده می‌شود.");
+}
+
+/**
+ * Read a cell for a LOCAL run.
+ *
+ * Local mode keeps non-shared sources off the server entirely, so their cells come from the copy
+ * loaded before the run began (see ensureLocalSourceValues). A SHARED (public) source is the
+ * deliberate exception: it belongs to everyone, so it stays server-backed even in a local run —
+ * reading it locally would show one machine's stale view of data other people are writing.
+ *
+ * A source whose copy was never loaded (the load failed) still falls back to the server, so one
+ * unreadable source cannot turn a whole run into empty values. But once a copy EXISTS, a missing
+ * cell is answered from that copy — empty — instead of one server round trip per lookup: the run is
+ * meant to work on the data it started from, and a request per cell is the traffic local mode exists
+ * to avoid.
+ */
+async function readCellForRun(ds, graph, rowIndex, columnKey) {
+  if (playStatus.runOnServer !== false || isPublicSource(ds, graph)) {
+    return await readServerCell(Number(ds?.id), rowIndex, columnKey);
+  }
+  const col = String(columnKey || "").trim();
+  const row = Number(rowIndex) || 0;
+  const cells = Array.isArray(ds?.cells) ? ds.cells : null;
+  if (!cells) {
+    // Never loaded on this machine: one read keeps behaviour correct instead of a false empty.
+    return await readServerCell(Number(ds?.id), rowIndex, columnKey);
+  }
+  // The run reads the COPY it started from, at the index this run itself uses. Its own row shifts
+  // are local bookkeeping for the sync, not a renumbering of what the run sees: after a local
+  // InsertRow the new row and the ones below it ARE the rows the following steps mean — including
+  // a cell this very run wrote a moment ago.
+  const committed = committedLocalRunWrites.get(`${Number(ds?.id)}|${row}|${col}`);
+  if (committed !== undefined) {
+    return { ok: true, body: { cellValue: committed, local: true } };
+  }
+  const hit = cells.find((c) =>
+    (c.key === col || c.Key === col || c.columnName === col)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === row
+  );
+  const v = hit ? (hit.cellValue !== undefined ? hit.cellValue : hit.CellValue) : "";
+  return { ok: true, body: { cellValue: v == null ? "" : String(v), local: true } };
+}
+
+/**
+ * Whether a source is shared (public) and therefore must stay server-backed in a local run.
+ *
+ * The flag rides on the source entry the portal put in the canvas, so no extra lookup is needed.
+ */
+function isPublicSource(ds, graph) {
+  if (!ds) return false;
+  if (ds.isPublic === true || ds.IsPublic === true) return true;
+  const id = Number(ds.id);
+  if (!Number.isFinite(id)) return false;
+  const entry = (graph?.dataSources || []).find((d) => Number(d.id) === id);
+  return entry?.isPublic === true || entry?.IsPublic === true;
+}
+
+/**
+ * Cells a local run has written, newest value per address.
+ *
+ * Kept per run so the Sync payload is exactly the set of writes the run made — not the whole grid,
+ * which would push values the user never touched and make an accidental overwrite far more likely.
+ * A repeated address keeps its LAST value: the same cell written twice in a loop should sync once.
+ *
+ * `baseValue` is the value the cell held in the copy the run started from (the server's value at
+ * load time). The sync's merge compares it with the server's current value to tell "nobody else
+ * touched this cell" (write it) from a real conflict (keep the server's). It is captured from the
+ * FIRST write only, before this run's own value replaces it in the cache.
+ */
+let localRunWrites = new Map();
+/**
+ * Source ids whose browser copy changed in a way the write log does not describe.
+ *
+ * A row insert/delete is a real result with no cell address, so it cannot appear in
+ * `locallyRunSources`; without this the record would be stale until the run ended and a viewer open
+ * during the run would keep showing the pre-run grid.
+ */
+let localCopyDirty = new Set();
+
+/**
+ * Row-address remaps caused by InsertRow / DeleteRow in a LOCAL run.
+ *
+ * A local row operation shifts the browser copy's indexes, but the server's rows are still where
+ * they were. Without a remap every write below the insertion point would be synced to a row that
+ * holds a different record on the server, and every write below a deleted row would target the row
+ * after its real one. `toServerRow` maps a local index back to the row it had on the server, and the
+ * pending writes are re-pointed whenever the copy shifts again.
+ */
+let localServerRowMap = new Map(); // dataSourceId -> { at, delta }[]
+
+/**
+ * Values this run wrote, keyed by LOCAL address.
+ *
+ * The cell cache is also the input for snapshotting and for the sync's base values, so it is not a
+ * reliable "what does the run currently see" store once a local row shift has moved rows around.
+ * This small map answers that question directly and is cleared with the rest of the run state.
+ */
+let committedLocalRunWrites = new Map();
+
+/** Re-key committed values with pending writes after a local row shift (see noteLocalRowShift). */
+function rekeyCommittedLocalRunWrites(dsId, at, isInsert) {
+  const moved = new Map();
+  for (const [key, value] of committedLocalRunWrites) {
+    const [idPart, rowPart, ...colParts] = key.split("|");
+    const col = colParts.join("|");
+    if (Number(idPart) !== Number(dsId)) { moved.set(key, value); continue; }
+    const row = Number(rowPart) || 0;
+    if (row < at) { moved.set(key, value); continue; }
+    const next = Math.max(0, row + (isInsert ? 1 : -1));
+    moved.set(`${idPart}|${next}|${col}`, value);
+  }
+  committedLocalRunWrites = moved;
+}
+
+function initLocalServerRowMap(graph) {
+  localServerRowMap = new Map();
+  for (const ds of graph?.dataSources || []) {
+    const id = Number(ds?.id);
+    if (Number.isFinite(id) && id > 0) localServerRowMap.set(id, []);
+  }
+}
+
+function noteLocalRowShift(dsId, at, isInsert) {
+  const id = Number(dsId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  const list = localServerRowMap.get(id) || [];
+  list.push({ at: Math.max(0, Number(at) || 0), delta: isInsert ? 1 : -1 });
+  localServerRowMap.set(id, list);
+  const previousRow = serverRowForLocal(id, Math.max(0, Number(at) || 0));
+  // Each deletion describes the SERVER row that disappears, so the run's stored row index no longer
+  // matches its live one: shifting it again here would apply the same deletion twice.
+  list[list.length - 1].serverRow = previousRow;
+  // Re-point every pending write of this source: the local index it was recorded at may now sit on
+  // a different row. `localRowIndex` is the index it was recorded at, and it must follow the shift
+  // too — otherwise a second shift (say a delete above it) would be applied to the old index and
+  // land on the wrong row.
+  const shiftedEntries = [];
+  for (const entry of localRunWrites.values()) {
+    if (Number(entry.dataSourceId) !== id) continue;
+    const local = Number(entry.localRowIndex) || 0;
+    if (local >= at) {
+      entry.localRowIndex = local + (isInsert ? 1 : -1);
+      shiftedEntries.push(entry);
+    }
+    if (Number(entry.localRowIndex) < 0) entry.localRowIndex = 0;
+    if (isInsert && local === at) {
+      // An inserted row has no pre-run value on the server: the row the run had loaded at that index
+      // moved down, so its value must not be used as the new row's base.
+      entry.baseValue = "";
+    }
+  }
+  if (!isInsert) {
+    // The row at `previousRow` is gone, so the rows BELOW it moved up: the value the run loaded for
+    // them now sits one row further down. Rebuilding the base keeps a shifted write from looking
+    // like a conflict against the record that took its place. Each write's base therefore comes
+    // from the row one BELOW its new position; a write that did NOT move keeps its own base.
+    for (const entry of shiftedEntries) {
+      const movedBase = loadedValueAtServerRow(id, previousRow + 1, entry.columnKey);
+      entry.baseValue = movedBase === undefined ? null : movedBase;
+    }
+  }
+  for (const entry of localRunWrites.values()) {
+    if (Number(entry.dataSourceId) !== id) continue;
+    entry.rowIndex = serverRowForLocal(id, entry.localRowIndex);
+  }
+  rekeyCommittedLocalRunWrites(id, at, isInsert);
+  // The map key follows the row: `recordLocalWrite` looks an existing entry up by the local index,
+  // so a stale key makes the run treat the moved row as a brand-new cell and lose its base value.
+  const movedKeys = new Map();
+  for (const entry of localRunWrites.values()) {
+    if (Number(entry?.dataSourceId) !== id) continue;
+    movedKeys.set(`${id}|${Number(entry.localRowIndex) || 0}|${String(entry.columnKey || "")}`, entry);
+  }
+  for (const [key, entry] of localRunWrites) {
+    if (Number(entry?.dataSourceId) !== id) movedKeys.set(key, entry);
+  }
+  localRunWrites = movedKeys;
+}
+
+/** The value the run loaded for a cell, addressed by the SERVER row it came from. */
+function loadedValueAtServerRow(dsId, serverRow, columnKey) {
+  const ds = (localRunGraph?.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+  const cells = Array.isArray(ds?.cells) ? ds.cells : [];
+  const col = String(columnKey || "");
+  const hit = cells.find((c) =>
+    (c.key === col || c.Key === col || c.columnName === col)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === Number(serverRow));
+  if (!hit) return undefined;
+  const v = hit.cellValue !== undefined ? hit.cellValue : hit.CellValue;
+  return v === undefined || v === null ? undefined : String(v);
+}
+
+function serverRowForLocal(dsId, localRow) {
+  const list = localServerRowMap.get(Number(dsId));
+  if (!Array.isArray(list) || !list.length) return localRow;
+  let row = Number(localRow) || 0;
+  // Apply the shifts newest-first: each one describes a state the copy went through, so undoing
+  // them in reverse order restores the server's numbering.
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = list[i];
+    if (row < e.at) continue;
+    row -= e.delta;
+  }
+  return row;
+}
+
+/** Does the browser copy actually hold any cell at this local row? */
+function existsInLocalCopy(dsId, localRow) {
+  const ds = (localRunGraph?.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+  const cells = Array.isArray(ds?.cells) ? ds.cells : [];
+  return cells.some((c) => Number(c.index ?? c.Index ?? c.rowIndex) === Number(localRow));
+}
+
+function isInsertedServerRow(dsId, serverRow) {
+  const list = localServerRowMap.get(Number(dsId)) || [];
+  const row = Number(serverRow) || 0;
+  // Undo the shifts one at a time, remembering the row as it stood BEFORE each one. Only that view
+  // can tell an inserted row (it did not exist before the insert) from a real row the insert pushed
+  // down — and a local index that cannot be mapped is below a deletion, so it is not inserted.
+  // Work on a LOCAL index: a server row at or after an insertion is the copy's row AFTER the push,
+  // and testing it unchanged would make the pushed-down real row look like the inserted one. A row
+  // the copies never contain (a not-yet-materialised appended row) has no pre-insert existence.
+  let local = localRowForServer(dsId, row);
+  if (local < 0 || !existsInLocalCopy(dsId, local)) return false;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = list[i];
+    if (local < e.at) continue;
+    if (e.delta > 0 && local < e.at + e.delta) return true;
+    local -= e.delta;
+  }
+  return false;
+}
+
+function localRowForServer(dsId, serverRow) {
+  const list = localServerRowMap.get(Number(dsId));
+  if (!Array.isArray(list) || !list.length) return serverRow;
+  let row = Number(serverRow) || 0;
+  // Forward application, so an inserted row is recognised as inserted (see isInsertedServerRow):
+  // on its own insertion, `row >= at` would push the server row past the new row entirely.
+  for (const e of list) {
+    if (e.delta > 0) {
+      if (row >= e.at) row += e.delta;
+    } else if (row >= e.at + e.delta) {
+      // A deleted row sat at `at`; server rows after it moved up by one.
+      row += e.delta;
+    }
+  }
+  return row;
+}
+
+/**
+ * What the SERVER row held when this run started.
+ *
+ * The local copy is only a valid comparison AFTER unmapping the run's own row shifts (see
+ * localServerRowMap). `undefined` means "the copy cannot answer" (a row the run inserted, or a cell
+ * it never carried); the server then decides from what it has.
+ */
+function snapshotBaseValue(ds, serverRow, col) {
+  const id = Number(ds?.id);
+  // A row this run created has no pre-run value on the server; the sync materialises it empty, so
+  // "empty" is the base that makes the merge agree instead of reporting a conflict.
+  if (isInsertedServerRow(id, serverRow)) return "";
+  const localRow = localRowForServer(id, serverRow);
+  const cells = Array.isArray(ds?.cells) ? ds.cells : [];
+  const hit = cells.find((c) =>
+    (c.key === col || c.Key === col || c.columnName === col)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === localRow
+  );
+  if (!hit) return undefined;
+  const v = hit.cellValue !== undefined ? hit.cellValue : hit.CellValue;
+  return v === undefined || v === null ? undefined : String(v);
+}
+
+function recordLocalWrite(ds, rowIndex, columnKey, text) {
+  const id = Number(ds?.id);
+  if (!Number.isFinite(id) || id <= 0) return;
+  const col = String(columnKey || "").trim();
+  const row = Number(rowIndex) || 0;
+  const key = `${id}|${row}|${col}`;
+  const existing = localRunWrites.get(key);
+  // MUST run before applyCellToLocalCache overwrites the value: this is the last moment the
+  // pre-run value is visible. Kept from the FIRST write so a loop writing the same row twice still
+  // compares against what the run loaded.
+  const baseValue = existing ? existing.baseValue : snapshotBaseValue(ds, serverRowForLocal(id, row), col);
+  localRunWrites.set(key, {
+    dataSourceId: id,
+    rowIndex: serverRowForLocal(id, row),
+    localRowIndex: row,
+    columnKey: col,
+    cellValue: text == null ? "" : String(text),
+    baseValue
+  });
+  committedLocalRunWrites.set(`${id}|${row}|${col}`, text == null ? "" : String(text));
+  localCopyDirty.add(id);
+  // Publish the divergence as it happens, not only when the run ends: a long run otherwise showed
+  // no "needs sync" mark for minutes, and a crash mid-run lost the fact that the source had changed.
+  scheduleLocalRunProgress();
+}
+
+/** Timer that publishes the pending writes while a local run is still going. */
+let localProgressTimer = null;
+/** Sources already reported for this run, so the report is one small call per source, not per write. */
+const localProgressReported = new Set();
+
+/**
+ * Debounced publish of this run's pending writes.
+ *
+ * Writes into the task record (so the processes/sources lists show "needs sync" immediately) and
+ * reports the touched source ids to the server once each. Both are cheap and bounded: the task store
+ * is local, and the report is a metadata POST with ids only — no cell values travel until the user
+ * presses Sync.
+ */
+function scheduleLocalRunProgress() {
+  if (playStatus.runOnServer !== false) return;
+  if (localProgressTimer) return;
+  localProgressTimer = setTimeout(() => {
+    localProgressTimer = null;
+    flushLocalRunProgress().catch(() => {});
+  }, 1200);
+}
+
+async function flushLocalRunProgress() {
+  const taskId = String(playStatus.taskId || "").trim();
+  if (!taskId) return;
+  // Server runs report themselves through the hub; nothing here applies to them.
+  if (playStatus.runOnServer !== false) return;
+  const cells = collectLocalRunWrites();
+  // Only the sources this run touched can have changed; the rest keep the record they already have.
+  const touched = new Set(localCopyDirty);
+  cells.forEach((c) => {
+    const id = Number(c?.dataSourceId);
+    if (Number.isFinite(id) && id > 0) touched.add(id);
+  });
+  if (!cells.length && !touched.size) return;
+  try {
+    const tasks = await loadUserTasks();
+    const idx = tasks.findIndex((t) => String(t.id) === taskId);
+    if (idx >= 0) {
+      const copies = snapshotLocalSourceCopies(localRunGraph, tasks[idx], touched);
+      // A run that only inserted rows wrote no CELL, but its copy still changed — so the records are
+      // persisted even when the write log is empty, or the viewer would keep showing the pre-run grid.
+      const insertedRows = collectLocalInsertedRows();
+      tasks[idx] = cells.length
+        ? {
+            ...tasks[idx],
+            localRunPendingSync: true,
+            locallyRunSources: cells,
+            locallyRunInsertedRows: insertedRows,
+            locallyRunDeletedRows: collectLocalDeletedRows(),
+            localSourceCopies: copies
+          }
+        : { ...tasks[idx], localSourceCopies: copies };
+      await saveUserTasks(tasks);
+      localCopyDirty.clear();
+    }
+  } catch { /* the end-of-run write is the fallback */ }
+  try {
+    const ids = [...new Set(cells.map((c) => Number(c?.dataSourceId)).filter((n) => Number.isFinite(n) && n > 0))]
+      .filter((id) => !localProgressReported.has(id));
+    if (ids.length) {
+      ids.forEach((id) => localProgressReported.add(id));
+      portalFetch(`/api/tasks/${encodeURIComponent(taskId)}/local-run-changes`, {
+        method: "POST",
+        body: JSON.stringify({ dataSourceIds: ids })
+      }).catch(() => {});
+    }
+  } catch { /* the local flag above is what this browser reads */ }
+  try { chrome.runtime.sendMessage({ type: "localRunPendingSync", taskId }); } catch { /* portal closed */ }
+}
+
+function resetLocalRunWrites() {
+  localRunWrites = new Map();
+  localCopyDirty = new Set();
+  localServerRowMap = new Map();
+  committedLocalRunWrites = new Map();
+  localProgressReported.clear();
+  if (localProgressTimer) {
+    clearTimeout(localProgressTimer);
+    localProgressTimer = null;
+  }
+}
+
+function collectLocalRunWrites() {
+  return Array.from(localRunWrites.values());
+}
+
+/**
+ * Rows this run inserted, as `{ dataSourceId, rowIndex }` in SERVER numbering.
+ *
+ * The sync uses this list to create those rows where the run saw them. Appending instead is only
+ * correct when the insertion was at the end; anywhere above existing rows it would shift nothing on
+ * the server and every value written below would land on a different record.
+ */
+/** Rows this run deleted, as `{ dataSourceId, rowIndex }` in SERVER numbering. */
+function collectLocalDeletedRows() {
+  const out = [];
+  for (const [dsId, list] of localServerRowMap) {
+    for (const e of list) {
+      if (e.delta >= 0) continue;
+      for (let i = 0; i > e.delta; i--) out.push({ dataSourceId: dsId, rowIndex: e.at - 1 - i });
+    }
+  }
+  return out;
+}
+
+function collectLocalInsertedRows() {
+  const out = [];
+  for (const [dsId, list] of localServerRowMap) {
+    for (const e of list) {
+      if (e.delta <= 0) continue;
+      for (let i = 0; i < e.delta; i++) out.push({ dataSourceId: dsId, rowIndex: e.at + i });
+    }
+  }
+  return out;
+}
+
+function applyCellToLocalCache(ds, rowIndex, columnKey, value, cellRevision, dataRevision) {
+  if (!ds) return;
+  ds.cells = ds.cells || [];
+  const idx = Number(rowIndex) || 0;
+  const col = String(columnKey || "").trim();
+  let hit = ds.cells.find((c) =>
+    (c.key === col || c.Key === col || c.columnName === col)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === idx
+  );
+  if (hit) {
+    if (hit.cellValue !== undefined) hit.cellValue = value;
+    else hit.CellValue = value;
+    hit.cellRevision = cellRevision;
+  } else {
+    ds.cells.push({ key: col, index: idx, cellValue: value, cellRevision });
+  }
+  if (dataRevision != null) ds.dataRevision = dataRevision;
+}
+
+/** Write one cell on server — waits (retry) until the cell lock/revision allows it. */
+async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = {}) {
+  const id = Number(ds?.id);
+  // A local run writes non-shared sources into the local copy only: no revision to negotiate, no
+  // lock to wait on, because there is no other writer. A shared source keeps the server path below,
+  // so its concurrency rules still apply even from a local run.
+  if (playStatus.runOnServer === false && id && !isPublicSource(ds, graph)) {
+    const col = String(columnKey || "").trim();
+    const row = Number(rowIndex) || 0;
+    // Record FIRST so the base value (the pre-run copy) is still visible in the cache, then apply.
+    recordLocalWrite(ds, row, col, text);
+    applyCellToLocalCache(ds, row, col, text, null, null);
+    return { ok: true, local: true, body: { cellValue: text } };
+  }
+  if (!id) return { ok: true, local: true };
+  const col = String(columnKey || "").trim();
+  const row = Number(rowIndex) || 0;
+  const chainKey = playCellKey(id, row, col);
+  const maxMs = Number(opts.maxWaitMs) || 20000;
+  const run = async () => {
+    const start = Date.now();
+    let expectedCellRevision = null;
+    // Consecutive 409s, to distinguish a one-off optimistic-concurrency conflict (retry at once)
+    // from a contended cell (must back off). Reset by any non-conflict outcome.
+    let conflictStreak = 0;
+    while (Date.now() - start < maxMs) {
+      const localHit = (ds.cells || []).find((c) =>
+        (c.key === col || c.Key === col || c.columnName === col)
+        && Number(c.index ?? c.Index ?? c.rowIndex) === row
+      );
+      if (localHit?.cellRevision != null) {
+        expectedCellRevision = localHit.cellRevision;
+      } else if (localHit?.CellRevision != null) {
+        expectedCellRevision = localHit.CellRevision;
+      } else {
+        const fresh = await readServerCell(id, row, col);
+        if (fresh?.ok && fresh.body) {
+          expectedCellRevision = fresh.body.cellRevision ?? fresh.body.CellRevision ?? 0;
+          if (fresh.body.dataRevision != null) ds.dataRevision = fresh.body.dataRevision;
+        }
+      }
+      let res;
+      try {
+        res = await callBackground({
+          type: "patchDataSourceCell",
+          dataSourceId: id,
+          rowIndex: row,
+          columnKey: col,
+          cellValue: text,
+          expectedCellRevision,
+          insertMode: opts.insertMode || null,
+          insertSeparator: opts.insertSeparator == null ? null : opts.insertSeparator
+        });
+      } catch {
+        res = null;
+      }
+      if (res?.ok && res.body) {
+        const rev = res.body.cellRevision ?? res.body.CellRevision;
+        const dRev = res.body.dataRevision ?? res.body.DataRevision;
+        // The server may have composed the value (Prepend/Append), so cache what it wrote — not the
+        // fragment we sent, which would make the next mirrored read return half the cell.
+        const written = res.body.cellValue ?? res.body.CellValue;
+        applyCellToLocalCache(ds, row, col, written == null ? text : String(written), rev, dRev);
+        return { ok: true, body: res.body };
+      }
+      if (res?.error === "auth") return { ok: false, error: "auth" };
+      // A ceiling breach is permanent for this write — retrying cannot help, so stop at once and
+      // carry the server's message through instead of burning the whole wait budget.
+      if (res?.limit) {
+        return {
+          ok: false,
+          error: "source_limit",
+          message: res.message || res.body?.message || res.body?.Message || null
+        };
+      }
+      // 409 conflict: adopt the server's current revision and retry.
+      //
+      // The retry is NOT immediate. A persistent conflict means some other writer is actively
+      // holding this cell, and an unthrottled `continue` spun as fast as the event loop allowed —
+      // hammering chrome.runtime.sendMessage (and the server behind it) for the whole wait budget,
+      // while starving the very writer whose lock we were waiting on. So a conflict backs off
+      // like any other retry; only the FIRST one retries at once, because a single conflict is
+      // the normal optimistic-concurrency case and resolves as soon as we present the new
+      // revision.
+      if (res?.conflict) {
+        conflictStreak += 1;
+        const cur = res.body?.currentCellRevision ?? res.body?.CurrentCellRevision;
+        if (cur != null) {
+          expectedCellRevision = cur;
+          applyCellToLocalCache(
+            ds, row, col,
+            res.body?.currentCellValue ?? res.body?.CurrentCellValue ?? "",
+            cur,
+            res.body?.currentDataRevision ?? res.body?.CurrentDataRevision
+          );
+          if (conflictStreak > 1) {
+            // Growing, capped pause: enough to let the other writer finish, short enough that a
+            // quick lock turnaround is not punished.
+            await sleep(Math.min(1000, 60 * conflictStreak));
+          }
+          continue;
+        }
+      }
+      // Any other outcome resets the streak: the next conflict is a fresh one, not a run of them.
+      conflictStreak = 0;
+      await sleep(Math.min(800, 80 + Math.floor((Date.now() - start) / 40)));
+    }
+    return { ok: false, error: "cell_write_timeout" };
+  };
+  const prev = playCellWriteChains.get(chainKey) || Promise.resolve();
+  const next = prev.then(run, run);
+  playCellWriteChains.set(chainKey, next.catch(() => {}));
+  return next;
+}
+
+async function readDataSourceMetaFromServer(dataSourceId) {
+  try {
+    return await callBackground({ type: "readDataSourceMeta", dataSourceId });
+  } catch {
+    return null;
+  }
+}
+
+/** Fetch rowCount only when group-repeat needs it (no row/cell bulk load). */
+async function ensureDataSourceRowCountMeta(ds) {
+  const id = Number(ds?.id);
+  if (!id || Number(ds.rowCount) > 0) return;
+  // A local run already holds this source's copy: zero rows means the copy IS empty, not "unknown",
+  // so asking the server would be a request spent to learn nothing.
+  if (playStatus.runOnServer === false && !isPublicSource(ds, null) && Array.isArray(ds?.cells)) return;
+  const res = await readDataSourceMetaFromServer(id);
+  if (!res?.ok || !res.body) return;
+  ds.rowCount = Number(res.body.rowCount ?? res.body.RowCount) || ds.rowCount || 0;
+  if (res.body.dataRevision != null) ds.dataRevision = res.body.dataRevision;
+}
+
+/**
+ * Read a cell for a run, through the in-flight dedupe cache.
+ *
+ * Returns a STRING on success (an empty string for a legitimately empty cell) and `undefined`
+ * when the read FAILED. The distinction is the entire point of phase 3.3:
+ *
+ *   ""          — we asked the server and the cell is empty. A real answer.
+ *   undefined   — we could NOT ask, or the ask failed. NOT an answer.
+ *
+ * Callers that feed live data into a page action (a selector, a typed value, a URL) must treat
+ * `undefined` as a step error rather than substituting the node's stored constant, because a
+ * wrong value there means clicking or typing the wrong thing on a real page. Callers that merely
+ * record a value can accept the gap.
+ *
+ * Reporting is deliberately NOT silent any more: a failed read is logged with its reason.
+ */
+async function fetchServerCellForPlay(id, row, col, ds, graph, step) {
+  const cacheKey = playCellKey(id, row, col);
+  if (playCellReadInflight.has(cacheKey)) {
+    return playCellReadInflight.get(cacheKey);
+  }
+  const work = (async () => {
+    const fresh = await readCellForRun(ds, graph, row, col);
+    if (!fresh?.ok || !fresh.body) {
+      const why = fresh?.error || "پاسخی از سرور نرسید";
+      appendPlayLog(
+        "warn",
+        `خواندن سلول «${col}» (ردیف ${row + 1}) از سرور ناموفق بود — ${why}`
+      );
+      return undefined;
+    }
+    const val = fresh.body.cellValue ?? fresh.body.CellValue ?? "";
+    const rev = fresh.body.cellRevision ?? fresh.body.CellRevision;
+    const dRev = fresh.body.dataRevision ?? fresh.body.DataRevision;
+    applyCellToLocalCache(ds, row, col, val, rev, dRev);
+    if (graph) {
+      emitDataSourceCellEvent(graph, ds, col, row, "read", val, step?.title);
+    }
+    return String(val);
+  })();
+  playCellReadInflight.set(cacheKey, work);
+  try {
+    return await work;
+  } finally {
+    playCellReadInflight.delete(cacheKey);
+  }
+}
+
+async function storeCapturedContent(step, graph, text, rowIndex) {
+  let dest = step.saveTargetType || "";
+  if (!dest) {
+    // Legacy: contentSourceType was destination before value-source split.
+    dest = (step.contentSourceType === "DataSource") ? "DataSource" : "Memory";
+  }
+  if (dest === "DataSource") {
+    const dsId = step.saveDataSourceId != null ? step.saveDataSourceId : step.dataSourceId;
+    const col = step.saveColumnName || step.dynamicSourceColumnName;
+    const sources = graph?.dataSources || [];
+    const ds = (dsId != null && sources.find((d) => Number(d.id) === Number(dsId)))
+      || findDataSourceForValue(step, graph);
+    if (!ds || !col) {
+      return { ok: false, error: tv("run.saveTargetMissing"), reason: "missing_save_target" };
+    }
+    const idx = Number(rowIndex) || 0;
+    const id = Number(ds.id);
+    // How the value meets what is already in the cell. The server composes it for a server-backed
+    // source (under the cell's row lock); a local-only source is composed here from the cache.
+    const mode = normalizeInsertMode(step.insertMode);
+    const separator = step.insertSeparator == null ? "" : String(step.insertSeparator);
+    if (id > 0) {
+      const saved = await writeServerCellWait(ds, graph, idx, col, text, {
+        insertMode: mode,
+        insertSeparator: separator
+      });
+      if (!saved.ok) {
+        // A ceiling breach is not a transient failure: report the server's own message (which names
+        // the row/byte cap and whether the license or the plan set it) instead of the generic
+        // "could not save", and do not pretend a retry would help.
+        if (saved.error === "source_limit") {
+          return {
+            ok: false,
+            error: saved.message || tv("run.sourceLimitExceeded"),
+            reason: "source_limit"
+          };
+        }
+        return {
+          ok: false,
+          error: saved.error === "cell_write_timeout"
+            ? tv("run.cellBusy")
+            : tv("run.cellSaveFailed"),
+          reason: saved.error || "cell_patch_failed"
+        };
+      }
+      // Prepend/Append were composed by the server, so ITS value is the one the viewers must show
+      // and the one the run stays in step with — the step's own fragment is only half of it.
+      const written = saved.body?.cellValue ?? saved.body?.CellValue;
+      const composed = written == null ? text : String(written);
+      emitDataSourceCellEvent(graph, ds, col, idx, "write", composed, step?.title);
+      return { ok: true, value: composed };
+    }
+    ds.cells = ds.cells || [];
+    const previous = cellValue(ds, col, idx, { emitRead: false });
+    const finalText = composeInsertValue(previous, text, mode, separator);
+    const hit = ds.cells.find((c) =>
+      (c.key === col || c.Key === col || c.columnName === col)
+      && Number(c.index ?? c.Index ?? c.rowIndex) === idx
+    );
+    if (hit) {
+      if (hit.cellValue !== undefined) hit.cellValue = finalText;
+      else if (hit.CellValue !== undefined) hit.CellValue = finalText;
+      else hit.value = finalText;
+    } else {
+      ds.cells.push({ key: col, index: idx, cellValue: finalText });
+    }
+    const rc = Number(ds.rowCount) || 0;
+    if (idx + 1 > rc) ds.rowCount = idx + 1;
+    emitDataSourceCellEvent(graph, ds, col, idx, "write", finalText, step?.title);
+    return { ok: true, value: finalText };
+  }
+  return setPlayMemoryVar(step.memoryVariableName || step.constantValue, text);
+}
+
+/**
+ * Move a LOCAL source's rows for an insert or a delete, keeping every value where it belongs.
+ *
+ * The mirror of the server's own row repack: every index from the touched row down shifts by one,
+ * the new row is materialised as empty cells (one per column, exactly like the server's AddRows so
+ * the numbering cannot collapse), and `rowCount` follows. Nothing is dropped: a local run's whole
+ * point is that the copy it loaded stays authoritative for the rest of the run.
+ */
+function applyLocalRowShift(ds, atIndex, isInsert) {
+  if (!ds) return false;
+  const at = Math.max(0, Number(atIndex) || 0);
+  const cells = Array.isArray(ds.cells) ? ds.cells : (ds.cells = []);
+  const rowOf = (c) => Number(c.index ?? c.Index ?? c.rowIndex);
+  const setRow = (c, v) => {
+    if (c.index !== undefined) c.index = v;
+    else if (c.Index !== undefined) c.Index = v;
+    else c.rowIndex = v;
+  };
+  if (isInsert) {
+    cells.forEach((c) => {
+      const i = rowOf(c);
+      if (Number.isFinite(i) && i >= at) setRow(c, i + 1);
+    });
+    const keys = (ds.columnKeys || (ds.columns || []).map((c) => c.key || c.Key) || []).filter(Boolean);
+    keys.forEach((k) => cells.push({ key: String(k), index: at, cellValue: "" }));
+    ds.rowCount = Math.max((Number(ds.rowCount) || 0) + 1, at + 1);
+  } else {
+    for (let i = cells.length - 1; i >= 0; i--) {
+      const idx = rowOf(cells[i]);
+      if (idx === at) cells.splice(i, 1);
+      else if (Number.isFinite(idx) && idx > at) setRow(cells[i], idx - 1);
+    }
+    ds.rowCount = Math.max(0, (Number(ds.rowCount) || 0) - 1);
+  }
+  // A structural change is a result too: publish it so the viewer's own copy of this source grows a
+  // row at the same moment the run does, instead of after the run ends.
+  localCopyDirty.add(Number(ds.id));
+  scheduleLocalRunProgress();
+  return true;
+}
+
+/** Normalise a step's insert mode — anything missing or unknown means a plain overwrite. */
+function normalizeInsertMode(mode) {
+  const m = String(mode || "").trim().toLowerCase();
+  return m === "prepend" ? "Prepend" : m === "append" ? "Append" : "Replace";
+}
+
+/**
+ * Join an incoming value with the cell's existing one.
+ *
+ * An empty previous value has nothing to join with, so the incoming value is stored as-is — a
+ * separator on its own (`, value`) would be noise the author never asked for.
+ */
+function composeInsertValue(previous, incoming, mode, separator) {
+  const prev = previous == null ? "" : String(previous);
+  const text = incoming == null ? "" : String(incoming);
+  if (!prev) return text;
+  if (mode === "Prepend") return text + (separator || "") + prev;
+  if (mode === "Append") return prev + (separator || "") + text;
+  return text;
+}
+
+function cellValue(ds, columnKey, rowIndex, opts = {}) {
+  if (!ds || !columnKey) return null;
+  const key = String(columnKey).trim();
+  const cells = ds.cells || [];
+  const hit = cells.find((c) =>
+    (c.key === key || c.Key === key || c.columnName === key)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === Number(rowIndex)
+  );
+  const val = hit ? (hit.cellValue ?? hit.CellValue ?? hit.value ?? "") : null;
+  if (opts.emitRead && opts.graph && val != null) {
+    emitDataSourceCellEvent(opts.graph, ds, key, rowIndex, "read", val, opts.stepTitle);
+  }
+  return val;
+}
+
+/**
+ * Ask a whole collection of cells one comparison question.
+ *
+ * A column or a row holds many cells, so the operator decides the shape of the answer: a positive
+ * operator asks "does ANY cell satisfy this?"; a negative one asks "does NO cell satisfy it?".
+ * Reading a negative operator as "some cell differs" would make almost every non-empty column match,
+ * which is never why anyone asks about a whole column.
+ */
+const NEGATIVE_OPERATOR_POSITIVE = {
+  notequal: "equal",
+  "!=": "equal",
+  notcontain: "contain",
+  notcontains: "contain",
+  hasnotvalue: "hasvalue"
+};
+function collectionMatches(equalityType, values, expected) {
+  const eq = String(equalityType || "equal").trim().toLowerCase().replace(/[_\s-]+/g, "");
+  const positive = NEGATIVE_OPERATOR_POSITIVE[eq];
+  return positive
+    ? !values.some((v) => compareConditionValues(v, expected, positive))
+    : values.some((v) => compareConditionValues(v, expected, eq));
+}
+
+/** Case-insensitive value lookup for a row's `values` map (keys come back in their stored casing). */
+function rowMapValue(map, columnKey) {
+  if (!map) return "";
+  if (map[columnKey] != null) return String(map[columnKey]);
+  const want = String(columnKey).trim().toLowerCase();
+  for (const k of Object.keys(map)) {
+    if (k.trim().toLowerCase() === want) return String(map[k] ?? "");
+  }
+  return "";
+}
+
+/**
+ * Every value of one column, in row order, for a whole-column check.
+ *
+ * Returns `null` when a page could not be read — "we could not find out" must not be answered as
+ * "the column does not contain it", which would silently insert a duplicate.
+ *
+ * Read in pages through the bulk row endpoint rather than cell by cell: a column check is a scan,
+ * and one request per row would make a 500-row source 500 round trips. The values also land in the
+ * run's cell cache (with their revisions) so later single-cell reads of the same rows are free; no
+ * per-cell live events are emitted, because a scan is not the author watching one cell.
+ */
+const COLUMN_SCAN_PAGE = 1000;
+const COLUMN_SCAN_MAX_PAGES = 50;
+async function readSourceColumnForCheck(ds, columnKey) {
+  const id = Number(ds?.id);
+  const col = String(columnKey || "").trim();
+  if (!id || !col) return null;
+  // A local run of a private source scans the copy it loaded: the scan is a memory walk. Paging the
+  // server for every evaluation of a whole-column condition is exactly the traffic local mode is
+  // there to avoid (and on a 500-row source it is 500 rows per condition check).
+  if (playStatus.runOnServer === false && !isPublicSource(ds, null) && Array.isArray(ds?.cells)) {
+    const want = col.toLowerCase();
+    const byRow = new Map();
+    ds.cells.forEach((c) => {
+      const key = String(c.key ?? c.Key ?? c.columnName ?? "").trim();
+      if (key.toLowerCase() !== want) return;
+      byRow.set(Number(c.index ?? c.Index ?? c.rowIndex) || 0, String(c.cellValue ?? c.CellValue ?? ""));
+    });
+    const rows = Number(ds.rowCount) || 0;
+    const end = Math.max(rows, byRow.size ? Math.max(...byRow.keys()) + 1 : 0);
+    const values = [];
+    for (let r = 0; r < end; r++) values.push(byRow.has(r) ? byRow.get(r) : "");
+    return values;
+  }
+  let rowCount = Number(ds.rowCount) || 0;
+  if (rowCount <= 0) {
+    const meta = await readDataSourceMetaFromServer(id);
+    rowCount = Number(meta?.body?.rowCount ?? meta?.body?.RowCount) || 0;
+    if (rowCount > 0) ds.rowCount = rowCount;
+  }
+  const values = [];
+  let from = 0;
+  for (let pageNo = 0; pageNo < COLUMN_SCAN_MAX_PAGES; pageNo++) {
+    let page;
+    try {
+      page = await callBackground({
+        type: "readDataSourceRows",
+        dataSourceId: id,
+        from,
+        count: COLUMN_SCAN_PAGE,
+        keys: [col]
+      });
+    } catch (err) {
+      appendPlayLog("warn", `خواندن ستون «${col}» از سرور ناموفق بود — ${err?.message || err}`);
+      return null;
+    }
+    if (!page?.ok || !page.body) {
+      appendPlayLog("warn", `خواندن ستون «${col}» از سرور ناموفق بود — ${page?.error || "پاسخی نرسید"}`);
+      return null;
+    }
+    const rows = page.body.rows || page.body.Rows || [];
+    const revisions = page.body.cellRevisions || page.body.CellRevisions || {};
+    // The page reports the SOURCE's total row count (not this page's), and the rows it returns are
+    // only the cells of the requested column — a row whose cell does not exist yet is simply
+    // absent from the page. So how many rows came back says nothing about where the source ends:
+    // advancing by that number would stop the scan early and answer "the column does not contain
+    // it" for values that live beyond the gap. Advance by the WINDOW and trust the row count.
+    const pageRowCount = Number(page.body.rowCount ?? page.body.RowCount) || 0;
+    if (pageRowCount > 0 && pageRowCount !== rowCount) {
+      rowCount = pageRowCount;
+      ds.rowCount = pageRowCount;
+    }
+    for (const row of rows) {
+      const idx = Number(row.rowIndex ?? row.RowIndex) || 0;
+      const value = rowMapValue(row.values || row.Values, col);
+      values.push(value);
+      const rev = revisions[idx]?.[col] ?? revisions[String(idx)]?.[col];
+      applyCellToLocalCache(ds, idx, col, value, rev, page.body.dataRevision ?? page.body.DataRevision);
+    }
+    from += COLUMN_SCAN_PAGE;
+    if (rowCount > 0) {
+      if (from >= rowCount) break;
+    } else if (rows.length < COLUMN_SCAN_PAGE) {
+      // No row count at all (the source was never read from the server): the page size is the only
+      // end-of-source signal left, which is exactly the "best effort" case this fallback serves.
+      break;
+    }
+  }
+  // The page cap is a safety net, not an answer: a scan that stopped in the middle must not be
+  // reported as "the column does not contain this value" (see COLUMN_SCAN_MAX_PAGES).
+  if (rowCount > 0 && from < rowCount) {
+    appendPlayLog("warn",
+      `ستون «${col}» کامل خوانده نشد (${from} از ${rowCount} ردیف) — نتیجهٔ ناقص پذیرفته نمی‌شود`);
+    return null;
+  }
+  return values;
+}
+
+/** Every value of one row, for a whole-row check. `null` means the read itself failed. */
+async function readSourceRowForCheck(ds, rowIndex) {
+  const id = Number(ds?.id);
+  const row = Number(rowIndex) || 0;
+  if (!id) return null;
+  // Same rule as the column scan: a local run answers from its own copy, no server page.
+  if (playStatus.runOnServer === false && !isPublicSource(ds, null) && Array.isArray(ds?.cells)) {
+    return ds.cells
+      .filter((c) => Number(c.index ?? c.Index ?? c.rowIndex) === row)
+      .map((c) => String(c.cellValue ?? c.CellValue ?? ""));
+  }
+  try {
+    const res = await callBackground({ type: "readDataSourceRow", dataSourceId: id, rowIndex: row });
+    if (!res?.ok || !res.body) {
+      appendPlayLog("warn", `خواندن ردیف ${row + 1} از سرور ناموفق بود — ${res?.error || "پاسخی نرسید"}`);
+      return null;
+    }
+    const map = res.body.values || res.body.Values || {};
+    for (const [key, value] of Object.entries(map)) {
+      applyCellToLocalCache(ds, row, key, String(value ?? ""), null, res.body.dataRevision ?? res.body.DataRevision);
+    }
+    return Object.values(map).map((v) => String(v ?? ""));
+  } catch (err) {
+    appendPlayLog("warn", `خواندن ردیف ${row + 1} از سرور ناموفق بود — ${err?.message || err}`);
+    return null;
+  }
+}
+
+function stepUsesDataSourceValue(step) {
+  const cst = step?.contentSourceType || "";
+  // A SourceValue condition reads its SUBJECT cell, and for a condition `contentSourceType`
+  // describes the COMPARE operand — a separate choice. The subject read is unconditional (the
+  // editor agrees: a SourceValue condition always needs its source pointer, whatever the compare
+  // source is).
+  if (step?.kind === "condition" && String(step?.conditionType || "") === "SourceValue") return true;
+  // An explicitly chosen value type is the author's visible choice and WINS. Leftover `sourceId` /
+  // `valueFromSource` fields from an older rule set must not turn a node the editor shows as
+  // «ثابت» into a source read at run time — the author cannot see the setting that then fails the
+  // run (real report: an InputContent with contentSourceType:"Constant" + leftover
+  // dataSourceId:45 / dynamicSourceColumnName:"Date" failed with «مقدار از منبع داده خوانده نشد»).
+  if (cst) return cst === "DataSource";
+  // No explicit type at all: an OLD save. Honour the legacy signals.
+  return step?.valueFromSource === true
+    || !!((step?.dataSourceId || step?.sourceId) && step?.dynamicSourceColumnName);
+}
+
+/**
+ * Resolve one cell's value for a run.
+ *
+ * Return contract (phase 3.3) — the caller's behaviour depends on telling these apart:
+ *   ""          a real, empty value
+ *   "text"      a real value
+ *   undefined   NO VALUE AVAILABLE — the data source or column is missing, the cell is not in the
+ *               local cache and the server could not supply it, or the read failed.
+ *
+ * `undefined` means "we could not find out", which is not the same as "the value is empty". A
+ * page action must not silently proceed on it.
+ */
+async function readDataSourceCellForPlay(ds, columnKey, rowIndex, step, graph) {
+  if (!ds || !columnKey) return undefined;
+  const col = String(columnKey).trim();
+  const row = Number(rowIndex) || 0;
+  const id = Number(ds.id) || 0;
+
+  if (id <= 0) {
+    // Local-only source: whatever the cache holds is all there is.
+    return cellValue(ds, col, row, { emitRead: true, graph, stepTitle: step?.title }) ?? undefined;
+  }
+
+  const mirrored = cellValue(ds, col, row, { emitRead: false });
+  if (mirrored != null) {
+    if (graph) emitDataSourceCellEvent(graph, ds, col, row, "read", mirrored, step?.title);
+    return String(mirrored);
+  }
+
+  // Not cached — ask the server. This yields "" for a genuinely empty cell and `undefined`
+  // when the read failed, and the two must not be conflated.
+  return fetchServerCellForPlay(id, row, col, ds, graph, step);
+}
+
+/**
+ * Portal housekeeping calls (register / unregister / abort-poll) with a hard ceiling.
+ *
+ * Plain `fetch` has NO timeout. If the portal is unreachable in a way that hangs the
+ * connection instead of refusing it (VPN drop, wedged proxy, machine asleep mid-flight), the
+ * promise never settles. That matters because `unregisterPlayOnServer` is awaited by
+ * `stopPlay`, so a hung portal could stall the Stop path itself — the user presses Stop and
+ * the run never reports as stopped. These are all bookkeeping requests that nobody waits on
+ * for a result, so failing fast is strictly better than hanging.
+ *
+ * The abort is composed with any signal the caller supplied rather than replacing it.
+ */
+const PORTAL_FETCH_TIMEOUT_MS = 8000;
+
+async function portalFetch(path, opts) {
+  try {
+    const portal = typeof portalBase === "function" ? await portalBase().catch(() => null) : null;
+    const base = String(portal || "").replace(/\/$/, "");
+    if (!base) return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PORTAL_FETCH_TIMEOUT_MS);
+    // Honour a caller's own signal too: aborting on either reason must settle the request.
+    const callerSignal = opts && opts.signal;
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+    try {
+      return await fetch(`${base}${path}`, {
+        credentials: "omit",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        ...(opts || {}),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // Callers already treat null / rejection as "portal unavailable" and carry on.
+    return null;
+  }
+}
+
+/**
+ * Register / unregister this run on the portal.
+ *
+ * The credential matters: `RegisterPlay` is `[AllowAnonymous]` so an unauthenticated client can still
+ * report a run, and the dashboard hangs each run on the account that registered it. Sent without a
+ * token, EVERY run from the extension landed on the "unauthenticated" row of the monitoring table —
+ * the operator saw a run count next to an anonymous aggregate while the real account running it
+ * showed none, and "stop this user's runs" could not reach those runs either. `portalAuthHeaders()`
+ * is the same source the abort poll already uses (the portal cookie, then the stored token), and it
+ * yields no header at all when there is no identity, which keeps the anonymous fallback intact.
+ */
+async function registerPlayOnServer(taskId) {
+  const userName = (await chrome.storage.local.get("da_local_user").catch(() => ({}))).da_local_user
+    || null;
+  const headers = await portalAuthHeaders();
+  const res = await portalFetch("/Panel/Tasks/RegisterPlay", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ taskId: String(taskId), userName })
+  });
+  // 409 means the deployment refuses server runs (stop-all OR the server-run master switch).
+  // The caller stops the run instead of letting a run the server rejected keep going.
+  return !!res && res.status === 409;
+}
+
+async function unregisterPlayOnServer(taskId) {
+  const headers = await portalAuthHeaders();
+  await portalFetch("/Panel/Tasks/UnregisterPlay", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ taskId: String(taskId) })
+  });
+}
+
+/**
+ * Announce that a local run has STARTED, so the local copy becomes visible immediately.
+ *
+ * The per-write publish (see scheduleLocalRunProgress) already reports the sources a run touches, but
+ * it only fires on the first write and the portal may be a debounce behind. A local run has two
+ * realities from the moment it reads its sources — what the server holds and what this machine is
+ * about to write — so the flag is set up front. It is cleared by a sync, which is also the honest
+ * answer for a run that turned out to write nothing.
+ */
+async function markLocalRunStarted(taskId) {
+  try {
+    const tasks = await loadUserTasks();
+    const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
+    if (idx < 0) return;
+    if (tasks[idx].localRunPendingSync === true) return;
+    tasks[idx] = { ...tasks[idx], localRunPendingSync: true, lastLocalRunAt: new Date().toISOString() };
+    await saveUserTasks(tasks);
+    try { chrome.runtime.sendMessage({ type: "localRunPendingSync", taskId: String(taskId) }); } catch { /* portal closed */ }
+  } catch { /* the first write publishes it anyway */ }
+}
+
+/**
+ * Flag a process as "has local results the server has not seen" when the run ENDS.
+ *
+ * Written into the task record itself rather than a side table, so the processes list can read it
+ * from the same place it already reads everything else, and so it survives a browser restart. The
+ * flag is what turns the Sync button on; only a successful sync clears it.
+ */
+async function markLocalRunPendingSync(taskId, results) {
+  try {
+    const tasks = await loadUserTasks();
+    const idx = tasks.findIndex((t) => String(t.id) === String(taskId));
+    if (idx < 0) return;
+    // Prefer the writes the run actually made; fall back to the result rows only if the write log
+    // is empty (a run that wrote nothing still deserves the flag cleared honestly).
+    const written = collectLocalRunWrites();
+    const cells = written.length ? written : collectWrittenCells(results);
+    tasks[idx] = {
+      ...tasks[idx],
+      localRunPendingSync: true,
+      lastLocalRunAt: new Date().toISOString(),
+      locallyRunSources: cells,
+      // Rows the run inserted, so the sync creates them at the same indexes the run used instead of
+      // assuming they belong at the end.
+      locallyRunInsertedRows: collectLocalInsertedRows(),
+      locallyRunDeletedRows: collectLocalDeletedRows(),
+      // The finished run's own copy of every private source: this is the data the local viewer must
+      // show afterwards, including the rows an Insert action created.
+      localSourceCopies: snapshotLocalSourceCopies(localRunGraph, tasks[idx])
+    };
+    await saveUserTasks(tasks);
+    // Mark the changed sources on the SERVER too, exactly as the desktop player does: the sources
+    // list and the monitor then show the divergence even from another machine, and the source
+    // row's Sync button clears the flag when the cells are merged. Best-effort — the pending list
+    // is already persisted locally, which is where the Sync button reads it from.
+    try {
+      const ids = [...new Set(cells.map((c) => Number(c?.dataSourceId)).filter((n) => Number.isFinite(n) && n > 0))];
+      if (ids.length) {
+        portalFetch(`/api/tasks/${encodeURIComponent(String(taskId))}/local-run-changes`, {
+          method: "POST",
+          body: JSON.stringify({ dataSourceIds: ids })
+        }).catch(() => {});
+      }
+    } catch { /* the flag above is the source of truth for this browser */ }
+    // Tell the portal a row needs its sync affordances, without waiting for a manual refresh.
+    try {
+      chrome.runtime.sendMessage({ type: "localRunPendingSync", taskId: String(taskId) });
+    } catch { /* the portal may not be open; the flag is already persisted */ }
+  } catch { /* a flag that cannot be written must never fail the run it describes */ }
+}
+
+/**
+ * Pull the cells a run actually wrote out of its result rows.
+ *
+ * Results already carry the address of every write (source, row, column, value), because that is
+ * what the HUD shows. Reading them here rather than adding a second bookkeeping path means the sync
+ * payload cannot drift from what the user was shown.
+ */
+function collectWrittenCells(results) {
+  const out = [];
+  for (const r of Array.isArray(results) ? results : []) {
+    if (!r || r.ok !== true) continue;
+    const dsId = Number(r.dataSourceId ?? r.saveDataSourceId);
+    if (!Number.isFinite(dsId) || dsId <= 0) continue;
+    const col = r.columnKey ?? r.saveColumnName;
+    if (!col) continue;
+    out.push({
+      dataSourceId: dsId,
+      rowIndex: Number(r.rowIndex ?? r.targetRow ?? 0) || 0,
+      columnKey: String(col),
+      cellValue: r.cellValue ?? r.value ?? ""
+    });
+  }
+  return out;
+}
+
+function startPlayAbortWatch(taskId, register) {
+  if (playAbortPoll) clearInterval(playAbortPoll);
+  // Registering is what makes this a SERVER-side run; a local run must not create a session.
+  if (register !== false) {
+    registerPlayOnServer(taskId).then((refused) => {
+      if (refused && playStatus.playing) {
+        appendPlayLog("error", "اجرای روی سرور توسط مدیر غیرفعال شده است؛ اجرا متوقف شد. از اجرای محلی استفاده کنید.");
+        stopPlay("server_run_disabled");
+      }
+    }).catch(() => {});
+  }
+  playAbortPoll = setInterval(async () => {
+    if (!playStatus.playing) return;
+    // Refresh liveness on the tick we already pay for. This is what lets detectOrphanedPlay tell a
+    // worker that was killed from one that is merely in a long step — see PLAY_HEARTBEAT_KEY.
+    markPlayHeartbeat(taskId, playStatus.stepIndex);
+    try {
+      const command = await fetchRunCommand(taskId);
+      if (command === SESSION_CLOSED) {
+        // The token is already dead server-side; stopping the run is the client's half of the
+        // administrator's "close all runs and sessions".
+        appendPlayLog("error", "دسترسی این حساب توسط مدیر نظارت بسته شد؛ اجرا متوقف شد. برای ادامه دوباره وارد شوید.");
+        await stopPlay("session_closed");
+        return;
+      }
+      if (!command) return;
+      if (command.stopAll) {
+        appendPlayLog("error", "همهٔ اجراهای سروری توسط مدیر نظارت متوقف شدند.");
+        await stopPlay("stop_all");
+        return;
+      }
+      if (command.abort) {
+        appendPlayLog("error", "اجرا به‌خاطر تغییر فرآیند متوقف شد");
+        await stopPlay("canvas_changed");
+      }
+    } catch { /* ignore */ }
+  }, 1500);
+}
+
+/** Returned by fetchRunCommand when the server says this session is no longer valid. */
+const SESSION_CLOSED = "session_closed";
+
+/**
+ * Ask whether this run has to stop, and whether the session behind it still exists.
+ *
+ * Two endpoints, in order of how much they can answer. The authenticated one can report a per-user
+ * decision - including "this session was closed", which arrives as a 401 - while the older anonymous
+ * abort poll can only report the global stop switch. The anonymous one is still used as a fallback so
+ * that a browser with no token (and an installation whose server predates the newer endpoint) keeps
+ * working exactly as before, global switch included.
+ */
+async function fetchRunCommand(taskId) {
+  const headers = await portalAuthHeaders();
+  if (headers.Authorization) {
+    const res = await portalFetch(`/api/run-command?taskId=${encodeURIComponent(taskId)}`, { method: "GET", headers });
+    if (res && res.status === 401) return SESSION_CLOSED;
+    if (res && res.ok) return await res.json().catch(() => null);
+  }
+  const legacy = await portalFetch(`/Panel/Tasks/PlayAbort?taskId=${encodeURIComponent(taskId)}`, { method: "GET" });
+  if (!legacy || !legacy.ok) return null;
+  return await legacy.json().catch(() => null);
+}
+
+/**
+ * The portal credential, from the same two places the background worker reads it: the portal's own
+ * cookie when the browser will hand it over, then the token stored in extension storage.
+ *
+ * No headers (rather than an empty Authorization) when neither is available, because the caller uses
+ * their absence to decide between the authenticated and the anonymous poll.
+ */
+async function portalAuthHeaders() {
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  try {
+    const portal = await portalBase().catch(() => null);
+    if (!portal) return headers;
+    try {
+      const cookie = await chrome.cookies.get({ url: portal, name: "da_access" });
+      if (cookie && cookie.value) {
+        headers.Authorization = `Bearer ${cookie.value}`;
+        return headers;
+      }
+    } catch { /* the cookies API may be unavailable in this context */ }
+    const stored = await chrome.storage.local.get("token").catch(() => ({}));
+    if (stored && stored.token) headers.Authorization = `Bearer ${stored.token}`;
+  } catch { /* no identity: the caller falls back to the anonymous poll */ }
+  return headers;
+}
+
+/**
+ * Liveness record for an in-flight run.
+ *
+ * Written under one storage key so a worker that starts up later can decide, without any in-memory
+ * state (which a terminated worker has lost), whether a run it sees marked `playing` is actually
+ * still being driven or was killed mid-step. See markPlayHeartbeat and detectOrphanedPlay.
+ */
+const PLAY_HEARTBEAT_KEY = "playHeartbeat";
+
+/** How long a run may go without a heartbeat before a fresh worker treats it as dead. */
+const PLAY_HEARTBEAT_STALE_MS = 30000;
+
+async function markPlayHeartbeat(taskId, stepOrdinal) {
+  try {
+    await chrome.storage.local.set({
+      [PLAY_HEARTBEAT_KEY]: {
+        taskId: String(taskId || "").trim(),
+        at: Date.now(),
+        step: Number(stepOrdinal) || 0
+      }
+    });
+  } catch { /* a heartbeat that cannot be written must never fail the step it describes */ }
+}
+
+async function clearPlayHeartbeat() {
+  try { await chrome.storage.local.remove(PLAY_HEARTBEAT_KEY); } catch { /* ignore */ }
+}
+
+/**
+ * Is a run marked `playing` actually still alive?
+ *
+ * Called once per worker start. `false` means the worker was terminated mid-run (the heartbeat
+ * stopped advancing) and the stored `playing: true` is now a lie: nothing is driving the run, and
+ * leaving it set blocks every future run with "پخش در حال اجراست." and leaves the target page's HUD
+ * up. Clearing it is the honest correction, and it is logged as an interruption so the operator is
+ * not left wondering why the run stopped.
+ *
+ * A missing heartbeat is treated as ALIVE, not dead: it means the run predates this record or has
+ * not reached its first write yet, and clearing a live run would be far worse than leaving a stale
+ * flag for the user to stop.
+ */
+async function detectOrphanedPlay() {
+  try {
+    const st = await chrome.storage.local.get(["playing", PLAY_HEARTBEAT_KEY]);
+    if (!st.playing) return false;
+    const hb = st[PLAY_HEARTBEAT_KEY];
+    if (!hb || !hb.at) return false;
+    const age = Date.now() - Number(hb.at);
+    if (!Number.isFinite(age) || age < PLAY_HEARTBEAT_STALE_MS) return false;
+    console.warn("[Webautomator Global] orphaned play detected", hb);
+    await chrome.storage.local.set({ playing: false, playPaused: false });
+    await chrome.storage.local.remove(PLAY_HEARTBEAT_KEY);
+    appendPlayLog(
+      "error",
+      "اجرای قبلی نیمه‌کاره ماند (سرویس‌ورکر افزونه توسط مرورگر بسته شد) و پاک‌سازی شد. " +
+      "به‌خاطر امنیت، اجرا از ابتدا شروع نمی‌شود — دوباره اجرا بزنید."
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let cellEventSeq = 0;
+
+/**
+ * Tell the open viewers what just happened to a source cell or row.
+ *
+ * Fire-and-forget by default: a run must not wait on a notification. Structural events are the
+ * exception — the caller passes `{ wait: true }` so the next step's read/write cannot overtake the
+ * row shift, which would make a viewer move the value it just flashed into the wrong row.
+ */
+async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellValue, stepTitle, opts = {}) {
+  try {
+    const taskId = String(graph?.taskId || playStatus.taskId || "").trim();
+    const dsId = Number(ds?.id || 0);
+    // insert/delete are structural: the row grid moved, so there is no column to name. They still
+    // have to reach the viewers — without them a viewer keeps its old rows and the next cell flash
+    // lights up a row that now holds a different value (the row inserted above shifted everything).
+    const structural = op === "insert" || op === "delete";
+    if (!taskId || !dsId || (!columnKey && !structural)) return;
+    let userName = null;
+    try {
+      const stored = await chrome.storage.local.get(["da_local_user", "da_session_user"]).catch(() => ({}));
+      userName = stored.da_local_user || stored.da_session_user || null;
+    } catch { /* ignore */ }
+    if (!userName && typeof localStorage !== "undefined") {
+      userName = localStorage.getItem("da_local_user") || localStorage.getItem("da_user") || null;
+    }
+    const payload = {
+      taskId,
+      dataSourceId: dsId,
+      // One id for both delivery paths (content-script window event + SignalR broadcast) so a
+      // viewer applies the event once — a doubled structural shift would invent an extra row.
+      eventId: `${Date.now().toString(36)}-${++cellEventSeq}`,
+      op: structural ? op : (op === "write" ? "write" : "read"),
+      columnKey: structural ? "" : String(columnKey),
+      rowIndex: Number(rowIndex) || 0,
+      cellValue: cellValue == null ? null : String(cellValue),
+      stepTitle: stepTitle || null,
+      userName
+    };
+    // Fan-out to open portal/editor tabs (fast local path).
+    let localSent = null;
+    try {
+      localSent = callBackground({ type: "broadcastDsCellEvent", event: payload }).catch(() => {});
+    } catch { /* ignore */ }
+    // A LOCAL run of a private source never touches the server, so the server has nothing to
+    // announce: posting the event there would reach the play hub and patch viewers that are showing
+    // the browser's copy — exactly the stale/incoherent grid the local mode must avoid. The window
+    // event above is the whole channel for this case; public sources keep the server path.
+    const localOnly = playStatus.runOnServer === false && ds && !isPublicSource(ds, graph);
+    if (localOnly) {
+      if (opts.wait && localSent) await Promise.race([localSent, sleep(2000)]);
+      return;
+    }
+    // SignalR path via portal HTTP.
+    const portal = typeof portalBase === "function"
+      ? await portalBase().catch(() => null)
+      : null;
+    const base = String(portal || "").replace(/\/$/, "");
+    if (!base) {
+      if (opts.wait && localSent) await Promise.race([localSent, sleep(2000)]);
+      return;
+    }
+    const posted = fetch(`${base}/Panel/Tasks/NotifyCellEvent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+      credentials: "omit"
+    }).catch(() => {});
+    // Bounded: an unreachable portal must not stall the run behind a notification.
+    if (opts.wait) await Promise.race([Promise.all([localSent, posted]), sleep(2000)]);
+  } catch { /* ignore */ }
+}
+
+async function persistPlayDataSources(graph) {
+  const taskId = String(graph?.taskId || playStatus.taskId || "").trim();
+  if (!taskId || !Array.isArray(graph?.dataSources)) return;
+  try {
+    await callBackground({
+      type: "persistPlayDataSources",
+      taskId,
+      dataSources: graph.dataSources
+    });
+  } catch { /* ignore */ }
+}
+
+function findDataSourceForStep(step, graph) {
+  const sources = graph?.dataSources || [];
+  const group = step.groupNodeId
+    ? (graph.nodes || []).find((n) => n.id === step.groupNodeId)
+    : null;
+  const start = (graph.nodes || []).find((n) => n.kind === "start");
+  const sid = step.selectorDataSourceId
+    || step.dataSourceId
+    || group?.dataSourceId
+    || start?.dataSourceId
+    || graph.dataSourceId
+    || null;
+  if (sid != null) {
+    const found = sources.find((d) => Number(d.id) === Number(sid));
+    if (found) return found;
+  }
+  return sources[0] || null;
+}
+
+function resolveDynamicText(text, step, graph, rowIndex) {
+  if (text == null || text === "") {
+    // Only a LEGACY node (no explicit value type) falls back to its source column here; a node
+    // whose visible type is «ثابت» must not read a leftover column just because it is set.
+    if (step?.dynamicSourceColumnName && !step?.contentSourceType) {
+      const ds = findDataSourceForValue(step, graph);
+      const v = cellValue(ds, step.dynamicSourceColumnName, rowIndex ?? 0, {
+        emitRead: true, graph, stepTitle: step?.title
+      });
+      return v != null ? String(v) : "";
+    }
+    return text || "";
+  }
+  if (typeof text !== "string") return text || "";
+  if (!/\{\{[^}]+\}\}/.test(text)) return text;
+  const ds = findDataSourceForValue(step, graph) || findDataSourceForStep(step, graph);
+  return text.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, key) =>
+    cellValue(ds, key, rowIndex ?? 0, { emitRead: true, graph, stepTitle: step?.title }) ?? "");
+}
+
+async function resolveDynamicTextAsync(text, step, graph, rowIndex) {
+  if (text == null || text === "") {
+    if (step?.dynamicSourceColumnName) {
+      const ds = findDataSourceForValue(step, graph);
+      const v = await readDataSourceCellForPlay(
+        ds, step.dynamicSourceColumnName, rowIndex ?? 0, step, graph
+      );
+      if (v === undefined) throw dataSourceUnavailable(step, ds, step.dynamicSourceColumnName, rowIndex);
+      return String(v);
+    }
+    return text || "";
+  }
+  if (typeof text !== "string") return text || "";
+  if (!/\{\{[^}]+\}\}/.test(text)) return text;
+  const ds = findDataSourceForValue(step, graph) || findDataSourceForStep(step, graph);
+  const parts = text.split(/(\{\{\s*[^}]+\s*\}\})/g);
+  const out = [];
+  for (const part of parts) {
+    const m = part.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+    if (m) {
+      const v = await readDataSourceCellForPlay(ds, m[1], rowIndex ?? 0, step, graph);
+      // An unavailable placeholder must NOT vanish. Substituting "" silently truncated the
+      // text — a half-built selector or a half-typed value — and the step then acted on it.
+      if (v === undefined) throw dataSourceUnavailable(step, ds, m[1], rowIndex);
+      out.push(v);
+    } else {
+      out.push(part);
+    }
+  }
+  return out.join("");
+}
+
+/** Build the error used whenever a needed data-source value could not be read. */
+function dataSourceUnavailable(step, ds, columnKey, rowIndex) {
+  const why =
+    `مقدار از منبع داده خوانده نشد (منبع ${ds?.id ?? "?"}، ستون «${columnKey || "?"}»، ` +
+    `ردیف ${(rowIndex ?? 0) + 1})`;
+  appendPlayLog("error", `${why} — از مقدار خالی/ثابت به‌جای دادهٔ واقعی استفاده نمی‌شود.`);
+  const err = new Error(why);
+  err.reason = "data_source_unavailable";
+  return err;
+}
+
+/**
+ * The id of the source a node itself means, most specific choice first.
+ *
+ * A condition's SUBJECT is `sourceId`, while `dataSourceId` on a condition carries the source of its
+ * COMPARE operand — a choice that only exists when the subject is not itself a source. Plain field
+ * order therefore made a condition whose subject IS a source (the author switched its type after
+ * picking a source operand) read that source's cell as its subject, and resolve its row pointer
+ * against it. Kept in step with `rowPointerSourceId` in the editor's flow.js.
+ */
+function nodeOwnSourceId(node) {
+  if (node?.kind === "condition" && conditionSubjectIsSource(node.conditionType) && node.sourceId != null) {
+    return node.sourceId;
+  }
+  return node?.dataSourceId ?? node?.saveDataSourceId ?? node?.sourceId;
+}
+
+function findDataSourceForValue(step, graph) {
+  const sources = graph?.dataSources || [];
+  // Actions pick their source with `dataSourceId`; a condition's subject uses `sourceId`. Both are
+  // the same choice — the node's own source — so both are honoured before the process default.
+  for (const id of [nodeOwnSourceId(step), step?.dataSourceId, step?.sourceId]) {
+    if (id != null) {
+      const found = sources.find((d) => Number(d.id) === Number(id));
+      if (found) return found;
+    }
+  }
+  return findDataSourceForStep(step, graph);
+}
+
+/**
+ * Shared hook for Play vs Learn. Phase 3: Play stops with error.
+ * Learn: reserved pauseForUser stub — no learning logic yet.
+ */
+async function onUnexpected(runMode, state, detail) {
+  const message = detail
+    ? `${state.reason}: ${detail}`
+    : state.reason || "unexpected";
+
+  if (runMode === RunMode.Learn) {
+    await pauseForUser(state);
+    return { ok: false, error: "Learn Mode هنوز پیاده نشده است.", unexpected: state };
+  }
+
+  return { ok: false, error: message, unexpected: state };
+}
+
+/** Phase 5 reserved — do not implement learn behavior here. */
+async function pauseForUser(_state) {
+  // Reserved for Learn Mode UI / wait loop.
+}
+
+function collectPlaySteps(graph, opts = {}) {
+  // Happy-path estimate: walk start → next, conditions → success, groups → inner.
+  const nodes = new Map((graph.nodes || []).map((n) => [n.id, n]));
+  const edges = graph.edges || [];
+  const steps = [];
+
+  /**
+   * Iterative depth-first walk with an explicit stack.
+   *
+   * This used to recurse with a `depth > 400` cut-off. The cut-off bounded the DAMAGE but not the
+   * recursion: 400 nested frames is already deep enough to be a stack risk in a service worker, and
+   * a perfectly valid long linear chain would reach it. An explicit stack moves the depth onto the
+   * heap, so the walk is bounded by the graph rather than by the browser.
+   *
+   * `seen` keeps it linear: every node is expanded at most once, which is also correct for a
+   * HUD step-count estimate — a node re-entered by a loop-back must not be counted twice.
+   */
+  const seen = new Set();
+  function walk(rootId) {
+    const stack = [rootId];
+    while (stack.length) {
+      const nodeId = stack.pop();
+      if (!nodeId || seen.has(nodeId)) continue;
+      seen.add(nodeId);
+      const node = nodes.get(nodeId);
+      if (!node) continue;
+
+      if (isActionNode(node)) steps.push(node);
+
+      // Successors, pushed in reverse so the first-listed is visited first (order only affects the
+      // sequence of `steps`; the count the HUD shows is order-independent).
+      const next = [];
+      if (node.kind === "group") {
+        const gStart = [...nodes.values()].find((n) => n.kind === "start" && n.groupNodeId === node.id);
+        const contains = flowEdge(edges, nodeId, ["contains"]);
+        const entry = gStart?.id || contains?.to || findGroupEntryFallback(graph, node.id);
+        if (entry) next.push(entry);
+        const after = flowEdge(edges, nodeId, ["next"]);
+        if (after) next.push(after.to);
+      } else if (node.kind === "condition") {
+        const e = flowEdge(edges, nodeId, ["success", "next"]);
+        if (e) next.push(e.to);
+      } else {
+        // start and action nodes both continue along `next`.
+        const e = flowEdge(edges, nodeId, ["next"]);
+        if (e) next.push(e.to);
+      }
+      for (let i = next.length - 1; i >= 0; i -= 1) stack.push(next[i]);
+    }
+  }
+
+  if (opts.conditionNodeId) {
+    const n = findGraphNode(graph, opts.conditionNodeId);
+    return n && n.kind === "condition" ? [] : [];
+  }
+  if (opts.stepNodeId) {
+    const n = findGraphNode(graph, opts.stepNodeId);
+    if (n && isActionNode(n)) return [n];
+    // Condition via stepNodeId — handled in runPlayLoop, not as action steps
+    if (n && n.kind === "condition") return [];
+    return [];
+  }
+
+  // Guard: never walk the full graph when a scoped play was requested.
+  if (opts.playScope === "step" || opts.playScope === "condition") {
+    return [];
+  }
+
+  const entry = resolvePlayEntryId(graph, opts);
+  if (entry) walk(entry, 0);
+
+  // Last resort: if the walk found nothing and this is not a group play, fall back to every
+  // action in root scope. "Every action" means every action REACHABLE from the start node,
+  // not every action on the canvas: a node with no path from start is never executed by
+  // executeFlow, so counting it here would promise steps that will not run.
+  if (steps.length === 0 && !opts.groupNodeId) {
+    const reachable = collectReachableFromStart(graph);
+    for (const n of graph.nodes || []) {
+      if (isActionNode(n) && !n.groupNodeId && (!reachable || reachable.has(n.id))) steps.push(n);
+    }
+  }
+  return steps;
+}
+
+/**
+ * Ids of every node reachable from the root start node, following the same edges executeFlow
+ * walks (start/action → next, condition → success or next, group → inner start/contains and
+ * then its own next).
+ *
+ * Returns null when there is no root start node, because then there is no entry point to
+ * measure reachability from and the caller should keep its previous "assume everything"
+ * behaviour rather than silently collecting nothing.
+ */
+function collectReachableFromStart(graph) {
+  const nodes = new Map((graph.nodes || []).map((n) => [n.id, n]));
+  const edges = graph.edges || [];
+  const rootStart = (graph.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
+  if (!rootStart) return null;
+
+  const reachable = new Set();
+  const queue = [rootStart.id];
+  while (queue.length) {
+    const id = queue.shift();
+    if (!id || reachable.has(id)) continue;
+    const node = nodes.get(id);
+    if (!node) continue;
+    reachable.add(id);
+
+    // Containment is a structural link, not a flow link, but a group's children are reachable
+    // through the group, so it is followed here.
+    for (const e of edges) {
+      if (e.from !== id) continue;
+      if (e.kind === "contains" || e.kind === "parent") { queue.push(e.to); continue; }
+      if (node.kind === "condition") {
+        // Both branches can run depending on the result.
+        if (e.kind === "success" || e.kind === "fail" || e.kind === "next") queue.push(e.to);
+      } else {
+        if (e.kind === "next") queue.push(e.to);
+      }
+    }
+  }
+  return reachable;
+}
+
+/** Field sets a row pointer can live in: the node's own row, and its dynamic SELECTOR's row. */
+const NODE_ROW_KEYS = { type: "rowIndexType", specific: "specificRowIndex" };
+const SELECTOR_ROW_KEYS = { type: "selectorRowIndexType", specific: "selectorSpecificRowIndex" };
+
+/**
+ * Resolve the row a node's own "dedicated row" pointer names.
+ *
+ * The pointer lives on the node that READS or WRITES a source row — an action or a condition —
+ * because that is where "which row?" is a real question: the same process may read row 0 for a
+ * lookup and write the loop's row for its result. A group carries no row opinion; it only owns
+ * its repeat, and every node inside it keeps its own answer.
+ *
+ * `keys` picks WHICH pointer to read: the node's own (default) or its dynamic selector's, so a
+ * node can pin its values to one row while its selector builds itself from another.
+ *
+ * Returns null when the node has no usable pointer ("None"/unset), so the caller falls back to the
+ * loop row it would use anyway. Every branch is deliberately tolerant: a pointer that cannot be
+ * resolved must not crash a run, it just leaves the node on its loop row.
+ */
+function resolveRowPointer(node, graph, ctx, keys) {
+  if (!node) return null;
+  const k = keys || NODE_ROW_KEYS;
+  const pointer = String(node[k.type] || "None");
+  const { groupRow, parentRow, processRow, loopIndex, groupIndex } = ctx || {};
+  switch (pointer) {
+    case "CurrentLoop":
+      return Number.isFinite(Number(groupRow)) ? Number(groupRow) : null;
+    case "ParentLoop":
+      return Number.isFinite(Number(parentRow)) ? Number(parentRow) : null;
+    // The two loop rows, kept distinct on purpose. "GroupLoop" is the row the GROUP's own repeat
+    // source produced, "ProcessLoop" is the row the outer process loop is on. From outside a group
+    // the two coincide; from inside one they are different rows, and an author writing "the row the
+    // process is on" means the outer one even when the step sits several groups deep.
+    case "GroupLoop":
+      return Number.isFinite(Number(groupRow)) ? Number(groupRow) : null;
+    case "ProcessLoop": {
+      const r = Number(processRow);
+      if (Number.isFinite(r)) return r;
+      return Number.isFinite(Number(loopIndex)) ? Number(loopIndex) : null;
+    }
+    // "TotalLoop" is an index into the whole loop run, so it reuses the outer loop position rather
+    // than the source row the group happens to be on.
+    case "TotalLoop":
+      return Number.isFinite(Number(loopIndex)) ? Number(loopIndex) : (Number.isFinite(Number(groupIndex)) ? Number(groupIndex) : null);
+    case "FirstRow":
+      return 0;
+    case "LastRow": {
+      const ds = findRowPointerSource(node, graph);
+      const rc = Number(ds?.rowCount);
+      if (Number.isFinite(rc) && rc > 0) return rc - 1;
+      // Fall back to the last row we can actually see in the graph when the count is unknown.
+      // A loop, NOT Math.max(...idxs): a long run can leave tens of thousands of cells in this
+      // array, and spreading a large array into a call blows the JS stack with "Maximum call
+      // stack size exceeded" — precisely the failure this area exists to prevent.
+      let last = null;
+      for (const c of ds?.cells || []) {
+        const x = Number(c.index ?? c.Index ?? c.rowIndex);
+        if (Number.isFinite(x) && (last === null || x > last)) last = x;
+      }
+      return last;
+    }
+    case "SpecificRow": {
+      const idx = Number(node[k.specific]);
+      if (!Number.isFinite(idx) || idx < 0) return null;
+      // Clamp to the source so a stale index (source shrank after the graph was saved) reads the
+      // nearest existing row instead of silently reading nothing.
+      const ds = findRowPointerSource(node, graph);
+      const rc = Number(ds?.rowCount);
+      if (Number.isFinite(rc) && rc > 0 && idx > rc - 1) return rc - 1;
+      return idx;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * The row the PROCESS loop sits on, from inside whatever group the step happens to live in.
+ *
+ * executeFlow threads the outer row down as `_processRow`; a step at the top level has no such
+ * marker and its own rowIndex already IS the process row. The difference only shows up inside a
+ * group, where rowIndex has been rebound to the group's row — and there, reading the outer row
+ * requires this marker rather than a guess.
+ */
+function processStatusRow(step, fallback) {
+  const threaded = Number(step?._processRow);
+  if (Number.isFinite(threaded)) return threaded;
+  const fromStatus = Number(playStatus?.processRow);
+  if (Number.isFinite(fromStatus)) return fromStatus;
+  return Number(fallback) || 0;
+}
+
+/** The source a row pointer resolves against: the node's own pick, else the process default. */
+function findRowPointerSource(node, graph) {
+  const sources = graph?.dataSources || [];
+  // Every id a node can pick its source with, in the order the node itself prefers: the action's
+  // value/target source first, then a condition's subject, then the dynamic-selector sources —
+  // including the COMPARE side (`equalSelector*`), because a node whose only source is its compare
+  // selector is source-dependent just the same.
+  const id = nodeOwnSourceId(node) ?? node?.selectorDataSourceId ?? node?.equalSelectorDataSourceId
+    ?? node?.equalAttributeDataSourceId ?? graph?.dataSourceId;
+  if (id == null || id === "") return null;
+  return sources.find((d) => Number(d.id) === Number(id)) || null;
+}
+
+/** Expand group iterations from group-start repeat settings (Loops / DataSource / Elements). */
+async function expandGroupByRepeatSource(tabId, groupOrStart, graph, ctx = {}) {
+  const node = groupOrStart || {};
+  const type = String(node.repeatSourceType || "None");
+  if (type === "None" || !type) {
+    return { type: "None", indices: [0], total: 1, label: "یک‌بار" };
+  }
+  if (type === "Loops") {
+    const n = Math.max(1, Number(node.loopCount ?? node.constantValue) || 1);
+    return {
+      type: "Loops",
+      indices: Array.from({ length: n }, (_, i) => i),
+      total: n,
+      label: `تعداد ثابت × ${n}`
+    };
+  }
+  if (type === "DataSource") {
+    const dsId = node.dataSourceId;
+    const ds = (graph.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+    if (ds) await ensureDataSourceRowCountMeta(ds);
+    let count = Number(ds?.rowCount) || 0;
+    if (!count && Array.isArray(ds?.cells) && ds.cells.length) {
+      const idxs = new Set(
+        ds.cells
+          .map((c) => Number(c.index ?? c.Index ?? c.rowIndex))
+          .filter((x) => Number.isFinite(x))
+      );
+      count = idxs.size || 0;
+    }
+    if (!count) {
+      appendPlayLog("warn", "منبع گروه ردیفی ندارد؛ یک‌بار اجرا می‌شود.");
+      return { type: "DataSource", indices: [0], total: 1, label: "منبع (بدون ردیف)" };
+    }
+    // Honour the group start's own from/to range, exactly as the process-level start does.
+    // Without this a group set to repeat over rows 3..5 ran the whole source, so the two repeat
+    // paths disagreed about the same fields and the editor's range box was inert for groups.
+    const allIndices = Array.from({ length: count }, (_, i) => i);
+    const indices = applyIndexRange(allIndices, node.repeatFromIndex, node.repeatToIndex);
+    const rangeNote = (indices.length !== count)
+      ? ` (ردیف ${indices[0] + 1} تا ${indices[indices.length - 1] + 1})`
+      : "";
+    return {
+      type: "DataSource",
+      indices,
+      total: indices.length,
+      sourceRowCount: count,
+      repeatFromIndex: node.repeatFromIndex ?? null,
+      repeatToIndex: node.repeatToIndex ?? null,
+      label: `منبع «${ds?.title || dsId}» × ${indices.length}${rangeNote}`
+    };
+  }
+  if (type === "Elements") {
+    let css = String(node.elementValue || node.selectorValue || node.css || "").trim();
+    // The group start's selector can also be built from a source cell («سلکتور پویا»): resolve it
+    // for THIS entry, honouring the selector's own row pointer; without one it reads the row the
+    // group is entered on. A selector without the flag resolves to itself.
+    if (node.selectorIsDynamic === true || node.attributeValueIsDynamic === true) {
+      try {
+        const selRow = resolveRowPointer(node, graph, ctx, SELECTOR_ROW_KEYS);
+        // `_rowScope` carries the same scope numbers for a selector fed by a loop index.
+        const dynNode = {
+          ...node,
+          ...(selRow != null ? { _selectorRow: selRow } : {}),
+          _rowScope: ctx
+        };
+        const resolved = await resolveDynamicSelectorAsync(
+          dynNode, graph,
+          selRow != null
+            ? selRow
+            : (Number.isFinite(Number(ctx && ctx.processRow))
+                ? Number(ctx.processRow)
+                : (Number(ctx && ctx.groupRow) || 0))
+        );
+        if (resolved) css = resolved;
+      } catch (err) {
+        appendPlayLog("warn", `ساخت سلکتور پویا برای تکرار گروه ناموفق: ${err?.message || err}`);
+      }
+    }
+    if (!css) {
+      appendPlayLog("warn", "سلکتور تکرار المان خالی است؛ یک‌بار اجرا می‌شود.");
+      return { type: "Elements", indices: [0], total: 1, label: "المان (بدون سلکتور)" };
+    }
+    // The group-start selector offers the same wait switch as any other selector. Counting once
+    // made it inert for a list that appears late; honour the budget here too, re-resolving the
+    // frame chain on every attempt.
+    const framePath = parseFramePath(node.framePathJson || node.framePath);
+    const deadline = Date.now() + selectorWaitBudget(node);
+    let count = 0;
+    for (;;) {
+      count = 0;
+      try {
+        const frameId = await resolveFramePath(tabId, framePath);
+        const [{ result }] = await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [frameId] },
+          func: (sel) => {
+            try {
+              return document.querySelectorAll(sel).length;
+            } catch {
+              return 0;
+            }
+          },
+          args: [css]
+        });
+        count = Number(result) || 0;
+      } catch { /* frame not ready yet — retry until the budget ends */ }
+      if (count > 0 || Date.now() >= deadline) break;
+      await sleep(ELEMENT_WAIT_POLL_MS);
+    }
+    if (!count) {
+      appendPlayLog("warn", "هیچ المانی برای تکرار گروه پیدا نشد؛ یک‌بار اجرا می‌شود.");
+      return { type: "Elements", indices: [0], total: 1, label: "المان (۰)" };
+    }
+    return {
+      type: "Elements",
+      indices: Array.from({ length: count }, (_, i) => i),
+      total: count,
+      label: `المان‌ها × ${count}`
+    };
+  }
+  return { type: "None", indices: [0], total: 1, label: "یک‌بار" };
+}
+
+function parseFramePath(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(normalizeHop);
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(normalizeHop) : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeHop(hop) {
+  if (!hop || typeof hop !== "object") return { by: "CssSelector", value: "", srcHint: null, indexInParent: null };
+  return {
+    by: hop.by || hop.By || "CssSelector",
+    value: hop.value || hop.Value || "",
+    srcHint: hop.srcHint || hop.SrcHint || null,
+    indexInParent:
+      hop.indexInParent != null
+        ? hop.indexInParent
+        : hop.IndexInParent != null
+          ? hop.IndexInParent
+          : null
+  };
+}
+
+async function resolveFramePath(tabId, framePath) {
+  if (!framePath || framePath.length === 0) return 0;
+
+  let currentFrameId = 0;
+
+  for (const hop of framePath) {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId });
+    if (!frames) throw new Error("لیست فریم‌ها در دسترس نیست.");
+
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [currentFrameId] },
+      func: matchChildIframe,
+      args: [hop]
+    });
+    if (!result) throw new Error(`فریم پیدا نشد: ${hop.value || hop.srcHint || hop.indexInParent}`);
+
+    const children = frames.filter((f) => f.parentFrameId === currentFrameId);
+    let child =
+      (result.src &&
+        children.find(
+          (c) =>
+            c.url === result.src ||
+            c.url.startsWith(result.src) ||
+            (hop.srcHint && (c.url.includes(hop.srcHint) || hop.srcHint.includes(c.url)))
+        )) ||
+      null;
+
+    if (!child && result.index >= 0 && result.index < children.length) {
+      child = children[result.index];
+    }
+    if (!child && hop.indexInParent != null && hop.indexInParent >= 0 && hop.indexInParent < children.length) {
+      child = children[hop.indexInParent];
+    }
+    if (!child) throw new Error(`frameId برای فریم فرزند پیدا نشد (${hop.value || hop.srcHint})`);
+
+    currentFrameId = child.frameId;
+  }
+  return currentFrameId;
+}
+
+async function clearTabPlayHighlights(tabId) {
+  if (!tabId) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => {
+        try {
+          // The marked node is the PAGE'S OWN element, not an overlay we created — removing it would
+          // delete the user's markup. Undo the outline we set and drop the marker class instead.
+          document.querySelectorAll(".da-play-hl").forEach((n) => {
+            n.style.removeProperty("outline");
+            n.style.removeProperty("outline-offset");
+            n.classList.remove("da-play-hl");
+          });
+          // Sweep any leftover overlay from an older build so a page is never left with a stray box.
+          document.querySelectorAll("#da-play-hl").forEach((n) => n.remove());
+        } catch { /* ignore */ }
+      }
+    });
+  } catch {
+    /* ignore — tab may not allow scripting */
+  }
+}
+
+async function executeInFrame(tabId, frameId, payload) {
+  try {
+    await clearTabPlayHighlights(tabId);
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [frameId] },
+      func: playExecuteInjected,
+      args: [payload]
+    });
+    return result || { ok: false, error: tv("run.noResult"), reason: "inject_empty" };
+  } catch (err) {
+    return { ok: false, error: err.message, reason: "inject_failed" };
+  }
+}
+
+/** Misses that mean "the target is not there yet" and performed no action, so retrying is safe. */
+function isRetryableElementMiss(result) {
+  const reason = String(result?.reason || "");
+  return reason === "element_not_found" || reason === "frame_resolve_failed";
+}
+
+/**
+ * Run one selector action with the node's wait budget.
+ *
+ * Each attempt re-resolves the frame chain and performs ONE element lookup (the injected call is
+ * given a zero budget so it cannot sleep inside the page). When the element — or its frame — is
+ * not there yet, the attempt is repeated every ELEMENT_WAIT_POLL_MS until the deadline. Only a
+ * miss is retried: an action that actually ran and failed is returned as-is, so a click can never
+ * be dispatched twice by the wait.
+ */
+async function executeInFrameWithWait(tabId, framePath, payload, waitTimeoutMs) {
+  const deadline = Date.now() + Math.max(0, Number(waitTimeoutMs) || 0);
+  await clearTabPlayHighlights(tabId);
+  let last = null;
+  for (;;) {
+    let frameId;
+    try {
+      frameId = await resolveFramePath(tabId, framePath || []);
+    } catch (err) {
+      last = { ok: false, error: err?.message || String(err), reason: "frame_resolve_failed" };
+      if (Date.now() >= deadline) return last;
+      await sleep(ELEMENT_WAIT_POLL_MS);
+      continue;
+    }
+    last = await executeInFrame(tabId, frameId, { ...payload, waitTimeoutMs: 0 });
+    if (!last || last.ok || !isRetryableElementMiss(last)) return last;
+    if (Date.now() >= deadline) return last;
+    await sleep(ELEMENT_WAIT_POLL_MS);
+  }
+}
+
+async function playExecuteInjected(payload) {
+  const actionType = payload.actionType || "Click";
+  const selector = payload.selectorValue;
+  const value = payload.constantValue;
+  const highlightColor = payload.highlightColor || "#ea5455";
+  const waitTimeoutMs = Math.max(0, Number(payload.waitTimeoutMs) || 0);
+  const stateReq = {
+    requireVisible: !!payload.requireVisible,
+    requireEnabled: !!payload.requireEnabled,
+    requireClickable: !!payload.requireClickable
+  };
+
+  function normalizeColor(v) {
+    const s = String(v || "").trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
+    if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+      return `#${s[1]}${s[1]}${s[2]}${s[2]}${s[3]}${s[3]}`.toLowerCase();
+    }
+    return "#ea5455";
+  }
+
+  /**
+   * Outline the element a step is about to act on.
+   *
+   * The highlight is applied to the element ITSELF rather than to a box drawn over it. An overlay
+   * sits at fixed coordinates captured at highlight time, so anything that moves or resizes the page
+   * afterwards (a lazy image, a font swap, a scroll inside a container) leaves the outline behind,
+   * pointing at empty space. It also cannot follow an element inside a scrolling pane. Setting the
+   * element's own outline moves with it by construction and needs no coordinates at all.
+   *
+   * `outline` is used rather than `border`: a border participates in layout, so adding one would
+   * shift the page by its width and could reflow the very element being clicked. An outline is drawn
+   * outside the box model, so nothing on the page moves.
+   */
+  function highlightTarget(el, color) {
+    if (!(el instanceof Element)) return;
+    const c = normalizeColor(color);
+    try {
+      document.querySelectorAll(".da-play-hl").forEach((n) => {
+        // Restore whatever the element had before, so a page is never left permanently recoloured.
+        n.style.removeProperty("outline");
+        n.style.removeProperty("outline-offset");
+        n.classList.remove("da-play-hl");
+      });
+    } catch { /* ignore */ }
+    try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch { /* ignore */ }
+    try {
+      el.style.setProperty("outline", `3px solid ${c}`, "important");
+      // A small positive offset keeps the ring clear of an element's own border so both stay visible.
+      el.style.setProperty("outline-offset", "2px", "important");
+      el.classList.add("da-play-hl");
+    } catch { /* ignore */ }
+  }
+
+  function elementMatchesState(el, need) {
+    if (!(el instanceof Element)) return false;
+    if (need.requireVisible || need.requireClickable) {
+      const st = window.getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      if (st.display === "none" || st.visibility === "hidden" || Number(st.opacity) === 0) return false;
+      if (!(r.width > 0 && r.height > 0)) return false;
+    }
+    if (need.requireEnabled) {
+      if (el.disabled === true) return false;
+      if (el.getAttribute("aria-disabled") === "true") return false;
+      if (el.getAttribute("disabled") != null && el.getAttribute("disabled") !== "false") return false;
+    }
+    if (need.requireClickable) {
+      const st = window.getComputedStyle(el);
+      if (st.pointerEvents === "none") return false;
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false;
+      try {
+        const top = document.elementFromPoint(x, y);
+        if (top && top !== el && !el.contains(top) && !(top.contains && top.contains(el))) return false;
+      } catch { /* ignore */ }
+    }
+    return true;
+  }
+
+  async function waitForElement(sel, timeoutMs, need) {
+    const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+    for (;;) {
+      let nodes;
+      try {
+        nodes = Array.from(document.querySelectorAll(sel));
+      } catch {
+        return { ok: false, error: tv("run.badSelector", { sel }), reason: "bad_selector" };
+      }
+      for (const el of nodes) {
+        if (elementMatchesState(el, need || {})) return { ok: true, el };
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return {
+      ok: false,
+      error: `عنصر پیدا نشد: ${sel}`,
+      reason: "element_not_found",
+      url: location.href
+    };
+  }
+
+  if (actionType === "WaitTime") return { ok: true, waitMs: Number(value) || 0 };
+  if (actionType === "NoAction") return { ok: true, skipped: true };
+
+  // ScrollPage: two modes, chosen on the step.
+  //   Amount    — move the document by a pixel amount. Needs no element, so it is handled here
+  //               before the selector guard.
+  //   ToElement — bring a chosen element into view. That one DOES need a selector, so if no selector
+  //               was resolved it is reported as such rather than silently scrolling nowhere.
+  if (actionType === "ScrollPage") {
+    const mode = String(payload.scrollType || "Amount");
+    if (mode === "ToElement") {
+      if (!selector) {
+        return { ok: false, error: tv("run.scrollNeedsSelector"), reason: "missing_selector" };
+      }
+      // The shared element wait handles "not there yet"; its failure is the step's failure.
+      const found = await waitForElement(selector, waitTimeoutMs, stateReq);
+      if (!found.ok) return found;
+      try {
+        found.el.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+      } catch {
+        try { found.el.scrollIntoView(); } catch { /* a detached node cannot be scrolled to */ }
+      }
+      return { ok: true, scrolledToElement: selector };
+    }
+    const amount = Number(value);
+    const dy = Number.isFinite(amount) && amount !== 0 ? amount : SCROLL_PAGE_DEFAULT_PX;
+    try {
+      window.scrollBy({ top: dy, left: 0, behavior: "instant" });
+    } catch {
+      try { window.scrollBy(0, dy); } catch { /* a page that refuses to scroll is not a failure */ }
+    }
+    return { ok: true, scrolledBy: dy };
+  }
+
+  // AlertAccept is NOT handled here on purpose. A JS dialog blocks the page's own script, so this
+  // injected context could never answer one — the extension does it, in lib/alert-dialog.js, and
+  // runAlertAcceptStep in this file drives it. Reaching this point with an AlertAccept means the
+  // step was dispatched by a path that skipped runStep, which is a bug worth seeing rather than
+  // papering over with a second implementation.
+
+  // WaitForLoading: wait until the document reports itself complete, then return. The budget is
+  // bounded here as well as in the caller, so a page that never finishes cannot hang the run.
+  if (actionType === "WaitForLoading") {
+    const maxMs = Math.max(0, Number(value) || 0) || 15000;
+    const deadline = Date.now() + maxMs;
+    // `document.readyState === "complete"` is the same condition the browser fires `load` for.
+    while (document.readyState !== "complete" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (document.readyState !== "complete") {
+      return { ok: true, timedOut: true, note: "still_loading" };
+    }
+    return { ok: true };
+  }
+
+  if (!selector) return { ok: false, error: tv("run.selectorEmpty"), reason: "missing_selector" };
+
+  // A deliberate wait for an element to exist. It must run before the shared existence
+  // check below, which uses the per-step selector timeout and would report the element
+  const found = await waitForElement(selector, waitTimeoutMs, stateReq);
+  if (!found.ok) return found;
+  const el = found.el;
+
+  highlightTarget(el, highlightColor);
+
+  if (actionType === "Click" || actionType === "DoubleClick" || actionType === "RightClick") {
+    /**
+     * Some legacy frameworks (the FFM-style `onclick="ffm.call(...)"` menus, and pages whose real
+     * handler is on `onmouseup`) do not respond to `el.click()`. That synthetic click carries no
+     * coordinates, `detail === 0` and `isTrusted === false`, and it reaches the page with no
+     * preceding mousedown/mouseup — so a handler that reads the event (button, which, clientX/Y)
+     * or that listens across the down..up window sees nothing it recognises and does nothing.
+     *
+     * `RealMouse` replays the whole sequence a human generates — pointerdown, mousedown, pointerup,
+     * mouseup, click — at the element's centre, with real coordinates and detail. It is opt-in per
+     * step because the browser still marks these as untrusted, so it is a bypass for pages that
+     * ignore the plain click, not a replacement for it.
+     */
+    const mode = String(payload.clickMode || "Synthetic");
+    if (mode === "RealMouse") {
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const base = {
+        bubbles: true, cancelable: true, view: window, composed: true,
+        clientX: cx, clientY: cy, screenX: cx, screenY: cy
+      };
+      const emitPair = (type) => {
+        const isDown = type === "down";
+        const mouseOpts = {
+          ...base,
+          button: 0,
+          buttons: isDown ? 1 : 0,
+          detail: 1
+        };
+        try {
+          el.dispatchEvent(new PointerEvent(`pointer${type}`, {
+            ...mouseOpts, pointerId: 1, pointerType: "mouse", isPrimary: true
+          }));
+        } catch { /* older engines without PointerEvent */ }
+        el.dispatchEvent(new MouseEvent(`mouse${type}`, mouseOpts));
+      };
+      try {
+        emitPair("down");
+        await new Promise((res) => setTimeout(res, 10));
+        emitPair("up");
+        el.dispatchEvent(new MouseEvent("click", { ...base, button: 0, buttons: 0, detail: 1 }));
+      } catch (err) {
+        return { ok: false, error: String(err && err.message || err), reason: "click_failed" };
+      }
+      return { ok: true, clickMode: "RealMouse" };
+    }
+    if (actionType === "DoubleClick") {
+      el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window }));
+    } else if (actionType === "RightClick") {
+      el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, view: window, button: 2 }));
+    } else {
+      el.click();
+    }
+    return { ok: true };
+  }
+
+  // Internal verb, not an ActionType: read the element's text back as a value. The actions that
+  // need a value from the page (InputContent, InsertContent, SetMemory, GoToUrl as a URL…) all
+  // funnel their read through here instead of each having their own copy.
+  if (actionType === "ReadElementValue") {
+    const rawMode = (payload && payload.valueMode) || "Auto";
+    const mode = String(rawMode).toLowerCase();
+    const attrName = String((payload && payload.valueAttribute) || "").trim();
+    if (mode === "attribute" && !attrName) {
+      return { ok: false, reason: "missing_value_attribute" };
+    }
+    const text = readElementValueSelfContained(el, mode, attrName);
+    if (text && text.__err) return { ok: false, reason: text.__err };
+    return { ok: true, text };
+  }
+
+  // One branch for every action that puts a value into a field: InputContent writes the author's
+  // value, and LoadContent (which types a source cell in) reuses it by sending InputContent.
+  //
+  // Two ways to write, chosen on the step:
+  //   Instant      — set the value directly. Fast, and the right default.
+  //   PerCharacter — focus the field and send a real key event per character. Slower, but it is the
+  //                  only thing that works on a field the page is watching keystroke by keystroke
+  //                  (live search, autocomplete, a masked input, an input with a key handler). The
+  //                  instant path cannot fake that: setting .value fires one `input` event and the
+  //                  page never sees the individual keys.
+  if (actionType === "InputContent") {
+    const v = value == null ? "" : String(value);
+    const perChar = String(payload.typeMode || "Instant") === "PerCharacter";
+
+    if (!perChar) {
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const desc = Object.getOwnPropertyDescriptor(proto, "value");
+        if (desc && desc.set) desc.set.call(el, v);
+        else el.value = v;
+      } else if (el.tagName.toLowerCase() === "select") {
+        el.value = v;
+      } else if (el.isContentEditable) {
+        el.textContent = v;
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return { ok: true };
+    }
+
+    // --- per character ------------------------------------------------------------------------
+    const canType = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable;
+    if (!canType) {
+      return { ok: false, error: tv("run.cannotType", { tag: el.tagName.toLowerCase() }), reason: "not_typeable" };
+    }
+    try { el.focus({ preventScroll: false }); } catch { /* a detached node cannot take focus */ }
+    // Start from an empty field: typing APPENDS, so a pre-filled box would concatenate otherwise.
+    // This mirrors ClearContent's behaviour rather than leaving the author to add a step for it.
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, "value");
+      if (desc && desc.set) desc.set.call(el, "");
+      else el.value = "";
+    } else {
+      el.textContent = "";
+    }
+
+    const keystrokeDelay = Math.max(0, Number(payload.typeDelayMs) || 0);
+    for (const ch of Array.from(v)) {
+      const init = { key: ch, bubbles: true, cancelable: true };
+      try {
+        el.dispatchEvent(new KeyboardEvent("keydown", init));
+        // beforeinput/input carry the character the page's own handlers read; without them a
+        // controlled React/Vue input reverts the change.
+        try { el.dispatchEvent(new InputEvent("beforeinput", { ...init, data: ch, inputType: "insertText" })); } catch { /* older engines */ }
+        el.dispatchEvent(new KeyboardEvent("keypress", init));
+        if (el.isContentEditable) {
+          el.textContent = (el.textContent || "") + ch;
+        } else {
+          // The native setter, so a framework's value tracker still sees the change.
+          const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const desc = Object.getOwnPropertyDescriptor(proto, "value");
+          const next = (el.value || "") + ch;
+          if (desc && desc.set) desc.set.call(el, next);
+          else el.value = next;
+        }
+        try { el.dispatchEvent(new InputEvent("input", { ...init, data: ch, inputType: "insertText" })); } catch { el.dispatchEvent(new Event("input", { bubbles: true })); }
+        el.dispatchEvent(new KeyboardEvent("keyup", init));
+      } catch { /* one character failing must not abandon the rest */ }
+      if (keystrokeDelay > 0) await new Promise((r) => setTimeout(r, keystrokeDelay));
+    }
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true, typed: v.length };
+  }
+
+  if (actionType === "Hover") {
+    el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
+    return { ok: true };
+  }
+
+  // Hold: press the element and keep the button down for the step's duration, then release. A page
+  // that reacts to a long press listens across the whole down..up window, so a plain click (down
+  // and up in the same tick) is never seen as one. Dispatching the down, waiting, then the up is
+  // what makes it work; the wait happens here because only this injected context can hold the
+  // press open while the page is live.
+  if (actionType === "Hold") {
+    const holdMs = Math.max(0, Number(value) || 0);
+    const r = el.getBoundingClientRect();
+    const opts = {
+      bubbles: true, cancelable: true, view: window, button: 0,
+      clientX: r.left + r.width / 2,
+      clientY: r.top + r.height / 2
+    };
+    try {
+      el.dispatchEvent(new MouseEvent("mousedown", opts));
+      // A pointerdown too: modern long-press handlers listen for pointer events, not mouse ones.
+      try { el.dispatchEvent(new PointerEvent("pointerdown", { ...opts, pointerId: 1, isPrimary: true })); } catch { /* older engines */ }
+      await new Promise((res) => setTimeout(res, holdMs));
+      el.dispatchEvent(new MouseEvent("mouseup", opts));
+      el.click();
+      try { el.dispatchEvent(new PointerEvent("pointerup", { ...opts, pointerId: 1, isPrimary: true })); } catch { /* ignore */ }
+    } catch (err) {
+      return { ok: false, error: String(err && err.message || err), reason: "hold_failed" };
+    }
+    return { ok: true, waitMs: 0, heldMs: holdMs };
+  }
+
+  // RemoveElements: delete the matched element(s) from the DOM. The page keeps whatever it does
+  // with a missing node — this is a real removal, not a hide, because a hidden element still
+  // occupies the layout and still answers queries, which is usually the opposite of the intent.
+  if (actionType === "RemoveElements") {
+    let nodes;
+    try {
+      nodes = Array.from(document.querySelectorAll(selector));
+    } catch {
+      return { ok: false, error: tv("run.badSelector", { sel: selector }), reason: "bad_selector" };
+    }
+    const wanted = payload.removeAllMatches !== false ? nodes : nodes.slice(0, 1);
+    let removed = 0;
+    for (const node of wanted) {
+      try {
+        if (node.parentNode) { node.parentNode.removeChild(node); removed += 1; }
+      } catch { /* a node we cannot detach is skipped rather than failing the whole step */ }
+    }
+    if (!removed) {
+      return { ok: false, error: tv("run.removeNone", { sel: selector }), reason: "element_not_found" };
+    }
+    return { ok: true, removed };
+  }
+
+  // A field usually has to be emptied before new text goes in: typing appends to whatever
+  // is already there, so an "InputContent" over a pre-filled box concatenates silently.
+  if (actionType === "ClearContent") {
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, "value");
+      if (desc && desc.set) desc.set.call(el, "");
+      else el.value = "";
+    } else if (el.isContentEditable) {
+      el.textContent = "";
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true };
+  }
+
+  if (actionType === "SelectOption") {
+    if (!(el instanceof HTMLSelectElement)) {
+      return { ok: false, error: tv("run.notSelect"), reason: "not_select" };
+    }
+    const mode = payload.selectBy || "Value";
+    const wanted = String(value == null ? "" : value);
+    let index = -1;
+    if (mode === "Index") {
+      index = Number(wanted);
+      if (!Number.isInteger(index) || index < 0 || index >= el.options.length) index = -1;
+    } else if (mode === "Text") {
+      index = Array.from(el.options).findIndex((o) => (o.textContent || "").trim() === wanted.trim());
+    } else {
+      index = Array.from(el.options).findIndex((o) => o.value === wanted);
+      // Value is exact by design; a label written into the value field is a common
+      // authoring slip, so fall back to text rather than failing outright.
+      if (index < 0) index = Array.from(el.options).findIndex((o) => (o.textContent || "").trim() === wanted.trim());
+    }
+    if (index < 0) {
+      return { ok: false, error: tv("run.optionNotFound", { v: wanted }), reason: "option_not_found" };
+    }
+    el.selectedIndex = index;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true };
+  }
+
+  return { ok: false, error: tv("run.unsupportedAction", { action: actionType }), reason: "unsupported_action" };
+}
+
+/**
+ * Map a step's key name onto the KeyboardEvent fields a page reads.
+ *
+ * The names are the ones an author types ("Enter", "Tab", "ArrowDown", "a"), so the mapping has to
+ * cover the modern `key`/`code` pair AND the legacy numeric `keyCode`/`which` — plenty of legacy
+ * pages (the ones that needed this action in the first place) read only the numbers.
+ */
+/**
+ * Send keydown / keypress / keyup to an element, or to the focused element when none is given.
+ *
+ * A synthetic KeyboardEvent is what the page's own handlers receive. It deliberately does NOT
+ * perform the browser's default action (a synthetic Tab does not move focus, a synthetic Enter does
+ * not submit): browsers reserve those for trusted events. Pages that listen for Enter to submit —
+ * the common case — see this event and submit themselves, which is the behaviour the step is for.
+ */
+function pressKeyOn(el, value) {
+  const key = String(value || "").trim();
+  if (!key) return { ok: false, error: tv("run.keyMissing"), reason: "missing_key" };
+  const target = el || document.activeElement || document.body;
+  const info = keyCodeFor(key);
+  try { target.focus({ preventScroll: true }); } catch { /* not focusable */ }
+  const init = {
+    key: info.key,
+    code: info.code,
+    keyCode: info.keyCode,
+    which: info.keyCode,
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    ctrlKey: !!info.ctrl,
+    shiftKey: !!info.shift,
+    altKey: !!info.alt,
+    metaKey: !!info.meta
+  };
+  target.dispatchEvent(new KeyboardEvent("keydown", init));
+  // keypress exists only for printable keys and Enter on older pages; sending it anyway is harmless
+  // to a listener that filters by key, and required by the ones that do not.
+  if (info.key.length === 1 || info.key === "Enter") {
+    target.dispatchEvent(new KeyboardEvent("keypress", init));
+  }
+  target.dispatchEvent(new KeyboardEvent("keyup", init));
+  return { ok: true, key: info.key };
+}
+
+function keyCodeFor(raw) {
+  const name = String(raw || "").trim();
+  const lower = name.toLowerCase();
+  const simple = {
+    enter: { key: "Enter", code: "Enter", keyCode: 13 },
+    tab: { key: "Tab", code: "Tab", keyCode: 9 },
+    escape: { key: "Escape", code: "Escape", keyCode: 27 },
+    esc: { key: "Escape", code: "Escape", keyCode: 27 },
+    space: { key: " ", code: "Space", keyCode: 32 },
+    backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
+    delete: { key: "Delete", code: "Delete", keyCode: 46 },
+    insert: { key: "Insert", code: "Insert", keyCode: 45 },
+    home: { key: "Home", code: "Home", keyCode: 36 },
+    end: { key: "End", code: "End", keyCode: 35 },
+    pageup: { key: "PageUp", code: "PageUp", keyCode: 33 },
+    pagedown: { key: "PageDown", code: "PageDown", keyCode: 34 },
+    arrowup: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+    up: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+    arrowdown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+    down: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+    arrowleft: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
+    left: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
+    arrowright: { key: "ArrowRight", code: "ArrowRight", keyCode: 39 },
+    right: { key: "ArrowRight", code: "ArrowRight", keyCode: 39 }
+  };
+  const ctrl = /\bctrl\b|\bcontrol\b/i.test(name);
+  const shift = /\bshift\b/i.test(name);
+  const alt = /\balt\b/i.test(name);
+  // "Ctrl+A", "ctrl+enter", "shift+Tab" — the last segment is the key itself.
+  const parts = name.split("+").map((p) => p.trim()).filter(Boolean);
+  const last = parts.length ? parts[parts.length - 1] : name;
+  const mods = { ctrl, shift, alt, meta: /\bmeta\b|\bcmd\b|\bwin\b/i.test(name) };
+  if (parts.length > 1) {
+    const head = parts.slice(0, -1).join("+").toLowerCase();
+    mods.ctrl = mods.ctrl || head.includes("ctrl") || head.includes("control");
+    mods.shift = mods.shift || head.includes("shift");
+    mods.alt = mods.alt || head.includes("alt");
+    mods.meta = mods.meta || head.includes("meta") || head.includes("cmd") || head.includes("win");
+  }
+  const hit = simple[last.toLowerCase()];
+  if (hit) return { ...hit, ...mods };
+  if (last.length === 1) {
+    const upper = last.toUpperCase();
+    const code = /^[A-Z]$/.test(upper) ? `Key${upper}`
+      : /^[0-9]$/.test(upper) ? `Digit${upper}`
+        : "";
+    return { key: last, code, keyCode: upper.charCodeAt(0), ...mods };
+  }
+  // An unknown name is still sent as typed: the page may listen for a key this build does not know.
+  return { key: name, code: name, keyCode: 0, ...mods };
+}
+
+function matchChildIframe(hop) {
+  const nodes = Array.from(document.querySelectorAll("iframe, frame"));
+  let el = null;
+  if (hop.value) {
+    try {
+      el = document.querySelector(hop.value);
+    } catch {
+      el = null;
+    }
+  }
+  if (!el && hop.srcHint) {
+    el = nodes.find((n) => {
+      const src = n.getAttribute("src") || n.src || "";
+      return src && (src === hop.srcHint || hop.srcHint.includes(src) || src.includes(hop.srcHint));
+    });
+  }
+  if (!el && hop.indexInParent != null && hop.indexInParent >= 0 && hop.indexInParent < nodes.length) {
+    el = nodes[hop.indexInParent];
+  }
+  if (!el) return null;
+  return {
+    index: nodes.indexOf(el),
+    src: el.src || el.getAttribute("src") || "",
+    srcHint: hop.srcHint || null
+  };
+}
+
+/**
+ * Wait for a tab's load to finish.
+ * `maxMs` bounds the wait; the caller decides the value (GoToUrl uses the step's
+ * `waitMaxMs`). 0 disables the wait entirely and resolves on the next tick.
+ */
+function waitTabComplete(tabId, maxMs) {
+  const limit = maxMs == null ? 15000 : Math.max(0, Number(maxMs) || 0);
+  // Already stopped: do not even arm a timer. Without this, a stop issued while a previous
+  // step was still settling would leave this wait to expire on its own.
+  if (playAbort) return Promise.resolve();
+  if (limit === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    // One teardown for every exit path (load event, timeout, abort) so a stopped run cannot
+    // leave this listener attached — a leaked onUpdated listener keeps firing on every tab
+    // change for the rest of the browser session.
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearInterval(abortPoll);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    };
+
+    const timeout = setTimeout(finish, limit);
+
+    // This wait is the longest single blocking point in a step (up to 15 s), so it is where
+    // "توقف" used to feel broken: the pause/stop was honoured only after the page finished
+    // loading. Polling playAbort makes Stop take effect inside the wait, not after it.
+    // The 200 ms cadence matches sleepInterruptible().
+    const abortPoll = setInterval(() => {
+      if (playAbort) finish();
+    }, 200);
+
+    function listener(id, info) {
+      if (id === tabId && info.status === "complete") finish();
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab.status === "complete") finish();
+    }).catch(() => {});
+  });
+}
+
+/** GoToUrl: wait for load unless the step switched it off; cap by waitMaxMs. */
+function resolveNavigationWaitMs(step) {
+  if (!step || step.waitForLoad === false) return 0;
+  const raw = Number(step.waitMaxMs);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  // Default keeps the historical behaviour (15 s) when no explicit cap is set.
+  return 15000;
+}
+
+
+function notifyTab(tabId, message) {
+  chrome.tabs.sendMessage(tabId, message).catch(() => {});
+}

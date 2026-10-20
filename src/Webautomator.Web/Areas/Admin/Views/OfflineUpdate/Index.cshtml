@@ -1,0 +1,103 @@
+@{
+  Layout = "_Layout";
+  ViewData["Title"] = L["admin.offlineUpdate.title"];
+  var staged = ViewData["Staged"] as Webautomator.Web.Services.StagedUpdateInfo;
+  var maxMb = ViewData["MaxUploadMb"] as int? ?? 512;
+  var restartCommand = ViewData["RestartCommand"] as string;
+}
+
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L["admin.offlineUpdate.intro"]
+}' />
+
+<div class="admin-settings-grid">
+  <div class="card-admin">
+    <h3><i class="ti ti-package" aria-hidden="true"></i>@L["admin.offlineUpdate.uploadTitle"]</h3>
+    <p class="admin-field-hint">@L["admin.offlineUpdate.uploadHint"]</p>
+    <form method="post" asp-action="Upload" enctype="multipart/form-data" class="admin-form-stack" id="offline-upload-form"
+          data-max-mb="@maxMb"
+          data-msg-too-large="@L["admin.offlineUpdate.errTooLargeClient"]"
+          data-msg-wrong-type="@L["admin.offlineUpdate.errWrongType"]"
+          data-msg-ready="@L["admin.offlineUpdate.fileReady"]">
+      @Html.AntiForgeryToken()
+      @* The file input is the real control; the drop zone is a labelled stand-in that forwards
+         clicks and drops to it, so the page keeps working if the script never runs. *@
+      <label class="admin-dropzone" id="offline-dropzone" for="package">
+        <i class="ti ti-cloud-upload admin-dropzone-icon" aria-hidden="true"></i>
+        <span class="admin-dropzone-title">@L["admin.offlineUpdate.dropTitle"]</span>
+        <span class="admin-dropzone-sub">@L["admin.offlineUpdate.dropSub"]</span>
+        <span class="admin-dropzone-pick">@L["admin.offlineUpdate.pickFile"]</span>
+        <input class="admin-dropzone-input" type="file" id="package" name="package" accept=".zip,application/zip" required />
+      </label>
+      <p class="admin-field-hint">@string.Format(L["admin.offlineUpdate.maxSize"], maxMb)</p>
+
+      <div class="admin-alert is-muted is-hidden" id="offline-file-note" role="status"></div>
+      <div class="admin-alert is-error is-hidden" id="offline-client-error" role="alert"></div>
+
+      <div class="admin-btn-row">
+        <button type="submit" class="btn-admin" id="offline-upload-submit" disabled>
+          <i class="ti ti-upload" aria-hidden="true"></i> <span id="offline-upload-submit-text">@L["admin.offlineUpdate.uploadSubmit"]</span>
+        </button>
+        <button type="button" class="btn-admin secondary is-hidden" id="offline-upload-clear">@L["admin.offlineUpdate.clearFile"]</button>
+      </div>
+      <div class="admin-inline-progress is-hidden" id="offline-upload-progress" role="status" aria-live="polite">
+        <div class="admin-inline-progress-bar"><span></span></div>
+        <span class="admin-inline-progress-text">@L["admin.offlineUpdate.uploading"]</span>
+      </div>
+    </form>
+    <partial name="_AdminHint" model='L["admin.offlineUpdate.uploadSafety"]' />
+  </div>
+
+  <div class="card-admin @(staged is null ? "" : "is-ok")">
+    <h3><i class="ti ti-circle-check" aria-hidden="true"></i>@L["admin.offlineUpdate.stagedTitle"]</h3>
+    @if (staged is null)
+    {
+      <div class="admin-alert is-muted">@L["admin.offlineUpdate.nothingStaged"]</div>
+    }
+    else
+    {
+      <div class="admin-alert is-ok">@L["admin.offlineUpdate.stagedReady"]</div>
+      <dl class="admin-kv">
+        <dt>@L["admin.offlineUpdate.version"]</dt>
+        <dd><code>@staged.Version</code></dd>
+        <dt>@L["admin.offlineUpdate.stagedAt"]</dt>
+        <dd class="num">@Webautomator.Web.Services.DateDisplay.DateTimeLocal(staged.StagedUtc)</dd>
+      </dl>
+      <div class="admin-alert is-warn">@L["admin.offlineUpdate.applyWarn"]</div>
+      <form method="post" asp-action="Apply" class="admin-form-stack">
+        @Html.AntiForgeryToken()
+        <label class="admin-inline-check">
+          <input type="checkbox" name="stopFirst" value="true" id="offline-stop-first" />
+          <span>@L["admin.offlineUpdate.confirmStopped"]</span>
+        </label>
+        <div class="admin-btn-row">
+          @* Launching the updater while the app still holds its own DLLs open can only
+             half-apply, so the button stays disabled until the operator confirms. *@
+          <button type="submit" class="btn-admin" id="offline-apply-submit" disabled>@L["admin.offlineUpdate.applySubmit"]</button>
+        </div>
+      </form>
+      <form method="post" asp-action="Discard">
+        @Html.AntiForgeryToken()
+        <button type="submit" class="btn-admin secondary">@L["admin.offlineUpdate.discard"]</button>
+      </form>
+    }
+  </div>
+
+  <div class="card-admin">
+    <h3><i class="ti ti-terminal-2" aria-hidden="true"></i>@L["admin.offlineUpdate.manualTitle"]</h3>
+    <p class="admin-field-hint">@L["admin.offlineUpdate.manualHint"]</p>
+    @if (!string.IsNullOrWhiteSpace(restartCommand))
+    {
+      <dl class="admin-kv">
+        <dt>@L["admin.offlineUpdate.restartCommand"]</dt>
+        <dd><code>@restartCommand</code></dd>
+      </dl>
+    }
+    <pre class="admin-code-block"><code>powershell -ExecutionPolicy Bypass -File .\update.ps1 -TargetDir "&lt;app folder&gt;" -Restart</code></pre>
+    <partial name="_AdminHint" model='L["admin.offlineUpdate.manualSafety"]' />
+  </div>
+</div>
+
+@section Scripts {
+  <script src="~/js/admin-offline-update.js?v=@V.AssetVersion"></script>
+}

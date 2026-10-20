@@ -1,14 +1,15 @@
-# Morobot V3 — مروبات / Morobot
+# Webautomator V3 — وباتومیتور / Webautomator
 
 بازنویسی پنل بدون Selenium: پرتال ASP.NET + بوم گردش + افزونه‌های Chrome MV3.
 
 وضعیت و قراردادها: [docs/STATUS.md](docs/STATUS.md)  
-رمزنگاری محلی و `.mrbt`: [docs/encryption-and-mrbt.md](docs/encryption-and-mrbt.md)
+**راهنمای جامع راه‌اندازی (Enterprise / on-prem):** [docs/setup-guide.md](docs/setup-guide.md) — در وب: `/Home/SetupGuide`  
+رمزنگاری محلی و `.watm`: [docs/encryption-and-watm.md](docs/encryption-and-watm.md)
 
 ## اجرا (local-first)
 
 ```bash
-dotnet run --project src/Morobot.Web --launch-profile https
+dotnet run --project src/Webautomator.Web --launch-profile https
 ```
 
 - لندینگ: https://localhost:7201/
@@ -20,13 +21,13 @@ dotnet run --project src/Morobot.Web --launch-profile https
 ## ساختار مهم
 
 ```
-src/Morobot.Web/Areas/Panel   پنل احرازشده
-src/Morobot.Web/Views/Home    لندینگ عمومی
+src/Webautomator.Web/Areas/Panel   پنل احرازشده
+src/Webautomator.Web/Views/Home    لندینگ عمومی
 wwwroot/locales                        fa.json / en.json
-wwwroot/js/da-crypto.js                AES-GCM + .mrbt
+wwwroot/js/da-crypto.js                AES-GCM + .watm
 wwwroot/js/da-secure-store.js          localStorage رمزشده
 wwwroot/editor/flow.js                 طراح دیاگرام
-extension-recorder|player|selector     بسته‌های MV3 جدا
+extension-global|extension-smart-recorder   افزونه Global + Smart
 docs/                                  معماری و فازها
 ```
 

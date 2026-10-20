@@ -1,0 +1,41 @@
+@{
+  var culture = L.Culture;
+  var dir = L.Dir;
+  var cssPrefix = L.IsRtl ? "rtl/" : "";
+  var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+  var pageTitle = ViewData["Title"] as string;
+}
+<!doctype html>
+<html lang="@culture" class="light-style layout-wide customizer-hide" dir="@dir" data-culture="@culture" data-assets-path="~/assets/" data-style="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>@brandHead.ComposeTitle(pageTitle, L["brand.tagline"])</title>
+  <partial name="_BrandHead" model="brandHead" />
+  <link rel="stylesheet" href="~/css/da-fonts.css" />
+  <link rel="stylesheet" href="~/assets/vendor/fonts/tabler-icons.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/@(cssPrefix)core.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/@(cssPrefix)theme-default.css" />
+  <link rel="stylesheet" href="~/assets/css/demo.css" />
+  <link rel="stylesheet" href="~/assets/vendor/css/pages/page-auth.css" />
+  <link rel="stylesheet" href="~/css/portal-app.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-switch.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-cropper.css?v=@V.AssetVersion" />
+  <link rel="stylesheet" href="~/css/da-avatar.css?v=@V.AssetVersion" />
+  <style>body { font-family: Vazirmatn, sans-serif !important; }</style>
+  <script src="~/assets/vendor/js/helpers.js"></script>
+  <script src="~/assets/js/config.js"></script>
+</head>
+<body>
+  <div class="container-xxl">
+    <div class="authentication-wrapper authentication-basic container-p-y">
+      <div class="authentication-inner py-6">
+        @RenderBody()
+      </div>
+    </div>
+  </div>
+  <script src="~/js/i18n.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-switch.js?v=@V.AssetVersion"></script>
+  <script src="~/js/da-cropper.js?v=@V.AssetVersion"></script>
+</body>
+</html>

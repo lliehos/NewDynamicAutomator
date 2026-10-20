@@ -7,14 +7,14 @@ $chromeCandidates = @(
 $chrome = $chromeCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $chrome) { throw 'Chrome not found' }
 
-$root = if (Test-Path 'C:\Projects\MorobotV3\extension-recorder\manifest.json') {
-  'C:\Projects\MorobotV3'
+$root = if (Test-Path 'C:\Projects\WebautomatorV3\extension-recorder\manifest.json') {
+  'C:\Projects\WebautomatorV3'
 } else {
   'C:\Projects\DynamicAutomatorV3'
 }
 
 # Prefer synced install paths; fall back to repo source
-$base = Join-Path $env:LOCALAPPDATA 'morobot.soras.ir'
+$base = Join-Path $env:LOCALAPPDATA 'webautomator'
 $roles = @('extension-recorder','extension-player','extension-selector','extension-smart-recorder')
 $exts = @()
 foreach ($r in $roles) {
@@ -25,7 +25,7 @@ foreach ($r in $roles) {
 }
 if (-not $exts.Count) { throw 'No extension folders found' }
 
-$profile = Join-Path $env:LOCALAPPDATA 'Temp\morobot-chrome-test'
+$profile = Join-Path $env:LOCALAPPDATA 'Temp\webautomator-chrome-test'
 New-Item -ItemType Directory -Force -Path $profile | Out-Null
 $extArg = ($exts -join ',')
 

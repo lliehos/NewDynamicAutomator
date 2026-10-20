@@ -1,8 +1,14 @@
 .da-smart-root {
   position: fixed !important;
-  left: 18px !important;
-  right: auto !important;
-  bottom: 18px !important;
+  /* left/bottom are only the starting corner: the script writes an inline left+top once the
+     user drags the FAB, and an inline style cannot beat !important. Keeping the declaration
+     here without !important lets the drag win while still giving a sane default. */
+  left: 18px;
+  right: auto;
+  bottom: 18px;
+  top: auto;
+  /* Set by the resize handle. 1 = the default 56px mark. */
+  --da-smart-scale: 1;
   z-index: 2147483647 !important;
   display: flex !important;
   flex-direction: column !important;
@@ -10,14 +16,100 @@
   gap: 10px !important;
   pointer-events: none !important;
   font-family: Tahoma, sans-serif !important;
+  /* The FAB is dragged with the pointer; without this the browser starts a text selection or
+     a native drag of the logo image instead. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
+.da-smart-root.is-dragging {
+  cursor: grabbing;
+}
+.da-smart-root.is-dragging .da-smart-logo-btn img,
+.da-smart-root.is-dragging .da-smart-save,
+.da-smart-root.is-dragging .da-smart-copy {
+  pointer-events: none;
+}
+.da-smart-root.is-resizing .da-smart-logo-btn img {
+  pointer-events: none;
+}
+/* A movable grab area should look movable. */
+.da-smart-root .da-smart-logo-btn {
+  cursor: grab;
+}
+.da-smart-root.is-dragging .da-smart-logo-btn {
+  cursor: grabbing;
+}
+/* Resize handle: bottom-left, so it never overlaps the logo the user clicks to stop. */
+.da-smart-resize {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nesw-resize;
+  touch-action: none;
+  z-index: 3;
+}
+.da-smart-resize::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  width: 9px;
+  height: 9px;
+  border-left: 2px solid rgba(255, 255, 255, 0.85);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 1px;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
+}
+.da-smart-resize:hover::before,
+.da-smart-root.is-resizing .da-smart-resize::before {
+  border-color: #28c76f;
+}
+.da-smart-root img {
+  -webkit-user-drag: none;
+  user-drag: none;
+  pointer-events: none;
+}
+/* Gesture guide. Sits above the FAB, is click-to-dismiss, and must never swallow a page click
+   it happens to overlap, so only the box itself is interactive. */
+.da-smart-guide {
+  max-width: 260px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #f8fafc;
+  font-size: 11px;
+  line-height: 1.7;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.da-smart-guide[hidden] { display: none !important; }
+.da-smart-guide-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.da-smart-guide-keys { white-space: nowrap; }
+.da-smart-guide kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  font-family: inherit;
+  font-size: 10px;
+}
+.da-smart-guide-text { opacity: 0.92; }
 .da-smart-root[hidden] {
   display: none !important;
 }
 .da-smart-root > * { pointer-events: auto !important; }
 .da-smart-logo-btn {
-  width: 56px;
-  height: 56px;
+  width: calc(56px * var(--da-smart-scale, 1));
+  height: calc(56px * var(--da-smart-scale, 1));
   padding: 0;
   border: 0;
   border-radius: 14px;
@@ -26,10 +118,12 @@
   box-shadow: 0 8px 22px rgba(13, 148, 136, 0.35);
   overflow: hidden;
   display: block;
+  /* Anchor for the resize handle. */
+  position: relative;
 }
 .da-smart-logo-btn img {
-  width: 56px;
-  height: 56px;
+  width: 100%;
+  height: 100%;
   display: block;
 }
 .da-smart-logo-btn.thinking {
@@ -51,12 +145,72 @@
   background: #28c76f;
   color: #fff;
   cursor: pointer;
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   box-shadow: 0 6px 16px rgba(40, 199, 111, 0.35);
 }
-.da-smart-save.show {
-  display: inline-flex;
-}
 .da-smart-save svg { display: block; }
+/* Persistent result banner.
+   A save that fails leaves the process empty, so the reason must stay on screen rather than expire
+   like a toast. It sits above the action row and wraps instead of clipping, because the message can
+   name a port and an error code. */
+.da-smart-notice {
+  max-width: 320px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff3f3;
+  color: #b42318;
+  border: 1px solid #f4c7c3;
+  font-size: 12px;
+  line-height: 1.6;
+  direction: rtl;
+  text-align: right;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.da-smart-notice.is-success {
+  background: #eafaf1;
+  color: #157347;
+  border-color: #b7e4c7;
+}
+/* The copy + save pair. The root stacks its children in a column, so the two actions need their own
+   row to sit side by side; without this wrapper the copy button would take a row of its own. */
+.da-smart-actions {
+  display: none;
+  align-items: center;
+  gap: 8px;
+}
+.da-smart-actions.show {
+  display: flex;
+}
+/* Build stamp. Small and quiet, but on screen: it is the only way to tell which copy of the
+   extension the browser is actually running, since Load unpacked reports nothing back. */
+.da-smart-version {
+  font-size: 11px;
+  font-family: Tahoma, sans-serif;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 6px;
+  padding: 2px 6px;
+  direction: ltr;
+  user-select: all;
+}
+/* Copy to memory — a plain icon button beside Save. */
+.da-smart-copy {
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 12px;
+  background: #fff;
+  color: #4b465c;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+.da-smart-copy svg { display: block; }
+.da-smart-copy:disabled,
+.da-smart-save:disabled { opacity: 0.6; cursor: default; }

@@ -1,0 +1,802 @@
+/** Player portal UI — play / pause / resume / stop. */
+(function () {
+  function playerOk() {
+    return document.documentElement.dataset.daPlayerExtension === "1";
+  }
+
+  function setPortalStatus(msg, type) {
+    const status = document.getElementById("da-portal-status")
+      || document.getElementById("flow-status")
+      || document.getElementById("da-page-rec-status");
+    if (status && msg != null) status.textContent = String(msg);
+    if (msg) {
+      try {
+        window.dispatchEvent(new CustomEvent("da-notify", {
+          detail: { message: String(msg), type: type || "info" }
+        }));
+      } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * Explain why "build element" did not add a node.
+   *
+   * The refusal happens on the tab the user right-clicked, which may not be the editor tab, so
+   * this both sets the page status and raises the editor's own notice channel — otherwise the
+   * message lands somewhere the user is not looking and looks like nothing happened.
+   */
+  function showBuildNotice(labelKey, detail) {
+    const culture = (document.documentElement.dataset.culture || "fa").toLowerCase() === "en" ? "en" : "fa";
+    const pack = culture === "en"
+      ? { noEditor: "Open the process editor first.", manyEditors: "More than one editor is open; keep only one.", locked: "This process is locked and cannot take a new node.", noElement: "No element selected. Right-click one first." }
+      : { noEditor: "ابتدا ادیتور فرآیند را باز کنید.", manyEditors: "بیش از یک ادیتور باز است؛ فقط یکی را باز بگذارید.", locked: "این فرآیند قفل است و نود جدید نمی‌پذیرد.", noElement: "المانی انتخاب نشده است. ابتدا روی آن راست‌کلیک کنید." };
+    const short = String(labelKey || "").replace(/^build\./, "");
+    const text = pack[short] || pack.noElement;
+    setPortalStatus(text, "error");
+    try {
+      window.postMessage({ source: "da-player-ext", type: "build-notice", text, detail: detail || "" }, "*");
+    } catch { /* ignore */ }
+  }
+
+  function emitPlayUi(phase, text, extra) {    const detail = { phase, text: text || "", ...(extra || {}) };
+    try {
+      // postMessage reaches the page world (editor); CustomEvent stays in the content-script world.
+      window.postMessage({ source: "da-player-ext", type: "play-ui", ...detail }, "*");
+      window.dispatchEvent(new CustomEvent("da-play-ui", { detail }));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function emitRecordUi(phase, text, extra) {
+    const detail = { phase, text: text || "", ...(extra || {}) };
+    try {
+      window.postMessage({ source: "da-recorder-ext", type: "record-ui", ...detail }, "*");
+      window.dispatchEvent(new CustomEvent("da-record-ui", { detail }));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function recorderOk() {
+    return document.documentElement.dataset.daRecorderExtension === "1"
+      || document.documentElement.dataset.daExtension === "1";
+  }
+
+  function portalUser() {
+    return localStorage.getItem("da_local_user") || "test";
+  }
+
+  /** Decrypt portal tasks into the Player extension before startPlay. */
+  async function readPortalTasksAsync() {
+    const user = portalUser();
+    const key = "da_local_tasks__" + user;
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return [];
+      if (window.DaCrypto && DaCrypto.looksEncrypted(raw)) {
+        const data = await DaCrypto.decryptJson(raw);
+        return Array.isArray(data) ? data : [];
+      }
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function mergePreferRicherPerId(prev, incoming) {
+    const isServerId = (id) => /^\d+$/.test(String(id ?? "").trim());
+    const prevById = new Map((prev || []).map((t) => [String(t.id), t]));
+    return (incoming || []).map((t) => {
+      const old = prevById.get(String(t.id));
+      if (!old) return t;
+      if (isServerId(t.id)) {
+        const out = { ...old, ...t };
+        if (Array.isArray(t.graph?.nodes) && t.graph.nodes.length) out.graph = t.graph;
+        else if (!Array.isArray(t.graph?.nodes) || !t.graph.nodes.length) {
+          if (!t.graph?.nodes?.length && t.stepCount != null) {
+            delete out.graph;
+            out.stepCount = Number(t.stepCount) || 0;
+            out.groupCount = Number(t.groupCount) || 0;
+          } else if (old.graph) out.graph = old.graph;
+        }
+        return out;
+      }
+      const inHas = Array.isArray(t?.graph?.nodes);
+      const oldHas = Array.isArray(old?.graph?.nodes);
+      if (inHas && (!oldHas || t.graph.nodes.length <= old.graph.nodes.length)) {
+        return { ...old, ...t, graph: t.graph };
+      }
+      if (oldHas && !inHas) {
+        return { ...t, graph: old.graph, stepCount: old.stepCount ?? t.stepCount, groupCount: old.groupCount ?? t.groupCount };
+      }
+      if (inHas && oldHas) {
+        return { ...old, ...t, graph: t.graph };
+      }
+      return { ...old, ...t };
+    });
+  }
+
+  async function syncTasksIntoPlayer(preferredTask) {
+    let tasks = await readPortalTasksAsync();
+    if (preferredTask && preferredTask.id != null) {
+      const id = String(preferredTask.id);
+      const idx = tasks.findIndex((t) => String(t.id) === id);
+      const merged = {
+        ...(idx >= 0 ? tasks[idx] : {}),
+        ...preferredTask,
+        graph: preferredTask.graph || (idx >= 0 ? tasks[idx].graph : null)
+      };
+      if (idx >= 0) tasks[idx] = merged;
+      else tasks = tasks.concat([merged]);
+    }
+    // If disk decrypt lagged, retry once.
+    const needGraph = preferredTask && preferredTask.graph?.nodes?.length;
+    const hasGraph = needGraph && tasks.some((t) => String(t.id) === String(preferredTask.id) && t.graph?.nodes?.length);
+    if (needGraph && !hasGraph) {
+      await new Promise((r) => setTimeout(r, 80));
+      const again = await readPortalTasksAsync();
+      tasks = mergePreferRicherPerId(again, tasks);
+      const idx = tasks.findIndex((t) => String(t.id) === String(preferredTask.id));
+      if (idx >= 0 && preferredTask.graph?.nodes) {
+        tasks[idx] = { ...tasks[idx], ...preferredTask, graph: preferredTask.graph };
+      }
+    }
+    const user = portalUser();
+    if (!tasks.length) {
+      return { ok: false, error: "در پورتال فرآیندی نیست یا هنوز رمزگشایی نشده — صفحه را رفرش کنید." };
+    }
+    return chrome.runtime.sendMessage({
+      type: "syncTasksFromPortal",
+      tasks,
+      user
+    }).catch((e) => ({ ok: false, error: e.message }));
+  }
+
+  let lastConditionAnnounceKey = "";
+  let conditionWaitGen = 0;
+
+  function announceConditionResult(pass, text, meta) {
+    const ok = !!pass;
+    const msg = text || (ok ? "نتیجه شرط: برقرار (موفق)" : "نتیجه شرط: برقرار نیست (ناموفق)");
+    // Unique per check run — same pass/fail must still alert again.
+    const checkId = meta?.checkId != null ? String(meta.checkId) : `${Date.now()}-${Math.random()}`;
+    const key = `ann:${checkId}`;
+    if (key === lastConditionAnnounceKey) return;
+    lastConditionAnnounceKey = key;
+    setPortalStatus(msg, ok ? "success" : "error");
+    emitPlayUi("done", msg, { conditionPass: ok, checkId });
+    try {
+      window.postMessage({
+        source: "da-player-ext",
+        type: "condition-result",
+        pass: ok,
+        message: msg,
+        checkId
+      }, "*");
+    } catch { /* ignore */ }
+  }
+
+  async function waitForConditionResult(timeoutMs, expect) {
+    const gen = ++conditionWaitGen;
+    const t0 = Date.now();
+    const deadline = t0 + Math.max(2000, Number(timeoutMs) || 20000);
+    const expectNodeId = expect?.conditionNodeId || null;
+    let sawPlaying = false;
+    let last = null;
+
+    while (Date.now() < deadline) {
+      if (gen !== conditionWaitGen) return false; // superseded by a newer check
+      const st = await chrome.runtime.sendMessage({ type: "getPlayState" }).catch(() => null);
+      last = st;
+      if (st?.playing) sawPlaying = true;
+
+      if (sawPlaying && st && st.playing === false) {
+        const lr = st.lastResult;
+        if (lr && Object.prototype.hasOwnProperty.call(lr, "conditionPass")) {
+          // Ignore stale result from a previous run (no checkId or older than this wait).
+          const cid = lr.checkId != null ? Number(lr.checkId) : NaN;
+          if (Number.isFinite(cid) && cid < t0 - 50) {
+            await new Promise((r) => setTimeout(r, 100));
+            continue;
+          }
+          if (expectNodeId && lr.nodeId && lr.nodeId !== expectNodeId) {
+            await new Promise((r) => setTimeout(r, 100));
+            continue;
+          }
+          announceConditionResult(!!lr.conditionPass, null, { checkId: lr.checkId || `${t0}` });
+          return true;
+        }
+        if (st.lastError) {
+          announceConditionResult(false, String(st.lastError), { checkId: `${t0}-err` });
+          return false;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    if (gen !== conditionWaitGen) return false;
+    if (last?.lastResult && Object.prototype.hasOwnProperty.call(last.lastResult, "conditionPass")) {
+      const lr = last.lastResult;
+      const cid = lr.checkId != null ? Number(lr.checkId) : NaN;
+      if (!Number.isFinite(cid) || cid >= t0 - 50) {
+        announceConditionResult(!!lr.conditionPass, null, { checkId: lr.checkId || `${t0}` });
+        return true;
+      }
+    }
+    announceConditionResult(
+      false,
+      "بررسی شرط پاسخ نداد. تب هدف را باز نگه دارید و دوباره تلاش کنید.",
+      { checkId: `${t0}-timeout` }
+    );
+    return false;
+  }
+
+  async function playTask(taskId, scope) {
+    const id = String(taskId || "").trim();
+    if (!id || id === "NaN" || id === "null" || id === "undefined") {
+      setPortalStatus("شناسهٔ فرآیند نامعتبر است.", "error");
+      emitPlayUi("error", "شناسهٔ فرآیند نامعتبر است.");
+      return { ok: false, error: "شناسهٔ فرآیند نامعتبر است." };
+    }
+
+    const preparing = "آماده‌سازی افزونهٔ اجرا…";
+    const status = document.getElementById("da-portal-status")
+      || document.getElementById("flow-status")
+      || document.getElementById("da-page-rec-status");
+    if (status) status.textContent = preparing;
+    emitPlayUi("preparing", preparing);
+
+    try {
+      await fetch("/extension/sync", { method: "POST", cache: "no-store" });
+    } catch {
+      /* ignore */
+    }
+
+    const preferred = scope?.task
+      || (scope?.graph ? { id, graph: scope.graph, title: scope.graph.title } : null);
+
+    // Push portal process list into Player chrome.storage BEFORE startPlay.
+    const sync = await syncTasksIntoPlayer(preferred);
+    if (!sync?.ok) {
+      const msg = sync?.error || "همگام‌سازی فرآیندها با افزونهٔ اجرا ناموفق بود.";
+      setPortalStatus(msg, "error");
+      emitPlayUi("error", msg);
+      return sync;
+    }
+
+    const rawTab = scope?.tabId != null && scope.tabId !== "" ? Number(scope.tabId) : NaN;
+    const hasTargetTab = Number.isFinite(rawTab);
+    const isConditionCheck = !!scope?.conditionNodeId;
+    const payload = {
+      type: "startPlay",
+      // Keep UUID/string ids — Number(uuid) becomes NaN and breaks play.
+      taskId: id,
+      groupNodeId: scope?.groupNodeId || null,
+      stepNodeId: scope?.stepNodeId || null,
+      conditionNodeId: scope?.conditionNodeId || null,
+      // "from this node onward": entry point for a full walk, not a single-node run.
+      nextFromNodeId: scope?.nextFromNodeId || null,
+      playScope: scope?.playScope
+        || (scope?.nextFromNodeId ? "next"
+          : scope?.conditionNodeId ? "condition"
+            : scope?.stepNodeId ? "step"
+              : scope?.groupNodeId ? "group"
+                : "task"),
+      tabId: hasTargetTab ? rawTab : null,
+      // Portal Start → new blank tab; ctx check/run → never open a new tab.
+      openNewTab: hasTargetTab ? false : (isConditionCheck ? false : (scope?.openNewTab !== false)),
+      // Per-run choice from the run-type menu. Unset means the default: a server run.
+      runOnServer: scope?.runOnServer !== false
+    };
+    const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
+    if (res?.reloading) {
+      const msg = res.message || "افزونه در حال Reload است — اجرا خودکار شروع می‌شود…";
+      setPortalStatus(msg, "info");
+      emitPlayUi("reloading", msg);
+    } else if (res?.ok) {
+      const msg = isConditionCheck
+        ? (hasTargetTab
+          ? "بررسی شرط در تب انتخاب‌شده شروع شد"
+          : "بررسی شرط شروع شد")
+        : (hasTargetTab
+          ? (scope?.groupNodeId
+            ? `اجرای گروه در تب انتخاب‌شده شروع شد — ${res.stepTotal || "?"} مرحله`
+            : `اجرا در تب انتخاب‌شده شروع شد — ${res.stepTotal || "?"} مرحله`)
+          : `اجرا شروع شد — ${res.stepTotal || "?"} مرحله`);
+      // For condition checks avoid green "started" toast — poll for the real pass/fail.
+      if (isConditionCheck) {
+        if (status) status.textContent = msg;
+        emitPlayUi("started", msg);
+        lastConditionAnnounceKey = "";
+        waitForConditionResult(25000, { conditionNodeId: scope.conditionNodeId }).catch(() => {});
+      } else {
+        setPortalStatus(msg, "success");
+        emitPlayUi("started", msg);
+      }
+    } else {
+      const msg = res?.error || "خطا در اجرا";
+      setPortalStatus(msg, "error");
+      emitPlayUi("error", msg);
+    }
+    return res;
+  }
+
+  async function recordTask(taskId, scope) {
+    const id = String(taskId || "").trim();
+    if (!id || id === "NaN" || id === "null" || id === "undefined") {
+      setPortalStatus("شناسهٔ فرآیند نامعتبر است.", "error");
+      emitRecordUi("error", "شناسهٔ فرآیند نامعتبر است.");
+      return { ok: false, error: "شناسهٔ فرآیند نامعتبر است." };
+    }
+    if (!recorderOk()) {
+      const msg = "افزونهٔ ضبط متصل نیست — از chrome://extensions آن را Reload کنید.";
+      setPortalStatus(msg, "error");
+      emitRecordUi("error", msg);
+      return { ok: false, error: msg };
+    }
+
+    emitRecordUi("preparing", "آماده‌سازی ضبط…");
+
+    try {
+      await fetch("/extension/sync", { method: "POST", cache: "no-store" });
+    } catch {
+      /* ignore */
+    }
+
+    const preferred = scope?.task
+      || (scope?.graph ? { id, graph: scope.graph, title: scope.graph.title } : null);
+
+    const sync = await syncTasksIntoPlayer(preferred);
+    if (!sync?.ok) {
+      const msg = sync?.error || "همگام‌سازی فرآیند با افزونه ناموفق بود.";
+      setPortalStatus(msg, "error");
+      emitRecordUi("error", msg);
+      return sync;
+    }
+
+    const rawTab = scope?.tabId != null && scope.tabId !== "" ? Number(scope.tabId) : NaN;
+    const hasTab = Number.isFinite(rawTab);
+    const payload = {
+      type: "startRecordSession",
+      taskId: id,
+      taskTitle: scope?.taskTitle || preferred?.title || null,
+      groupTitle: scope?.groupTitle || null
+    };
+    if (hasTab && scope?.openNewTab !== true) {
+      payload.tabId = rawTab;
+    }
+
+    const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
+    if (res?.ok) {
+      const msg = hasTab && scope?.openNewTab !== true
+        ? `ضبط در تب #${rawTab} شروع شد`
+        : "ضبط در تب جدید شروع شد — FAB روی صفحهٔ هدف";
+      setPortalStatus(msg, "success");
+      emitRecordUi("started", msg);
+    } else {
+      const msg = res?.error || "خطا در شروع ضبط";
+      setPortalStatus(msg, "error");
+      emitRecordUi("error", msg);
+    }
+    return res;
+  }
+
+  function tabLabel(t) {
+    const title = (t.title || "").trim() || "بدون عنوان";
+    const url = (t.url || "").replace(/^https?:\/\//i, "").slice(0, 48);
+    return url ? `${title} — ${url}` : title;
+  }
+
+  async function listOpenTabsForEditor() {
+    let res = await chrome.runtime.sendMessage({ type: "listOpenTabs" })
+      .catch((e) => ({ ok: false, error: e.message, tabs: [] }));
+    // Cold service worker: one quick retry.
+    if (!res?.ok && !Array.isArray(res?.tabs)) {
+      await new Promise((r) => setTimeout(r, 200));
+      res = await chrome.runtime.sendMessage({ type: "listOpenTabs" })
+        .catch((e) => ({ ok: false, error: e.message, tabs: [] }));
+    }
+    const tabs = Array.isArray(res?.tabs) ? res.tabs : [];
+    // Execution targets: http(s) pages and blank/about:blank tabs (not the Webautomator portal).
+    const list = tabs.filter((t) => {
+      if (!t || !t.id || t.isPortal) return false;
+      if (t.isBlank) return true;
+      return /^https?:\/\//i.test(String(t.url || ""));
+    });
+    list.sort((a, b) => {
+      if (a.isBlank !== b.isBlank) return a.isBlank ? 1 : -1;
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      return 0;
+    });
+    return {
+      ok: !!res?.ok || list.length > 0,
+      tabs: list.map((t) => ({
+        id: t.id,
+        title: t.title || "",
+        url: t.url || "",
+        active: !!t.active,
+        isBlank: !!t.isBlank,
+        isPortal: !!t.isPortal,
+        label: (t.isBlank ? (t.title || "تب جدید / خالی") : tabLabel(t))
+          + (t.isPortal ? " (پورتال)" : "")
+          + (t.isBlank ? " · about:blank" : "")
+      })),
+      error: res?.error
+    };
+  }
+
+  async function stopPlay() {
+    const res = await chrome.runtime.sendMessage({ type: "stopPlay" }).catch((e) => ({ ok: false, error: e.message }));
+    if (res?.ok === false && res?.error) {
+      setPortalStatus(res.error, "error");
+    } else {
+      setPortalStatus("اجرا متوقف شد", "info");
+    }
+    emitPlayUi("done");
+    return res;
+  }
+
+  async function pausePlayFromPortal() {
+    const res = await chrome.runtime.sendMessage({ type: "pausePlay" }).catch((e) => ({ ok: false, error: e.message }));
+    if (res?.ok === false && res?.error) {
+      setPortalStatus(res.error, "error");
+    } else {
+      setPortalStatus("اجرا موقتاً متوقف شد", "info");
+    }
+    return res;
+  }
+
+  async function resumePlayFromPortal() {
+    const res = await chrome.runtime.sendMessage({ type: "resumePlay" }).catch((e) => ({ ok: false, error: e.message }));
+    if (res?.ok === false && res?.error) {
+      setPortalStatus(res.error, "error");
+    } else {
+      setPortalStatus("ادامه اجرا", "info");
+    }
+    return res;
+  }
+
+  document.addEventListener("click", async (ev) => {
+    const t = ev.target instanceof Element ? ev.target.closest("[data-da-action]") : null;
+    if (!t) return;
+    const action = t.getAttribute("data-da-action");
+
+    if (action === "check-extension" || action === "check-player") {
+      ev.preventDefault();
+      window.dispatchEvent(new CustomEvent("da-extension-recheck", { detail: { role: "player" } }));
+    }
+    if (action === "check-recorder") {
+      ev.preventDefault();
+      window.dispatchEvent(new CustomEvent("da-extension-recheck", { detail: { role: "recorder" } }));
+    }
+    if (action === "play-task") {
+      ev.preventDefault();
+      if (!playerOk()) return;
+      const taskId = t.getAttribute("data-task-id");
+      if (!taskId) return;
+      await playTask(taskId);
+    }
+    if (action === "play-group") {
+      ev.preventDefault();
+      if (!playerOk()) return;
+      const taskId = t.getAttribute("data-task-id") || document.getElementById("flow-app")?.dataset?.taskId;
+      const groupNodeId = t.getAttribute("data-group-id");
+      if (!taskId || !groupNodeId) return;
+      await playTask(taskId, { groupNodeId });
+    }
+    if (action === "play-step") {
+      ev.preventDefault();
+      if (!playerOk()) return;
+      const taskId = t.getAttribute("data-task-id") || document.getElementById("flow-app")?.dataset?.taskId;
+      const stepNodeId = t.getAttribute("data-step-id");
+      if (!taskId || !stepNodeId) return;
+      await playTask(taskId, { stepNodeId });
+    }
+    if (action === "stop-play") {
+      ev.preventDefault();
+      if (!playerOk()) return;
+      await stopPlay();
+    }
+    if (action === "pause-play") {
+      ev.preventDefault();
+      if (!playerOk()) return;
+      await pausePlayFromPortal();
+    }
+    if (action === "resume-play") {
+      ev.preventDefault();
+      if (!playerOk()) return;
+      await resumePlayFromPortal();
+    }
+    if (action === "copy-record-memory") {
+      ev.preventDefault();
+      // Copy the last recording back OUT of extension memory.
+      //
+      // The copy button lives on the recorded page's HUD, and that page is often closed or navigated
+      // away before the user gets to the diagram. Without this, the payload captured by
+      // `saveMemoryDraft` would be unreachable and the user would have to record the process again.
+      // The text is already in storage (written by `saveMemoryDraft`), so nothing server-side is
+      // needed — but the clipboard write still has to happen on a page, because the background has
+      // no DOM.
+      const culture = (document.documentElement.dataset.culture || "fa").toLowerCase() === "en" ? "en" : "fa";
+      const pack = culture === "en"
+        ? {
+          none: "There is no recorded process in extension memory.",
+          copied: "The recorded process was copied — right-click the diagram and choose Paste process.",
+          blocked: "The browser blocked the clipboard write."
+        }
+        : {
+          none: "فرآیند ضبط‌شده‌ای در حافظهٔ افزونه نیست.",
+          copied: "فرآیند ضبط‌شده در حافظه کپی شد — در دیاگرام راست‌کلیک و «چسباندن فرآیند» را بزنید.",
+          blocked: "مرورگر اجازهٔ نوشتن در حافظه را نداد."
+        };
+
+      const stored = await chrome.storage.local.get(["recordMemoryText", "recordMemoryAt"]).catch(() => ({}));
+      const text = stored?.recordMemoryText;
+      if (!text) {
+        setPortalStatus(pack.none, "error");
+        return;
+      }
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch { ok = false; }
+      setPortalStatus(ok ? pack.copied : pack.blocked, ok ? "success" : "error");
+      return;
+    }
+  });
+
+  // postMessage path for ctx «اجرا/بررسی در مرورگر» (reliable tabId)
+  window.addEventListener("message", async (ev) => {    if (ev.source !== window) return;
+    const d = ev.data;
+    if (!d || d.source !== "da-editor") return;
+    // Only the extension that OWNS this page (fingerprint handshake succeeded) answers the editor.
+    // With a second Webautomator extension installed, both content scripts see this message; without
+    // the guard both would start a run against their own server.
+    if (!playerOk()) return;
+    if (d.type === "play") {
+      if (!d.taskId) return;
+      await playTask(d.taskId, {
+        groupNodeId: d.groupNodeId,
+        stepNodeId: d.stepNodeId,
+        conditionNodeId: d.conditionNodeId,
+        nextFromNodeId: d.nextFromNodeId,
+        playScope: d.playScope || null,
+        tabId: d.tabId,
+        openNewTab: d.openNewTab,
+        task: d.task || null,
+        graph: d.graph || null,
+        // Editor context menus never set this: a run started with the diagram open is a server run.
+        runOnServer: d.runOnServer
+      });
+      return;
+    }
+    if (d.type === "stop") {
+      await stopPlay();
+      return;
+    }
+    if (d.type === "pause") {
+      await pausePlayFromPortal();
+      return;
+    }
+    if (d.type === "resume") {
+      await resumePlayFromPortal();
+      return;
+    }
+    if (d.type === "list-open-tabs") {
+      const res = await listOpenTabsForEditor();
+      try {
+        window.postMessage({ source: "da-player-ext", type: "open-tabs", ...res }, "*");
+        window.dispatchEvent(new CustomEvent("da-open-tabs", { detail: res }));
+      } catch { /* ignore */ }
+    }
+    if (d.type === "get-play-state") {
+      // Reconciler for the editor: it may have missed a "done" broadcast (a dropped message, or a run
+      // that ended in the editor's own tab). Reading the engine's real state lets the editor clear a
+      // Stop button it is otherwise stuck showing forever. The panel's run-mode switch uses the same
+      // answer (with taskId) to refuse flipping a process that is currently running.
+      const st = await chrome.runtime.sendMessage({ type: "getPlayState" }).catch(() => null);
+      const detail = {
+        playing: !!st?.playing,
+        paused: !!st?.paused,
+        taskId: st?.taskId != null ? String(st.taskId) : null,
+        scope: st?.scope || null,
+        lastError: st?.lastError || null,
+        currentNodeId: st?.currentNodeId || null
+      };
+      try {
+        window.postMessage({ source: "da-player-ext", type: "play-state", ...detail }, "*");
+        window.dispatchEvent(new CustomEvent("da-play-state", { detail }));
+      } catch { /* ignore */ }
+    }
+    if (d.type === "record") {
+      if (!d.taskId) return;
+      await recordTask(d.taskId, {
+        tabId: d.tabId,
+        openNewTab: d.openNewTab,
+        taskTitle: d.taskTitle,
+        task: d.task || null,
+        graph: d.graph || null
+      });
+      return;
+    }
+  });
+
+  window.addEventListener("da-start-record", async (ev) => {
+    if (!recorderOk()) return;
+    const d = ev.detail || {};
+    if (!d.taskId) return;
+    await recordTask(d.taskId, {
+      tabId: d.tabId,
+      openNewTab: d.openNewTab,
+      taskTitle: d.taskTitle,
+      task: d.task || null,
+      graph: d.graph || null
+    });
+  });
+
+  window.addEventListener("da-play", async (ev) => {
+    if (!playerOk()) return;
+    const d = ev.detail || {};
+    if (!d.taskId) return;
+    // Skip if this looks like a tab-targeted play without tabId (handled via postMessage).
+    await playTask(d.taskId, {
+      groupNodeId: d.groupNodeId,
+      stepNodeId: d.stepNodeId,
+      conditionNodeId: d.conditionNodeId,
+      nextFromNodeId: d.nextFromNodeId,
+      playScope: d.playScope || null,
+      tabId: d.tabId,
+      openNewTab: d.openNewTab,
+      task: d.task || null,
+      graph: d.graph || null,
+      // The processes list's run-type menu sends this; the editor's own menu leaves it unset.
+      runOnServer: d.runOnServer
+    });
+  });
+
+  window.addEventListener("da-list-open-tabs", async () => {
+    if (!playerOk()) return;
+    const res = await listOpenTabsForEditor();
+    try {
+      window.dispatchEvent(new CustomEvent("da-open-tabs", { detail: res }));
+      window.postMessage({ source: "da-player-ext", type: "open-tabs", ...res }, "*");
+    } catch { /* ignore */ }
+  });
+
+  window.addEventListener("da-stop-play", async () => {
+    if (!playerOk()) return;
+    await stopPlay();
+  });
+
+  window.addEventListener("da-pause-play", async () => {
+    if (!playerOk()) return;
+    await pausePlayFromPortal();
+  });
+
+  window.addEventListener("da-resume-play", async () => {
+    if (!playerOk()) return;
+    await resumePlayFromPortal();
+  });
+
+  function maybeAnnounceFromPlayState(message) {
+    if (!message) return false;
+    if (message.type === "conditionCheckResult") {
+      announceConditionResult(!!message.pass, message.message, { checkId: message.checkId });
+      return true;
+    }
+    if (message.type !== "playStateChanged") return false;
+    const hasCond = message.lastResult
+      && Object.prototype.hasOwnProperty.call(message.lastResult, "conditionPass");
+    if (!hasCond) return false;
+    // Prefer finished state; also accept if playing was cleared early for condition checks.
+    if (message.playing && message.scope !== "condition") return false;
+    announceConditionResult(
+      !!message.lastResult.conditionPass,
+      null,
+      { checkId: message.lastResult.checkId }
+    );
+    return true;
+  }
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    // Relay from the worker into the PAGE world, where the editor listens.
+    // The editor lives in the page, not in this content script, so a message from the service
+    // worker has to be forwarded across the isolated-world boundary. The editor's answer is
+    // returned to the worker so it can report a refusal (locked graph, etc.) to the user.
+    if (message?.type === "relayToPage") {
+      const requestId = `da-build-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+      let settled = false;
+      const onReply = (ev) => {
+        if (ev.source !== window) return;
+        const d = ev.data;
+        if (!d || d.source !== "da-editor" || d.type !== "da-build-node-result") return;
+        if (d.requestId !== requestId) return;
+        settled = true;
+        window.removeEventListener("message", onReply);
+        try { sendResponse(d.result || { ok: false, errorKey: "build.noElement" }); } catch { /* ignore */ }
+      };
+      window.addEventListener("message", onReply);
+      try {
+        window.postMessage({ ...(message.payload || {}), requestId }, "*");
+      } catch {
+        window.removeEventListener("message", onReply);
+        try { sendResponse({ ok: false, errorKey: "build.noElement" }); } catch { /* ignore */ }
+        return false;
+      }
+      // Do not leave the worker waiting forever on a page that never answers.
+      setTimeout(() => {
+        if (settled) return;
+        window.removeEventListener("message", onReply);
+        try { sendResponse({ ok: false, errorKey: "build.noEditor" }); } catch { /* ignore */ }
+      }, 2500);
+      return true;   // async response
+    }
+
+    // A refusal the worker could not resolve into a label — show it on the page.
+    if (message?.type === "da-build-error") {
+      showBuildNotice(message.labelKey, message.detail);
+      return;
+    }
+
+    if (maybeAnnounceFromPlayState(message)) return;
+    if (message?.type !== "playStateChanged") return;
+
+    // Live diagram highlight on the editor (current node).
+    try {
+      window.postMessage({
+        source: "da-player-ext",
+        type: "play-progress",
+        playing: !!message.playing,
+        nodeId: message.currentNodeId || null,
+        stepIndex: message.stepIndex || 0,
+        stepTotal: message.stepTotal || 0,
+        paused: !!message.paused
+      }, "*");
+      window.dispatchEvent(new CustomEvent("da-play-progress", {
+        detail: {
+          playing: !!message.playing,
+          nodeId: message.currentNodeId || null,
+          stepIndex: message.stepIndex || 0,
+          stepTotal: message.stepTotal || 0,
+          paused: !!message.paused
+        }
+      }));
+    } catch { /* ignore */ }
+
+    const status = document.getElementById("da-portal-status")
+      || document.getElementById("flow-status")
+      || document.getElementById("da-page-rec-status");
+    if (message.playing) {
+      // Don't spam "اجرا شروع شد" for silent condition checks.
+      if (message.scope === "condition") return;
+      const msg = message.title ? `اجرا: ${message.title}` : "اجرا شروع شد";
+      if (status) status.textContent = msg;
+      emitPlayUi("started", msg);
+    } else if (message.lastError) {
+      const msg = String(message.lastError);
+      setPortalStatus(msg, "error");
+      emitPlayUi("error", msg);
+    } else {
+      emitPlayUi("done");
+    }
+  });
+
+  const hidePortalExtFab = async () => {
+    try {
+      const { portalBase } = await chrome.storage.local.get("portalBase");
+      const base = String(portalBase || "").replace(/\/$/, "");
+      if (!base || !location.href.startsWith(base)) return;
+    } catch {
+      return;
+    }
+    const extFab = document.getElementById("da-player-fab") || document.getElementById("da-recorder-fab");
+    if (extFab) extFab.style.display = "none";
+  };
+  hidePortalExtFab();
+  setTimeout(hidePortalExtFab, 400);
+
+  window.daPlayerOk = playerOk;
+})();

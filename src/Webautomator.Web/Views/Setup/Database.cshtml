@@ -1,0 +1,140 @@
+@model Webautomator.Infrastructure.Services.DatabaseSetupResult
+@{
+    Layout = null;
+    ViewData["Title"] = "راه‌اندازی دیتابیس";
+    var result = Model;
+    var brandHead = ViewData["BrandHead"] as BrandHeadModel ?? new BrandHeadModel();
+    var retryFailed = TempData["SetupRetryFailed"] != null;
+}
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>راه‌اندازی دیتابیس — @brandHead.AppName</title>
+  <partial name="_BrandHead" model="brandHead" />
+  @* Same font as the rest of the application; Tahoma remains the fallback for an offline server. *@
+  <link rel="stylesheet" href="~/css/da-fonts.css" />
+  <style>
+    :root { --ink: #1f2937; --muted: #6b7280; --line: #e5e7eb; --bg: #f9fafb; --accent: #7367f0; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: Vazirmatn, Tahoma, "Segoe UI", sans-serif;
+      margin: 0; padding: 2rem 1rem; background: var(--bg); color: var(--ink);
+      line-height: 1.8;
+    }
+    .wrap { max-width: 860px; margin: 0 auto; }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+    h1 { font-family: "Segoe UI", Vazirmatn, sans-serif; font-size: 1.25rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+    h2 { font-size: 1rem; margin: 0 0 .75rem; font-weight: 600; }
+    .lead { color: var(--muted); margin: 0; }
+    .badge {
+      display: inline-block; font-size: .8rem; padding: .15rem .6rem; border-radius: 999px;
+      background: #eef2ff; color: #4338ca; margin-bottom: .75rem;
+    }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1rem; margin: 0; }
+    dt { color: var(--muted); }
+    dd { margin: 0; font-family: Consolas, "Courier New", monospace; direction: ltr; text-align: left; word-break: break-all; font-size: .92em; }
+    pre {
+      background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 8px; overflow-x: auto;
+      direction: ltr; text-align: left; font-size: .85rem; line-height: 1.6; margin: 0;
+      font-family: Consolas, "Courier New", monospace;
+    }
+    .note { color: var(--muted); font-size: .9rem; margin: .75rem 0 0; }
+    .server-msg { font-size: .85rem; color: #991b1b; background: #fef2f2; border: 1px solid #fecaca;
+                  border-radius: 8px; padding: .75rem; direction: ltr; text-align: left;
+                  font-family: Consolas, monospace; word-break: break-word; }
+    .actions { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+    button {
+      font: inherit; cursor: pointer; border: 0; border-radius: 8px; padding: .6rem 1.4rem;
+      background: var(--accent); color: #fff; font-weight: 600;
+    }
+    button:hover { filter: brightness(.95); }
+    .alert { border-radius: 8px; padding: .75rem 1rem; margin-bottom: 1rem; font-size: .9rem; }
+    .alert.err { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+    .hint { font-size: .85rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  @if (retryFailed)
+  {
+    <div class="alert err">
+      هنوز اتصال برقرار نشد. دستور زیر را روی SQL Server اجرا کنید و دوباره تلاش کنید.
+    </div>
+  }
+
+  <div class="card">
+    <span class="badge">راه‌اندازی اولیه</span>
+    <h1>دیتابیس در دسترس نیست</h1>
+    <p class="lead">
+      برنامه با هویت ویندوزی خودش به SQL Server وصل می‌شود. این هویت را سیستم‌عامل تأمین می‌کند و
+      رمزی وجود ندارد که وارد کنید — فقط باید یک‌بار روی SQL Server به آن دسترسی داده شود.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>وضعیت فعلی</h2>
+    <dl>
+      <dt>سرور</dt>
+      <dd>@(string.IsNullOrWhiteSpace(result?.DataSource) ? "—" : result!.DataSource)</dd>
+
+      <dt>دیتابیس</dt>
+      <dd>@(string.IsNullOrWhiteSpace(result?.DatabaseName) ? "—" : result!.DatabaseName)</dd>
+
+      <dt>هویتی که برنامه با آن اجرا می‌شود</dt>
+      <dd>@(string.IsNullOrWhiteSpace(result?.Identity) ? "—" : result!.Identity)</dd>
+
+      @if (result?.SqlErrorNumber is int errNo)
+      {
+        <dt>کد خطای SQL Server</dt>
+        <dd>@errNo</dd>
+      }
+    </dl>
+
+    @if (!string.IsNullOrWhiteSpace(result?.Summary))
+    {
+      <p class="note">@result!.Summary</p>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(result?.ServerMessage))
+    {
+      <div class="server-msg" style="margin-top:.75rem">@result!.ServerMessage</div>
+    }
+  </div>
+
+  @if (!string.IsNullOrWhiteSpace(result?.RemedySql))
+  {
+    <div class="card">
+      <h2>دستوری که باید اجرا شود</h2>
+      <p class="hint" style="margin-top:0">
+        این را با یک حساب مدیر روی SQL Server (مثلاً در SSMS) اجرا کنید. فقط همین یک‌بار لازم است.
+      </p>
+      <pre>@result!.RemedySql</pre>
+      @if (!string.IsNullOrWhiteSpace(result!.RemedyNote))
+      {
+        <p class="note">@result!.RemedyNote</p>
+      }
+    </div>
+  }
+
+  <div class="card">
+    <div class="actions">
+      <form method="post" action="/setup/database/retry">
+        @Html.AntiForgeryToken()
+        <button type="submit">دوباره امتحان کن</button>
+      </form>
+      <span class="hint">
+        پس از اجرای دستور بالا، این دکمه را بزنید. نیازی به ری‌استارت سرویس نیست.
+      </span>
+    </div>
+  </div>
+
+  <p class="hint">
+    این صفحه فقط از روی خود سرور (localhost) قابل مشاهده است.
+  </p>
+
+</div>
+</body>
+</html>

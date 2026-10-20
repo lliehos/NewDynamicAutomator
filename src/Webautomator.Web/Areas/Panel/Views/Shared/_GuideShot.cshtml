@@ -1,0 +1,30 @@
+@model Webautomator.Web.Areas.Panel.Models.GuideShotModel
+@{
+  var caption = L[Model.Caption];
+  var src = $"/img/guide/{Model.Slug}.png";
+}
+
+@* <object> rather than <img> on purpose. The screenshots are supplied after the fact by whoever
+   deploys the product, so at first render the file is usually absent — and an <img> whose source
+   is missing paints the browser's torn-page icon, which reads as "this page is broken" rather than
+   "this picture is not supplied yet". <object> falls back to its own content instead, so an absent
+   image shows a labelled frame naming the exact file to drop in. *@
+<figure class="da-guide-figure">
+  <object class="da-guide-shot" data="@src" type="image/png" aria-label="@caption">
+    <div class="da-guide-shot-missing">
+      <i class="ti ti-photo" aria-hidden="true"></i>
+      <p class="da-guide-shot-title">@caption</p>
+      <p class="da-guide-shot-file">
+        <span data-i18n="panel.guide.shotHint">@L["panel.guide.shotHint"]</span>
+        <code dir="ltr">wwwroot@(src)</code>
+      </p>
+    </div>
+  </object>
+  <figcaption class="da-guide-caption">
+    <span data-i18n="@Model.Caption">@caption</span>
+    <a class="da-guide-open" href="@Model.Url" target="_blank" rel="noopener">
+      <i class="ti ti-external-link" aria-hidden="true"></i>
+      <span data-i18n="panel.guide.openPage">@L["panel.guide.openPage"]</span>
+    </a>
+  </figcaption>
+</figure>

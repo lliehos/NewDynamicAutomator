@@ -10,6 +10,11 @@
 _run/
 _run[0-9]/
 _run[0-9][0-9]/
+publish-clean/
+publish-clean[0-9]/
+
+# Local demo deployment snapshot (a built copy of the app; never commit)
+_demo/
 
 # Local AI / agent tooling (machine-specific; do not commit)
 .claude/
@@ -45,7 +50,11 @@ bld/
 [Bb]in/
 [Oo]bj/
 [Ll]og/
-[Ll]ogs/
+# NOTE: the Visual Studio template's "[Ll]ogs/" is deliberately NOT used here. It matches ANY
+# directory named "Logs" at any depth, which also swallowed the admin area's own view folder
+# (Areas/Admin/Views/Logs) — those views were therefore never committed and the /Admin/Logs pages
+# died with "view not found". Log output in this repository is console + the Windows event log;
+# local run logs live under _run/logs (ignored above) and build output under bin/obj (ignored above).
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/
@@ -204,6 +213,13 @@ publish/
 # but database connection strings (with potential passwords) will be unencrypted
 *.pubxml
 *.publishproj
+# ...EXCEPT this repo's own deployment profiles, which everyone who deploys must share: keeping
+# them local made "publish from any machine" impossible. Re-include the profile itself and let the
+# rule above still swallow everything else. The SETTINGS (server path, user) are shared on purpose;
+# the PASSWORD is not — it lives in the sibling *.pubxml.user file, which stays ignored by the
+# existing *.user rule, so nothing secret is committed.
+!src/Webautomator.Web/Properties/PublishProfiles/FTPProfile.pubxml
+!src/Webautomator.Web/Properties/PublishProfiles/FolderProfile.pubxml
 
 # Microsoft Azure Web App publish settings. Comment the next line if you want to
 # checkin your Azure Web App publish settings, but sensitive information contained
@@ -494,3 +510,21 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Vendor license signing keys (never commit private keys)
+tools/license-keys/*.pem
+!tools/license-keys/.gitkeep
+
+# Built vendor kit zips (regenerate with tools/vendor-kit/BUILD-VENDOR-KIT.ps1)
+dist/
+
+# Runtime uploads and staged offline-update packages (per-install, never commit)
+uploads/
+updates/
+
+# Local DB / canvas backups (do not commit)
+_backup_*.bak
+_webautomator*.bak
+_webautomator*.bak
+*.bak
+/.vscode

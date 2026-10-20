@@ -1,0 +1,48 @@
+<Window x:Class="Webautomator.Player.RunSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Style="{StaticResource DsWindow}"
+        Title="تنظیمات اجرا"
+        Height="400" Width="460" MinHeight="340" MinWidth="380"
+        FlowDirection="RightToLeft"
+        WindowStartupLocation="CenterOwner"
+        Icon="pack://application:,,,/Assets/webautomator-icon.jpg">
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <TextBlock Grid.Row="0" Style="{StaticResource DsSectionTitle}" Text="تنظیمات اجرا"/>
+
+    <StackPanel Grid.Row="1" Style="{StaticResource DsFieldBlock}">
+      <TextBlock Text="فاصله بین مراحل (میلی‌ثانیه)" FontWeight="SemiBold" Margin="0,0,0,4"/>
+      <TextBox x:Name="StepDelayBox" Style="{StaticResource DsTextBox}" Text="0"/>
+      <TextBlock Style="{StaticResource DsHint}" Margin="0,4,0,0"
+                 Text="مکث بین هر اقدام. صفر یعنی بدون مکث."/>
+    </StackPanel>
+
+    <StackPanel Grid.Row="2" Style="{StaticResource DsFieldBlock}">
+      <TextBlock Text="رنگ اجرای فرآیند" FontWeight="SemiBold" Margin="0,0,0,4"/>
+      <DockPanel LastChildFill="True">
+        <TextBox x:Name="ColorTextBox" DockPanel.Dock="Left" Width="110" Margin="8,0,0,0"
+                 Style="{StaticResource DsTextBox}" Text="#7367F0" MaxLength="7"/>
+        <Border x:Name="ColorSwatch" Height="30" CornerRadius="6" BorderThickness="1"
+                BorderBrush="{StaticResource DsBorderBrush}" Background="#7367F0"/>
+      </DockPanel>
+      <TextBlock Style="{StaticResource DsHint}" Margin="0,4,0,0"
+                 Text="رنگی که حین اجرا روی المنت هدف کشیده می‌شود. کد رنگ مثل #7367F0."/>
+    </StackPanel>
+
+    <TextBlock x:Name="StatusText" Grid.Row="3" Style="{StaticResource DsHint}"
+               VerticalAlignment="Bottom" Foreground="{StaticResource DsDangerBrush}"/>
+
+    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Left" Margin="0,12,0,0">
+      <Button Content="ذخیره" Style="{StaticResource DsButton}" MinWidth="110" Click="Save_Click"/>
+      <Button Content="انصراف" Style="{StaticResource DsButtonSecondary}" MinWidth="90" Margin="8,0,0,0" Click="Cancel_Click"/>
+    </StackPanel>
+  </Grid>
+</Window>

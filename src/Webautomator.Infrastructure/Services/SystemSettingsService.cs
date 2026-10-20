@@ -1,0 +1,270 @@
+using Webautomator.Domain;
+using Webautomator.Domain.Entities;
+using Webautomator.Domain.Enums;
+using Webautomator.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+
+namespace Webautomator.Infrastructure.Services;
+
+public class SystemSettingsService
+{
+    private readonly AppDbContext _db;
+
+    public SystemSettingsService(AppDbContext db) => _db = db;
+
+    public async Task<string> GetAsync(string key, string fallback, CancellationToken ct = default)
+    {
+        var row = await _db.SystemSettings.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Key == key, ct);
+        return string.IsNullOrWhiteSpace(row?.Value) ? fallback : row!.Value.Trim();
+    }
+
+    /// <summary>
+    /// True when a row for this key exists at all, regardless of its value. Used to tell "this
+    /// install has never had the setting" (fall back to a legacy key) from "the setting is present
+    /// but blank/false".
+    /// </summary>
+    public Task<bool> ExistsAsync(string key, CancellationToken ct = default) =>
+        _db.SystemSettings.AsNoTracking().AnyAsync(s => s.Key == key, ct);
+
+    /// <summary>
+    /// <summary>
+    /// Which of the user's own details this deployment asks for, from the Admin → Settings switches.
+    /// </summary>
+    /// <remarks>
+    /// A row that has never been written falls back to <see cref="SystemSettingKeys.ProfileFieldDefault"/>
+    /// rather than to "off": an installation whose rows predate the switch (or that runs against a
+    /// database seeded before this feature existed) must ask exactly what it asked before, instead of
+    /// silently dropping fields from its registration form.
+    /// </remarks>
+    public async Task<ProfileFieldSet> GetProfileFieldsAsync(CancellationToken ct = default)
+    {
+        var rows = await _db.SystemSettings.AsNoTracking()
+            .Where(s => SystemSettingKeys.ProfileFieldKeys.Contains(s.Key))
+            .Select(s => new { s.Key, s.Value })
+            .ToListAsync(ct);
+
+        var enabled = new List<string>();
+        foreach (var key in SystemSettingKeys.ProfileFieldKeys)
+        {
+            var value = rows.FirstOrDefault(r => string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase))?.Value;
+            var on = string.IsNullOrWhiteSpace(value)
+                ? SystemSettingKeys.ProfileFieldDefault(key)
+                : IsOn(value);
+            if (on) enabled.Add(key);
+        }
+
+        return ProfileFieldSet.FromEnabled(enabled);
+    }
+
+    /// <summary>The on/off spellings a switch may hold, matching how other boolean settings are read.</summary>
+    private static bool IsOn(string value) => value.Trim() switch
+    {
+        "true" or "True" or "1" or "on" or "yes" => true,
+        _ => false
+    };
+
+    /// <summary>
+    /// True when the setting is one of the on-spellings; an unset row falls back.
+    /// </summary>
+    /// <remarks>
+    /// One reader for every switch, so "is this flag on?" cannot be answered two different ways in two
+    /// places: the settings page writes "true"/"false", an older row may hold "1", and a hand-edited one
+    /// may hold "on".
+    /// </remarks>
+    public async Task<bool> GetBoolAsync(string key, bool fallback = false, CancellationToken ct = default)
+    {
+        var row = await _db.SystemSettings.AsNoTracking()
+            .Where(s => s.Key == key)
+            .Select(s => s.Value)
+            .FirstOrDefaultAsync(ct);
+
+        return string.IsNullOrWhiteSpace(row) ? fallback : IsOn(row);
+    }
+
+    /// <summary>
+    /// The master switch for server runs. Defaults to TRUE when the row is missing or blank, so a
+    /// deployment that has never had this setting keeps the behaviour it already had — the same
+    /// "absent means the capability stays" rule the licence flags use.
+    /// </summary>
+    public async Task<bool> IsServerRunEnabledAsync(CancellationToken ct = default)
+    {
+        var raw = await GetAsync(SystemSettingKeys.ServerRunEnabled, "true", ct);
+        return !string.Equals(raw, "false", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public async Task<Plan> GetDefaultRegisterPlanAsync(CancellationToken ct = default)
+    {
+        var code = await GetAsync(SystemSettingKeys.DefaultRegisterPlan, nameof(PlanCode.Pro), ct);
+        // The configured code first; then the lowest active plan, which is what "the default level for
+        // new registrations" means once an admin has defined their own ladder and left the code
+        // pointing at a plan that no longer exists. The very last resort is any active plan, so
+        // registration never fails on an install whose plan list was emptied by hand.
+        var plan = await _db.Plans.FirstOrDefaultAsync(p => p.Code == code && p.IsActive, ct);
+        plan ??= await _db.Plans.Where(p => p.IsActive)
+            .OrderBy(p => p.SortOrder).ThenBy(p => p.Id).FirstOrDefaultAsync(ct);
+        plan ??= await _db.Plans.OrderBy(p => p.SortOrder).ThenBy(p => p.Id).FirstOrDefaultAsync(ct);
+        return plan ?? throw new InvalidOperationException("هیچ پلنی تعریف نشده است.");
+    }
+
+    /// <summary>
+    /// The deployment-wide password policy from Admin → Settings, as nullable values.
+    /// </summary>
+    /// <remarks>
+    /// Both members are null when the setting has never been written, which lets
+    /// <see cref="PasswordPolicy.Resolve"/> tell "this install has no opinion" from "this install
+    /// deliberately chose the weakest rule". Reading them together means a caller cannot accidentally
+    /// apply the length but forget the complexity rule.
+    /// </remarks>
+    public async Task<(int? minLength, bool? requireLetterAndDigit)> GetGlobalPasswordPolicyAsync(
+        CancellationToken ct = default)
+    {
+        var rows = await _db.SystemSettings.AsNoTracking()
+            .Where(s => s.Key == SystemSettingKeys.PasswordMinLength
+                     || s.Key == SystemSettingKeys.PasswordRequireLetterAndDigit)
+            .Select(s => new { s.Key, s.Value })
+            .ToListAsync(ct);
+
+        int? minLength = null;
+        bool? requireLetterAndDigit = null;
+
+        foreach (var row in rows)
+        {
+            if (string.IsNullOrWhiteSpace(row.Value))
+                continue;
+
+            if (string.Equals(row.Key, SystemSettingKeys.PasswordMinLength, StringComparison.OrdinalIgnoreCase))
+            {
+                if (int.TryParse(row.Value.Trim(), out var parsed))
+                    minLength = parsed;
+            }
+            else if (string.Equals(row.Key, SystemSettingKeys.PasswordRequireLetterAndDigit, StringComparison.OrdinalIgnoreCase))
+            {
+                var v = row.Value.Trim();
+                requireLetterAndDigit = v is "true" or "True" or "1" or "on" or "yes";
+            }
+        }
+
+        return (minLength, requireLetterAndDigit);
+    }
+
+    public Task<List<SystemSetting>> ListAsync(CancellationToken ct = default) =>
+        _db.SystemSettings.OrderBy(s => s.Group).ThenBy(s => s.Key).ToListAsync(ct);
+
+    public async Task SaveAsync(IEnumerable<(string key, string value)> pairs, CancellationToken ct = default)
+        => await SaveAsync(pairs, actorUserId: null, actorUserName: null, ct);
+
+    /// <summary>
+    /// Persist setting values, recording who made the change.
+    /// </summary>
+    /// <remarks>
+    /// Only rows whose value actually differs are touched. Without that check, opening the form
+    /// and pressing save — or a page that re-posts unchanged values — would rewrite every row and
+    /// make "last changed by" name whoever last loaded the page rather than whoever last changed
+    /// something, which is worse than not showing it at all.
+    /// </remarks>
+    public async Task SaveAsync(
+        IEnumerable<(string key, string value)> pairs,
+        int? actorUserId,
+        string? actorUserName,
+        CancellationToken ct = default)
+    {
+        var list = pairs.ToList();
+        var keys = list.Select(p => p.key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rows = await _db.SystemSettings.Where(s => keys.Contains(s.Key)).ToListAsync(ct);
+        var changed = new List<(string Key, string From, string To)>();
+
+        foreach (var (key, value) in list)
+        {
+            var row = rows.FirstOrDefault(r => string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase));
+            if (row is null) continue;
+            var next = (value ?? "").Trim();
+            if (string.Equals(row.Value, next, StringComparison.Ordinal)) continue;
+
+            changed.Add((row.Key, row.Value, next));
+            row.Value = next;
+            row.LastChangedByUserId = actorUserId is > 0 ? actorUserId : null;
+            row.LastChangedByUserName = string.IsNullOrWhiteSpace(actorUserName) ? null : actorUserName;
+            row.LastChangedAtUtc = DateTime.UtcNow;
+        }
+
+        if (changed.Count == 0) return;
+
+        await _db.SaveChangesAsync(ct);
+
+        // The row records the latest change; the event log keeps the sequence, so "who changed
+        // this, from what to what, and when" is answerable for more than just the last edit.
+        // Values are included because an audit trail that only says a setting changed is not
+        // enough to explain a behaviour difference between two days.
+        foreach (var (key, from, to) in changed)
+        {
+            _db.EventLogs.Add(new AppEventLog
+            {
+                Level = "Audit",
+                Category = "Settings",
+                EventType = "SettingChanged",
+                Message = $"Setting '{key}' changed",
+                UserId = actorUserId is > 0 ? actorUserId : null,
+                UserName = string.IsNullOrWhiteSpace(actorUserName) ? null : actorUserName,
+                DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { key, from, to }),
+                CreatedAtUtc = DateTime.UtcNow
+            });
+        }
+
+        await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetAsync(string key, string value, CancellationToken ct = default)
+        => await SetAsync(key, value, actorUserId: null, actorUserName: null, ct);
+
+    /// <summary>
+    /// Write one setting, recording who changed it.
+    /// </summary>
+    /// <remarks>
+    /// Shares the change-recording behaviour with <see cref="SaveAsync(IEnumerable{ValueTuple{string, string}}, int?, string?, CancellationToken)"/>
+    /// so every path that edits settings — the settings form, branding, licence import — leaves
+    /// the same trail. An unchanged write is a no-op, so a service that re-applies the value it
+    /// already had does not claim a change nobody made.
+    /// </remarks>
+    public async Task SetAsync(
+        string key,
+        string value,
+        int? actorUserId,
+        string? actorUserName,
+        CancellationToken ct = default)
+    {
+        var row = await _db.SystemSettings.FirstOrDefaultAsync(s => s.Key == key, ct);
+        if (row is null)
+        {
+            // The settings table is seeded by DbSeeder; a missing key means the caller wrote to
+            // a key that was never declared there. Silently dropping the write makes the feature
+            // look broken with no error anywhere, so surface it instead.
+            throw new InvalidOperationException(
+                $"System setting '{key}' does not exist. Add it to DbSeeder so a row is created, " +
+                "otherwise the value cannot be persisted.");
+        }
+
+        var next = (value ?? "").Trim();
+        if (string.Equals(row.Value, next, StringComparison.Ordinal)) return;
+
+        var from = row.Value;
+        row.Value = next;
+        row.LastChangedByUserId = actorUserId is > 0 ? actorUserId : null;
+        row.LastChangedByUserName = string.IsNullOrWhiteSpace(actorUserName) ? null : actorUserName;
+        row.LastChangedAtUtc = DateTime.UtcNow;
+
+        _db.EventLogs.Add(new AppEventLog
+        {
+            Level = "Audit",
+            Category = "Settings",
+            EventType = "SettingChanged",
+            Message = $"Setting '{key}' changed",
+            UserId = actorUserId is > 0 ? actorUserId : null,
+            UserName = string.IsNullOrWhiteSpace(actorUserName) ? null : actorUserName,
+            DetailsJson = System.Text.Json.JsonSerializer.Serialize(new { key, from, to = next }),
+            CreatedAtUtc = DateTime.UtcNow
+        });
+
+        await _db.SaveChangesAsync(ct);
+    }
+}

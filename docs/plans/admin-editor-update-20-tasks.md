@@ -1,0 +1,125 @@
+# پلن اجرایی ۲۰ کار (Admin / Editor / Update)
+
+> **نسخه:** 1.0 · **ایجاد:** 2026-09-24 · **برنچ:** `feature/datasource-cell-locking-optimization`
+
+## قواعد اجرا (این بخش را دقیقاً رعایت کن)
+
+1. **هیچ سؤالی نپرس.** اگر ابهامی بود، محتمل‌ترین تفسیر را انتخاب کن، همان را در کد
+   کامنت کن و ادامه بده.
+2. **هیچ گزارشی نده.** نه خلاصهٔ پایان کار، نه جدول، نه توضیح. فقط کار را انجام بده.
+   خروجی مجاز در انتهای هر آیتم: **یک خط** به شکل
+   `#<شماره> <وضعیت: done|blocked> <کامیت-هش>`.
+3. **هر آیتم مستقل:** یک برنچ/کامیت جدا، build، تست کاربری، و در صورت موفقیت
+   `commit` + `push` مستقل.
+4. اگر آیتمی خیلی بزرگ شد، به زیرکارهای شماره‌دار بشکن (`#7a`, `#7b`) و هر زیرکار
+   کامیت جدا بگیرد.
+5. ترتیب از ۱ به ۲۰. اگر آیتمی مسدود شد، `blocked` بزن و برو سراغ بعدی (برنگرد).
+6. هر آیتم که تمام شد، ستون وضعیت همان ردیف در جدول زیر را به‌روز کن.
+
+## جدول وضعیت
+
+| # | عنوان کوتاه | وضعیت | کامیت |
+|---|-------------|--------|-------|
+| 1 | حذف دیتاسورس → invalid شدن نودها + prompt جایگزینی | done | b7bf98c |
+| 2 | تداخل `/Admin/Settings` و `/Admin/Branding` | done | d65bb29 |
+| 3 | اصلاح باکس‌های آماری داشبورد ادمین (متن زیر آیکون) | done | d92ccd4 |
+| 4 | چارت و آمار در داشبورد ادمین | done | 8535887 |
+| 5 | صفحه‌بندی در لیست‌های پنل ادمین | done | fcb9ee6 |
+| 6 | تبدیل همهٔ checkbox ها به switch در وب‌اپ | done | c372179 |
+| 7 | آپدیت آفلاین (آپلود بسته، جانشینی، restart) + تب ساخت بسته | done | 714ec79 |
+| 8 | Migrate پشت لایسنس (پیش‌فرض غیرفعال) + تنظیم در Vendor Studio | done | 68e83a3 |
+| 9 | اعمال migration دیتابیس بعد از آپدیت | done | 6ace26e |
+| 10 | چک دوره‌ای آپدیت آنلاین + اخطار و اعمال | done | 7686bed |
+| 11 | منابع ادمین: سازنده/ویرایش‌کننده + زمان‌ها | done | 7b2622a |
+| 12 | کاربران ادمین: تعداد فرآیند و منبع | done | 64771f5 |
+| 13 | بازطراحی تنظیمات سامانه (دسته‌بندی، color picker، آپلود حرفه‌ای) | done | c373027 |
+| 14 | کراپر تصویر در کل سامانه | done | e0ad4d2 |
+| 15 | آواتار کاربر در پروفایل + نوار بالای پنل | done | 8f974c0 |
+| 16 | دوزبانه کردن همهٔ لیبل‌های پنل ادمین | done | 2d0519f |
+| 17 | حذف/توضیح دو فیلد «حداکثر انتظار (ms)» در باکس ویژگی‌های فرآیند | done | 03116a9 |
+| 18 | دو نوع شرط جدید: تاریخ سیستم / زمان سیستم | done | 7c89505 |
+| 19 | اکشن GoToUrl: سوئیچ انتظار + حداکثر انتظار (ms) | done | 37e94e0 |
+| 20 | افزودن شرط/اکشن‌های لازم دیگر با پارامترها | done | (این کامیت) |
+
+## یادداشت‌های فنی (برای هر آیتم)
+
+### #1 حذف دیتاسورس
+- حذف منبع از کتابخانه (`DeleteLibraryAsync`) و **detach** باید نودهای وابسته را
+  invalid کنند: مقدار `dataSourceId` پاک شود ولی **نام ستون بماند**.
+- `validateDataSourcePick` باید برای «منبع نامشخص» پیام بدهد (کلید `ds.pickMissing`
+  موجود است).
+- پس از افزودن منبع جدید و پیش‌فرض شدن، اگر نودهای invalid وجود دارند →
+  `DaNotify.confirm` برای اصلاح خودکار؛ در صورت تایید، `dataSourceId` نودها
+  به منبع جدید ست شود (ستون‌ها دست‌نخورده).
+- الگوی remap موجود: `remapSelectorsToSource` در `flow.js`.
+
+### #2 تداخل Settings/Branding
+- هر دو مسیر یک کنترلر/اکشن مشترک را هندل می‌کنند. بررسی `Areas/Admin/Controllers`
+  و routeها؛ باید هر کدام اکشن مستقل با view مستقل داشته باشند و منو هر دو را جدا نشان دهد.
+
+### #7 آپدیت آفلاین
+- آپلود zip → استخراج در `updates/staged/<version>` → اسکریپت آپدیتور
+  (`update.ps1` روی Windows) که سرویس را می‌بندد، فایل‌ها را جانشین می‌کند و دوباره
+  استارت می‌زند. بعد از استارت، migration (#9) اعمال شود.
+- در `Webautomator.VendorStudio` یک تب «ساخت بستهٔ آپدیت» برای تولید zip + manifest نسخه.
+
+**پیاده‌سازی انجام‌شده:**
+- قالب بسته در `Webautomator.Licensing` (مشترک بین ابزار فروشنده و سرور):
+  `UpdatePackageManifest` (نسخه، یادداشت، `minCurrentVersion`، فهرست فایل‌ها با
+  SHA-256 و اندازه، `entrypoint`)، `UpdatePackageJson` (سریال‌سازی + هش + مقایسهٔ نسخه)،
+  `UpdatePackageBuilder` (ساخت zip + تولید `update.ps1`).
+- CLI: `dotnet run --project src/Webautomator.LicenseTool -- package-update --version 1.2.0
+  --source <published-folder> [-o out.zip] [--notes ...] [--channel stable]
+  [--min-current 1.0.0]`.
+- Vendor Studio: تب «بسته آپدیت» با انتخاب پوشهٔ publish، نسخه، یادداشت، حداقل نسخه،
+  کانال و فایل خروجی؛ از همان builder استفاده می‌کند پس بایت‌به‌بایت با CLI یکسان است.
+- سرور: `OfflineUpdateService` (استخراج فقط پس از بررسی مانیفست و هش هر فایل؛ مسیرهای
+  `..`/مطلق رد می‌شوند) + `OfflineUpdateController` در `Admin` و صفحهٔ
+  `Areas/Admin/Views/OfflineUpdate/Index.cshtml`.
+- امنیت: بسته فقط وقتی پذیرفته می‌شود که نسخهٔ آن **جدیدتر** از نسخهٔ نصب‌شده و
+  ≥ `minCurrentVersion` باشد؛ هیچ فایلی خارج از `updates/staged` نوشته نمی‌شود.
+- اسکریپت `update.ps1` قبل از کپی، قفل‌بودن فایل‌ها را بررسی می‌کند (سرویس در حال اجرا →
+  خروج با کد ۳ و پیام روشن) و بعد از موفقیت برنامه را با `-StartCommand` (یا اولین exe)
+  دوباره اجرا می‌کند. لاگ در `update.log` کنار اسکریپت.
+- تنظیمات: `Webautomator:OfflineUpdate` (`UploadDirectory`, `StagingDirectory`,
+  `MaxUploadMegabytes`, `RestartCommand`). `uploads/` و `updates/` در `.gitignore`.
+
+### #20 شرط/اکشن‌های تکمیلی
+- **اکشن‌های جدید** (engine + editor، با پارامترها):
+  - `ClearContent` — خالی‌کردن فیلد پیش از تایپ (جلوگیری از الحاق به مقدار قبلی).
+  - `FocusElement` — فوکوس روی المان.
+  - `ScrollIntoView` — اسکرول تا المان (کلیک روی المان خارج از دید را درست می‌کند).
+  - `SelectOption` — انتخاب گزینهٔ لیست کشویی با `selectBy` ∈ {Value, Text, Index}؛
+    اگر value پیدا نشد، همان مقدار به‌عنوان متن نمایشی امتحان می‌شود.
+  - `PressKey` — فشردن کلید با `keyName`؛ `Enter` داخل فرم آن را submit می‌کند.
+  - `WaitForElement` — انتظار ظهور المان با `waitMaxMs` (بدون نیاز به مقدار مقایسه).
+  - `SetMemory` — نوشتن مقدار در متغیر حافظه با `memoryVariableName` (بدون سلکتور؛
+    در `runStep` پیش از مسیر سلکتور/فریم return می‌کند).
+- **شرط‌های جدید:** `ElementVisible` / `ElementHidden` — وجود به‌همراه مرئی‌بودن
+  (`requireVisible`) یا نبود/پنهان‌بودن.
+- هر دو فایل `flow.js` و `engine.js` هم‌زمان به‌روز شدند: `conditionNeedsCompare`،
+  فهرست‌های نیازمند سلکتور، `stepReceivesValue`، `stepShowsTargetSelector`،
+  `conditionNeedsBrowser` و جدول پیام‌های `run.*` در engine.
+- کلیدهای locale دوزبانه: `editor.actions.{ClearContent,FocusElement,ScrollIntoView,
+  SelectOption,PressKey,WaitForElement,SetMemory,selectBy*,keyName*,waitForElementHint,
+  memoryName,setMemoryHint}` و `editor.cond.{elementVisible,elementHidden}`.
+- سواچ `?v=` فایل `flow.js` در `Areas/Panel/Views/Tasks/Editor.cshtml` به‌روز شد
+  (`new-actions-conditions-1`).
+
+
+### #8 Migrate پشت لایسنس
+- افزودن فیلد به license document (مثلاً `AllowLegacyMigration`) + نمایش در Vendor Studio
+  به‌عنوان toggle. در وب، کنترلر `Migrate` باید بدون این entitlement → 404/403.
+
+### #9/10 آپدیت
+- #9: مطمئن شو `DatabaseBootstrapService.MigrateAndSeedAsync` بعد از هر آپدیت (نه فقط
+  اولین اجرا) اجرا می‌شود.
+- #10: `UpdateNotifyBackgroundService` دوره‌ای چک کند و به گروه admin در SignalR
+  اعلان بدهد؛ با تایید ادمین دانلود و staging انجام شود.
+
+## ترتیب پیشنهادی زیرکارها
+- UI-محور و کم‌ریسک اول: #3، #6، #16، #11، #12، #2، #5
+- سپس داشبورد: #4 (پس از #3)
+- سپس ویرایشگر: #17، #18، #19، #20، #1
+- سپس تصویر/آواتار: #14، #15، #13
+- در آخر سنگین‌ها: #7، #8، #9، #10

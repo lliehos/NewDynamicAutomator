@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Continue'
 # Kill chrome using our test profile (best-effort)
 Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.CommandLine -match 'morobot-chrome-test' } |
+  Where-Object { $_.CommandLine -match 'webautomator-chrome-test' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 1
 
@@ -10,13 +10,13 @@ $chrome = @(
   'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-$base = Join-Path $env:LOCALAPPDATA 'morobot.soras.ir'
+$base = Join-Path $env:LOCALAPPDATA 'webautomator'
 $roles = @('extension-recorder','extension-player','extension-selector','extension-smart-recorder')
 $exts = foreach ($r in $roles) {
   $p = Join-Path $base $r
   if (Test-Path (Join-Path $p 'manifest.json')) { $p }
 }
-$profile = Join-Path $env:LOCALAPPDATA 'Temp\morobot-chrome-test'
+$profile = Join-Path $env:LOCALAPPDATA 'Temp\webautomator-chrome-test'
 $extArg = ($exts -join ',')
 $port = 9222
 

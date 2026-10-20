@@ -1,0 +1,103 @@
+@model List<Webautomator.Domain.Entities.AppEventLog>
+@using Webautomator.Web.Areas.Admin.Models
+@{
+  ViewData["Title"] = L["admin.logs.title"];
+  var logs = Model;
+  var selectedLevel = ViewBag.Level as string;
+  var selectedCategory = ViewBag.Category as string;
+
+  // The four levels EventLogService writes. A row recorded by an older build with another value
+  // still renders — it just falls back to the raw value instead of a translated chip.
+  var levels = new[] { "Info", "Warning", "Error", "Audit" };
+  bool IsKnownLevel(string? level) => level is not null && levels.Contains(level, StringComparer.OrdinalIgnoreCase);
+  string LevelLabel(string? level) => IsKnownLevel(level) ? L["admin.logs.level." + level!.ToLowerInvariant()] : level ?? "—";
+  string LevelClass(string? level) => IsKnownLevel(level) ? "admin-chip-" + level!.ToLowerInvariant() : "";
+
+  var errorCount = logs.Count(l => string.Equals(l.Level, "Error", StringComparison.OrdinalIgnoreCase));
+  var warningCount = logs.Count(l => string.Equals(l.Level, "Warning", StringComparison.OrdinalIgnoreCase));
+
+  // Clearing removes exactly what the filter is showing, so the confirmation names the filter — and
+  // an unset side reads as "all" rather than leaving a blank gap inside the sentence.
+  var levelName = string.IsNullOrWhiteSpace(selectedLevel) ? L["admin.logs.all"] : LevelLabel(selectedLevel);
+  var categoryName = string.IsNullOrWhiteSpace(selectedCategory) ? L["admin.logs.all"] : selectedCategory;
+  var clearConfirm = string.IsNullOrWhiteSpace(selectedLevel) && string.IsNullOrWhiteSpace(selectedCategory)
+    ? L["admin.logs.clearConfirmAll"]
+    : L.T("admin.logs.clearConfirmFiltered", ("level", levelName), ("category", categoryName));
+}
+
+<partial name="_AdminPageHead" model='new AdminPageHeadModel {
+  Summary = L.T("admin.logs.summary",
+    ("count", logs.Count.ToString()),
+    ("errors", errorCount.ToString()),
+    ("warnings", warningCount.ToString()))
+}' />
+
+<div class="admin-filter-bar">
+  <span class="admin-filter-label">@L["admin.logs.level"]</span>
+  <a class="admin-chip @(string.IsNullOrWhiteSpace(selectedLevel) ? "is-active" : "")"
+     asp-action="Index" asp-route-category="@selectedCategory">@L["admin.logs.all"]</a>
+  @foreach (var level in levels)
+  {
+    <a class="admin-chip @LevelClass(level) @(string.Equals(selectedLevel, level, StringComparison.OrdinalIgnoreCase) ? "is-active" : "")"
+       asp-action="Index" asp-route-level="@level" asp-route-category="@selectedCategory">@LevelLabel(level)</a>
+  }
+  @* Destroying evidence is the one action here a Monitor must not have (see LogsController.Clear),
+     so the button is offered to admins only and the server enforces the same rule. *@
+  @if (User.IsInRole("Admin"))
+  {
+    <form method="post" asp-action="Clear" asp-route-level="@selectedLevel" asp-route-category="@selectedCategory"
+          class="admin-filter-clear" onsubmit="return confirm('@clearConfirm');">
+      @Html.AntiForgeryToken()
+      <button type="submit" class="btn-admin danger"><i class="ti ti-trash" aria-hidden="true"></i>@L["admin.logs.clear"]</button>
+    </form>
+  }
+</div>
+
+@if (logs.Count == 0)
+{
+  <div class="admin-empty">
+    <i class="ti ti-history" aria-hidden="true"></i>
+    <p>@L["admin.logs.empty"]</p>
+  </div>
+}
+else
+{
+  <div class="admin-table-wrap" data-page-size="20">
+  <table class="admin-table">
+    <thead>
+      <tr>
+        <th class="admin-nowrap">@L["admin.logs.time"]</th>
+        <th>@L["admin.logs.level"]</th>
+        <th>@L["admin.logs.category"]</th>
+        <th>@L["admin.logs.event"]</th>
+        <th>@L["admin.logs.message"]</th>
+        <th>@L["admin.logs.user"]</th>
+        <th class="admin-nowrap">@L["admin.logs.ip"]</th>
+      </tr>
+    </thead>
+    <tbody>
+    @foreach (var entry in logs)
+    {
+      <tr>
+        <td class="admin-nowrap">@Webautomator.Web.Services.DateDisplay.UtcDateTimeLocal(entry.CreatedAtUtc)</td>
+        <td><span class="admin-chip @LevelClass(entry.Level)">@LevelLabel(entry.Level)</span></td>
+        <td class="admin-nowrap">@entry.Category</td>
+        <td class="admin-nowrap">@entry.EventType</td>
+        <td class="admin-log-message">
+          @entry.Message
+          @if (!string.IsNullOrWhiteSpace(entry.DetailsJson))
+          {
+            <details class="admin-log-detail">
+              <summary>@L["admin.logs.details"]</summary>
+              <pre>@entry.DetailsJson</pre>
+            </details>
+          }
+        </td>
+        <td>@(string.IsNullOrWhiteSpace(entry.UserName) ? "—" : entry.UserName)</td>
+        <td class="admin-nowrap">@(string.IsNullOrWhiteSpace(entry.IpAddress) ? "—" : entry.IpAddress)</td>
+      </tr>
+    }
+    </tbody>
+  </table>
+  </div>
+}

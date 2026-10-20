@@ -1,0 +1,27 @@
+@using Webautomator.Web.Models
+@model BrandHeadModel
+<style id="webautomator-brand-theme">
+:root,
+[data-style="light"],
+html.flow-ltr,
+html.flow-rtl {
+  --webautomator-primary: @Model.ColorPrimary;
+  --webautomator-primary-dark: @Model.ColorPrimaryDark;
+  --webautomator-primary-hover: @Model.ColorPrimaryDark;
+  --webautomator-primary-light: @Model.ColorPrimaryLight;
+  @* The r,g,b triplet of the primary, so rgba(...) tints (e.g. the portal sidebar active
+     gradient in portal-app.css) stay in the chosen palette instead of falling back to the
+     shipped teal. *@
+  --webautomator-primary-rgb: @Model.PrimaryRgb;
+  --webautomator-accent: @Model.ColorAccent;
+  --webautomator-soft: @Model.ColorSoft;
+  --webautomator-soft-2: @Model.ColorSoft2;
+  --webautomator-ink: @Model.ColorInk;
+  --webautomator-border-subtle: @Model.ColorBorderSubtle;
+  --bs-primary: @Model.ColorPrimary;
+  --bs-primary-rgb: @Model.PrimaryRgb;
+  --bs-primary-bg-subtle: @Model.ColorSoft;
+  --bs-primary-border-subtle: @Model.ColorBorderSubtle;
+  --bs-primary-text-emphasis: @Model.ColorPrimaryDark;
+}
+</style>
