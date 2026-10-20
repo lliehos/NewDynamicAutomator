@@ -452,6 +452,13 @@
         // wrong records.
         insertedRows: Array.isArray(holder.locallyRunInsertedRows) ? holder.locallyRunInsertedRows : [],
         deletedRows: Array.isArray(holder.locallyRunDeletedRows) ? holder.locallyRunDeletedRows : [],
+        // WHAT changed in the browser copy (per-source change record): the portal paints it and the
+        // sync uses it to tell a run-written cell from a hand edit.
+        changes: holder.localSourceCopies && typeof holder.localSourceCopies === "object"
+          ? Object.fromEntries(Object.entries(holder.localSourceCopies)
+            .map(([sid, rec]) => [sid, rec?.changes || null])
+            .filter(([, ch]) => ch && (ch.rows?.length || ch.deleted?.length || Object.keys(ch.cells || {}).length)))
+          : {},
         localRunAt: holder.lastLocalRunAt || null,
         pending: holder.localRunPendingSync === true,
         copies: Object.keys(holder.localSourceCopies || {}),

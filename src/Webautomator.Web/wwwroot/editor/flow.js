@@ -8592,6 +8592,61 @@
 
   const DYN_SEL_PLACEHOLDER = "{مقدار پویا}";
 
+  /**
+   * Which part of an element a value read returns.
+   *
+   * `Auto` is the historic behaviour (a form field's value, otherwise the element's text) and stays
+   * the default so existing processes keep working. The rest name the part explicitly — a link's
+   * href, a card's title, its markup, or any attribute — because "read the element" alone could not
+   * express those, and guessing was the only option.
+   */
+  const ELEMENT_VALUE_MODES = [
+    { value: "Auto", label: "خودکار (مقدار فیلد، وگرنه متن)" },
+    { value: "Value", label: "مقدار فیلد (value)" },
+    { value: "Text", label: "متن (textContent)" },
+    { value: "InnerText", label: "متن نمایشی (innerText)" },
+    { value: "InnerHtml", label: "HTML داخلی (innerHTML)" },
+    { value: "OuterHtml", label: "HTML کامل (outerHTML)" },
+    { value: "Attribute", label: "اتریبیوت دلخواه" },
+    { value: "Href", label: "لینک (href)" },
+    { value: "Src", label: "منبع (src)" },
+    { value: "Title", label: "عنوان (title)" }
+  ];
+
+  function normalizeElementValueMode(mode) {
+    const raw = String(mode || "").trim();
+    return ELEMENT_VALUE_MODES.some((m) => m.value === raw) ? raw : "Auto";
+  }
+
+  /**
+   * The «کدام بخش المان خوانده شود» block, for a value read (page → source/memory or a compare).
+   *
+   * `modeKey`/`attrKey` keep each reader's own choice separate, so the target of an action and the
+   * compare value of a condition cannot overwrite one another.
+   */
+  function elementValueModeSectionHtml(n, modeKey, attrKey, idSuffix) {
+    const mode = normalizeElementValueMode(n[modeKey]);
+    n[modeKey] = mode;
+    const opts = ELEMENT_VALUE_MODES.map((m) =>
+      `<option value="${m.value}" ${mode === m.value ? "selected" : ""}>${esc(m.label)}</option>`).join("");
+    return `
+      <div class="insp-field">
+        <label>مقدار از کدام بخش المان خوانده شود؟</label>
+        <select data-k="${modeKey}">${opts}</select>
+        <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">
+          «خودکار» رفتار قبلی است: برای input/textarea/select مقدار فیلد و برای بقیه متن.
+          برای خواندن <code>href</code> یک لینک یا <code>title</code> یک کارت، همان گزینه را انتخاب کنید.
+        </p>
+      </div>
+      ${mode === "Attribute" ? `
+        <div class="insp-field">
+          <label>نام اتریبیوت</label>
+          <input data-k="${attrKey}" dir="ltr" value="${esc(n[attrKey] || "")}" placeholder="مثلاً data-id یا aria-label" />
+          <p class="palette-hint" style="margin:4px 0 0">دقیقاً همان نامی که در HTML آمده (بدون <code>getAttribute</code>).</p>
+        </div>
+      ` : ""}`;
+  }
+
   // The action spec table lives in the Player (extension-global/player/engine.js) so the editor and
   // the engine cannot disagree about what a step needs. It used to be duplicated here, and the two
   // copies had already drifted: the editor demanded a selector for ClearContent and SelectOption
@@ -9203,7 +9258,9 @@
     const at = n.actionType || "";
     if (!at || at === "NoAction") return { ok: true, reasons };
 
-    if (stepShowsTargetSelector(n)) {
+    // PressKey's element is OPTIONAL: an empty selector means "whatever has focus", which is a
+    // valid target for a keyboard event (Enter in the field the previous step filled).
+    if (stepShowsTargetSelector(n) && !(at === "PressKey" && !n.selectorValue)) {
       const v = validateSelectorBlock(n, { label: "سلکتور هدف" });
       if (!v.ok) reasons.push(v.reason);
     }
@@ -10112,6 +10169,8 @@
       if (isUrl) {
         html += `<p class="palette-hint">متن/مقدار این المان به‌عنوان آدرس استفاده می‌شود.</p>`;
       }
+      // Which part of the element carries the value — the field the reader was missing.
+      html += elementValueModeSectionHtml(n, "elementValueMode", "elementValueAttribute", "value");
     } else if (src === "DataSource") {
       html += `
         <div class="insp-field"><label>منبع داده</label>
@@ -11219,6 +11278,8 @@
           // One selector switch per node: the subject selector carries it when IT is data-driven.
           rowSwitch: n.selectorIsDynamic !== true && n.attributeValueIsDynamic !== true
         });
+        // Which part of that element is compared, with the same vocabulary the value readers use.
+        html += elementValueModeSectionHtml(n, "equalElementValueMode", "equalElementValueAttribute", "eq");
       } else if (src === "DataSource" && allowCompareDs) {
         html += `<div class="insp-field"><label>منبع داده</label>
             <select data-k="dataSourceId"><option value="">— انتخاب منبع —</option>${compareDsOpts}</select>
@@ -11763,7 +11824,7 @@
     "selectorSpecificRowIndex",
     "systemClockFormat",
     "newTabAlias", "switchTabAlias", "switchTabUrl", "switchTabTitle", "closeTabAlias",
-    "closeTabUrl", "closeTabTitle", "pressKeyName"
+    "closeTabUrl", "closeTabTitle", "pressKeyName", "elementValueAttribute", "equalElementValueAttribute"
   ]);
   /** Keys that hold a free-text label the user reads, so they follow the UI direction. */
   const RTL_FIELD_KEYS = new Set(["title", "label", "attributeName"]);

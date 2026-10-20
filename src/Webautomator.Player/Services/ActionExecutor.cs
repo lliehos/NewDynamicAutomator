@@ -579,11 +579,25 @@ public sealed class ActionExecutor
         try
         {
             var el = FindElement(driver, step, timeout);
-            var text = ((IJavaScriptExecutor)driver).ExecuteScript(
-                "const el=arguments[0];" +
-                "if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT')return el.value||'';" +
-                "return (el.innerText||el.textContent||'').trim();",
-                el) as string;
+            // WHICH part of the element is the value. `Auto` keeps the historic guess (a form
+            // field's value, otherwise its text); the other modes read exactly what was authored —
+            // a link's href, a named attribute, the markup.
+            var mode = (step.ReadExtraString("elementValueMode") ?? "").Trim();
+            if (mode.Length == 0) mode = "Auto";
+            var attr = (step.ReadExtraString("elementValueAttribute") ?? "").Trim();
+            const string js =
+                "const el=arguments[0], m=String(arguments[1]||'auto').toLowerCase(), a=arguments[2];" +
+                "if(m==='value')return el.value!=null?String(el.value):'';" +
+                "if(m==='attribute'){if(!a)return '';const v=el.getAttribute(a);return v==null?'':String(v);}" +
+                "if(m==='innerhtml')return el.innerHTML||'';" +
+                "if(m==='outerhtml')return el.outerHTML||'';" +
+                "if(m==='innertext')return (el.innerText||'').trim();" +
+                "if(m==='text')return (el.textContent||'').trim();" +
+                "if(m==='auto'){const t=(el.tagName||'').toUpperCase();" +
+                "if(t==='INPUT'||t==='TEXTAREA'||t==='SELECT')return el.value||'';" +
+                "return (el.innerText||el.textContent||'').trim();}" +
+                "const v=el.getAttribute(m);return v==null?'':String(v);";
+            var text = ((IJavaScriptExecutor)driver).ExecuteScript(js, el, mode, attr) as string;
             return StepOutcome.Read(text ?? "");
         }
         catch (Exception ex)

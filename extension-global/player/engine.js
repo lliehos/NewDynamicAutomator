@@ -361,7 +361,9 @@ function validateActionNodeForPlay(n, graph) {
   const at = n.actionType || "";
   if (!at || at === "NoAction") return { ok: true, reasons };
 
-  if (stepShowsTargetSelector(n)) {
+  // PressKey's element is OPTIONAL: no selector means "whatever has focus", a valid target for a
+  // keyboard event (Enter in the field the previous step filled).
+  if (stepShowsTargetSelector(n) && !(at === "PressKey" && !String(n.selectorValue || "").trim())) {
     const v = validateSelectorBlock(n, { labelKey: "label.targetSelector" });
     if (!v.ok) reasons.push(v.reason);
   }
@@ -3532,19 +3534,41 @@ async function resolveConditionCompareValue(tabId, node, graph, rowIndex, opts =
       const framePath = parseFramePath(node.framePathJson);
       try {
         const frameId = await resolveFramePath(tabId, framePath);
+        // Which part of the element is compared: the same vocabulary the value readers use, so a
+        // condition can check a link's href or a card's attribute instead of its text.
+        const mode = normalizeElementValueMode(node.equalElementValueMode);
+        const attrName = mode === "Attribute"
+          ? String(node.equalElementValueAttribute || "").trim()
+          : "";
         const [{ result } = {}] = await chrome.scripting.executeScript({
           target: { tabId, frameIds: [frameId] },
-          func: (s) => {
+          func: (s, m, a) => {
             try {
               const el = document.querySelector(s);
               if (!el) return "";
-              if (el.value != null) return String(el.value);
-              return (el.textContent || "").trim();
+              const requested = String(m || "auto").toLowerCase();
+              if (requested === "value") return el.value != null ? String(el.value) : "";
+              if (requested === "attribute") {
+                const name = String(a || "").trim();
+                if (!name) return "";
+                const got = el.getAttribute(name);
+                return got == null ? "" : String(got);
+              }
+              if (requested === "innerhtml") return el.innerHTML || "";
+              if (requested === "outerhtml") return el.outerHTML || "";
+              if (requested === "innertext") return (el.innerText || "").trim();
+              if (requested === "text") return (el.textContent || "").trim();
+              if (requested === "auto") {
+                if (el.value != null) return String(el.value);
+                return (el.textContent || "").trim();
+              }
+              const attr = el.getAttribute(requested);
+              return attr == null ? "" : String(attr);
             } catch {
               return "";
             }
           },
-          args: [sel]
+          args: [sel, mode.toLowerCase(), attrName]
         }) || [];
         return result == null ? "" : String(result);
       } catch {
@@ -3621,6 +3645,38 @@ function selectorStateReqs(step, { equal = false } = {}) {
     requireEnabled: step.selectorRequireEnabled === true,
     requireClickable: step.selectorRequireClickable === true
   };
+}
+
+/**
+ * Read one element's value INSIDE the page.
+ *
+ * A standalone function on purpose: `chrome.scripting.executeScript` serialises the source, so an
+ * injected function cannot call anything else in this file. `mode` says which part of the element
+ * carries the value — `auto` keeps the historic guess (a form field's value, otherwise its text)
+ * while the named modes read exactly what the author picked (a link's href, an attribute, markup…).
+ */
+function readElementValueSelfContained(el, mode, attrName) {
+  const m = String(mode || "auto").toLowerCase();
+  if (m === "value") return el.value != null ? String(el.value) : "";
+  if (m === "attribute") {
+    const name = String(attrName || "").trim();
+    if (!name) return { __err: "missing_value_attribute" };
+    const v = el.getAttribute(name);
+    return v == null ? "" : String(v);
+  }
+  if (m === "innerhtml") return el.innerHTML || "";
+  if (m === "outerhtml") return el.outerHTML || "";
+  if (m === "innertext") return (el.innerText || "").trim();
+  if (m === "text") return (el.textContent || "").trim();
+  if (m === "auto") {
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+      return el.value || "";
+    }
+    return (el.innerText || el.textContent || "").trim();
+  }
+  // href / src / title and every other attribute an author may name later.
+  const v = el.getAttribute(m);
+  return v == null ? "" : String(v);
 }
 
 /** Injected into pages — find first element matching CSS + optional state filters. */
@@ -4832,12 +4888,50 @@ function resolveStepParam(step, graph, rowIndex, opts = {}) {
   return resolveDynamicText(raw, step, graph, rowIndex ?? 0);
 }
 
+/**
+ * How a value is read out of an element.
+ *
+ * `Auto` keeps the old behaviour (a form field's value, otherwise the trimmed text) so every existing
+ * process means what it meant before. The rest name the part the author actually wants, because a
+ * link's `href`, a card's `title` or an element's markup are all legitimate — and previously
+ * unreachable — values.
+ */
+const ELEMENT_VALUE_MODES = [
+  "Auto", "Value", "Text", "InnerText", "InnerHtml", "OuterHtml", "Attribute", "Href", "Title", "Src"
+];
+
+function normalizeElementValueMode(mode) {
+  const raw = String(mode || "").trim();
+  const hit = ELEMENT_VALUE_MODES.find((m) => m.toLowerCase() === raw.toLowerCase());
+  return hit || "Auto";
+}
+
+/** The attribute name a `Attribute` read uses; supports the dynamic (source/loop) placeholder. */
+async function resolveElementValueAttribute(step, graph, rowIndex) {
+  const mode = normalizeElementValueMode(step?.elementValueMode);
+  if (mode === "Href") return "href";
+  if (mode === "Src") return "src";
+  if (mode === "Title") return "title";
+  if (mode !== "Attribute") return "";
+  const raw = String(step?.elementValueAttribute || "").trim();
+  if (!raw) return "";
+  // The attribute NAME is usually a constant. It is allowed to come from a cell (a loop over
+  // "read this attribute" rows); a missing cell must fail loudly there, like every other dynamic
+  // selector, rather than silently reading a different attribute.
+  if (!step?.elementValueAttributeIsDynamic) return raw;
+  return String(await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0, {
+    valueKey: "elementValueAttribute",
+    dynFlag: "elementValueAttributeIsDynamic",
+    dynDs: "elementValueAttributeDataSourceId",
+    dynCol: "elementValueAttributeDynamicColumn"
+  }) || "").trim();
+}
+
 async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
   const cst = step.contentSourceType || "";
   if (cst === "System") {
     return resolveSystemValue(step.systemValueType || "CurrentDateTime");
-  }
-  if (stepUsesDataSourceValue(step)) {
+  }  if (stepUsesDataSourceValue(step)) {
     const ds = findDataSourceForValue(step, graph);
     const v = await readDataSourceCellForPlay(
       ds, step.dynamicSourceColumnName, rowIndex ?? 0, step, graph
@@ -4873,12 +4967,19 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
     });
     if (!valueSel) return "";
     const eqReq = selectorStateReqs(step, { equal: true });
+    // WHERE in the element the value lives. Without it the reader guessed: `.value` for form fields,
+    // trimmed text for everything else — which cannot read `href` off a link, an attribute of a card,
+    // or the raw markup. The step carries the choice; the injector below applies it.
+    const valueMode = normalizeElementValueMode(step.elementValueMode);
+    const valueAttr = await resolveElementValueAttribute(step, graph, rowIndex ?? 0);
     const payload = {
       // Internal verb: read an element's text as a VALUE. It is not an ActionType — reading a
       // field is a sub-step of the actions that need a value, never something the author picks.
       actionType: "ReadElementValue",
       selectorValue: valueSel,
       constantValue: "",
+      valueMode,
+      valueAttribute: valueAttr,
       requireVisible: !!eqReq.requireVisible,
       requireEnabled: !!eqReq.requireEnabled,
       requireClickable: !!eqReq.requireClickable
@@ -4886,6 +4987,9 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
     // The value selector's own wait switch gets the same frame-aware retry as a target selector.
     const result = await executeInFrameWithWait(
       tabId, opts.framePath || [], payload, selectorWaitBudget(step, { equal: true }));
+    if (result?.reason === "missing_value_attribute") {
+      throw new Error(tv("run.valueAttrMissing"));
+    }
     return result?.text != null ? String(result.text) : "";
   }
   return resolveStepParam(step, graph, rowIndex, opts);
@@ -5290,19 +5394,68 @@ function noteLocalRowShift(dsId, at, isInsert) {
   const list = localServerRowMap.get(id) || [];
   list.push({ at: Math.max(0, Number(at) || 0), delta: isInsert ? 1 : -1 });
   localServerRowMap.set(id, list);
-
+  const previousRow = serverRowForLocal(id, Math.max(0, Number(at) || 0));
+  // Each deletion describes the SERVER row that disappears, so the run's stored row index no longer
+  // matches its live one: shifting it again here would apply the same deletion twice.
+  list[list.length - 1].serverRow = previousRow;
   // Re-point every pending write of this source: the local index it was recorded at may now sit on
   // a different row. `localRowIndex` is the index it was recorded at, and it must follow the shift
   // too — otherwise a second shift (say a delete above it) would be applied to the old index and
   // land on the wrong row.
+  const shiftedEntries = [];
   for (const entry of localRunWrites.values()) {
     if (Number(entry.dataSourceId) !== id) continue;
     const local = Number(entry.localRowIndex) || 0;
-    if (local >= at) entry.localRowIndex = local + (isInsert ? 1 : -1);
+    if (local >= at) {
+      entry.localRowIndex = local + (isInsert ? 1 : -1);
+      shiftedEntries.push(entry);
+    }
     if (Number(entry.localRowIndex) < 0) entry.localRowIndex = 0;
+    if (isInsert && local === at) {
+      // An inserted row has no pre-run value on the server: the row the run had loaded at that index
+      // moved down, so its value must not be used as the new row's base.
+      entry.baseValue = "";
+    }
+  }
+  if (!isInsert) {
+    // The row at `previousRow` is gone, so the rows BELOW it moved up: the value the run loaded for
+    // them now sits one row further down. Rebuilding the base keeps a shifted write from looking
+    // like a conflict against the record that took its place. Each write's base therefore comes
+    // from the row one BELOW its new position; a write that did NOT move keeps its own base.
+    for (const entry of shiftedEntries) {
+      const movedBase = loadedValueAtServerRow(id, previousRow + 1, entry.columnKey);
+      entry.baseValue = movedBase === undefined ? null : movedBase;
+    }
+  }
+  for (const entry of localRunWrites.values()) {
+    if (Number(entry.dataSourceId) !== id) continue;
     entry.rowIndex = serverRowForLocal(id, entry.localRowIndex);
   }
   rekeyCommittedLocalRunWrites(id, at, isInsert);
+  // The map key follows the row: `recordLocalWrite` looks an existing entry up by the local index,
+  // so a stale key makes the run treat the moved row as a brand-new cell and lose its base value.
+  const movedKeys = new Map();
+  for (const entry of localRunWrites.values()) {
+    if (Number(entry?.dataSourceId) !== id) continue;
+    movedKeys.set(`${id}|${Number(entry.localRowIndex) || 0}|${String(entry.columnKey || "")}`, entry);
+  }
+  for (const [key, entry] of localRunWrites) {
+    if (Number(entry?.dataSourceId) !== id) movedKeys.set(key, entry);
+  }
+  localRunWrites = movedKeys;
+}
+
+/** The value the run loaded for a cell, addressed by the SERVER row it came from. */
+function loadedValueAtServerRow(dsId, serverRow, columnKey) {
+  const ds = (localRunGraph?.dataSources || []).find((d) => Number(d.id) === Number(dsId));
+  const cells = Array.isArray(ds?.cells) ? ds.cells : [];
+  const col = String(columnKey || "");
+  const hit = cells.find((c) =>
+    (c.key === col || c.Key === col || c.columnName === col)
+    && Number(c.index ?? c.Index ?? c.rowIndex) === Number(serverRow));
+  if (!hit) return undefined;
+  const v = hit.cellValue !== undefined ? hit.cellValue : hit.CellValue;
+  return v === undefined || v === null ? undefined : String(v);
 }
 
 function serverRowForLocal(dsId, localRow) {
@@ -7359,12 +7512,14 @@ async function playExecuteInjected(payload) {
   // need a value from the page (InputContent, InsertContent, SetMemory, GoToUrl as a URL…) all
   // funnel their read through here instead of each having their own copy.
   if (actionType === "ReadElementValue") {
-    let text = "";
-    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
-      text = el.value || "";
-    } else {
-      text = (el.innerText || el.textContent || "").trim();
+    const rawMode = (payload && payload.valueMode) || "Auto";
+    const mode = String(rawMode).toLowerCase();
+    const attrName = String((payload && payload.valueAttribute) || "").trim();
+    if (mode === "attribute" && !attrName) {
+      return { ok: false, reason: "missing_value_attribute" };
     }
+    const text = readElementValueSelfContained(el, mode, attrName);
+    if (text && text.__err) return { ok: false, reason: text.__err };
     return { ok: true, text };
   }
 

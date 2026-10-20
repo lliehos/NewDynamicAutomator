@@ -1093,6 +1093,24 @@ rect.flow-marquee{pointer-events:none}
   min-width:40px;
 }
 .ds-viewer-table thead .ds-row-idx{z-index:3;background:#f0eef8}
+/* WHAT changed in the browser copy, so a local run's result is readable before it is synced.
+   A colour per kind of change: an inserted row (red outline), a deleted row (grey, struck),
+   a cell the run wrote (red text), a cell edited by hand here (blue text), and a row that only
+   moved because of a structural change elsewhere (dashed outline). The legend above the grid
+   names them, so the colours are never the only signal. */
+.ds-viewer-table tr.ds-chg-row-insert td,
+.ds-viewer-table tr.ds-chg-row-insert th{box-shadow:inset 0 0 0 2px rgba(234,84,85,.85);background:rgba(234,84,85,.06)}
+.ds-viewer-table tr.ds-chg-row-delete td,
+.ds-viewer-table tr.ds-chg-row-delete th{background:rgba(140,140,150,.12);color:#8b8b96;text-decoration:line-through}
+.ds-viewer-table tr.ds-chg-row-shift td,
+.ds-viewer-table tr.ds-chg-row-shift th{box-shadow:inset 0 0 0 1px rgba(120,120,140,.5)}
+.ds-viewer-table td.ds-chg-cell-write{color:#d93025;font-weight:700}
+.ds-viewer-table td.ds-chg-cell-write::after{content:"✎";margin-inline-start:4px;font-size:10px;opacity:.75}
+.ds-viewer-table td.ds-chg-cell-edit{color:#1a73e8;font-weight:700}
+.ds-viewer-table td.ds-chg-cell-edit::after{content:"✎";margin-inline-start:4px;font-size:10px;opacity:.75}
+.ds-chg-legend{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:6px 0 0;font-size:11.5px;color:#5e5873}
+.ds-chg-legend span{display:inline-flex;align-items:center;gap:5px}
+.ds-chg-legend i{display:inline-block;width:12px;height:12px;border-radius:3px}
 .ds-viewer-empty{
   text-align:center;
   color:#a8aaae;

@@ -1023,6 +1023,21 @@
     const deletedRows = Array.isArray(answer?.deletedRows)
       ? answer.deletedRows
       : (Array.isArray(task?.locallyRunDeletedRows) ? task.locallyRunDeletedRows : []);
+    // The per-cell change KIND the viewer recorded: "run" (written by the local run) or "edit" (done
+    // by hand in the local grid). It travels with the payload so the server log — and the operator —
+    // can tell where a value came from, instead of treating every unsynced cell the same.
+    const changeKinds = {};
+    const changeSources = (answer && answer.ok && answer.changes && typeof answer.changes === "object")
+      ? answer.changes
+      : Object.fromEntries(Object.entries(task?.localSourceCopies || {})
+        .map(([sid, rec]) => [sid, rec?.changes || null]));
+    for (const [sid, rec] of Object.entries(changeSources || {})) {
+      for (const [rowKey, cols] of Object.entries(rec?.cells || {})) {
+        for (const [colKey, kind] of Object.entries(cols || {})) {
+          changeKinds[`${Number(sid)}|${Number(rowKey)}|${colKey}`] = kind;
+        }
+      }
+    }
     const sourceIds = [...new Set(cells
       .map((c) => Number(c?.dataSourceId))
       .filter((n) => Number.isFinite(n) && n > 0))];
@@ -1066,7 +1081,8 @@
           // values, so the badge stayed and the divergence was never resolved.
           cells,
           rows: insertedRows,
-          deletedRows
+          deletedRows,
+          changeKinds
         })
       });
       if (!res.ok) {
@@ -1110,8 +1126,17 @@
       } else if (!accepted) {
         // Keep the log: the values are still only here, so the choice (retry after the server
         // changes, or rebuild this copy from the server) is still the user's to make.
-        notifyHome(t("tasks.syncRefused", { applied, conflicts, skipped })
-          || `سرور هیچ سلولی را از این ارسال نپذیرفت (${conflicts} تعارض · ${skipped} نامعتبر) — نسخهٔ سرور حفظ شد و «نیاز به همگام‌سازی» باقی ماند. اگر نسخهٔ سرور درست است، این منبع را از سرور بازسازی کنید؛ وگرنه دوباره سینک کنید.`, "error");
+        //
+        // Say WHY each cell was refused. A bare count ("6 نامعتبر") left the user guessing whether
+        // the row, the column or the write itself was the problem — the reasons now come from the
+        // server, so the message can name them.
+        const rejectedList = Array.isArray(result?.rejected) ? result.rejected : [];
+        const reasons = [...new Set(rejectedList.map((r) => r?.reason).filter(Boolean))];
+        const detail = rejectedList.length
+          ? ` — ${String(t("tasks.syncRejectedDetail") || "دلیل:").trim()} ${rejectedList.slice(0, 3).map((r) => `${r?.reason || "?"} @ ${Number(r?.rowIndex) + 1}/${r?.columnKey}`).join(" · ")}${rejectedList.length > 3 ? " …" : ""}`
+          : (reasons.length ? ` — ${reasons.join(", ")}` : "");
+        notifyHome((t("tasks.syncRefused", { applied, conflicts, skipped })
+          || `سرور هیچ سلولی را از این ارسال نپذیرفت (${conflicts} تعارض · ${skipped} نامعتبر) — نسخهٔ سرور حفظ شد و «نیاز به همگام‌سازی» باقی ماند. اگر نسخهٔ سرور درست است، این منبع را از سرور بازسازی کنید؛ وگرنه دوباره سینک کنید.`) + detail, "error");
         return;
       }
       notifyHome(
