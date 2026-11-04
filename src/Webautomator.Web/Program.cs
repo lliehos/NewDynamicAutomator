@@ -9,6 +9,30 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
+// ---- Keep the event log away from the logging pipeline ------------------------------------------
+// Nothing in this application adds the EventLog provider, yet it is what killed the published build:
+//
+//   Unhandled exception. System.AggregateException: An error occurred while writing to logger(s).
+//    ---> System.InvalidOperationException: Cannot open log for source '.NET Runtime'.
+//    ---> System.ComponentModel.Win32Exception (1722): The RPC server is unavailable.
+//    ... at XmlKeyManager.GetFallbackKeyRepositoryEncryptorPair()
+//
+// The host keeps a bootstrap logger for the moments before configuration exists: console (only when a
+// console is attached), the event log, and debug. So a process started without a console (IIS
+// "in process" registered as a Windows service, or NSSM/a `sc create` wrapper) sends its first line
+// straight to the event log. That write needs an event source the service account is allowed to use;
+// under a normal service identity it either cannot be opened at all ("you may not have write access",
+// RPC server unavailable) or does not match the log the provider picked. Either way the write throws
+// — from inside DataProtection's own logging, before Kestrel has bound a port — and a log line turns
+// into a startup crash. A reproduced AddEventLog write for a non-matching source throws
+// ArgumentException wrapped in AggregateException, so this is a throw, not a silently dropped message.
+//
+// The switch must be set before CreateBuilder reads it, and "none" is explicit rather than relying on
+// console detection: assigning it in appsettings can never reach the bootstrap logger, and a
+// deployment whose hosting model differs from Development's should not depend on handle detection.
+// The app's own logging is the console provider, added by the Web SDK, and is unaffected.
+Environment.SetEnvironmentVariable("DOTNET_DisableFallbackConsole", "none");
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Configuration layering, lowest priority first:
@@ -28,6 +52,11 @@ builder.Configuration.AddJsonFile(serverUpdateSettings, optional: true, reloadOn
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddMemoryCache();
+// Before anything that mints a protected payload: without a persisted key ring every restart silently
+// signs everyone out and invalidates open forms. See DataProtectionSetup for why the folder is a
+// sibling of the application rather than part of the publish.
+Webautomator.Web.Services.DataProtectionSetup.KeepKeysBesideTheApplication(
+    builder.Services, builder.Environment.ContentRootPath);
 builder.Services.AddScoped<ILocaleService, LocaleService>();
 builder.Services.AddScoped<BrandingCookieService>();
 builder.Services.AddScoped<TenantBrandingViewService>();

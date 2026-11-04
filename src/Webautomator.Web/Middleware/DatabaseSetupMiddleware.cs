@@ -44,6 +44,14 @@ public sealed class DatabaseSetupMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
+        // Re-assert the process-level logging switch on every request. IIS serves a worker with
+        // ASPNETCORE_ENVIRONMENT reset to the host's value unless the version is pinned, and the pinned
+        // version has no per-request counterpart for DOTNET_DisableFallbackConsole — so a worker that
+        // started with Program.cs's setting can silently lose it. Setting it here covers both cases:
+        // the managed host keeps the value, and a worker that re-created its logger from the environment
+        // gets the switch back before anything tries to log from an event-log-less state.
+        Environment.SetEnvironmentVariable("DOTNET_DisableFallbackConsole", "none");
+
         // Whether this request came from the machine itself decides the WHOLE shape of the answer,
         // not just the final branch. Every page below explains a database problem — the setup page
         // even prints the SQL error — and the setup page's own footer promises it "is only visible
@@ -52,26 +60,40 @@ public sealed class DatabaseSetupMiddleware
         // let "/" through to the diagnosis and then checked loopback only afterwards.
         var local = IsLocalRequest(context);
 
-        // The status probe is answered in EVERY phase, before the phase checks below. A progress
-        // page already open in a browser keeps polling after initialisation finishes, and at that
-        // moment the phase is Ready — if the probe fell through to MVC there (where no such route
-        // exists) it would return 404, the page's poll would never see "ready", and the browser
-        // would sit on the spinner forever. Answering it here is what lets the page navigate itself.
+        // The status probe is answered in EVERY phase and for EVERY caller, before the phase checks
+        // below. Two things depend on that. A progress page already open in a browser keeps polling
+        // after initialisation finishes, and at that moment the phase is Ready — if the probe fell
+        // through to MVC there (where no such route exists) it would return 404, the poll would never
+        // see "ready", and the browser would sit on the spinner forever. And the warm-up page below is
+        // served behind the public name too, so its poll would otherwise be answered with 503 and the
+        // page would stall. The payload carries no diagnosis — only the phase name and a progress
+        // sentence — so answering off-server callers reveals nothing the 503 did not already say.
         if (IsStatusProbe(context.Request.Path))
         {
-            if (local)
-            {
-                await WriteStatusAsync(context);
-                return;
-            }
-
-            await WriteNotReadyAsync(context);
+            await WriteStatusAsync(context);
             return;
         }
 
         if (_state.Phase == DatabaseSetupPhase.Ready)
         {
             await _next(context);
+            return;
+        }
+
+        // A page is requested while startup work is still finishing (or right after a restart, before
+        // the first request has touched the database). Bridge that gap with a small waiting page that
+        // follows the status probe: to the requested URL when the application is ready, to the
+        // diagnosis page if the phase settles on Blocked. The setup and front pages are excluded above,
+        // so a real failure is never hidden behind it.
+        //
+        // On-server callers get it too rather than the progress page: the progress page lists the
+        // setup steps and is the wrong answer for someone who just opened the site, and the waiting
+        // page ends in the same place. Off-server callers get it instead of a bare 503 — that is the
+        // whole point, since a 503 with no way forward was indistinguishable from an outage and made
+        // the first visit after a restart look like a database failure until someone refreshed.
+        if (WantsHtmlPage(context))
+        {
+            await WriteWarmUpPageAsync(context);
             return;
         }
 
@@ -143,6 +165,154 @@ public sealed class DatabaseSetupMiddleware
     /// <summary>JSON endpoint the progress page polls to learn when initialisation has finished.</summary>
     private static bool IsStatusProbe(PathString path) =>
         path.StartsWithSegments("/setup/status", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when the caller is asking for a page a person can look at, rather than for an asset, an
+    /// API response or a socket. Used to decide whether the warm-up page is a sensible answer.
+    /// </summary>
+    /// <remarks>
+    /// Shallow on purpose. A caller that negotiates for something other than HTML is left to the
+    /// phase branches below (503 off-server, diagnosis on-server); mutating verbs are never answered
+    /// with a page whose reload would replay them.
+    /// </remarks>
+    private static bool WantsHtmlPage(HttpContext context)
+    {
+        if (!HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method))
+            return false;
+
+        var path = context.Request.Path;
+        if (path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWithSegments("/hubs", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // The setup page and the retry action are the operator's way IN, so they must never be
+        // replaced by a waiting page — that would leave a genuine failure unreachable.
+        if (IsDiagnosisPath(path))
+            return false;
+
+        var accept = context.Request.Headers.Accept.ToString();
+        if (accept.Length > 0)
+        {
+            // A fetch() default of "*/*" counts as a page; an explicit non-HTML preference does not.
+            if (accept.Contains("application/json", StringComparison.OrdinalIgnoreCase)
+                && !accept.Contains("text/html", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (accept.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The page served to a browser that arrives while startup is still in progress.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without this, the first hit on a freshly started server is answered before the background
+    /// initialiser has finished, and the visitor sees "database not reachable" or a bare "not ready"
+    /// that a plain refresh then contradicts. The page below turns that first experience into a short
+    /// wait: it asks the status probe, and follows the answer wherever it leads — to the diagnosis if
+    /// something is genuinely broken, to the progress page while first-run work is running, or back to
+    /// the URL that was asked for once the application is ready.
+    /// </para>
+    /// <para>
+    /// It is inline, unstyled-by-the-application and dependency-free on purpose: it is emitted during
+    /// startup, when no layout, branding or localisation can be trusted to read from the database. The
+    /// text follows the <c>Accept-Language</c> header rather than the culture middleware, which has not
+    /// run yet.
+    /// </para>
+    /// </remarks>
+    private async Task WriteWarmUpPageAsync(HttpContext context)
+    {
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "text/html; charset=utf-8";
+        // The page is different on every visit (ready or not), so it must never be replayed by a cache.
+        context.Response.Headers.CacheControl = "no-store, no-cache";
+        context.Response.Headers.RetryAfter = "2";
+
+        var english = PrefersEnglish(context);
+        var title = english ? "Starting up" : "در حال آماده‌سازی سامانه";
+        var message = english ? "The system is getting ready. This page refreshes itself." : "سامانه در حال آماده‌سازی است. این صفحه خودکار به‌روزرسانی می‌شود.";
+        var hint = english ? "If it does not continue on its own, open /setup/database on the server." : "اگر ادامه پیدا نکرد، روی سرور نشانی /setup/database را باز کنید.";
+        var lang = english ? "en" : "fa";
+        var dir = english ? "ltr" : "rtl";
+
+        // The visitor's original URL, so the reload lands where they were going. Escaped because it is
+        // reflected into script and markup.
+        var target = context.Request.Path + context.Request.QueryString;
+        var safeTarget = System.Text.Json.JsonSerializer.Serialize(target);
+        var htmlTarget = System.Net.WebUtility.HtmlEncode(target);
+
+        await context.Response.WriteAsync($$"""
+            <!doctype html>
+            <html lang="{{lang}}" dir="{{dir}}">
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>{{title}}</title>
+              <style>
+                body {
+                  margin: 0; min-height: 100vh; display: grid; place-items: center;
+                  font-family: Vazirmatn, Tahoma, "Segoe UI", sans-serif;
+                  background: #f9fafb; color: #1f2937; text-align: center;
+                }
+                .box { padding: 2rem; max-width: 30rem; }
+                .gear {
+                  width: 56px; height: 56px; margin: 0 auto 1.5rem;
+                  border: 5px solid #e5e7eb; border-top-color: #0d9488; border-right-color: #0d9488;
+                  border-radius: 50%; animation: spin 1s linear infinite;
+                }
+                @keyframes -webkit-spin { to { transform: rotate(360deg); } }
+                @keyframes spin { to { transform: rotate(360deg); } }
+                h1 { font-size: 1.15rem; margin: 0 0 .5rem; font-weight: 700; }
+                p { color: #6b7280; font-size: .95rem; margin: 0; }
+                .hint { margin-top: 1.5rem; font-size: .8rem; color: #9ca3af; }
+                @media (prefers-reduced-motion: reduce) { .gear { animation-duration: 3s; } }
+              </style>
+            </head>
+            <body>
+              <div class="box">
+                <div class="gear" role="progressbar" aria-label="{{title}}"></div>
+                <h1>{{title}}</h1>
+                <p>{{message}}</p>
+                <div class="hint">{{hint}}</div>
+              </div>
+              <script>
+                (function () {
+                  var target = {{safeTarget}};
+                  function poll() {
+                    fetch('/setup/status', { cache: 'no-store' })
+                      .then(function (r) { return r.json(); })
+                      .then(function (s) {
+                        if (s.ready) { location.replace(target || '/'); return; }
+                        if (s.phase === 'Blocked') { location.replace('/setup/database'); return; }
+                        setTimeout(poll, 1000);
+                      })
+                      .catch(function () { setTimeout(poll, 1500); });
+                  }
+                  setTimeout(poll, 700);
+                })();
+              </script>
+              <noscript>
+                <p><a href="{{htmlTarget}}">{{title}}</a></p>
+              </noscript>
+            </body>
+            </html>
+            """);
+    }
+
+    /// <summary>
+    /// Decides the warm-up page's language from the one header available before the culture
+    /// middleware has run.
+    /// </summary>
+    private static bool PrefersEnglish(HttpContext context)
+    {
+        var languages = context.Request.Headers.AcceptLanguage.ToString();
+        return languages.Length > 0
+            && languages.TrimStart().StartsWith("en", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// The static asset roots the diagnosis pages need. Inlined today, but kept because the page that
@@ -223,7 +393,7 @@ public sealed class DatabaseSetupMiddleware
                 h1 { font-size: 1.15rem; margin: 0 0 .5rem; font-weight: 700; letter-spacing: -.01em; }
                 p { color: #6b7280; font-size: .95rem; margin: 0; min-height: 1.4em; }
                 .hint { margin-top: 1.5rem; font-size: .8rem; color: #9ca3af; }
-                @@media (prefers-reduced-motion: reduce) {
+                @media (prefers-reduced-motion: reduce) {
                   .gear { animation-duration: 3s; }
                 }
               </style>
@@ -258,10 +428,15 @@ public sealed class DatabaseSetupMiddleware
     }
 
     /// <summary>
-    /// True for the pages that explain the failure to whoever is sitting at the server: the front
-    /// page and the dedicated setup URL. Everything else is a normal application URL that cannot
-    /// work without a database.
+    /// True for the pages that explain the failure: the front page and the dedicated setup URL.
+    /// Everything else is a normal application URL that cannot work without a database.
     /// </summary>
+    /// <remarks>
+    /// The front page is included because it is where an operator lands by reflex, and on a local
+    /// request it renders the diagnosis itself. It is excluded from the warm-up page for the same
+    /// reason as the setup URL: a genuine failure must stay one URL away instead of hiding behind a
+    /// spinner that will poll a status that has already settled on Blocked.
+    /// </remarks>
     private static bool IsDiagnosisPath(PathString path) =>
         path == "/"
         || path == string.Empty

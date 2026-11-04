@@ -300,6 +300,8 @@ dotnet Webautomator.Web.dll
 
 مناسب برای محیط آزمایشی یا سرورهای کوچک. برنامه را با `Webautomator.Web.exe` اجرا کنید. برای اجرای دائم می‌توانید از **Windows Service** (مثلاً با NSSM) استفاده کنید.
 
+> **اجرای برنامه در قالب Windows Service و لاگ.** این برنامه لاگ‌های خود را به **Windows Event Log** نمی‌فرستد — فقط کنسول. علت این تصمیم آگاهانه است: روی سرور، سرویس با حساب غیرمدیر اجرا می‌شود، نمی‌تواند source رویداد `.NET Runtime` را بسازد، و هر نوشتن در Event Log از داخل خودِ لاگر استثنا می‌دهد و برنامه را هنگام بالا آمدن متوقف می‌کند (`Cannot open log for source '.NET Runtime'` / `The RPC server is unavailable`). اگر این خطا را دیدید، باینری قدیمی است؛ نسخهٔ جاری در `Program.cs` با `DOTNET_DisableFallbackConsole=none` این مسیر را می‌بندد.
+
 ### 7.3 Linux — nginx + systemd (پیشنهادی)
 
 **۱. سرویس systemd** (فایل `/etc/systemd/system/webautomator.service`):
