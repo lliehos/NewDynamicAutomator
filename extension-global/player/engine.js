@@ -863,6 +863,10 @@ const ENGINE_MSG = {
     "run.noResult": "بدون نتیجه",
     "run.badSelector": "سلکتور نامعتبر: {sel}",
     "run.removeNone": "المانی برای حذف پیدا نشد: {sel}",
+    "run.scrollNeedsSelector": "برای اسکرول تا المان، ابتدا المان مقصد را انتخاب کنید.",
+    "run.cannotType": "در این المان ({tag}) نمی‌توان تایپ کرد.",
+    "run.valueAttrMissing": "نام اتریبیوتی که باید خوانده شود خالی است.",
+    "run.valueReadFailed": "خواندن مقدار از المان صفحه ناموفق بود ({reason}).",
     "run.alertNotArmed": "گوش‌دادن به پیام هشدار مرورگر برای این تب فعال نیست؛ افزونهٔ Player را دوباره بارگذاری کنید.",
     "run.alertNone": "پیام هشداری که باید تأیید شود دیده نشد.",
     "run.selectorEmpty": "سلکتور خالی است.",
@@ -959,6 +963,10 @@ const ENGINE_MSG = {
     "run.noResult": "No result",
     "run.badSelector": "Invalid selector: {sel}",
     "run.removeNone": "No element to remove was found: {sel}",
+    "run.scrollNeedsSelector": "Pick a target element before scrolling to one.",
+    "run.cannotType": "This element ({tag}) cannot be typed into.",
+    "run.valueAttrMissing": "The attribute name to read is empty.",
+    "run.valueReadFailed": "Reading the value from the page element failed ({reason}).",
     "run.alertNotArmed": "Dialog handling is not armed for this tab; reload the Player extension.",
     "run.alertNone": "No browser dialog was seen to accept.",
     "run.selectorEmpty": "Selector is empty.",
@@ -1012,6 +1020,27 @@ function selLabel(opts) {
   if (opts && opts.labelKey) return tv(opts.labelKey);
   if (opts && typeof opts.label === "string" && opts.label.trim()) return opts.label;
   return tv("label.selector");
+}
+
+/**
+ * The message templates the page-side executor needs.
+ *
+ * `playExecuteInjected` is serialised by `chrome.scripting.executeScript`, so it cannot call `tv`
+ * from inside the tab. The templates are resolved HERE, where the culture lives, and travel in the
+ * payload with their `{placeholders}` intact; the page side only substitutes the values.
+ */
+function injectedTexts() {
+  return {
+    "run.badSelector": tv("run.badSelector", { sel: "{sel}" }),
+    "run.scrollNeedsSelector": tv("run.scrollNeedsSelector"),
+    "run.selectorEmpty": tv("run.selectorEmpty"),
+    "run.cannotType": tv("run.cannotType", { tag: "{tag}" }),
+    "run.removeNone": tv("run.removeNone", { sel: "{sel}" }),
+    "run.notSelect": tv("run.notSelect"),
+    "run.optionNotFound": tv("run.optionNotFound", { v: "{v}" }),
+    "run.unsupportedAction": tv("run.unsupportedAction", { action: "{action}" }),
+    "run.keyMissing": tv("run.keyMissing")
+  };
 }
 
 /** Human label for a node kind, used in validation reports. */
@@ -3648,38 +3677,13 @@ function selectorStateReqs(step, { equal = false } = {}) {
 }
 
 /**
- * Read one element's value INSIDE the page.
+ * Injected into pages — find first element matching CSS + optional state filters.
  *
- * A standalone function on purpose: `chrome.scripting.executeScript` serialises the source, so an
- * injected function cannot call anything else in this file. `mode` says which part of the element
- * carries the value — `auto` keeps the historic guess (a form field's value, otherwise its text)
- * while the named modes read exactly what the author picked (a link's href, an attribute, markup…).
+ * The element-value reader lives INSIDE `playExecuteInjected`, not here: that function's source is
+ * serialised before it reaches the page, so it cannot call anything declared in this file. Keeping
+ * the reader at module level meant every page-element read threw `ReferenceError` in the tab, the
+ * injection came back as a failure, and the step quietly stored an empty value.
  */
-function readElementValueSelfContained(el, mode, attrName) {
-  const m = String(mode || "auto").toLowerCase();
-  if (m === "value") return el.value != null ? String(el.value) : "";
-  if (m === "attribute") {
-    const name = String(attrName || "").trim();
-    if (!name) return { __err: "missing_value_attribute" };
-    const v = el.getAttribute(name);
-    return v == null ? "" : String(v);
-  }
-  if (m === "innerhtml") return el.innerHTML || "";
-  if (m === "outerhtml") return el.outerHTML || "";
-  if (m === "innertext") return (el.innerText || "").trim();
-  if (m === "text") return (el.textContent || "").trim();
-  if (m === "auto") {
-    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
-      return el.value || "";
-    }
-    return (el.innerText || el.textContent || "").trim();
-  }
-  // href / src / title and every other attribute an author may name later.
-  const v = el.getAttribute(m);
-  return v == null ? "" : String(v);
-}
-
-/** Injected into pages — find first element matching CSS + optional state filters. */
 function pageFindMatchingElement(sel, req) {
   const need = req || {};
   let nodes;
@@ -4413,7 +4417,11 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     highlightColor: resolveHighlightColor(graph),
     requireVisible: !!stateReq.requireVisible,
     requireEnabled: !!stateReq.requireEnabled,
-    requireClickable: !!stateReq.requireClickable
+    requireClickable: !!stateReq.requireClickable,
+    // The page side has no access to this file's helpers, so it gets its messages and the
+    // scroll fallback as data (see playExecuteInjected).
+    texts: injectedTexts(),
+    scrollDefaultPx: SCROLL_PAGE_DEFAULT_PX
   };
 
   // ONE execution path, deliberately.
@@ -4499,7 +4507,8 @@ async function runLoadContentStep(tabId, taskId, step, runMode, graph, rowIndex,
     highlightColor: resolveHighlightColor(graph),
     requireVisible: !!stateReq.requireVisible,
     requireEnabled: !!stateReq.requireEnabled,
-    requireClickable: !!stateReq.requireClickable
+    requireClickable: !!stateReq.requireClickable,
+    texts: injectedTexts()
   };
   // Same single-path rule and same frame-aware wait as runStep above.
   const result = await executeInFrameWithWait(tabId, framePath || [], payload, waitTimeoutMs);
@@ -4982,13 +4991,20 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
       valueAttribute: valueAttr,
       requireVisible: !!eqReq.requireVisible,
       requireEnabled: !!eqReq.requireEnabled,
-      requireClickable: !!eqReq.requireClickable
+      requireClickable: !!eqReq.requireClickable,
+      texts: injectedTexts()
     };
     // The value selector's own wait switch gets the same frame-aware retry as a target selector.
     const result = await executeInFrameWithWait(
       tabId, opts.framePath || [], payload, selectorWaitBudget(step, { equal: true }));
     if (result?.reason === "missing_value_attribute") {
       throw new Error(tv("run.valueAttrMissing"));
+    }
+    // A read that never reached the element is NOT an empty value. Returning "" here is what let
+    // a broken page-side reader write an empty cell and call the step a success.
+    if (!result || result.ok !== true) {
+      throw new Error(result?.error
+        || tv("run.valueReadFailed", { reason: result?.reason || "read_failed" }));
     }
     return result?.text != null ? String(result.text) : "";
   }
@@ -7321,6 +7337,55 @@ async function playExecuteInjected(payload) {
     requireClickable: !!payload.requireClickable
   };
 
+  // Messages and constants this page-side function needs.
+  //
+  // `chrome.scripting.executeScript` serialises this function to its own source, so it can reach
+  // NOTHING from the worker's scope — no `tv`, no `SCROLL_PAGE_DEFAULT_PX`, no helper functions.
+  // Every such reference used to throw `ReferenceError` inside the tab: the injection was reported
+  // as failed and a value read came back as "", so an element's text was "inserted" empty. All of
+  // it now travels in the payload (`texts`, `scrollDefaultPx`).
+  const TEXT = (payload && payload.texts) || {};
+  const scrollDefaultPx = Number(payload && payload.scrollDefaultPx) || 600;
+  function tv(key, vars) {
+    let s = TEXT[key] != null ? String(TEXT[key]) : String(key);
+    if (vars && typeof vars === "object") {
+      for (const k of Object.keys(vars)) {
+        s = s.split("{" + k + "}").join(vars[k] == null ? "" : String(vars[k]));
+      }
+    }
+    return s;
+  }
+
+  /**
+   * Which part of the element carries the value.
+   *
+   * `mode` is the author's choice (see the editor's picker); `auto` keeps the historic guess — a
+   * form field's value, otherwise its text. Self-contained on purpose: see the note above.
+   */
+  function readElementValue(el, mode, attrName) {
+    const m = String(mode || "auto").toLowerCase();
+    if (m === "value") return el.value != null ? String(el.value) : "";
+    if (m === "attribute") {
+      const name = String(attrName || "").trim();
+      if (!name) return { __err: "missing_value_attribute" };
+      const v = el.getAttribute(name);
+      return v == null ? "" : String(v);
+    }
+    if (m === "innerhtml") return el.innerHTML || "";
+    if (m === "outerhtml") return el.outerHTML || "";
+    if (m === "innertext") return (el.innerText || "").trim();
+    if (m === "text") return (el.textContent || "").trim();
+    if (m === "auto") {
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+        return el.value || "";
+      }
+      return (el.innerText || el.textContent || "").trim();
+    }
+    // href / src / title and every other attribute an author may name later.
+    const v = el.getAttribute(m);
+    return v == null ? "" : String(v);
+  }
+
   function normalizeColor(v) {
     const s = String(v || "").trim();
     if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
@@ -7439,7 +7504,7 @@ async function playExecuteInjected(payload) {
       return { ok: true, scrolledToElement: selector };
     }
     const amount = Number(value);
-    const dy = Number.isFinite(amount) && amount !== 0 ? amount : SCROLL_PAGE_DEFAULT_PX;
+    const dy = Number.isFinite(amount) && amount !== 0 ? amount : scrollDefaultPx;
     try {
       window.scrollBy({ top: dy, left: 0, behavior: "instant" });
     } catch {
@@ -7546,7 +7611,7 @@ async function playExecuteInjected(payload) {
     if (mode === "attribute" && !attrName) {
       return { ok: false, reason: "missing_value_attribute" };
     }
-    const text = readElementValueSelfContained(el, mode, attrName);
+    const text = readElementValue(el, mode, attrName);
     if (text && text.__err) return { ok: false, reason: text.__err };
     return { ok: true, text };
   }
