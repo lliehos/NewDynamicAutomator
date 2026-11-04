@@ -174,8 +174,9 @@ const BUILD_ITEMS = [
   ["Hold", "build.hold"],
   ["InputContent", "build.inputContent"],
   ["LoadContent", "build.loadContent"],
-  // InsertContent is «ذخیره در منبع»: the right-clicked element is the VALUE, and the destination
-  // cell is picked in the editor. Omitting it here was the gap the owner reported.
+  // InsertContent is «ذخیره در منبع»: the right-clicked element is the VALUE. Its menu entry is
+  // built separately (createInsertContentItems) because it also needs the destination source and
+  // column, which are submenus of this entry rather than a flat item.
   ["InsertContent", "build.insertContent"],
   ["ClearContent", "build.clearContent"],
   ["SelectOption", "build.selectOption"],
@@ -202,6 +203,22 @@ const BUILD_MENU_IDS = new Set(BUILD_ITEMS.map(([id]) => id));
  */
 const CTX_BUILD_PROC_PREFIX = "da-build-proc:";
 const CTX_BUILD_ACT_PREFIX = "da-build-act:";
+/**
+ * «ذخیره در منبع» (InsertContent) is the one action whose node needs a DESTINATION as well as the
+ * element, and the destination is knowable when the menu is built: the process's own data sources.
+ * The menu therefore nests one level deeper than the other actions:
+ *
+ *   ذخیره در منبع ▸ [data source] ▸ column
+ *
+ * The source level disappears when the process has only one source, so the common case stays two
+ * clicks. The chosen source/column travel to the editor with the node (see handleBuildElement), so
+ * the created step is already complete instead of asking for two pickers afterwards.
+ */
+const CTX_BUILD_INS_PREFIX = "da-build-ins:";
+const CTX_BUILD_INS_DS_PREFIX = "da-build-ins-ds:";
+const CTX_BUILD_INS_COL_PREFIX = "da-build-ins-col:";
+/** How many columns one source contributes before the list stops being usable. */
+const INSERT_MENU_MAX_COLUMNS = 30;
 function buildActionMenuId(tabId, type) { return `${CTX_BUILD_ACT_PREFIX}${tabId}:${type}`; }
 /** Decode an action menu id back into its target tab and action, or null when it is not one. */
 function parseBuildActionMenuId(id) {
@@ -213,6 +230,32 @@ function parseBuildActionMenuId(id) {
   const actionType = rest.slice(sep + 1);
   if (!Number.isFinite(tabId) || !actionType) return null;
   return { tabId, actionType };
+}
+
+/** Encode/decode one column key inside a menu id (keys are arbitrary user text). */
+function insertColumnMenuId(tabId, dsId, columnKey) {
+  return `${CTX_BUILD_INS_COL_PREFIX}${tabId}:${Number(dsId) || 0}:${encodeURIComponent(String(columnKey || ""))}`;
+}
+
+/**
+ * Decode a menu id of the InsertContent branch.
+ *
+ * Returns null for the submenu headers (a source header is not an action), and `{tabId, dsId:0,
+ * columnKey:''}` for the explicit «pick it in the inspector» entry.
+ */
+function parseInsertMenuId(id) {
+  if (typeof id !== "string" || !id.startsWith(CTX_BUILD_INS_COL_PREFIX)) return null;
+  const rest = id.slice(CTX_BUILD_INS_COL_PREFIX.length);
+  const first = rest.indexOf(":");
+  if (first < 0) return null;
+  const second = rest.indexOf(":", first + 1);
+  if (second < 0) return null;
+  const tabId = Number(rest.slice(0, first));
+  const dsId = Number(rest.slice(first + 1, second));
+  let columnKey = rest.slice(second + 1);
+  try { columnKey = decodeURIComponent(columnKey); } catch { /* keep the raw text */ }
+  if (!Number.isFinite(tabId)) return null;
+  return { tabId, dsId: Number.isFinite(dsId) ? dsId : 0, columnKey: String(columnKey || "") };
 }
 
 /**
@@ -256,6 +299,9 @@ const CTX_LABELS = {
     "build.inputContent": "پر کردن فیلد المان",
     "build.loadContent": "بارگذاری از منبع در المان",
     "build.insertContent": "ذخیره در منبع",
+    "build.insertPickLater": "انتخاب منبع/ستون در بازرس",
+    "build.insertMoreColumns": "ستون‌های بیشتر — در بازرس انتخاب کنید",
+    "build.insertNoSource": "این فرآیند منبعی ندارد؛ منبع را در بازرس انتخاب کنید.",
     "build.clearContent": "پاک کردن متن فیلد",
     "build.selectOption": "انتخاب گزینه از لیست",
     "build.scrollPage": "اسکرول تا المان",
@@ -293,6 +339,9 @@ const CTX_LABELS = {
     "build.inputContent": "Fill the element's field",
     "build.loadContent": "Load a source cell into the element",
     "build.insertContent": "Save to a data source",
+    "build.insertPickLater": "Pick the source/column in the inspector",
+    "build.insertMoreColumns": "More columns — pick one in the inspector",
+    "build.insertNoSource": "This process has no data source; pick one in the inspector.",
     "build.clearContent": "Clear the field's text",
     "build.selectOption": "Select an option from the list",
     "build.scrollPage": "Scroll to the element",
@@ -368,6 +417,112 @@ async function isOnOurPortal(url) {
 }
 
 /**
+ * The data sources of one process, as the menu needs them.
+ *
+ * Read from the task store the extension already keeps for the editors (`loadUserTasks`, defined in
+ * background.js — this file runs in the same worker). A graph the store does not have yet (a process
+ * opened but never pulled) yields an empty list, and the menu then falls back to the plain
+ * «ذخیره در منبع» item whose destination is chosen in the inspector. Guessing a source would be far
+ * worse: a menu entry that writes into the wrong source is a silent data bug.
+ *
+ * @returns {Promise<Array<{id:number,title:string,columns:Array<{key:string,title:string}>}>>}
+ */
+async function readTaskSources(taskId) {
+  if (!taskId || typeof loadUserTasks !== "function") return [];
+  try {
+    const tasks = await loadUserTasks();
+    const task = tasks.find((t) => String(t.id) === String(taskId));
+    const list = task?.graph?.dataSources;
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter((ds) => Number(ds?.id) > 0)
+      .map((ds) => {
+        const id = Number(ds.id);
+        const columns = Array.isArray(ds.columns) ? ds.columns : [];
+        const titleByKey = new Map(
+          columns.map((c) => [String(c?.key ?? c?.Key ?? ""), String(c?.title ?? c?.Title ?? "")])
+        );
+        const keys = Array.isArray(ds.columnKeys) && ds.columnKeys.length
+          ? ds.columnKeys.map(String)
+          : columns.map((c) => String(c?.key ?? c?.Key ?? "")).filter(Boolean);
+        return {
+          id,
+          title: String(ds.title || `#${id}`),
+          columns: keys.map((key) => ({ key, title: titleByKey.get(key) || key }))
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The «ذخیره در منبع» branch: the action itself, then the process's sources and their columns.
+ *
+ * Without this the operator had to right-click (to make the node), then find the node, then pick a
+ * source and a column in the inspector — three separate places for one intention. Here the same
+ * right-click answers all of it.
+ *
+ * Two shapes, chosen by the graph rather than by a setting:
+ *   • one source  → «ذخیره در منبع ▸ <column>»            (the short path)
+ *   • many        → «ذخیره در منبع ▸ <source> ▸ <column>»
+ * Columns are capped (INSERT_MENU_MAX_COLUMNS); a source with more gets one extra entry that creates
+ * the node without a column, so a 200-column sheet cannot turn the menu into a wall of text.
+ * A process with no source keeps the plain item — the node is still useful, the inspector explains
+ * what is missing.
+ */
+async function createInsertContentItems(create, culture, urlPatterns, tabId, taskId, parentId) {
+  const base = { contexts: ["all"], documentUrlPatterns: urlPatterns };
+  const sources = await readTaskSources(taskId);
+  const usable = sources.filter((s) => s.columns.length);
+  if (!usable.length) {
+    create({
+      id: buildActionMenuId(tabId, "InsertContent"),
+      parentId,
+      title: ctxT(culture, "build.insertContent"),
+      ...base
+    });
+    return;
+  }
+
+  const insId = `${CTX_BUILD_INS_PREFIX}${tabId}`;
+  create({ id: insId, parentId, title: ctxT(culture, "build.insertContent"), ...base });
+
+  const multi = usable.length > 1;
+  for (const src of usable) {
+    const listParent = multi ? `${CTX_BUILD_INS_DS_PREFIX}${tabId}:${src.id}` : insId;
+    if (multi) {
+      create({ id: listParent, parentId: insId, title: src.title, ...base });
+    }
+    for (const col of src.columns.slice(0, INSERT_MENU_MAX_COLUMNS)) {
+      create({
+        id: insertColumnMenuId(tabId, src.id, col.key),
+        parentId: listParent,
+        title: col.title || col.key,
+        ...base
+      });
+    }
+    if (src.columns.length > INSERT_MENU_MAX_COLUMNS) {
+      create({
+        id: insertColumnMenuId(tabId, src.id, ""),
+        parentId: listParent,
+        title: ctxT(culture, "build.insertMoreColumns"),
+        ...base
+      });
+    }
+  }
+
+  // Always available: create the node now, choose the destination later. One entry at the end
+  // instead of hiding the whole branch behind "the graph must be read first".
+  create({
+    id: insertColumnMenuId(tabId, 0, ""),
+    parentId: insId,
+    title: ctxT(culture, "build.insertPickLater"),
+    ...base
+  });
+}
+
+/**
  * Build the "add element to process" branch of the context menu.
  *
  * The target process is baked into the item ids, because a context menu cannot ask a question at
@@ -400,6 +555,11 @@ async function createBuildMenuItems(culture, urlPatterns) {
         documentUrlPatterns: urlPatterns
       });
       for (const [type, key] of BUILD_ITEMS) {
+        // «ذخیره در منبع» also needs a destination, so it is built as a submenu of this process.
+        if (type === "InsertContent") {
+          await createInsertContentItems(create, culture, urlPatterns, ed.id, ed.taskId, procId);
+          continue;
+        }
         create({
           id: buildActionMenuId(ed.id, type),
           parentId: procId,
@@ -414,6 +574,10 @@ async function createBuildMenuItems(culture, urlPatterns) {
 
   const tabId = editors[0]?.id ?? 0;
   for (const [type, key] of BUILD_ITEMS) {
+    if (type === "InsertContent") {
+      await createInsertContentItems(create, culture, urlPatterns, tabId, editors[0]?.taskId || "", CTX_BUILD_PARENT);
+      continue;
+    }
     create({
       id: buildActionMenuId(tabId, type),
       parentId: CTX_BUILD_PARENT,
@@ -599,6 +763,24 @@ if (chrome.contextMenus?.onClicked?.addListener) {
 
     // Process submenu headers are containers, not actions.
     if (typeof info.menuItemId === "string" && info.menuItemId.startsWith(CTX_BUILD_PROC_PREFIX)) return;
+    // The InsertContent branch's headers are containers too; only a COLUMN entry is an action.
+    if (typeof info.menuItemId === "string"
+      && (info.menuItemId.startsWith(CTX_BUILD_INS_PREFIX) || info.menuItemId.startsWith(CTX_BUILD_INS_DS_PREFIX))) return;
+
+    // «ذخیره در منبع» with a destination chosen from the menu.
+    const insertTarget = parseInsertMenuId(info.menuItemId);
+    if (insertTarget) {
+      await handleBuildElement(info, tab, {
+        tabId: insertTarget.tabId,
+        actionType: "InsertContent",
+        saveDataSourceId: insertTarget.dsId > 0 ? insertTarget.dsId : null,
+        saveColumnName: insertTarget.columnKey || null
+      }).catch((err) => {
+        console.warn("[selector] build insert failed", err?.message || err);
+        notifyBuildError(tab.id, "build.noElement");
+      });
+      return;
+    }
 
     // "Build element": append a node to the editor the user picked (its tab id is in the menu id).
     const buildTarget = parseBuildActionMenuId(info.menuItemId);
@@ -700,6 +882,10 @@ async function handleBuildElement(info, tab, target) {
     framePathJson: JSON.stringify(framePath),
     url: cap.captured.url || null,
     matchCount: cap.captured.matchCount ?? null,
+    // Chosen in the context menu for «ذخیره در منبع»; absent when the operator picked «later»/
+    // when the process had no source, in which case the node asks for it in the inspector.
+    saveDataSourceId: target.saveDataSourceId ?? null,
+    saveColumnName: target.saveColumnName ?? null,
     // Echo the process so the editor can refuse a tab that no longer shows it, instead of editing
     // a graph the user did not pick.
     taskId: taskId || null

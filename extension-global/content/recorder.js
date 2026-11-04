@@ -39,6 +39,28 @@ document.addEventListener("click", onClick, true);
 document.addEventListener("change", onChange, true);
 document.addEventListener("submit", onSubmit, true);
 
+/**
+ * Ctrl+Shift+click = «ذخیره در منبع» (InsertContent), and it must not also do what the browser does
+ * with Ctrl+click: a Ctrl+click on a link opens a NEW TAB, and Shift+click extends the selection.
+ * Swallowing the press (capture phase, before the page's own handlers) keeps the page from reacting
+ * to a gesture that is meant for the recorder. The click event still follows, and onClick emits the
+ * InsertContent step for it.
+ */
+document.addEventListener("mousedown", (ev) => {
+  if (!recording) return;
+  if (!(ev.ctrlKey && ev.shiftKey)) return;
+  if (isFromFab(ev.target)) return;
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+}, true);
+
+document.addEventListener("auxclick", (ev) => {
+  if (!recording || !(ev.ctrlKey && ev.shiftKey)) return;
+  if (isFromFab(ev.target)) return;
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+}, true);
+
 } // __daRecorderCaptureBound
 
 function isInputField(el) {
@@ -168,11 +190,29 @@ function nearestNearbyLabel(el) {
 
 function onClick(ev) {
   if (!recording || isFromFab(ev.target)) return;
-  if (!recordOptions.trackMouse) return;
   const el = ev.target instanceof Element ? ev.target : ev.target.parentElement;
   if (!el) return;
-  if (isInputField(el) && !recordOptions.trackInputClicks) return;
   const label = elementLabel(el);
+  // Ctrl+Shift+click is the «ذخیره در منبع» gesture: the element is the VALUE to read, and the
+  // destination cell is chosen on the node afterwards. Recording it as a Click instead was the
+  // whole problem — a recorded click cannot be turned into a source write. It is an explicit
+  // request, so it is honoured even when plain mouse tracking is switched off.
+  if (ev.ctrlKey && ev.shiftKey) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    emit({
+      actionType: "InsertContent",
+      elementValue: cssPath(el),
+      elementLabel: label,
+      // Which part of the element to read: the gesture says «this element», not «this field», so
+      // the recorder leaves the choice at its default (value for a form field, text otherwise).
+      elementValueMode: "Auto",
+      url: location.href
+    });
+    return;
+  }
+  if (!recordOptions.trackMouse) return;
+  if (isInputField(el) && !recordOptions.trackInputClicks) return;
   emit({
     actionType: "Click",
     elementValue: cssPath(el),

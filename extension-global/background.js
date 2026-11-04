@@ -1505,8 +1505,8 @@ function recordedActionVerbFa(actionType) {
     case "RightClick": return "کلیک‌راست";
     case "Hover": return "هاور";
     case "Hold": return "نگه‌داشتن";
-    case "InputContent":
-    case "InsertContent": return "متن";
+    case "InputContent": return "متن";
+    case "InsertContent": return "ذخیره در منبع";
     case "LoadContent": return "بارگذاری";
     case "GoToUrl": return "رفتن به";
     case "GoBack": return "بازگشت";
@@ -1594,6 +1594,9 @@ async function onRecordedEventLocked(payload, sender) {
     elementBy: "CssSelector",
     elementValue: payload.elementValue,
     elementLabel: String(payload.elementLabel || "").trim() || null,
+    // «ذخیره در منبع» (Ctrl+Shift+click) also names WHICH part of the element to read; the field is
+    // optional so a plain click simply has none.
+    elementValueMode: payload.elementValueMode || null,
     title: null,
     framePath,
     recordedTabAlias: alias,
@@ -2505,6 +2508,11 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
       stepEntity += 1;
       const sid = `${gid}-step-${i + 1}`;
       const isNav = String(a.actionType || "").toLowerCase() === "gotourl";
+      // «ذخیره در منبع» (InsertContent) reads its value FROM the element and has no target element:
+      // the selector belongs to the value side, and the destination cell is picked on the node. A
+      // recorded step used to carry everything in `selectorValue`, which is the TARGET field — for
+      // this action that field is not used, so the value would have been lost.
+      const isInsert = String(a.actionType || "").toLowerCase() === "insertcontent";
       nodes.push({
         id: sid,
         kind: "action",
@@ -2515,9 +2523,13 @@ function buildGraphFromRecordingGroups(taskId, title, groups) {
         // The recorded value is a constant (the typed text, or the target address for GoToUrl).
         // Stating it stops the editor/player from inferring "element" for an action that merely
         // permits an element source.
-        contentSourceType: "Constant",
-        selectorValue: a.elementValue || "",
-        constantValue: isNav ? "" : (a.value || ""),
+        contentSourceType: isInsert ? "Elements" : "Constant",
+        selectorValue: isInsert ? "" : (a.elementValue || ""),
+        equalSelectorValue: isInsert ? (a.elementValue || "") : "",
+        equalSelectorIsDynamic: false,
+        ...(isInsert ? { valueFromSource: true, saveTargetType: "DataSource" } : {}),
+        ...(isInsert && a.elementValueMode ? { elementValueMode: a.elementValueMode } : {}),
+        constantValue: isNav ? "" : (isInsert ? "" : (a.value || "")),
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         // Named-tab fields are step settings, so the draft→graph conversion has to carry them.
         openInNewTab: a.openInNewTab === true,

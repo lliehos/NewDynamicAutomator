@@ -7504,7 +7504,35 @@
       node.contentSourceType = "Elements";
       node.equalSelectorValue = selector;
       node.equalSelectorIsDynamic = false;
-      if (actionType === "InsertContent") node.valueFromSource = true;
+      if (actionType === "InsertContent") {
+        node.valueFromSource = true;
+        node.saveTargetType = "DataSource";
+        // The context menu can already name the destination («ذخیره در منبع ▸ منبع ▸ ستون»). When
+        // it did, the node arrives complete instead of asking for two pickers; when it did not, the
+        // fields stay unset and the inspector asks for them like before.
+        //
+        // The menu was built from the STORED graph, so it can name a source this diagram no longer
+        // has (or a column that was renamed). Applying an id the graph does not know would create a
+        // step that fails validation for a reason the operator cannot see, so it is checked here and
+        // dropped when it does not resolve — the inspector then asks for it, which is honest.
+        const dsId = Number(msg.saveDataSourceId);
+        const chosenSource = Number.isFinite(dsId) && dsId > 0
+          ? (graph.dataSources || []).find((d) => Number(d.id) === dsId)
+          : null;
+        if (chosenSource) {
+          node.saveDataSourceId = dsId;
+          const col = String(msg.saveColumnName || "").trim();
+          const knownColumns = Array.isArray(chosenSource.columnKeys) && chosenSource.columnKeys.length
+            ? chosenSource.columnKeys.map(String)
+            : (chosenSource.columns || []).map((c) => String(c?.key ?? c?.Key ?? "")).filter(Boolean);
+          if (col && knownColumns.includes(col)) {
+            node.saveColumnName = col;
+            // Say WHERE it goes in the title: a diagram with several «ذخیره در منبع» nodes is
+            // otherwise impossible to scan.
+            node.title = `${node.title} → ${col}`;
+          }
+        }
+      }
     } else {
       node.selectorValue = selector;
       // ScrollPage's selector only applies in "to element" mode; without this the node would
