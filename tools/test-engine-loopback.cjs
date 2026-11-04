@@ -130,8 +130,61 @@ const legacy = resolveLoopBackLimits(legacyGraph);
 check("legacy: start value becomes the fallback", legacy.defaultLimit, 300);
 check("legacy: condition without value inherits it", loopBackLimitFor(legacyGraph.nodes[1], legacy), 300);
 
-if (failed) {
-  console.error(`\n${failed} check(s) failed`);
-  process.exit(1);
+// --- Walk test: the loop-back budget is PER LOOP INSTANCE -------------------------------------
+//
+// The shape below is the one that broke: a group repeating twice, each iteration running a
+// condition loop that needs 3 rounds. With one counter for the whole walk the second iteration
+// started at round 4 and the run stopped with "more than 3 visits" even though the loop never
+// exceeded its own limit. The condition exits on round 3, so a per-loop counter finishes with
+// 6 evaluations and no error.
+const walkGraph = {
+  // A gap large enough that paceLoopBack's 500 ms floor has nothing left to add, so the test
+  // does not spend seconds sleeping.
+  stepDelayMs: 600,
+  nodes: [
+    { id: "s", kind: "start", stepDelayMs: 600 },
+    { id: "g", kind: "group", title: "گروه" },
+    { id: "gs", kind: "start", groupNodeId: "g", repeatSourceType: "Loops", loopCount: 2 },
+    { id: "c", kind: "condition", groupNodeId: "g", loopBackLimit: 3, title: "شرط" },
+    { id: "a", kind: "action", groupNodeId: "g", actionType: "Click", title: "کار" },
+    { id: "e", kind: "end" }
+  ],
+  edges: [
+    { from: "s", to: "g", kind: "next" },
+    { from: "g", to: "e", kind: "next" },
+    { from: "gs", to: "c", kind: "next" },
+    // The loop: fail goes to a step whose `next` returns to the condition; success leaves to the end.
+    { from: "c", to: "a", kind: "fail" },
+    { from: "a", to: "c", kind: "next" },
+    { from: "c", to: "e", kind: "success" }
+  ]
+};
+
+async function main() {
+  let condCalls = 0;
+  let round = 0;
+  // Stub the page-side check: false twice, then true (round 3), resetting for the next iteration.
+  globalThis.evaluateCondition = async () => {
+    condCalls += 1;
+    round += 1;
+    if (round >= 3) { round = 0; return true; }
+    return false;
+  };
+  // The loop body is a plain step; the walker is what is under test, not the page action.
+  globalThis.runOneAction = async () => ({ ok: true });
+  playStatus.lastError = null;
+  playStatus.results = [];
+  await executeFlow(1, walkGraph, "s", 0, 1, 1, {});
+  if (process.env.DEBUG_WALK) playLogs.forEach((l) => console.log(`  [${l.level}] ${l.text}`));
+  check("walk: two group iterations finish without hitting the budget", playStatus.lastError, null);
+  check("walk: each iteration counts its own 3 rounds", condCalls, 6);
 }
-console.log("\nengine helpers OK");
+
+main().then(() => {
+  if (failed) {
+    console.error(`\n${failed} check(s) failed`);
+    process.exit(1);
+  }
+  console.log("\nengine helpers OK");
+  process.exit(0);
+});

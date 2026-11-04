@@ -1617,15 +1617,16 @@ function selectorWaitBudget(node, { equal = false } = {}) {
 }
 
 /**
- * Called just before moving to `nextId`. When that node has already run in this walk, the
- * edge being followed is a loop-back, so this logs the iteration and enforces a floor on the
- * pause. Without the floor a "wait until the condition is true" loop would re-evaluate as
- * fast as the page allows — hammering the target site and flooding the log, while also
- * giving the condition no time to become true.
+ * Called just before moving to `nextId`. When that node has already run in the CURRENT LOOP
+ * INSTANCE, the edge being followed is a loop-back, so this logs the iteration and enforces a floor
+ * on the pause. Without the floor a "wait until the condition is true" loop would re-evaluate as
+ * fast as the page allows — hammering the target site and flooding the log, while also giving the
+ * condition no time to become true.
  */
-async function paceLoopBack(graph, nextId, visitCounts, loopBackLimits) {
+async function paceLoopBack(graph, nextId, loopBackLimits, visits) {
   if (!nextId) return;
-  const already = visitCounts.get(nextId) || 0;
+  // The count of THIS loop instance (its frame's own map), not of the whole walk.
+  const already = (visits && visits.get(nextId)) || 0;
   if (already <= 0) return;
   const node = findGraphNode(graph, nextId);
   const label = node?.title || node?.conditionType || node?.actionType || nextId;
@@ -2708,7 +2709,7 @@ function clampLoopBackLimit(value, fallback) {
 }
 
 /**
- * The per-walk loop-back budgets.
+ * The loop-back budgets.
  *
  * The setting lives on CONDITION nodes now: the condition is where a loop's exit test is written,
  * so "how many rounds may this loop take" belongs to it. A condition without its own value falls
@@ -2718,6 +2719,9 @@ function clampLoopBackLimit(value, fallback) {
  * The other nodes of the loop (condition --fail--> step --> same condition) are revisited once per
  * round too. They get the LARGEST configured condition budget, otherwise a condition set to 500
  * would still be cut off at the step's old 100 before its own budget was reached.
+ *
+ * These are per-loop-instance budgets: a loop body inside a group that repeats starts its count
+ * from zero on every group iteration (see executeFlow's visitCounts).
  */
 function resolveLoopBackLimits(graph) {
   const start = (graph?.nodes || []).find((n) => n.kind === "start" && !n.groupNodeId);
@@ -2731,7 +2735,7 @@ function resolveLoopBackLimits(graph) {
   return { defaultLimit: legacy, maxLimit: max };
 }
 
-/** The visit budget this node gets in one walk. */
+/** The visit budget a node gets in ONE loop instance. */
 function loopBackLimitFor(node, limits) {
   const fallback = limits?.defaultLimit ?? LOOP_BACK_DEFAULT;
   if (node?.kind === "condition") {
@@ -2748,14 +2752,24 @@ function loopBackLimitFor(node, limits) {
  * a cycle (A contains B, B's entry leads back into A) never returns from the descent — the stack
  * grows until the engine dies with "Maximum call stack size exceeded".
  *
- * The per-node visit budget cannot help here: it is counted per executeFlow invocation, so each
- * fresh descent starts from zero and the cycle is invisible to it. This backstop is a property of
- * the walk as a whole, which is what the failure actually is.
+ * The per-loop visit budget cannot help here: each nesting level counts in its own scope, so every
+ * fresh descent starts from a fresh counter and the cycle is invisible to it. MAX_GROUP_DEPTH is a
+ * property of the walk as a whole (the frame stack depth), which is what the failure actually is.
  *
  * 50 is far beyond any real automation flow (the editor's own nesting is a handful of levels) and
  * still shallow enough that the stack has room for the frames a step adds on top.
  */
 const MAX_GROUP_DEPTH = 50;
+
+/**
+ * Hard ceiling on node visits in ONE walk.
+ *
+ * The loop-back budget is per loop instance now (see executeFlow), which is what the author means
+ * by "10 rounds of THIS loop". A cyclic diagram can reset those counters forever, so the walk
+ * keeps its own ceiling: a total no real process reaches, but small enough that a cycle stops the
+ * run in seconds instead of spinning.
+ */
+const WALK_STEP_GUARD = 100000;
 
 /**
  * Walk the flow diagram from entryId — ITERATIVELY, with an explicit frame stack.
@@ -2775,10 +2789,11 @@ const MAX_GROUP_DEPTH = 50;
  * is kept, but as a DIAGNOSTIC limit on a diagram that is almost certainly cyclic rather than as
  * the only thing standing between a bad graph and a crash.
  *
- * Re-entering a node is allowed (a loop-back edge is a supported shape) and bounded by a per-node
- * visit budget — see resolveLoopBackLimits. The budget is now counted in ONE map for the whole walk
- * rather than per invocation, which is what finally makes a group-cycle detectable: previously each
- * descent started a fresh counter, so a cycle was invisible to it.
+ * Re-entering a node is allowed (a loop-back edge is a supported shape) and bounded by a per-loop
+ * visit budget — see resolveLoopBackLimits. The budget is counted PER LOOP INSTANCE: one walk covers
+ * a whole process iteration plus every iteration of every group inside it, and each of those gets
+ * its own counter (see `visitCounts` below). A cycle that keeps opening new loop instances is
+ * caught by MAX_GROUP_DEPTH when it nests and by WALK_STEP_GUARD when it repeats sideways.
  *
  * @returns {{tabId:number, stepFailed?:boolean, error?:string, authFailure?:boolean}}
  */
@@ -2788,8 +2803,22 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
   let activeTabId = tabId;
   let stepOrdinal = 0;
 
-  // ONE visit budget for the entire walk, so a cycle that crosses a group boundary is still seen.
-  const visitCounts = new Map();
+  // Visit counts live ON THE FRAME, one map per loop instance.
+  //
+  // The budget on a condition answers "how many rounds may THIS loop take", so it has to be
+  // counted per loop instance, not per walk. A single walk covers the whole process iteration
+  // (one source row) AND every iteration of every group inside it, so one flat map made the
+  // counters accumulate: a condition with a 10-round budget inside a group that repeats 3 rows
+  // ran out during the SECOND row, and the run stopped with "more than 10 visits" even though
+  // the loop itself never exceeded its limit.
+  //
+  // Per frame is also the only shape that does not leak: a group with thousands of iterations
+  // would otherwise add a `scope|node` key per node per iteration to one map that lives until the
+  // end of the process iteration. Here the map is garbage as soon as the frame is popped, and the
+  // key is a plain node id (no string building on the hot path).
+  //
+  // The walk as a whole is still bounded by WALK_STEP_GUARD below, so a cyclic diagram cannot
+  // spin forever just because its counters keep resetting.
   // Per-condition budgets (with the old start/graph value as the fallback), resolved once.
   const loopBackLimits = resolveLoopBackLimits(graph);
   // Total node steps, a second independent backstop against a walk that never settles.
@@ -2802,6 +2831,8 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
    */
   const stack = [{
     cur: entryId,
+    // Node visit counts of THIS loop instance — see the note above.
+    visits: new Map(),
     // Row context for this level. A group's repeat may rebind the row for the level below.
     row: rowIndex,
     // The PROCESS row this walk was started for. It is deliberately separate from `row`: a group
@@ -2821,7 +2852,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     groupNodeId: null
   }];
 
-  while (stack.length && !playAbort && !playStatus.lastError && guard++ < 100000) {
+  while (stack.length && !playAbort && !playStatus.lastError && guard++ < WALK_STEP_GUARD) {
     await waitIfPaused();
     if (playAbort) break;
 
@@ -2848,7 +2879,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         frame.cur = afterId;
         if (!afterId) continue;   // chain ends here; the next iteration pops this level
         await delayAfterNode(graph, afterId);
-        await paceLoopBack(graph, afterId, visitCounts, loopBackLimits);
+        await paceLoopBack(graph, afterId, loopBackLimits, frame.visits);
         continue;
       }
       const gi = frame.pendingGroupIndex++;
@@ -2867,6 +2898,9 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       // gets a fresh child frame.
       stack.push({
         cur: frame.entryId,
+        // A NEW loop instance: its conditions start their own round count, and this map is freed
+        // with the frame when the iteration ends.
+        visits: new Map(),
         row: effectiveRow,
         // The process row travels down UNCHANGED through every nesting level.
         outerRow: frame.outerRow,
@@ -2897,8 +2931,8 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
     }
 
     const loopBackLimit = loopBackLimitFor(node, loopBackLimits);
-    const visits = (visitCounts.get(cur) || 0) + 1;
-    visitCounts.set(cur, visits);
+    const visits = (frame.visits.get(cur) || 0) + 1;
+    frame.visits.set(cur, visits);
     if (visits > loopBackLimit) {
       const label = node.title || node.conditionType || node.actionType || cur;
       appendPlayLog(
@@ -2968,7 +3002,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       const nextId = flowEdge(edges, node.id, ["next"])?.to || null;
       // Delay after the step finished, before the next node.
       await delayAfterNode(graph, nextId);
-      await paceLoopBack(graph, nextId, visitCounts, loopBackLimits);
+      await paceLoopBack(graph, nextId, loopBackLimits, frame.visits);
       frame.cur = nextId;
       continue;
     }
@@ -3097,7 +3131,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
 
       const nextId = e.to || null;
       await delayAfterNode(graph, nextId);
-      await paceLoopBack(graph, nextId, visitCounts, loopBackLimits);
+      await paceLoopBack(graph, nextId, loopBackLimits, frame.visits);
       frame.cur = nextId;
       continue;
     }
@@ -3124,7 +3158,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         appendPlayLog("warn", `گروه «${node.title || node.id}» ورودی ندارد`);
         const afterId = flowEdge(edges, node.id, ["next"])?.to || null;
         await delayAfterNode(graph, afterId);
-        await paceLoopBack(graph, afterId, visitCounts, loopBackLimits);
+        await paceLoopBack(graph, afterId, loopBackLimits, frame.visits);
         frame.cur = afterId;
         continue;
       }
@@ -3156,6 +3190,13 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
 
     appendPlayLog("warn", `نود ناشناخته: ${node.kind} (${node.id})`);
     break;
+  }
+
+  // The walk stopped because it ran out of its own step ceiling rather than because it finished:
+  // that is a cyclic diagram, and saying so beats reporting the run as "completed".
+  if (!playAbort && !playStatus.lastError && stack.length && guard > WALK_STEP_GUARD) {
+    playStatus.lastError = `سقف ${WALK_STEP_GUARD} مرحله در یک دور اجرا رد شد — احتمالاً حلقه‌ای وجود دارد که هرگز بسته نمی‌شود`;
+    appendPlayLog("error", playStatus.lastError);
   }
 
   return { tabId: activeTabId };
