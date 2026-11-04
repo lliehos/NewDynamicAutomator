@@ -515,6 +515,8 @@ async function handleMessage(message, sender) {
       return insertDataSourceRowMessage(message);
     case "broadcastDsCellEvent":
       return broadcastDsCellEventMessage(message);
+    case "setPlayLiveCells":
+      return setPlayLiveCellsMessage(message);
     case "reloadPlayerNow":
       return reloadPlayerNow(message.pendingPlay || null);
     case "getCopiedSelector":
@@ -2390,6 +2392,23 @@ async function broadcastDsCellEventMessage(message) {
     chrome.tabs.sendMessage(tab.id, { type: "dsCellEvent", event: ev }).catch(() => {});
   }
   return { ok: true };
+}
+
+/**
+ * The Player HUD's «live cell view» switch.
+ *
+ * Stored as a preference so it survives a reload, and applied to the run in flight immediately (the
+ * engine's setPlayLiveCells lives in this worker — see player/engine.js). Off does not change what a
+ * run writes; it only stops the per-cell announcements, which is the part that costs IPC and HTTP
+ * traffic when a process touches thousands of cells.
+ */
+async function setPlayLiveCellsMessage(message) {
+  const enabled = message?.enabled !== false;
+  try { await chrome.storage.local.set({ daPlayLiveCells: enabled }); } catch { /* preference only */ }
+  try {
+    if (typeof setPlayLiveCells === "function") return setPlayLiveCells(enabled);
+  } catch { /* engine not loaded in this context */ }
+  return { ok: true, enabled };
 }
 
 async function getLocalTaskGraph(taskId) {

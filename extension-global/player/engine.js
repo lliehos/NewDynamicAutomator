@@ -1389,6 +1389,10 @@ let playStatus = {
   lastError: null,
   lastResult: null,
   runMode: RunMode.Play,
+  // Live cell notifications (the read/write flash the data viewers show). The switch exists because a
+  // run that touches thousands of cells spends real time on IPC and HTTP for something nobody is
+  // watching; with it off the run keeps writing exactly the same data, only the live view is quiet.
+  liveCells: true,
   logs: [],
   results: []
 };
@@ -1452,6 +1456,8 @@ function clearPlayLogs() {
   playStatus.results = [];
   playStatus.lastError = null;
   playStatus.lastResult = null;
+  // A new run must not inherit notifications still queued from the previous one.
+  resetCellEventQueue();
   broadcastPlayState();
   return getPlayStatus();
 }
@@ -1728,6 +1734,7 @@ async function stopPlay(reason) {
   wakePlayResumeWaiters();
   clearPlayCellReadInflight();
   clearPlayCellWriteChains();
+  resetCellEventQueue();
   // The run ended on purpose, so its liveness record goes with it. Leaving it behind would make a
   // later worker start read a stale timestamp and report a phantom interruption.
   await clearPlayHeartbeat();
@@ -2366,6 +2373,11 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   // The graph of THIS run; the per-source records are refreshed from it as the run progresses.
   localRunGraph = null;
   playStatus.runOnServer = runOnServer;
+  // The live-view switch is a persisted preference, read once per run (see setPlayLiveCells).
+  try {
+    const live = await chrome.storage.local.get("daPlayLiveCells");
+    playStatus.liveCells = live?.daPlayLiveCells !== false;
+  } catch { playStatus.liveCells = true; }
   // The watch runs for a LOCAL run too. A local run registers nothing with the server, but an
   // administrator can still put a stop to it - the stop-all switch, or closing the session itself -
   // and a poll is the only channel to a browser that never registered. Only the registration half is
@@ -5624,8 +5636,22 @@ function recordLocalWrite(ds, rowIndex, columnKey, text) {
 
 /** Timer that publishes the pending writes while a local run is still going. */
 let localProgressTimer = null;
+/** Something changed since the last publish, so a flush has work to do. */
+let localProgressDirty = false;
 /** Sources already reported for this run, so the report is one small call per source, not per write. */
 const localProgressReported = new Set();
+
+/**
+ * How often a local run publishes what it has written so far.
+ *
+ * Publishing is NOT free: it reads the whole task store, rebuilds the per-source records (a deep copy
+ * of every cell of the sources this run touched) and writes the whole store back. At 1.2 s that was
+ * a multi-megabyte re-serialisation several times a second on a long run — visibly more CPU, more
+ * memory churn and a growing storage write every time the run produced another batch of cells. The
+ * data is not on a deadline (the operator reads "needs sync" on a human timescale), so 10 s gives
+ * the same information for a fraction of the cost. The end of the run still publishes unconditionally.
+ */
+const LOCAL_PROGRESS_FLUSH_MS = 10000;
 
 /**
  * Debounced publish of this run's pending writes.
@@ -5637,18 +5663,23 @@ const localProgressReported = new Set();
  */
 function scheduleLocalRunProgress() {
   if (playStatus.runOnServer !== false) return;
+  localProgressDirty = true;
   if (localProgressTimer) return;
   localProgressTimer = setTimeout(() => {
     localProgressTimer = null;
     flushLocalRunProgress().catch(() => {});
-  }, 1200);
+  }, LOCAL_PROGRESS_FLUSH_MS);
 }
 
-async function flushLocalRunProgress() {
+async function flushLocalRunProgress(force) {
   const taskId = String(playStatus.taskId || "").trim();
   if (!taskId) return;
   // Server runs report themselves through the hub; nothing here applies to them.
   if (playStatus.runOnServer !== false) return;
+  // Nothing written since the last publish: re-reading and re-writing the whole task store would be
+  // pure churn. `force` is for the callers that must persist even when no cell was touched.
+  if (!force && !localProgressDirty) return;
+  localProgressDirty = false;
   const cells = collectLocalRunWrites();
   // Only the sources this run touched can have changed; the rest keep the record they already have.
   const touched = new Set(localCopyDirty);
@@ -5699,6 +5730,7 @@ function resetLocalRunWrites() {
   localServerRowMap = new Map();
   committedLocalRunWrites = new Map();
   localProgressReported.clear();
+  localProgressDirty = false;
   if (localProgressTimer) {
     clearTimeout(localProgressTimer);
     localProgressTimer = null;
@@ -5869,7 +5901,14 @@ async function writeServerCellWait(ds, graph, rowIndex, columnKey, text, opts = 
   };
   const prev = playCellWriteChains.get(chainKey) || Promise.resolve();
   const next = prev.then(run, run);
-  playCellWriteChains.set(chainKey, next.catch(() => {}));
+  // Only an IN-FLIGHT chain needs to be remembered. Keeping the settled promise for every cell a run
+  // ever wrote made the map grow with the whole source for no benefit — the next write can start its
+  // own chain. The guard is dropped only if it is still the current entry.
+  const guard = next.catch(() => {});
+  playCellWriteChains.set(chainKey, guard);
+  guard.finally(() => {
+    if (playCellWriteChains.get(chainKey) === guard) playCellWriteChains.delete(chainKey);
+  });
   return next;
 }
 
@@ -6660,11 +6699,87 @@ async function detectOrphanedPlay() {
 let cellEventSeq = 0;
 
 /**
+ * Live cell events are COALESCED.
+ *
+ * Every source read and write used to send its own trio of work: a storage read for the user name,
+ * a message to the background (which then queried EVERY tab) and a POST to the portal (which
+ * rebroadcasts it to the viewers). Nothing awaited them, so in a loop that touches the same cells
+ * over and over they piled up as pending promises, IPC calls and sockets — the worker's memory grew
+ * and every later step queued behind them. That is the "starts fast, gets slower and heavier"
+ * behaviour of a long run; a fresh browser starts from an empty queue, which is why restarting
+ * seemed to fix it for a while.
+ *
+ * A viewer can only ever show the LATEST value of a cell, so the queue is keyed by cell and a new
+ * event replaces the pending one for the same cell. A timer drains at most
+ * CELL_EVENT_MAX_PER_FLUSH events per CELL_EVENT_FLUSH_MS, and a repeat announcement of a value
+ * that was already sent for that cell (the read-back of a cell the run just read) is dropped.
+ *
+ * Structural events (insert/delete) are the exception: they are ordered, rare, and awaited by the
+ * caller, so they are delivered immediately — a row shift must never be overtaken.
+ */
+const CELL_EVENT_FLUSH_MS = 250;
+const CELL_EVENT_MAX_PER_FLUSH = 25;
+const CELL_EVENT_MAX_QUEUE = 400;
+const CELL_EVENT_DEDUPE_MS = 2000;
+
+/** Pending non-structural events, keyed by cell — the newest state of a cell wins. */
+let cellEventQueue = new Map();
+let cellEventTimer = null;
+let cellEventFlushing = false;
+/** What was last delivered per cell, so a repeat of the same state is not announced again. */
+const cellEventRecent = new Map();
+/** Resolved once per run: every event carries this user name. */
+let cellEventUserName = null;
+
+/** Drop anything pending — a new run must not inherit the previous run's notifications. */
+function resetCellEventQueue() {
+  if (cellEventTimer) {
+    clearTimeout(cellEventTimer);
+    cellEventTimer = null;
+  }
+  cellEventQueue = new Map();
+  cellEventRecent.clear();
+  cellEventUserName = null;
+}
+
+/**
+ * Turn the live cell view on or off.
+ *
+ * Off means "write the data, do not announce it": no window event, no portal POST, no queue. The
+ * preference is persisted by the caller (background.js writes `daPlayLiveCells`) and re-read at the
+ * start of every run, so the choice survives a reload and applies to the next run as well.
+ */
+function setPlayLiveCells(enabled) {
+  playStatus.liveCells = enabled !== false;
+  if (!playStatus.liveCells) resetCellEventQueue();
+  broadcastPlayState();
+  return { ok: true, enabled: playStatus.liveCells };
+}
+
+async function cellEventUserNameFor() {
+  if (cellEventUserName !== null) return cellEventUserName || null;
+  let name = null;
+  try {
+    const stored = await chrome.storage.local.get(["da_local_user", "da_session_user"]).catch(() => ({}));
+    name = stored.da_local_user || stored.da_session_user || null;
+  } catch { /* ignore */ }
+  if (!name && typeof localStorage !== "undefined") {
+    name = localStorage.getItem("da_local_user") || localStorage.getItem("da_user") || null;
+  }
+  cellEventUserName = name || "";
+  return cellEventUserName || null;
+}
+
+function cellEventKeyOf(p) {
+  return `${p.dataSourceId}|${p.op}|${p.rowIndex}|${p.columnKey}`;
+}
+
+/**
  * Tell the open viewers what just happened to a source cell or row.
  *
- * Fire-and-forget by default: a run must not wait on a notification. Structural events are the
- * exception — the caller passes `{ wait: true }` so the next step's read/write cannot overtake the
- * row shift, which would make a viewer move the value it just flashed into the wrong row.
+ * Non-structural events are queued and conflated (see the note above). Structural events and calls
+ * that pass `{ wait: true }` are delivered immediately, because the next step must not overtake
+ * them.
  */
 async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellValue, stepTitle, opts = {}) {
   try {
@@ -6675,14 +6790,8 @@ async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellV
     // lights up a row that now holds a different value (the row inserted above shifted everything).
     const structural = op === "insert" || op === "delete";
     if (!taskId || !dsId || (!columnKey && !structural)) return;
-    let userName = null;
-    try {
-      const stored = await chrome.storage.local.get(["da_local_user", "da_session_user"]).catch(() => ({}));
-      userName = stored.da_local_user || stored.da_session_user || null;
-    } catch { /* ignore */ }
-    if (!userName && typeof localStorage !== "undefined") {
-      userName = localStorage.getItem("da_local_user") || localStorage.getItem("da_user") || null;
-    }
+    // Live view switched off: the write itself already happened, only the announcement is skipped.
+    if (playStatus.liveCells === false) return;
     const payload = {
       taskId,
       dataSourceId: dsId,
@@ -6694,35 +6803,110 @@ async function emitDataSourceCellEvent(graph, ds, columnKey, rowIndex, op, cellV
       rowIndex: Number(rowIndex) || 0,
       cellValue: cellValue == null ? null : String(cellValue),
       stepTitle: stepTitle || null,
-      userName
+      userName: null
     };
-    // Fan-out to open portal/editor tabs (fast local path).
-    let localSent = null;
-    try {
-      localSent = callBackground({ type: "broadcastDsCellEvent", event: payload }).catch(() => {});
-    } catch { /* ignore */ }
     // A LOCAL run of a private source never touches the server, so the server has nothing to
     // announce: posting the event there would reach the play hub and patch viewers that are showing
     // the browser's copy — exactly the stale/incoherent grid the local mode must avoid. The window
-    // event above is the whole channel for this case; public sources keep the server path.
+    // event is the whole channel for this case; public sources keep the server path.
     const localOnly = playStatus.runOnServer === false && ds && !isPublicSource(ds, graph);
+
+    if (structural || opts.wait) {
+      await deliverCellEvent(payload, localOnly, { wait: opts.wait === true });
+      return;
+    }
+
+    const key = cellEventKeyOf(payload);
+    const recent = cellEventRecent.get(key);
+    if (recent && recent.value === payload.cellValue && Date.now() - recent.at < CELL_EVENT_DEDUPE_MS) return;
+    // Conflation: the newest state of this cell replaces whatever was still pending for it.
+    cellEventQueue.set(key, { payload, localOnly });
+    if (cellEventQueue.size > CELL_EVENT_MAX_QUEUE) {
+      // Drop the oldest entries. A viewer that missed one flash of one cell is not harmed, while an
+      // unbounded queue is exactly the growth this exists to prevent.
+      const excess = cellEventQueue.size - CELL_EVENT_MAX_QUEUE;
+      let dropped = 0;
+      for (const k of cellEventQueue.keys()) {
+        if (dropped >= excess) break;
+        cellEventQueue.delete(k);
+        dropped += 1;
+      }
+    }
+    scheduleCellEventFlush();
+  } catch { /* ignore */ }
+}
+
+function scheduleCellEventFlush() {
+  if (cellEventTimer) return;
+  cellEventTimer = setTimeout(() => {
+    cellEventTimer = null;
+    flushCellEvents().catch(() => {});
+  }, CELL_EVENT_FLUSH_MS);
+}
+
+async function flushCellEvents() {
+  if (cellEventFlushing) return;
+  cellEventFlushing = true;
+  // Resolved ONCE per flush: the portal origin costs a few storage reads and used to be looked up
+  // for every single cell event.
+  let base = null;
+  try {
+    base = typeof portalBase === "function" ? await portalBase().catch(() => null) : null;
+  } catch { base = null; }
+  try {
+    let sent = 0;
+    while (cellEventQueue.size && sent < CELL_EVENT_MAX_PER_FLUSH) {
+      const first = cellEventQueue.entries().next();
+      if (first.done) break;
+      const [key, item] = first.value;
+      cellEventQueue.delete(key);
+      sent += 1;
+      await deliverCellEvent(item.payload, item.localOnly, { base });
+    }
+  } finally {
+    cellEventFlushing = false;
+  }
+  // Anything left keeps its own slot: the run keeps producing events, the queue stays bounded.
+  if (cellEventQueue.size) scheduleCellEventFlush();
+}
+
+/** Deliver ONE event to the open viewers (local window event + SignalR), never blocking a step. */
+async function deliverCellEvent(payload, localOnly, opts = {}) {
+  try {
+    const p = { ...payload };
+    if (p.userName == null) p.userName = await cellEventUserNameFor();
+    cellEventRecent.set(cellEventKeyOf(p), { value: p.cellValue, at: Date.now() });
+    if (cellEventRecent.size > 4000) {
+      // Keep the dedupe map small: forget the older half. Only recent repeats matter.
+      const drop = Math.floor(cellEventRecent.size / 2);
+      let dropped = 0;
+      for (const k of cellEventRecent.keys()) {
+        if (dropped >= drop) break;
+        cellEventRecent.delete(k);
+        dropped += 1;
+      }
+    }
+    let localSent = null;
+    try {
+      localSent = callBackground({ type: "broadcastDsCellEvent", event: p }).catch(() => {});
+    } catch { /* ignore */ }
     if (localOnly) {
       if (opts.wait && localSent) await Promise.race([localSent, sleep(2000)]);
       return;
     }
-    // SignalR path via portal HTTP.
-    const portal = typeof portalBase === "function"
-      ? await portalBase().catch(() => null)
-      : null;
-    const base = String(portal || "").replace(/\/$/, "");
-    if (!base) {
+    let base = opts.base !== undefined ? opts.base : null;
+    if (opts.base === undefined) {
+      base = typeof portalBase === "function" ? await portalBase().catch(() => null) : null;
+    }
+    const origin = String(base || "").replace(/\/$/, "");
+    if (!origin) {
       if (opts.wait && localSent) await Promise.race([localSent, sleep(2000)]);
       return;
     }
-    const posted = fetch(`${base}/Panel/Tasks/NotifyCellEvent`, {
+    const posted = fetch(`${origin}/Panel/Tasks/NotifyCellEvent`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(p),
       credentials: "omit"
     }).catch(() => {});
     // Bounded: an unreachable portal must not stall the run behind a notification.
@@ -7318,7 +7502,8 @@ async function clearTabPlayHighlights(tabId) {
 
 async function executeInFrame(tabId, frameId, payload) {
   try {
-    await clearTabPlayHighlights(tabId);
+    // No highlight sweep here: executeInFrameWithWait — the only caller — has just done it, and it
+    // is an all-frames injection, so doing it twice doubled the cost of every single step.
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId, frameIds: [frameId] },
       func: playExecuteInjected,

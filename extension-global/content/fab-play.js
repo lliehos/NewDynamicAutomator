@@ -95,6 +95,9 @@
           <button type="button" id="da-fab-clear-logs" class="da-ico-btn da-fab-clear" title="${t("play.clear")}" aria-label="${t("play.clear")}">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6 7h12v2H6V7zm2 3h8l-1 10H9L8 10zm3-5h2l1 2h4v2H6V7h4l1-2z"/></svg>
           </button>
+          <button type="button" id="da-fab-live-cells" class="da-ico-btn" title="${t("play.liveCellsOn")}" aria-label="${t("play.liveCellsOn")}">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M13 2L4.5 13.5H11l-1 8.5 9-12h-6.5L13 2z"/></svg>
+          </button>
         </div>
       </div>
     </div>
@@ -116,6 +119,7 @@
   const playPauseBtn = root.querySelector("#da-fab-playpause");
   const stopBtn = root.querySelector("#da-fab-stop");
   const clearBtn = root.querySelector("#da-fab-clear-logs");
+  const liveBtn = root.querySelector("#da-fab-live-cells");
   const playTitle = root.querySelector("#da-fab-play-title");
   const playProgress = root.querySelector("#da-fab-play-progress");
   const playResults = root.querySelector("#da-fab-results");
@@ -579,6 +583,38 @@
       if (!stopBtn.hidden) stopBtn.disabled = false;
     }
   });
+
+  /**
+   * The «live cell view» switch.
+   *
+   * Off stops the per-cell announcements (the read/write flash a data viewer shows). It does not
+   * change what a run writes — only the traffic and the work every touched cell otherwise costs.
+   * The choice is persisted, and the run in flight picks it up at once.
+   */
+  let liveCellsEnabled = true;
+  function paintLiveBtn() {
+    if (!liveBtn) return;
+    const label = t(liveCellsEnabled ? "play.liveCellsOn" : "play.liveCellsOff");
+    liveBtn.title = label;
+    liveBtn.setAttribute("aria-label", label);
+    // Dimmed = off. Inline so the HUD needs no extra stylesheet rule.
+    liveBtn.style.opacity = liveCellsEnabled ? "" : "0.45";
+  }
+  liveBtn?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    liveCellsEnabled = !liveCellsEnabled;
+    paintLiveBtn();
+    try {
+      await chrome.runtime.sendMessage({ type: "setPlayLiveCells", enabled: liveCellsEnabled });
+    } catch { /* the storage write below is the durable half */ }
+    try { await chrome.storage.local.set({ daPlayLiveCells: liveCellsEnabled }); } catch { /* ignore */ }
+  });
+  try {
+    const storedLive = await chrome.storage.local.get("daPlayLiveCells");
+    liveCellsEnabled = storedLive?.daPlayLiveCells !== false;
+  } catch { /* default on */ }
+  paintLiveBtn();
 
   clearBtn.addEventListener("click", async (e) => {
     e.preventDefault();
