@@ -24,6 +24,14 @@ namespace Webautomator.Web.Services;
 /// string stayed identical, and the browser kept the old file. The symptom is maddening — the fix
 /// is verifiably present on disk and in a `no-store` fetch, yet the page still renders the old
 /// rules — and it looks like a mistake in the CSS rather than a caching artefact.
+///
+/// THE STAMP IS RECOMPUTED WHILE THE APP RUNS. Computing it once at startup still meant "edit a .js
+/// file, and Ctrl+F5 until the process restarts" — the very workflow this exists to remove, and on
+/// a deployment where static files are copied over FTP the process may not restart at all (the DLLs
+/// did not change), so the stamp stayed stale for the lifetime of the site. The getter re-walks
+/// `wwwroot` at most once every <see cref="RefreshWindow"/> and returns the new stamp, so the next
+/// page load asks the browser for the edited file under a new URL. The window is what keeps the
+/// directory walk off the hot path: at most one scan per five seconds, shared by every request.
 /// </remarks>
 public interface IAppVersionService
 {
@@ -37,8 +45,21 @@ public interface IAppVersionService
 /// <inheritdoc />
 public sealed class AppVersionService : IAppVersionService
 {
+    /// <summary>How stale the in-memory stamp may become before it is recomputed (dev only).</summary>
+    private static readonly TimeSpan RefreshWindow = TimeSpan.FromSeconds(5);
+
+    private readonly IWebHostEnvironment? _env;
+    /// <summary>The assembly half of the stamp; it cannot change while this process runs.</summary>
+    private readonly string _assemblyToken;
+    private readonly object _gate = new();
+
+    private string _assetVersion;
+    private DateTime _assetVersionAtUtc;
+
     public AppVersionService(IWebHostEnvironment env)
     {
+        _env = env;
+
         // InformationalVersion is preferred because the SDK stamps it as "<version>+<gitsha>";
         // the informational text is what actually distinguishes two builds of the same version.
         var assembly = Assembly.GetEntryAssembly() ?? typeof(AppVersionService).Assembly;
@@ -49,18 +70,36 @@ public sealed class AppVersionService : IAppVersionService
             ? assembly.GetName().Version?.ToString() ?? "0.0.0"
             : informational;
 
-        AssetVersion = MakeUrlSafe(Version) + "-" + StaticAssetStamp(env);
+        _assemblyToken = MakeUrlSafe(Version);
+        _assetVersion = Compose(env);
+        _assetVersionAtUtc = DateTime.UtcNow;
     }
+
+    public string Version { get; }
+
+    public string AssetVersion
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (DateTime.UtcNow - _assetVersionAtUtc < RefreshWindow) return _assetVersion;
+                _assetVersion = Compose(_env);
+                _assetVersionAtUtc = DateTime.UtcNow;
+                return _assetVersion;
+            }
+        }
+    }
+
+    private string Compose(IWebHostEnvironment? env) => $"{_assemblyToken}-{StaticAssetStamp(env)}";
 
     /// <summary>
     /// A short token that changes whenever any file under `wwwroot` is written.
     /// </summary>
     /// <remarks>
-    /// Walks the tree once at startup and takes the newest `LastWriteTimeUtc`, so editing a single
-    /// stylesheet is enough to move the stamp. The cost is one directory scan per process start,
-    /// which is negligible next to the alternative (a user staring at stale CSS and reporting it as
-    /// a bug). Failures degrade to "0" rather than throwing: a cache-busting token must never be
-    /// the reason the application cannot start.
+    /// Walks the tree and takes the newest `LastWriteTimeUtc`, so editing a single stylesheet is
+    /// enough to move the stamp. Failures degrade to "0" rather than throwing: a cache-busting token
+    /// must never be the reason the application cannot start.
     /// </remarks>
     private static string StaticAssetStamp(IWebHostEnvironment? env)
     {
@@ -85,10 +124,6 @@ public sealed class AppVersionService : IAppVersionService
             return "0";
         }
     }
-
-    public string Version { get; }
-
-    public string AssetVersion { get; }
 
     /// <summary>
     /// Reduce the version to something safe and short enough for a query string.
