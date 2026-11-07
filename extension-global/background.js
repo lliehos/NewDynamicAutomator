@@ -2011,6 +2011,22 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
   let tip = findProcessFlowTip(nodes, edges);
   if (!tip) tip = processStartNode(nodes)?.id || "start";
 
+  // A recording CONTINUES the process. When the existing chain already ends at a terminal marker,
+  // the marker has to move to the end of the recorded block; leaving it where it is would give the
+  // previous node two outgoing edges (branching into both the marker and the new group) and the
+  // operator would see the recording dangling off the side of the real flow.
+  let displacedEndId = null;
+  if (tip) {
+    const out = (edges || []).find((e) => e.from === tip && e.kind === "next");
+    if (out) {
+      const target = nodes.find((n) => n.id === out.to);
+      if (target && target.kind === "end") {
+        displacedEndId = target.id;
+        edges = edges.filter((e) => e !== out);
+      }
+    }
+  }
+
   const list = Array.isArray(groups) && groups.length
     ? groups
     : [{ id: "group-1", title: "گروه ضبط", steps: [] }];
@@ -2051,6 +2067,12 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
       maxEntity += 1;
       const sid = `${gid}-step-${i + 1}`;
       const isNav = String(a.actionType || "").toLowerCase() === "gotourl";
+      // «ذخیره در منبع» (InsertContent) is the one recorded action whose value is READ FROM the
+      // clicked page element, not typed by the operator: there is no constant to keep. Its selector
+      // therefore belongs to the VALUE side (equalSelectorValue) — `selectorValue` is the TARGET
+      // field and is unused for this action. Writing it as a Constant (the old behaviour) stored an
+      // empty value and threw the element away, so the step could never read the page.
+      const isInsert = String(a.actionType || "").toLowerCase() === "insertcontent";
       nodes.push({
         id: sid,
         kind: "action",
@@ -2058,12 +2080,20 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
         title: buildRecordedActionTitle(a, i),
         groupNodeId: gid,
         actionType: a.actionType || "Click",
-        // The recorded value is a constant (the typed text, or the target address for GoToUrl).
+        // The recorded value is a constant (the typed text, or the target address for GoToUrl),
+        // except for InsertContent, which reads it from the element.
         // Stating it stops the editor/player from inferring "element" for an action that merely
         // permits an element source.
-        contentSourceType: "Constant",
-        selectorValue: a.elementValue || "",
-        constantValue: isNav ? "" : (a.value || ""),
+        contentSourceType: isInsert ? "Elements" : "Constant",
+        selectorValue: isInsert ? "" : (a.elementValue || ""),
+        ...(isInsert ? {
+          equalSelectorValue: a.elementValue || "",
+          equalSelectorIsDynamic: false,
+          valueFromSource: true,
+          saveTargetType: "DataSource"
+        } : {}),
+        ...(isInsert && a.elementValueMode ? { elementValueMode: a.elementValueMode } : {}),
+        constantValue: isNav ? "" : (isInsert ? "" : (a.value || "")),
         navigateUrl: isNav ? (a.url || a.value || "") : null,
         // Named-tab fields are step settings, so the draft→graph conversion has to carry them.
         openInNewTab: a.openInNewTab === true,
@@ -2095,6 +2125,11 @@ function mergeRecordingGroupsIntoGraph(existingGraph, groups, taskId, title) {
       prevStep = sid;
     });
   });
+
+  // Re-attach the terminal marker that was displaced above, now downstream of the recorded block.
+  if (displacedEndId) {
+    edges.push({ id: `e-rec-${stamp}-end`, from: tip, to: displacedEndId, kind: "next" });
+  }
 
   return {
     ...base,

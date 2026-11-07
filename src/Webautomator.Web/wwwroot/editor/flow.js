@@ -3736,6 +3736,40 @@
     return graph.nodes.find((n) => n.kind === "start" && n.groupNodeId === id) || null;
   }
 
+  /**
+   * Last node on the flow chain of one scope (process level when `scopeId` is null/empty).
+   *
+   * Used when new content is APPENDED to a diagram — a pasted recording — so the block joins the
+   * existing flow instead of landing as an island beside it. The walk follows `next` edges, and a
+   * condition's `success` branch because that is its continuation; a `fail` branch is the
+   * alternative (usually ending the run), so it is never treated as "the" chain.
+   *
+   * Returns the start node when the scope has no steps yet, and null when the scope has no start
+   * (nothing to attach to).
+   */
+  function flowChainTip(scopeId) {
+    const scope = scopeId || null;
+    const start = scope ? scopeStart(scope) : processStart();
+    if (!start) return null;
+    const inScope = (n) => !!n && (n.groupNodeId || null) === scope;
+    let tip = start;
+    const seen = new Set([tip.id]);
+    while (tip) {
+      const out = tip.kind === "condition"
+        ? (graph.edges || []).find((e) => e.from === tip.id && e.kind === "success")
+        : (graph.edges || []).find((e) => e.from === tip.id && e.kind === "next");
+      if (!out) break;
+      const target = nodeById(out.to);
+      // A chain that already runs into a terminal marker has no continuation to append after;
+      // stop on the node before it so the new block is inserted between them.
+      if (!target || !inScope(target) || target.kind === "end") break;
+      if (seen.has(target.id)) break;
+      seen.add(target.id);
+      tip = target;
+    }
+    return tip;
+  }
+
   /** Ensure a start node exists inside a group designer (entry of that scope). */
   function ensureGroupStart(gid) {
     if (!gid) return null;
@@ -6170,6 +6204,18 @@
     const inserted = [];
     const targetScope = editingGroupId || null;
 
+    // Pasting INTO a scope needs that scope to have an entry node, and — whichever scope we paste
+    // into — the place the existing flow currently ENDS. Both are read BEFORE the payload's nodes
+    // join the graph: once they are in, the walk would run through them and treat the pasted block
+    // as its own continuation.
+    if (targetScope) ensureGroupStart(targetScope);
+    const appendTip = flowChainTip(targetScope);
+    const appendTipKind = appendTip?.kind === "condition" ? "success" : "next";
+    const appendTipOut = appendTip
+      ? (graph.edges || []).find((e) => e.from === appendTip.id && e.kind === appendTipKind)
+      : null;
+    const displacedTargetId = appendTipOut ? appendTipOut.to : null;
+
     const rawNodes = src.nodes.filter((n) => n && typeof n === "object");
 
     // The recording's own start and end are dropped: both are per-process scope markers, and a
@@ -6349,6 +6395,59 @@
         });
       }
     });
+
+    // Join the pasted block to the EXISTING flow.
+    //
+    // Everything above makes the block internally runnable; it says nothing about how the block
+    // becomes part of the diagram the user already had. Without this last step the pasted group
+    // arrived as an island — reachable nowhere from the process start — which is the reported bug:
+    // "the new group created from the recording has no connection to the existing nodes".
+    //
+    // The block is appended where the current chain ends (see `flowChainTip`), so a recording pasted
+    // onto a diagram that already has steps lands AFTER them instead of beside them.
+    if (appendTip && inserted.length) {
+      const firstEntry = entriesViaDroppedMarker.size
+        ? [...entriesViaDroppedMarker].find((id) => nodeById(id)) || null
+        : null;
+      const groupEntryId = recordedGroupId ? nodeMap[recordedGroupId] || null : null;
+      // Inside an open group the recording's group node stays at the top level (see the scope
+      // rewrite above), so the block's real entry there is its first ACTION, not that group.
+      const entryId = targetScope
+        ? (firstEntry || inserted.find((n) => isActionNode(n))?.id || null)
+        : (groupEntryId || firstEntry || inserted.find((n) => isActionNode(n))?.id || null);
+      const entry = entryId ? nodeById(entryId) : null;
+
+      if (entry && entry.id !== appendTip.id) {
+        // A node has one flow exit (a condition has its two named branches). Replacing rather than
+        // adding keeps the chain linear, matching what drawing the link by hand would do.
+        graph.edges = (graph.edges || []).filter((e) => !(e.from === appendTip.id && e.kind === appendTipKind));
+        graph.edges.push({ id: tmpId("e"), from: appendTip.id, to: entry.id, kind: appendTipKind });
+
+        // A step block pasted INTO a group also needs the group's `contains` edge, so the group owns
+        // the new children and `ensureGroupStart` can find the first of them.
+        if (targetScope && isActionNode(entry) && (entry.groupNodeId || null) === targetScope) {
+          if (!graph.edges.some((e) => e.from === targetScope && e.kind === "contains")) {
+            graph.edges.push({ id: tmpId("e"), from: targetScope, to: entry.id, kind: "contains" });
+          }
+        }
+
+        // If the append displaced a terminal marker, put it back at the END of the pasted block so
+        // the run still finishes where the old chain finished.
+        const displaced = displacedTargetId ? nodeById(displacedTargetId) : null;
+        if (displaced && displaced.kind === "end") {
+          let blockExitId = null;
+          (Array.isArray(src.edges) ? src.edges : []).forEach((e) => {
+            if (!e || !nodeMap[e.from]) return;
+            const target = rawNodes.find((x) => x.id === e.to);
+            if (target && target.kind === "end") blockExitId = nodeMap[e.from];
+          });
+          const exit = blockExitId ? nodeById(blockExitId) : null;
+          if (exit && exit.id !== displaced.id) {
+            graph.edges.push({ id: tmpId("e"), from: exit.id, to: displaced.id, kind: "next" });
+          }
+        }
+      }
+    }
 
     selectedEdgeId = null;
     selected = new Set(inserted.map((n) => n.id));
