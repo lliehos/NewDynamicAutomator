@@ -9999,6 +9999,10 @@
     }
 
     if (stepNeedsValueSource(n)) body += stepValueSourceHtml(n);
+    // Refresh takes no value and no URL, but it does reload the page — so it gets the same
+    // «wait for the load» pair GoToUrl has; without it the step always used the 15 s default and
+    // there was no way to say "continue immediately".
+    if (at === "Refresh") body += stepNavWaitHtml(n);
     // LoadContent reads ONE cell and writes it somewhere: its read side (source + column) comes
     // first — with the row switch right under that PAIR (rendered inside stepLoadSourceHtml) —
     // then its destination.
@@ -10355,9 +10359,25 @@
         </div>`;
       }
 
-      const waitOn = n.waitForLoad !== false;
-      const waitMs = Number(n.waitMaxMs) > 0 ? Number(n.waitMaxMs) : 15000;
-      html += `
+      html += stepNavWaitHtml(n);
+    }
+    return html;
+  }
+
+  /**
+   * The «wait for the page to load» pair, shared by every action that navigates or reloads.
+   *
+   * GoToUrl and Refresh differ in what they ask the browser for, but not in what the author has to
+   * decide afterwards: does the next step wait for the new document, and for how long. Keeping the
+   * controls in one place is what stops Refresh from silently using the 15 s default with no way to
+   * turn it off.
+   */
+  function stepNavWaitHtml(n, waitOnIn, waitMsIn) {
+    const waitOn = waitOnIn === undefined ? n.waitForLoad !== false : waitOnIn;
+    const waitMs = waitMsIn === undefined
+      ? (Number(n.waitMaxMs) > 0 ? Number(n.waitMaxMs) : 15000)
+      : waitMsIn;
+    let out = `
         <div class="insp-field">
           <label class="da-switch">
             <input type="checkbox" data-k="waitForLoad" ${waitOn ? "checked" : ""}/>
@@ -10366,14 +10386,13 @@
           </label>
           <p class="palette-hint" style="margin:6px 0 0;line-height:1.55">${t("editor.actions.waitForUrlLoadHint")}</p>
         </div>`;
-      if (waitOn) {
-        html += `<div class="insp-field"><label>${t("editor.actions.waitMaxMs")}</label>
+    if (waitOn) {
+      out += `<div class="insp-field"><label>${t("editor.actions.waitMaxMs")}</label>
           <input type="number" min="0" step="100" data-k="waitMaxMs" value="${esc(waitMs)}" />
           <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${t("editor.actions.waitMaxMsHint")}</p>
         </div>`;
-      }
     }
-    return html;
+    return out;
   }
 
   function processDataSourceOptions(selectedId, { markMaster = true } = {}) {

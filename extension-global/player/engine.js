@@ -4465,6 +4465,31 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   if (actionType === "GoBack") return runHistoryStep(tabId, "back", step);
   if (actionType === "GoForward") return runHistoryStep(tabId, "forward", step);
 
+  // Reload the tab that is already open.
+  //
+  // Nothing to resolve — no URL, no selector — so this returns before the selector plumbing, the
+  // same shape as back/forward. Unlike a history move, a reload DOES have a completion event, so
+  // the step waits for the new document and honours the node's own wait switch (`waitForLoad` /
+  // `waitMaxMs`): a step that reads the page right after a refresh must not race the reload.
+  if (actionType === "Refresh") {
+    try {
+      await chrome.tabs.reload(tabId);
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err), reason: "refresh_failed" };
+    }
+    // The wait is the author's choice: off means "fire the reload and continue", so it must not pay
+    // the settle below either.
+    const waitMs = resolveNavigationWaitMs(step);
+    if (waitMs > 0) {
+      // One beat before watching for completion: `tabs.get` can still report "complete" for the
+      // document that is about to unload, and the wait would return before the reload even started.
+      await sleep(50);
+      await waitTabComplete(tabId, waitMs);
+    }
+    appendPlayLog("info", "صفحه دوباره بارگذاری شد");
+    return { ok: true, navigated: true };
+  }
+
   if (actionType === "GoToUrl") {
     let url = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { preferUrl: true });
     const cst0 = step.contentSourceType || "";
