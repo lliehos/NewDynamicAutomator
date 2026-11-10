@@ -8974,6 +8974,12 @@
       case "HHmmss":
         m = /^(\d{2})(\d{2})(\d{2})$/.exec(v);
         return !!m && Number(m[1]) < 24 && Number(m[2]) < 60 && Number(m[3]) < 60;
+      case "HH:mm:ss.fff":
+        m = /^(\d{2}):(\d{2}):(\d{2})\.(\d{3})$/.exec(v);
+        return !!m && Number(m[1]) < 24 && Number(m[2]) < 60 && Number(m[3]) < 60;
+      case "HHmmssfff":
+        m = /^(\d{2})(\d{2})(\d{2})(\d{3})$/.exec(v);
+        return !!m && Number(m[1]) < 24 && Number(m[2]) < 60 && Number(m[3]) < 60;
       case "Timestamp": return /^\d+$/.test(v);
       default: return true;
     }
@@ -9560,7 +9566,7 @@
         // hand-edited format can be wrong.
         const userFormats = src === "UserSystemDate"
           ? ["Auto", "yyyy-MM-dd", "yyyy/MM/dd", "dd-MM-yyyy", "yyyyMMdd", "Timestamp"]
-          : ["Auto", "HH:mm:ss", "HH:mm", "HHmmss", "Timestamp"];
+          : ["Auto", "HH:mm:ss", "HH:mm", "HHmmss", "HH:mm:ss.fff", "HHmmssfff", "Timestamp"];
         const fmt = String(n.userSystemClockFormat || "Auto").trim();
         if (!userFormats.some((f) => f.toLowerCase() === fmt.toLowerCase())) {
           reasons.push(`قالب «${fmt}» برای مقدار سیستم کاربر مجاز نیست`);
@@ -10260,10 +10266,31 @@
         ? `<p class="palette-hint">هنوز متغیری نیست — ابتدا مقداری در حافظه ذخیره کنید.</p>`
         : `<p class="palette-hint">مقدار ذخیره‌شده در این متغیر خوانده می‌شود.</p>`}`;
     } else if (src === "System") {
+      const sysType = n.systemValueType || "CurrentDateTime";
       html += `<div class="insp-field"><label>نوع پیش‌فرض</label>
-        <select data-k="systemValueType">${systemValueOptionsHtml(n.systemValueType)}</select>
-      </div>
-      <p class="palette-hint">مقدار در لحظهٔ اجرا توسط سیستم تولید می‌شود.</p>`;
+        <select data-k="systemValueType">${systemValueOptionsHtml(sysType)}</select>
+      </div>`;
+      // The clock kinds take a format, and until now no screen set one: the desktop player already
+      // honoured `systemClockFormat` on an action, but the editor could not produce it — so a step
+      // that wanted milliseconds had no way to ask for them.
+      if (sysType === "CurrentDate" || sysType === "CurrentTime" || sysType === "CurrentDateTime") {
+        const isDate = sysType === "CurrentDate";
+        const isStamp = sysType === "CurrentDateTime";
+        const options = isDate
+          ? ["Auto", "yyyy-MM-dd", "yyyy/MM/dd", "dd-MM-yyyy", "yyyyMMdd", "Timestamp"]
+          : (isStamp
+            ? ["Auto", "HH:mm:ss", "HH:mm", "HHmmss", "HH:mm:ss.fff", "HHmmssfff"]
+            : ["Auto", "HH:mm:ss", "HH:mm", "HHmmss", "HH:mm:ss.fff", "HHmmssfff", "Timestamp"]);
+        const cur = options.includes(n.systemClockFormat) ? n.systemClockFormat : "Auto";
+        html += `<div class="insp-field"><label>قالب زمان (اختیاری)</label>
+          <select data-k="systemClockFormat">${options.map((f) =>
+            `<option value="${esc(f)}" ${f === cur ? "selected" : ""}>${f === "Auto" ? "خودکار (مقدار پیش‌فرض سیستم)" : esc(f)}</option>`).join("")}</select>
+          <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${isStamp
+            ? "قالب زمان روی بخش زمان اعمال می‌شود و تاریخ با قالب پیش‌فرض نوشته می‌شود؛ مثلاً «HH:mm:ss.fff» می‌دهد 2026-11-10 14:05:09.123"
+            : "«خودکار» همان مقدار پیش‌فرض سیستمی است. قالب‌های دارای fff میلی‌ثانیه را هم دارند."}</p>
+        </div>`;
+      }
+      html += `<p class="palette-hint">مقدار در لحظهٔ اجرا توسط سیستم تولید می‌شود.</p>`;
     }
 
     // SelectOption: how the target option is matched inside the <select>.
@@ -11238,7 +11265,7 @@
         || (ct === "SystemDate" ? "yyyy-MM-dd" : "HH:mm:ss");
       const formats = ct === "SystemDate"
         ? [["yyyy-MM-dd", "2026-09-24"], ["yyyy/MM/dd", "2026/09/24"], ["dd-MM-yyyy", "24-09-2026"], ["yyyyMMdd", "20260924"], ["Timestamp", t("editor.cond.clockTimestamp")]]
-        : [["HH:mm:ss", "14:05:09"], ["HH:mm", "14:05"], ["HHmmss", "140509"], ["Timestamp", t("editor.cond.clockTimestamp")]];
+        : [["HH:mm:ss", "14:05:09"], ["HH:mm", "14:05"], ["HHmmss", "140509"], ["HH:mm:ss.fff", "14:05:09.123"], ["HHmmssfff", "140509123"], ["Timestamp", t("editor.cond.clockTimestamp")]];
       html += `<div class="insp-field"><label>${t("editor.cond.clockFormat")}</label>
           <select data-k="systemClockFormat">
             ${formats.map(([v, sample]) => `<option value="${esc(v)}" ${clockFormat === v ? "selected" : ""}>${esc(v)} — ${esc(sample)}</option>`).join("")}
@@ -11323,7 +11350,7 @@
         const clockFmt = n.systemClockFormat || (ct === "SystemDate" ? "yyyy-MM-dd" : "HH:mm:ss");
         const clockSample = ct === "SystemDate"
           ? (clockFmt === "yyyy/MM/dd" ? "2026/09/24" : clockFmt === "dd-MM-yyyy" ? "24-09-2026" : clockFmt === "yyyyMMdd" ? "20260924" : clockFmt === "Timestamp" ? "1758720000000" : "2026-09-24")
-          : (clockFmt === "HH:mm" ? "14:05" : clockFmt === "HHmmss" ? "140509" : clockFmt === "Timestamp" ? "1758720000000" : "14:05:09");
+          : (clockFmt === "HH:mm" ? "14:05" : clockFmt === "HHmmss" ? "140509" : clockFmt === "HH:mm:ss.fff" ? "14:05:09.123" : clockFmt === "HHmmssfff" ? "140509123" : clockFmt === "Timestamp" ? "1758720000000" : "14:05:09");
         const placeholder = isUrl
           ? "مثلاً google.com یا /login"
           : isClock
@@ -11342,7 +11369,7 @@
         const isDate = src === "UserSystemDate";
         const formats = isDate
           ? ["Auto", "yyyy-MM-dd", "yyyy/MM/dd", "dd-MM-yyyy", "yyyyMMdd", "Timestamp"]
-          : ["Auto", "HH:mm:ss", "HH:mm", "HHmmss", "Timestamp"];
+          : ["Auto", "HH:mm:ss", "HH:mm", "HHmmss", "HH:mm:ss.fff", "HHmmssfff", "Timestamp"];
         const cur = formats.includes(n.userSystemClockFormat) ? n.userSystemClockFormat : "Auto";
         const formatOpts = formats.map((f) =>
           `<option value="${f}" ${f === cur ? "selected" : ""}>${f === "Auto" ? "خودکار (از شکل مقدار مورد بررسی)" : esc(f)}</option>`).join("");

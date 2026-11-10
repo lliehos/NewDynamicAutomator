@@ -348,6 +348,8 @@ public sealed class ConditionEvaluator
         {
             "HH:mm" => now.ToString("HH':'mm", CultureInfo.InvariantCulture),
             "HHmmss" => now.ToString("HHmmss", CultureInfo.InvariantCulture),
+            "HH:mm:ss.fff" => now.ToString("HH':'mm':'ss'.'fff", CultureInfo.InvariantCulture),
+            "HHmmssfff" => now.ToString("HHmmssfff", CultureInfo.InvariantCulture),
             "Timestamp" => new DateTimeOffset(now).ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
             _ => now.ToString("HH':'mm':'ss", CultureInfo.InvariantCulture)
         };
@@ -366,14 +368,17 @@ public sealed class ConditionEvaluator
         var s = (sample ?? "").Trim();
         if (s.Length == 0) return null;
 
-        // A subject that shows the whole moment ("2026-11-10 08:45:00") needs a date AND a time: a
-        // date-only clock could never equal it, no matter which side is right.
-        var stamp = Regex.Match(s, @"^(\d{4})([-/\.])(\d{1,2})\2(\d{1,2})[ T](\d{1,2}):(\d{2})(:(\d{2}))?$");
+        // A subject that shows the whole moment ("2026-11-10 08:45:00" or "…08:45:00.123") needs a
+        // date AND a time: a date-only clock could never equal it, no matter which side is right.
+        var stamp = Regex.Match(s, @"^(\d{4})([-/\.])(\d{1,2})\2(\d{1,2})[ T](\d{1,2}):(\d{2})(:(\d{2})(?:\.(\d{1,3}))?)?$");
         if (stamp.Success)
         {
             var sep = stamp.Groups[2].Value;
             var datePart = SystemClock("SystemDate", $"yyyy{sep}MM{sep}dd");
-            var timePart = SystemClock("SystemTime", stamp.Groups[8].Success ? "HH:mm:ss" : "HH:mm");
+            var timeFormat = !stamp.Groups[8].Success ? "HH:mm"
+                : stamp.Groups[9].Success ? "HH:mm:ss.fff"
+                : "HH:mm:ss";
+            var timePart = SystemClock("SystemTime", timeFormat);
             return datePart + (s.Contains('T') ? "T" : " ") + timePart;
         }
 
@@ -397,10 +402,18 @@ public sealed class ConditionEvaluator
             return null;
         }
 
-        if (Regex.IsMatch(s, @"^\d{8,}$")) return SystemClock(kind, "Timestamp");
+        if (Regex.IsMatch(s, @"^\d{2}:\d{2}:\d{2}\.\d{3}$")) return SystemClock(kind, "HH:mm:ss.fff");
         if (Regex.IsMatch(s, @"^\d{2}:\d{2}:\d{2}$")) return SystemClock(kind, "HH:mm:ss");
         if (Regex.IsMatch(s, @"^\d{2}:\d{2}$")) return SystemClock(kind, "HH:mm");
         if (Regex.IsMatch(s, @"^\d{6}$")) return SystemClock(kind, "HHmmss");
+        // Nine digits that read as a valid HHmmssfff; anything else of 8+ digits is an epoch stamp.
+        var compactMs = Regex.Match(s, @"^(\d{2})(\d{2})(\d{2})(\d{3})$");
+        if (compactMs.Success
+            && int.Parse(compactMs.Groups[1].Value) < 24
+            && int.Parse(compactMs.Groups[2].Value) < 60
+            && int.Parse(compactMs.Groups[3].Value) < 60)
+            return SystemClock(kind, "HHmmssfff");
+        if (Regex.IsMatch(s, @"^\d{8,}$")) return SystemClock(kind, "Timestamp");
         return null;
     }
 }

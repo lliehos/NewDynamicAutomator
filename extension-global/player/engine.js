@@ -287,7 +287,7 @@ function conditionNeedsCompareOperand(ct, eq) {
 
 /** Formats the user-clock compare operand may be rendered in (the inspector offers exactly these). */
 const USER_DATE_CLOCK_FORMATS = ["yyyy-MM-dd", "yyyy/MM/dd", "dd-MM-yyyy", "yyyyMMdd", "Timestamp"];
-const USER_TIME_CLOCK_FORMATS = ["HH:mm:ss", "HH:mm", "HHmmss", "Timestamp"];
+const USER_TIME_CLOCK_FORMATS = ["HH:mm:ss", "HH:mm", "HHmmss", "HH:mm:ss.fff", "HHmmssfff", "Timestamp"];
 
 /**
  * Does a typed literal have the same shape as the machine clock in `fmt`?
@@ -326,6 +326,12 @@ function clockLiteralFitsFormat(value, fmt) {
       return !!m && inRange(Number(m[1]), Number(m[2]));
     case "HHmmss":
       m = /^(\d{2})(\d{2})(\d{2})$/.exec(v);
+      return !!m && inRange(Number(m[1]), Number(m[2]), Number(m[3]));
+    case "HH:mm:ss.fff":
+      m = /^(\d{2}):(\d{2}):(\d{2})\.(\d{3})$/.exec(v);
+      return !!m && inRange(Number(m[1]), Number(m[2]), Number(m[3]));
+    case "HHmmssfff":
+      m = /^(\d{2})(\d{2})(\d{2})(\d{3})$/.exec(v);
       return !!m && inRange(Number(m[1]), Number(m[2]), Number(m[3]));
     case "Timestamp":
       return /^\d{8,}$/.test(v);
@@ -871,7 +877,7 @@ const ENGINE_MSG = {
     "cond.userDateMissing": "تاریخ سیستم کاربر مشخص نیست",
     "cond.userDateBadFormat": "فرمت تاریخ سیستم کاربر نامعتبر است (مجاز: YYYY-MM-DD)",
     "cond.userTimeMissing": "زمان سیستم کاربر مشخص نیست",
-    "cond.userTimeBadFormat": "فرمت زمان سیستم کاربر نامعتبر است (مجاز: HH:mm یا HH:mm:ss)",
+    "cond.userTimeBadFormat": "فرمت زمان سیستم کاربر نامعتبر است (مجاز: HH:mm یا HH:mm:ss یا HH:mm:ss.fff)",
     "cond.userClockFormatBad": "قالب «{fmt}» برای مقدار سیستم کاربر مجاز نیست",
     "cond.memCompareMissing": "متغیر حافظه مقایسه مشخص نیست",
     "cond.sysCompareMissing": "نوع مقدار پیشفرض مقایسه مشخص نیست",
@@ -973,7 +979,7 @@ const ENGINE_MSG = {
     "cond.userDateMissing": "User system date is not set",
     "cond.userDateBadFormat": "User system date format is invalid (expected YYYY-MM-DD)",
     "cond.userTimeMissing": "User system time is not set",
-    "cond.userTimeBadFormat": "User system time format is invalid (expected HH:mm or HH:mm:ss)",
+    "cond.userTimeBadFormat": "User system time format is invalid (expected HH:mm, HH:mm:ss or HH:mm:ss.fff)",
     "cond.userClockFormatBad": "The «{fmt}» format is not allowed for a user-system value",
     "cond.memCompareMissing": "Comparison memory variable is not set",
     "cond.sysCompareMissing": "Comparison system value type is not set",
@@ -3637,7 +3643,7 @@ async function resolveConditionCompareValue(tabId, node, graph, rowIndex, opts =
   try {
     const src = node.contentSourceType || "Constant";
     if (src === "System") {
-      return resolveSystemValue(node.systemValueType || "CurrentDateTime");
+      return resolveSystemValue(node.systemValueType || "CurrentDateTime", node.systemClockFormat);
     }
     if (src === "UserSystemDate" || src === "UserSystemTime") {
       // "تاريخ/زمان سیستم کاربر" is the machine clock AT THE MOMENT of the check. It used to return
@@ -5025,18 +5031,30 @@ async function appendAttributeFilterAsync(sel, step, graph, rowIndex, opts = {})
   return `${sel}[${escapedName}="${escapedVal}"]`;
 }
 
-function resolveSystemValue(kind) {
+function resolveSystemValue(kind, format) {
   const k = String(kind || "CurrentDateTime");
+  // An explicitly chosen format wins; "Auto"/blank keeps the historical localised value below, so a
+  // process saved before the picker existed produces exactly what it used to.
+  const fmt = String(format || "").trim();
+  const explicit = fmt.length > 0 && fmt.toLowerCase() !== "auto";
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   if (k === "CurrentDate") {
+    if (explicit) return formatSystemClock("SystemDate", fmt);
     try { return d.toLocaleDateString("fa-IR"); } catch { return d.toISOString().slice(0, 10); }
   }
   if (k === "CurrentTime") {
+    if (explicit) return formatSystemClock("SystemTime", fmt);
     try { return d.toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
     catch { return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; }
   }
   if (k === "CurrentDateTime") {
+    if (explicit) {
+      // One format field describes the whole moment: a date shape sets the date half and a time shape
+      // sets the time half, while the half the format does not mention keeps its default. That is why
+      // "HH:mm:ss.fff" yields "2026-11-10 14:05:09.123" instead of dropping the date.
+      return `${formatSystemClock("SystemDate", fmt)} ${formatSystemClock("SystemTime", fmt)}`;
+    }
     try { return d.toLocaleString("fa-IR"); } catch { return d.toISOString(); }
   }
   if (k === "Timestamp") return String(Date.now());
@@ -5055,7 +5073,8 @@ function resolveSystemValue(kind) {
  * Kept to ASCII digits on purpose: comparing against a constant typed in the
  * editor must not depend on the browser's locale digits.
  * Supported formats — date: `yyyy-MM-dd` (default), `yyyy/MM/dd`, `dd-MM-yyyy`,
- * `yyyyMMdd`, `Timestamp`; time: `HH:mm:ss` (default), `HH:mm`, `HHmmss`.
+ * `yyyyMMdd`, `Timestamp`; time: `HH:mm:ss` (default), `HH:mm`, `HHmmss`,
+ * `HH:mm:ss.fff` and `HHmmssfff` (fractional seconds), `Timestamp`.
  */
 function formatSystemClock(kind, format) {
   const d = new Date();
@@ -5066,6 +5085,7 @@ function formatSystemClock(kind, format) {
   const HH = p(d.getHours());
   const mm = p(d.getMinutes());
   const ss = p(d.getSeconds());
+  const fff = String(d.getMilliseconds()).padStart(3, "0");
   const fmt = String(format || "").trim();
 
   if (kind === "SystemDate") {
@@ -5085,6 +5105,8 @@ function formatSystemClock(kind, format) {
   switch (fmt) {
     case "HH:mm": return `${HH}:${mm}`;
     case "HHmmss": return `${HH}${mm}${ss}`;
+    case "HH:mm:ss.fff": return `${HH}:${mm}:${ss}.${fff}`;
+    case "HHmmssfff": return `${HH}${mm}${ss}${fff}`;
     case "Timestamp": return String(d.getTime());
     case "HH:mm:ss":
     default: return `${HH}:${mm}:${ss}`;
@@ -5101,13 +5123,14 @@ function formatSystemClock(kind, format) {
 function matchFormatToSample(kind, currentValue, sample) {
   const s = String(sample || "").trim();
   if (!s) return null;
-  // A subject that shows the whole moment ("2026-11-10 08:45:00") needs a date AND a time: a
-  // date-only clock could never equal it, no matter which side is right.
-  const stamp = /^(\d{4})([-/.])(\d{1,2})\2(\d{1,2})[ T](\d{1,2}):(\d{2})(:(\d{2}))?$/.exec(s);
+  // A subject that shows the whole moment ("2026-11-10 08:45:00" or "…08:45:00.123") needs a date
+  // AND a time: a date-only clock could never equal it, no matter which side is right.
+  const stamp = /^(\d{4})([-/.])(\d{1,2})\2(\d{1,2})[ T](\d{1,2}):(\d{2})(:(\d{2})(?:\.(\d{1,3}))?)?$/.exec(s);
   if (stamp) {
     const sep = stamp[2];
     const datePart = formatSystemClock("SystemDate", `yyyy${sep}MM${sep}dd`);
-    const timePart = formatSystemClock("SystemTime", stamp[8] ? "HH:mm:ss" : "HH:mm");
+    const timePart = formatSystemClock(
+      "SystemTime", stamp[8] ? (stamp[9] ? "HH:mm:ss.fff" : "HH:mm:ss") : "HH:mm");
     return `${datePart}${s.includes("T") ? "T" : " "}${timePart}`;
   }
   const isDate = kind === "SystemDate";
@@ -5123,10 +5146,16 @@ function matchFormatToSample(kind, currentValue, sample) {
     if (/^\d{8}$/.test(s)) return formatSystemClock(kind, "yyyyMMdd");
     return null;
   }
-  if (/^\d{8,}$/.test(s)) return formatSystemClock(kind, "Timestamp");
+  if (/^\d{2}:\d{2}:\d{2}\.\d{3}$/.test(s)) return formatSystemClock(kind, "HH:mm:ss.fff");
   if (/^\d{2}:\d{2}:\d{2}$/.test(s)) return formatSystemClock(kind, "HH:mm:ss");
   if (/^\d{2}:\d{2}$/.test(s)) return formatSystemClock(kind, "HH:mm");
   if (/^\d{6}$/.test(s)) return formatSystemClock(kind, "HHmmss");
+  // Nine digits that read as a valid HHmmssfff; anything else of 8+ digits is an epoch timestamp.
+  if (/^\d{9}$/.test(s)
+    && Number(s.slice(0, 2)) < 24 && Number(s.slice(2, 4)) < 60 && Number(s.slice(4, 6)) < 60) {
+    return formatSystemClock(kind, "HHmmssfff");
+  }
+  if (/^\d{8,}$/.test(s)) return formatSystemClock(kind, "Timestamp");
   return null;
 }
 
@@ -5146,7 +5175,7 @@ function formatUserSystemClock(kind, format, sample) {
 function resolveStepParam(step, graph, rowIndex, opts = {}) {
   const cst = step.contentSourceType || "";
   if (cst === "System") {
-    return resolveSystemValue(step.systemValueType || "CurrentDateTime");
+    return resolveSystemValue(step.systemValueType || "CurrentDateTime", step.systemClockFormat);
   }
   // `sourceId` is the CONDITION inspector's name for the same idea; a step saved by the editor may
   // carry either, and both mean "read this cell". An EXPLICIT value type wins over those fields:
@@ -5209,7 +5238,7 @@ async function resolveElementValueAttribute(step, graph, rowIndex) {
 async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
   const cst = step.contentSourceType || "";
   if (cst === "System") {
-    return resolveSystemValue(step.systemValueType || "CurrentDateTime");
+    return resolveSystemValue(step.systemValueType || "CurrentDateTime", step.systemClockFormat);
   }  if (stepUsesDataSourceValue(step)) {
     const ds = findDataSourceForValue(step, graph);
     const v = await readDataSourceCellForPlay(
