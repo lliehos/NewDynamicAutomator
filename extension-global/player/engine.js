@@ -1193,6 +1193,7 @@ const RunMode = { Play: 0, Learn: 1 };
 let playAbort = false;
 let playPaused = false;
 let playResumeWaiters = [];
+
 /**
  * HUD history bounds.
  *
@@ -1595,15 +1596,67 @@ async function waitIfPaused() {
   }
 }
 
+/**
+ * The sleepers currently parked in `sleepInterruptible`, woken by pause and stop.
+ *
+ * Shared here rather than threaded through every caller because there is exactly one run per worker,
+ * and a wake that arrives for a sleeper that already finished is harmless (its resolver is gone from
+ * the set).
+ */
+const playSleepWaiters = new Set();
+
+/** Wake every sleeper so it re-reads pause/abort instead of waiting out its timer. */
+function wakePlaySleepers() {
+  for (const resolve of Array.from(playSleepWaiters)) {
+    try { resolve(); } catch { /* ignore */ }
+  }
+  playSleepWaiters.clear();
+}
+
+/** setTimeout's ceiling: a larger delay overflows the 32-bit field and fires immediately. */
+const MAX_TIMER_MS = 2147483647;
+
+/** Sleep until `deadline` (ms since epoch), or until pause/stop wakes us. */
+function sleepUntil(deadline) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      playSleepWaiters.delete(done);
+      resolve();
+    };
+    const timer = setTimeout(done, Math.min(remaining, MAX_TIMER_MS));
+    playSleepWaiters.add(done);
+  });
+}
+
+/**
+ * Wait that a pause or a stop can cut short.
+ *
+ * One timer for the whole remaining duration, not a fixed 200 ms tick. The old tick existed only to
+ * notice pause/stop, and it cost two things: a 10-minute `WaitTime` woke 3000 times for a decision
+ * that changes at most twice, and every wakeup was a timer plus a promise the service worker had to
+ * schedule. It also made the tick unrelated to the requested delay, while adding a floor of its own
+ * to sub-200 ms waits (they went through one extra loop iteration).
+ *
+ * Now the sleep lasts exactly as long as asked (`setTimeout` resolution, so 1 ms is honoured as
+ * closely as a browser can) and pause/stop call `wakePlaySleepers()` to resolve it immediately. The
+ * deadline is absolute, so time spent paused still counts against the wait — the behaviour this had
+ * before, kept deliberately.
+ */
 async function sleepInterruptible(ms) {
-  const end = Date.now() + Math.max(0, Number(ms) || 0);
-  while (Date.now() < end) {
+  const deadline = Date.now() + Math.max(0, Number(ms) || 0);
+  for (;;) {
     if (playAbort) return;
     await waitIfPaused();
     if (playAbort) return;
-    const left = end - Date.now();
+    const left = deadline - Date.now();
     if (left <= 0) return;
-    await sleep(Math.min(200, left));
+    await sleepUntil(deadline);
   }
 }
 
@@ -1781,6 +1834,8 @@ async function stopPlay(reason) {
   playStatus.playing = false;
   playStatus.paused = false;
   wakePlayResumeWaiters();
+  // A long WaitTime sleeps in one timer, so it has to be told the run is over instead of polling.
+  wakePlaySleepers();
   clearPlayCellReadInflight();
   clearPlayCellWriteChains();
   resetCellEventQueue();
@@ -1850,6 +1905,8 @@ async function pausePlay() {
   if (playPaused) return getPlayStatus();
   playPaused = true;
   playStatus.paused = true;
+  // The sleeper must stop its timer now and report "paused", instead of finishing the wait first.
+  wakePlaySleepers();
   appendPlayLog("info", "اجرا موقتاً متوقف شد (پاز)");
   try { await chrome.storage.local.set({ playPaused: true }); } catch { /* ignore */ }
   broadcastPlayState();
@@ -2373,6 +2430,9 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   playAbort = false;
   playPaused = false;
   playResumeWaiters = [];
+  // A sleeper left over from a previous run is already aborted with it; clearing the set only drops
+  // the reference so a stale timer resolver cannot be woken as if it belonged to this run.
+  playSleepWaiters.clear();
   // Every run starts with a CLEAN log — including the context menu's single-step and «from this
   // node on» runs, which are re-run repeatedly while debugging. Mixing their output with a
   // previous run's (often another task's) made a fresh failure unreadable in the HUD and in the

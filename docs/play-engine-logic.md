@@ -355,7 +355,11 @@ effectiveRow = moveLoop ? gRow : parentRow
 - `delayAfterNode(graph, nextId)` اگر `nextId` تهی باشد **هیچ مکثی** نمی‌کند → آخرین نود مکث نمی‌گیرد.
 - `resolveStepDelayMs` فقط نود شروع **ریشه** را می‌خواند؛ مقدار `stepDelayMs` روی نود شروع یک
   **گروه** نادیده گرفته می‌شود (با اینکه UI فیلد را برای هر نود شروع نشان می‌دهد).
-- `sleepInterruptible` هر ۲۰۰ms `playAbort`/`playPaused` را دوباره چک می‌کند.
+- `sleepInterruptible` **یک تایمر برای تمام مدت باقی‌مانده** می‌خوابد (deadline مطلق)، نه تیک ثابت
+  ۲۰۰ms؛ `pausePlay` و `stopPlay` با `wakePlaySleepers()` آن را فوراً بیدار می‌کنند. پس تیک
+  ۲۰۰ms قبلی (که فقط برای دیدن مکث/توقف بود) حذف شد: انتظار ۶۰۰ ثانیه‌ای حالا **یک بار** بیدار
+  می‌شود نه ۳۰۰۰ بار، و دقت زیر ۲۰۰ms به resolution خود مرورگر سپرده می‌شود (۱ms واقعاً ۱ms است،
+  نه یک دور اضافه). زمان مکث همچنان از مدت انتظار کم می‌شود (deadline مطلق است).
 
 ---
 
@@ -761,7 +765,7 @@ resolve می‌شود.
 | عملیات | رفتار |
 |--------|--------|
 | `stopPlay` | `playAbort=true`، پاک‌کردن polling، `unregisterPlayOnServer`، ذخیرهٔ storage، لاگ |
-| `pausePlay` | `playPaused=true`؛ حلقه در `waitIfPaused` منتظر می‌ماند |
+| `pausePlay` | `playPaused=true` + `wakePlaySleepers()`؛ حلقه در `waitIfPaused` منتظر می‌ماند |
 | `resumePlay` | `playPaused=false` + `wakePlayResumeWaiters` |
 | واچ لغو | `setInterval` هر **۱۵۰۰ms** (خط ۳۰۷۸) به `GET /Panel/Tasks/PlayAbort?taskId=…`؛ اگر `abort` بود → `stopPlay("canvas_changed")` |
 
