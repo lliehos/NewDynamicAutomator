@@ -83,17 +83,23 @@ public sealed class DatabaseSetupMiddleware
         // A page is requested while startup work is still finishing (or right after a restart, before
         // the first request has touched the database). Bridge that gap with a small waiting page that
         // follows the status probe: to the requested URL when the application is ready, to the
-        // diagnosis page if the phase settles on Blocked. The setup and front pages are excluded above,
-        // so a real failure is never hidden behind it.
+        // diagnosis page if the phase settles on Blocked. On-server, the setup and front pages are
+        // excluded, so a real failure is never hidden behind it.
         //
         // On-server callers get it too rather than the progress page: the progress page lists the
         // setup steps and is the wrong answer for someone who just opened the site, and the waiting
         // page ends in the same place. Off-server callers get it instead of a bare 503 — that is the
         // whole point, since a 503 with no way forward was indistinguishable from an outage and made
         // the first visit after a restart look like a database failure until someone refreshed.
-        if (WantsHtmlPage(context))
+        //
+        // `local` is passed because the diagnosis paths are only "the diagnosis" for a caller that can
+        // actually read them. For anyone else "/" and /setup/database are ordinary URLs, and excluding
+        // them sent the site's own front page — the one URL every visitor types — into the bare-503
+        // branch below, which is exactly the white "application is not ready" page seen on the first
+        // visit after a publish recycle.
+        if (WantsHtmlPage(context, local))
         {
-            await WriteWarmUpPageAsync(context);
+            await WriteWarmUpPageAsync(context, local);
             return;
         }
 
@@ -153,12 +159,19 @@ public sealed class DatabaseSetupMiddleware
 
         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         context.Response.ContentType = "text/plain; charset=utf-8";
+        // Non-HTML callers (curl, an API client, a health check) get the same plain answer; telling them
+        // when to come back stops a retry storm while the initialiser is still working.
+        context.Response.Headers.RetryAfter = "5";
         // The last sentence is for the operator who reached the server over its public name instead
         // of localhost: the page they are looking for is one URL away, and without this they would
         // be left with a bare 503 and no way in.
+        //
+        // The wording covers both phases on purpose. Most of these answers are written while the
+        // background initialiser is still running, so naming only the database sent operators looking
+        // for a broken connection when the application was merely a few seconds from ready.
         await context.Response.WriteAsync(
-            "The application is not ready: its database is not reachable. " +
-            "See the server console for details. " +
+            "The application is not ready yet: it is still starting up, or its database is not " +
+            "reachable. See the server console for details. " +
             "On the server itself, open the site through http://localhost to see the diagnosis.");
     }
 
@@ -171,11 +184,20 @@ public sealed class DatabaseSetupMiddleware
     /// API response or a socket. Used to decide whether the warm-up page is a sensible answer.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Shallow on purpose. A caller that negotiates for something other than HTML is left to the
     /// phase branches below (503 off-server, diagnosis on-server); mutating verbs are never answered
     /// with a page whose reload would replay them.
+    /// </para>
+    /// <para>
+    /// <paramref name="local"/> decides what the diagnosis paths mean. On the server they are the
+    /// operator's way IN, so they must never be replaced by a waiting page — that would leave a
+    /// genuine failure unreachable. Off-server the diagnosis is not served at all, so those paths are
+    /// just URLs, and a visitor there needs the warm-up page more than anyone: without it the first
+    /// hit after a restart is answered with a bare text 503 on a white page.
+    /// </para>
     /// </remarks>
-    private static bool WantsHtmlPage(HttpContext context)
+    private static bool WantsHtmlPage(HttpContext context, bool local)
     {
         if (!HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method))
             return false;
@@ -185,9 +207,9 @@ public sealed class DatabaseSetupMiddleware
             || path.StartsWithSegments("/hubs", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        // The setup page and the retry action are the operator's way IN, so they must never be
-        // replaced by a waiting page — that would leave a genuine failure unreachable.
-        if (IsDiagnosisPath(path))
+        // Never hide the operator's own way in behind a waiting page — but only where that page is
+        // actually served. See the remarks above.
+        if (local && IsDiagnosisPath(path))
             return false;
 
         var accept = context.Request.Headers.Accept.ToString();
@@ -223,27 +245,52 @@ public sealed class DatabaseSetupMiddleware
     /// text follows the <c>Accept-Language</c> header rather than the culture middleware, which has not
     /// run yet.
     /// </para>
+    /// <para>
+    /// <paramref name="local"/> changes only the Blocked branch. On the server the redirect to the
+    /// diagnosis is the point; off-server that page is refused, so the redirect would land the visitor
+    /// on the very plain-text 503 this page exists to replace. There it settles into a short
+    /// "not available" notice instead and keeps polling, so it still recovers on its own once the
+    /// operator fixes the database on the server.
+    /// </para>
     /// </remarks>
-    private async Task WriteWarmUpPageAsync(HttpContext context)
+    private async Task WriteWarmUpPageAsync(HttpContext context, bool local)
     {
-        context.Response.StatusCode = StatusCodes.Status200OK;
+        // Preparing is a wait, Blocked is an outage. Reporting the second as 200 would tell a load
+        // balancer and a search engine that all is well; the page still polls, so the visitor is not
+        // stranded either way.
+        var blocked = _state.Phase == DatabaseSetupPhase.Blocked;
+        context.Response.StatusCode = blocked
+            ? StatusCodes.Status503ServiceUnavailable
+            : StatusCodes.Status200OK;
         context.Response.ContentType = "text/html; charset=utf-8";
         // The page is different on every visit (ready or not), so it must never be replayed by a cache.
         context.Response.Headers.CacheControl = "no-store, no-cache";
-        context.Response.Headers.RetryAfter = "2";
+        context.Response.Headers.RetryAfter = blocked ? "5" : "2";
 
         var english = PrefersEnglish(context);
         var title = english ? "Starting up" : "در حال آماده‌سازی سامانه";
         var message = english ? "The system is getting ready. This page refreshes itself." : "سامانه در حال آماده‌سازی است. این صفحه خودکار به‌روزرسانی می‌شود.";
         var hint = english ? "If it does not continue on its own, open /setup/database on the server." : "اگر ادامه پیدا نکرد، روی سرور نشانی /setup/database را باز کنید.";
+        var unavailable = english
+            ? "The system is not available right now. This page keeps checking and continues on its own once the service is ready."
+            : "سامانه در حال حاضر در دسترس نیست. این صفحه وضعیت را بررسی می‌کند و پس از آماده‌شدن سرویس، خودکار ادامه می‌دهد.";
         var lang = english ? "en" : "fa";
         var dir = english ? "ltr" : "rtl";
+
+        // A blocked deployment that is already known to be such opens on the notice, not on a spinner
+        // that would only tell the truth 700 ms later.
+        var openBlocked = blocked && !local;
+        var initialMessage = openBlocked ? unavailable : message;
+        var htmlInitialMessage = System.Net.WebUtility.HtmlEncode(initialMessage);
+        var gearStyle = openBlocked ? "display:none" : "";
 
         // The visitor's original URL, so the reload lands where they were going. Escaped because it is
         // reflected into script and markup.
         var target = context.Request.Path + context.Request.QueryString;
         var safeTarget = System.Text.Json.JsonSerializer.Serialize(target);
+        var safeUnavailable = System.Text.Json.JsonSerializer.Serialize(unavailable);
         var htmlTarget = System.Net.WebUtility.HtmlEncode(target);
+        var canDiagnose = local ? "true" : "false";
 
         await context.Response.WriteAsync($$"""
             <!doctype html>
@@ -274,20 +321,33 @@ public sealed class DatabaseSetupMiddleware
             </head>
             <body>
               <div class="box">
-                <div class="gear" role="progressbar" aria-label="{{title}}"></div>
-                <h1>{{title}}</h1>
-                <p>{{message}}</p>
+                <div class="gear" id="gear" style="{{gearStyle}}" role="progressbar" aria-label="{{title}}"></div>
+                <h1 id="title">{{title}}</h1>
+                <p id="msg">{{htmlInitialMessage}}</p>
                 <div class="hint">{{hint}}</div>
               </div>
               <script>
                 (function () {
                   var target = {{safeTarget}};
+                  var canDiagnose = {{canDiagnose}};
+                  var unavailable = {{safeUnavailable}};
+                  var settled = false;
                   function poll() {
                     fetch('/setup/status', { cache: 'no-store' })
                       .then(function (r) { return r.json(); })
                       .then(function (s) {
                         if (s.ready) { location.replace(target || '/'); return; }
-                        if (s.phase === 'Blocked') { location.replace('/setup/database'); return; }
+                        if (s.phase === 'Blocked') {
+                          // On the server the diagnosis is one URL away. Anywhere else that URL is
+                          // refused, so redirecting there would replace this page with a bare 503.
+                          if (canDiagnose) { location.replace('/setup/database'); return; }
+                          settled = true;
+                          document.getElementById('gear').style.display = 'none';
+                          document.getElementById('msg').textContent = unavailable;
+                          setTimeout(poll, 5000);
+                          return;
+                        }
+                        if (settled) { settled = false; }
                         setTimeout(poll, 1000);
                       })
                       .catch(function () { setTimeout(poll, 1500); });
@@ -334,7 +394,11 @@ public sealed class DatabaseSetupMiddleware
         {
             phase = _state.Phase.ToString(),
             ready = _state.IsReady,
-            message = _state.ProgressMessage
+            message = _state.ProgressMessage,
+            // Whether the diagnosis page is reachable from HERE. It is served on loopback only, so a
+            // remote caller that learns "Blocked" must not be sent to it — it would be refused.
+            // This is not a secret: it merely restates that the caller is not on the server.
+            diagnosis = IsLocalRequest(context)
         };
         return context.Response.WriteAsync(
             System.Text.Json.JsonSerializer.Serialize(payload));
