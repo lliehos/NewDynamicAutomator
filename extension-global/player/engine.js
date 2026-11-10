@@ -279,22 +279,59 @@ function conditionNeedsCompare(ct) {
 
 function conditionNeedsCompareOperand(ct, eq) {
   if (!conditionNeedsCompare(ct)) return false;
-  if (eq === "HasValue" || eq === "HasNotValue") return false;
-  return true;
+  // Compared through the same normaliser as the evaluator: "HasValue", "hasvalue" and "Has_Value"
+  // are one operator, and testing the raw string made two of the three still demand an operand.
+  const op = normalizeCompareOperator(eq);
+  return op !== "hasvalue" && op !== "hasnotvalue";
 }
 
-/** Allowed: YYYY-MM-DD (calendar-valid). */
-function isValidUserSystemDateForPlay(v) {
-  const s = String(v || "").trim();
-  if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(s)) return false;
-  const [y, m, d] = s.split("-").map(Number);
-  const dt = new Date(y, m - 1, d);
-  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
-}
+/** Formats the user-clock compare operand may be rendered in (the inspector offers exactly these). */
+const USER_DATE_CLOCK_FORMATS = ["yyyy-MM-dd", "yyyy/MM/dd", "dd-MM-yyyy", "yyyyMMdd", "Timestamp"];
+const USER_TIME_CLOCK_FORMATS = ["HH:mm:ss", "HH:mm", "HHmmss", "Timestamp"];
 
-/** Allowed: HH:mm or HH:mm:ss */
-function isValidUserSystemTimeForPlay(v) {
-  return /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(String(v || "").trim());
+/**
+ * Does a typed literal have the same shape as the machine clock in `fmt`?
+ *
+ * Mirrors clockValueConforms in the editor so the two agree on what "never matches" means. Range
+ * checks each part too, because a shape-only test would accept 24:99.
+ */
+function clockLiteralFitsFormat(value, fmt) {
+  const v = String(value || "").trim();
+  if (!v) return false;
+  const inRange = (h, mi, se) => h < 24 && mi < 60 && (se == null || se < 60);
+  const dateOk = (y, mo, d) => {
+    if (Number(mo) < 1 || Number(mo) > 12 || Number(d) < 1 || Number(d) > 31) return false;
+    const dt = new Date(Number(y), Number(mo) - 1, Number(d));
+    return dt.getFullYear() === Number(y) && dt.getMonth() === Number(mo) - 1 && dt.getDate() === Number(d);
+  };
+  let m;
+  switch (fmt) {
+    case "yyyy-MM-dd":
+      m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+      return !!m && dateOk(m[1], m[2], m[3]);
+    case "yyyy/MM/dd":
+      m = /^(\d{4})\/(\d{2})\/(\d{2})$/.exec(v);
+      return !!m && dateOk(m[1], m[2], m[3]);
+    case "dd-MM-yyyy":
+      m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(v);
+      return !!m && dateOk(m[3], m[2], m[1]);
+    case "yyyyMMdd":
+      m = /^(\d{4})(\d{2})(\d{2})$/.exec(v);
+      return !!m && dateOk(m[1], m[2], m[3]);
+    case "HH:mm:ss":
+      m = /^(\d{2}):(\d{2}):(\d{2})$/.exec(v);
+      return !!m && inRange(Number(m[1]), Number(m[2]), Number(m[3]));
+    case "HH:mm":
+      m = /^(\d{2}):(\d{2})$/.exec(v);
+      return !!m && inRange(Number(m[1]), Number(m[2]));
+    case "HHmmss":
+      m = /^(\d{2})(\d{2})(\d{2})$/.exec(v);
+      return !!m && inRange(Number(m[1]), Number(m[2]), Number(m[3]));
+    case "Timestamp":
+      return /^\d{8,}$/.test(v);
+    default:
+      return true;
+  }
 }
 
 function validateSelectorBlock(n, opts = {}) {
@@ -558,20 +595,22 @@ function validateConditionNodeForPlay(n, graph) {
         }
       } else if (!val) {
         reasons.push(tv("cond.valueEmpty"));
+      } else if (ct === "SystemDate" || ct === "SystemTime") {
+        // The subject is the machine clock in the node's own format. A literal of another shape can
+        // never be equal, and ordering it is meaningless — say so while editing instead of failing
+        // silently on every play.
+        const fmt = n.systemClockFormat || (ct === "SystemDate" ? "yyyy-MM-dd" : "HH:mm:ss");
+        if (!clockLiteralFitsFormat(val, fmt)) {
+          reasons.push(tv("cond.clockFormatMismatch", { fmt }));
+        }
       }
-    } else if (src === "UserSystemDate") {
-      const val = String(n.constantEqualValue ?? n.userSystemDateValue ?? "").trim();
-      if (!val) {
-        reasons.push(tv("cond.userDateMissing"));
-      } else if (!isValidUserSystemDateForPlay(val)) {
-        reasons.push(tv("cond.userDateBadFormat"));
-      }
-    } else if (src === "UserSystemTime") {
-      const val = String(n.constantEqualValue ?? n.userSystemTimeValue ?? "").trim();
-      if (!val) {
-        reasons.push(tv("cond.userTimeMissing"));
-      } else if (!isValidUserSystemTimeForPlay(val)) {
-        reasons.push(tv("cond.userTimeBadFormat"));
+    } else if (src === "UserSystemDate" || src === "UserSystemTime") {
+      // Nothing to type: the compare value is the machine clock at play time. Only an explicitly
+      // chosen format could be wrong, and a graph edited by hand is the only way to get one.
+      const fmt = String(n.userSystemClockFormat || "").trim();
+      const allowed = src === "UserSystemDate" ? USER_DATE_CLOCK_FORMATS : USER_TIME_CLOCK_FORMATS;
+      if (fmt && fmt.toLowerCase() !== "auto" && !allowed.includes(fmt)) {
+        reasons.push(tv("cond.userClockFormatBad", { fmt }));
       }
     } else if (src === "Elements") {
       const v = validateSelectorBlock(n, {
@@ -828,10 +867,12 @@ const ENGINE_MSG = {
     "cond.memVarMissing": "متغیر حافظه مورد بررسی انتخاب نشده",
     "cond.numMissing": "مقدار عددی مقایسه مشخص نیست",
     "cond.valueEmpty": "مقدار مقایسه خالی است",
+    "cond.clockFormatMismatch": "مقدار مقایسه با قالب «{fmt}» هم‌شکل نیست",
     "cond.userDateMissing": "تاریخ سیستم کاربر مشخص نیست",
     "cond.userDateBadFormat": "فرمت تاریخ سیستم کاربر نامعتبر است (مجاز: YYYY-MM-DD)",
     "cond.userTimeMissing": "زمان سیستم کاربر مشخص نیست",
     "cond.userTimeBadFormat": "فرمت زمان سیستم کاربر نامعتبر است (مجاز: HH:mm یا HH:mm:ss)",
+    "cond.userClockFormatBad": "قالب «{fmt}» برای مقدار سیستم کاربر مجاز نیست",
     "cond.memCompareMissing": "متغیر حافظه مقایسه مشخص نیست",
     "cond.sysCompareMissing": "نوع مقدار پیشفرض مقایسه مشخص نیست",
     "cond.noSuccessEdge": "شاخهٔ «موفق» (success) این شرط وصل نشده",
@@ -928,10 +969,12 @@ const ENGINE_MSG = {
     "cond.memVarMissing": "No memory variable selected to check",
     "cond.numMissing": "Numeric comparison value is not set",
     "cond.valueEmpty": "Comparison value is empty",
+    "cond.clockFormatMismatch": "The comparison value does not match the «{fmt}» format",
     "cond.userDateMissing": "User system date is not set",
     "cond.userDateBadFormat": "User system date format is invalid (expected YYYY-MM-DD)",
     "cond.userTimeMissing": "User system time is not set",
     "cond.userTimeBadFormat": "User system time format is invalid (expected HH:mm or HH:mm:ss)",
+    "cond.userClockFormatBad": "The «{fmt}» format is not allowed for a user-system value",
     "cond.memCompareMissing": "Comparison memory variable is not set",
     "cond.sysCompareMissing": "Comparison system value type is not set",
     "cond.noSuccessEdge": "This condition's \"success\" branch is not wired",
@@ -3428,7 +3471,9 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
         appendPlayLog("warn", `شرط «آدرس صفحه»: ${lastConditionError} → شاخه fail`);
         return false;
       }
-      const expected = await resolveConditionCompareValue(tabId, node, graph, rowIndex, { preferUrl: true });
+      const expected = await resolveConditionCompareValue(tabId, node, graph, rowIndex, {
+        preferUrl: true, subjectValue: actual
+      });
       return compareConditionValues(actual, expected, node.equalityType || "equal");
     }
 
@@ -3496,7 +3541,7 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
       const left = ct === "SourceValue"
         ? ((await resolveStepParamAsync(node, graph, rowIndex)) || "")
         : (await readElementText(tabId, node, graph, rowIndex));
-      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
+      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex, { subjectValue: left });
       return compareConditionValues(left, right, node.equalityType || "equal");
     }
 
@@ -3546,7 +3591,7 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
       }
       const vars = await getPlayMemoryVars();
       const left = vars[name] != null ? String(vars[name]) : "";
-      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
+      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex, { subjectValue: left });
       return compareConditionValues(left, right, node.equalityType || "equal");
     }
 
@@ -3555,8 +3600,16 @@ async function evaluateCondition(tabId, node, graph, rowIndex) {
     // Formatting is explicit so a comparison is predictable regardless of the
     // UI locale (fa-IR digits would otherwise never match a stored literal).
     if (ct === "SystemDate" || ct === "SystemTime") {
-      const left = formatSystemClock(ct, node.systemClockFormat);
-      const right = await resolveConditionCompareValue(tabId, node, graph, rowIndex);
+      let left = formatSystemClock(ct, node.systemClockFormat);
+      let right = await resolveConditionCompareValue(tabId, node, graph, rowIndex, { subjectValue: left });
+      // The author may have typed the literal in another shape than the node's
+      // format (a ""14:05"" clock against a ""14:05:09"" literal). Re-formatting
+      // the clock to the operand's shape keeps an ordering comparison honest
+      // instead of silently answering false.
+      if (!compareConditionValues(left, right, "equal")) {
+        const adapted = matchFormatToSample(ct, left, right);
+        if (adapted != null) left = adapted;
+      }
       return compareConditionValues(left, right, node.equalityType || "equal");
     }
 
@@ -3583,7 +3636,12 @@ async function resolveConditionCompareValue(tabId, node, graph, rowIndex, opts =
       return resolveSystemValue(node.systemValueType || "CurrentDateTime");
     }
     if (src === "UserSystemDate" || src === "UserSystemTime") {
-      return String(node.constantEqualValue || node.constantValue || "").trim();
+      // "تاريخ/زمان سیستم کاربر" is the machine clock AT THE MOMENT of the check. It used to return
+      // a literal the author had typed in the inspector, which made the source indistinguishable
+      // from «مقدار ثابت» and meant an element showing today's date never matched unless the author
+      // retyped it every day.
+      const kind = src === "UserSystemDate" ? "SystemDate" : "SystemTime";
+      return formatUserSystemClock(kind, node.userSystemClockFormat, opts.subjectValue);
     }
     if (src === "Memory") {
       const name = String(node.memoryVariableName || node.sourceMemoryVariableName || "").trim();
@@ -3666,48 +3724,147 @@ async function resolveConditionCompareValue(tabId, node, graph, rowIndex, opts =
   }
 }
 
+/**
+ * Compare two values for a condition.
+ *
+ * Shared by every condition type — the element, source, memory, URL and system clock checks alike —
+ * because a rule that holds in one place and not another is a rule the author cannot rely on.
+ *
+ * Kept in step with ConditionCompare.cs in the local runner:
+ *   1. the operator is normalised first: the editor stores `BiggerThan`, older saves store
+ *      `greaterThan`, a hand-edited graph may store `>`, and all three must mean the same thing;
+ *   2. two clock/date values are ordered AS clock/date values: `09:10` is after `08:45`, which
+ *      never worked while ordering was numeric-only;
+ *   3. otherwise numbers compare numerically only when BOTH sides are numbers, and everything else
+ *      compares as text, so "01" is not "1" but "10" is still after "9".
+ */
+function normalizeCompareOperator(equalityType) {
+  const k = String(equalityType || "").trim().toLowerCase().replace(/[_\s-]+/g, "");
+  if (!k) return "equal";
+  switch (k) {
+    case "equal": case "equals": case "==": case "=": case "eq": return "equal";
+    case "notequal": case "not": case "!=": case "<>": case "ne": return "notequal";
+    case "biggerthan": case "greaterthan": case "gt": case ">": return "greater";
+    case "smallerthan": case "lessthan": case "lt": case "<": return "less";
+    case "biggerorequal": case "greaterthanorequal": case "greaterorequal": case "gte": case ">=":
+      return "greaterorequal";
+    case "smallerorequal": case "lessthanorequal": case "lessorequal": case "lte": case "<=":
+      return "lessorequal";
+    case "contain": case "contains": return "contains";
+    case "notcontain": case "notcontains": return "notcontains";
+    case "startwith": case "startswith": return "startswith";
+    case "endwith": case "endswith": return "endswith";
+    case "hasvalue": return "hasvalue";
+    case "hasnotvalue": case "novalue": return "hasnotvalue";
+    default: return "equal";
+  }
+}
+
+const CLOCK_TIME_HMS = /^(\d{1,2}):(\d{2}):(\d{2})$/;
+const CLOCK_TIME_HM = /^(\d{1,2}):(\d{2})$/;
+const CLOCK_TIME_COMPACT = /^(\d{2})(\d{2})(\d{2})$/;
+const CLOCK_DATE_YMD = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/;
+const CLOCK_DATE_DMY = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/;
+const CLOCK_DATE_COMPACT = /^(\d{4})(\d{2})(\d{2})$/;
+
+function parseClockTime(raw) {
+  const s = String(raw || "").trim();
+  let m = CLOCK_TIME_HMS.exec(s) || CLOCK_TIME_COMPACT.exec(s);
+  if (m) {
+    const h = Number(m[1]), mi = Number(m[2]), se = Number(m[3]);
+    if (h > 23 || mi > 59 || se > 59) return null;
+    return h * 3600 + mi * 60 + se;
+  }
+  m = CLOCK_TIME_HM.exec(s);
+  if (m) {
+    const h = Number(m[1]), mi = Number(m[2]);
+    if (h > 23 || mi > 59) return null;
+    return h * 3600 + mi * 60;
+  }
+  return null;
+}
+
+function parseClockDate(raw) {
+  const s = String(raw || "").trim();
+  let m = CLOCK_DATE_YMD.exec(s) || CLOCK_DATE_COMPACT.exec(s);
+  let y, mo, d;
+  if (m) { y = Number(m[1]); mo = Number(m[2]); d = Number(m[3]); }
+  else {
+    m = CLOCK_DATE_DMY.exec(s);
+    if (!m) return null;
+    y = Number(m[3]); mo = Number(m[2]); d = Number(m[1]);
+  }
+  if (y < 1 || y > 9999 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  return y * 10000 + mo * 100 + d;
+}
+
+function parseClockTimestamp(raw) {
+  const s = String(raw || "").trim();
+  const idx = s.search(/[T ]/);
+  if (idx <= 0) return null;
+  const d = parseClockDate(s.slice(0, idx));
+  const t = parseClockTime(s.slice(idx + 1));
+  if (d == null || t == null) return null;
+  return d * 100000 + t;
+}
+
+/**
+ * Order two values that look like a clock time, a date, or a date+time.
+ * Only orderable when BOTH sides share a shape — a time against a date has no honest ordering.
+ */
+function compareClockValues(a, b) {
+  const ta = parseClockTime(a), tb = parseClockTime(b);
+  if (ta != null && tb != null) return ta === tb ? 0 : (ta < tb ? -1 : 1);
+  const da = parseClockDate(a), db = parseClockDate(b);
+  if (da != null && db != null) return da === db ? 0 : (da < db ? -1 : 1);
+  const sa = parseClockTimestamp(a), sb = parseClockTimestamp(b);
+  if (sa != null && sb != null) return sa === sb ? 0 : (sa < sb ? -1 : 1);
+  return null;
+}
+
 function compareConditionValues(left, right, equalityType) {
   try {
     const a = left == null ? "" : String(left);
     const b = right == null ? "" : String(right);
-    const eqRaw = String(equalityType || "equal").trim();
-    const eq = eqRaw.toLowerCase().replace(/[_\s-]+/g, "");
+    const eq = normalizeCompareOperator(equalityType);
 
     if (eq === "hasvalue") return a.trim() !== "";
     if (eq === "hasnotvalue") return a.trim() === "";
-
-    if (eq === "notequal" || eq === "!=") return a !== b;
-    if (eq === "contain" || eq === "contains") return a.includes(b);
-    if (eq === "notcontain" || eq === "notcontains") return !a.includes(b);
+    if (eq === "contains") return a.includes(b);
+    if (eq === "notcontains") return !a.includes(b);
     if (eq === "startswith") return a.startsWith(b);
     if (eq === "endswith") return a.endsWith(b);
 
-    if (eq === "biggerthan" || eq === "gt" || eq === ">") {
-      const na = Number(a);
-      const nb = Number(b);
-      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
-      return na > nb;
-    }
-    if (eq === "smallerthan" || eq === "lt" || eq === "<") {
-      const na = Number(a);
-      const nb = Number(b);
-      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
-      return na < nb;
-    }
-    if (eq === "gte" || eq === ">=") {
-      const na = Number(a);
-      const nb = Number(b);
-      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
-      return na >= nb;
-    }
-    if (eq === "lte" || eq === "<=") {
-      const na = Number(a);
-      const nb = Number(b);
-      if (Number.isNaN(na) || Number.isNaN(nb)) return false;
-      return na <= nb;
-    }
+    // Number("") is 0 and Number(" ") is 0 — treating a blank as zero made "empty > -1" true.
+    const numericOf = (v) => {
+      const s = String(v).trim();
+      if (!s) return null;
+      const n = Number(s);
+      return Number.isFinite(n) ? n : null;
+    };
+    const na = numericOf(a);
+    const nb = numericOf(b);
+    const bothNumeric = na != null && nb != null;
 
-    return a === b;
+    if (eq === "equal") return (bothNumeric && na === nb) || a === b;
+    if (eq === "notequal") return !((bothNumeric && na === nb) || a === b);
+
+    let cmp;
+    if (bothNumeric) {
+      cmp = na === nb ? 0 : (na < nb ? -1 : 1);
+    } else {
+      const clockCmp = compareClockValues(a, b);
+      // Text ordering is the last resort: answering false for every non-numeric pair made a
+      // mis-set-up condition indistinguishable from a genuine "no".
+      cmp = clockCmp != null ? clockCmp : (a === b ? 0 : (a < b ? -1 : 1));
+    }
+    if (eq === "greater") return cmp > 0;
+    if (eq === "less") return cmp < 0;
+    if (eq === "greaterorequal") return cmp >= 0;
+    if (eq === "lessorequal") return cmp <= 0;
+    return false;
   } catch {
     return false;
   }
@@ -4908,9 +5065,13 @@ function formatSystemClock(kind, format) {
   const fmt = String(format || "").trim();
 
   if (kind === "SystemDate") {
+    // Any of "-", "/" and "." between year, month and day: a literal typed as "1405/08/19" must
+    // be comparable with the clock, whatever separator the author used.
+    const ymd = /^yyyy([-/.])MM\1dd$/.exec(fmt);
+    if (ymd) return `${yyyy}${ymd[1]}${MM}${ymd[1]}${dd}`;
+    const dmy = /^dd([-/.])MM\1yyyy$/.exec(fmt);
+    if (dmy) return `${dd}${dmy[1]}${MM}${dmy[1]}${yyyy}`;
     switch (fmt) {
-      case "yyyy/MM/dd": return `${yyyy}/${MM}/${dd}`;
-      case "dd-MM-yyyy": return `${dd}-${MM}-${yyyy}`;
       case "yyyyMMdd": return `${yyyy}${MM}${dd}`;
       case "Timestamp": return String(d.getTime());
       case "yyyy-MM-dd":
@@ -4924,6 +5085,58 @@ function formatSystemClock(kind, format) {
     case "HH:mm:ss":
     default: return `${HH}:${mm}:${ss}`;
   }
+}
+
+/**
+ * Re-format the machine clock to the shape of the compare literal.
+ *
+ * Only used as a fallback when the node's own format does not match the literal at all — the
+ * literal is what the author actually typed, so it wins. Returns `null` when no safe guess exists
+ * (an empty operand, or a shape neither side recognises), leaving the caller's own format alone.
+ */
+function matchFormatToSample(kind, currentValue, sample) {
+  const s = String(sample || "").trim();
+  if (!s) return null;
+  // A subject that shows the whole moment ("2026-11-10 08:45:00") needs a date AND a time: a
+  // date-only clock could never equal it, no matter which side is right.
+  const stamp = /^(\d{4})([-/.])(\d{1,2})\2(\d{1,2})[ T](\d{1,2}):(\d{2})(:(\d{2}))?$/.exec(s);
+  if (stamp) {
+    const sep = stamp[2];
+    const datePart = formatSystemClock("SystemDate", `yyyy${sep}MM${sep}dd`);
+    const timePart = formatSystemClock("SystemTime", stamp[8] ? "HH:mm:ss" : "HH:mm");
+    return `${datePart}${s.includes("T") ? "T" : " "}${timePart}`;
+  }
+  const isDate = kind === "SystemDate";
+  if (isDate) {
+    if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(s)) {
+      const sep = s.match(/[-/.]/)?.[0] || "-";
+      return formatSystemClock(kind, `yyyy${sep}MM${sep}dd`);
+    }
+    if (/^\d{1,2}[-/.]\d{1,2}[-/.]\d{4}$/.test(s)) {
+      const sep = s.match(/[-/.]/)?.[0] || "-";
+      return formatSystemClock(kind, `dd${sep}MM${sep}yyyy`);
+    }
+    if (/^\d{8}$/.test(s)) return formatSystemClock(kind, "yyyyMMdd");
+    return null;
+  }
+  if (/^\d{8,}$/.test(s)) return formatSystemClock(kind, "Timestamp");
+  if (/^\d{2}:\d{2}:\d{2}$/.test(s)) return formatSystemClock(kind, "HH:mm:ss");
+  if (/^\d{2}:\d{2}$/.test(s)) return formatSystemClock(kind, "HH:mm");
+  if (/^\d{6}$/.test(s)) return formatSystemClock(kind, "HHmmss");
+  return null;
+}
+
+/**
+ * The user's own clock as a compare operand ("تاریخ/زمان سیستم کاربر").
+ *
+ * The node's optional format wins; on "Auto" (or no format) the shape is taken from the value being
+ * checked, so an element showing "14:05" is compared against a "HH:mm" clock instead of "14:05:09"
+ * that could never match. Mirrors `UserSystemClock` in ConditionEvaluator.cs.
+ */
+function formatUserSystemClock(kind, format, sample) {
+  const fmt = String(format || "").trim();
+  if (fmt && fmt.toLowerCase() !== "auto") return formatSystemClock(kind, fmt);
+  return matchFormatToSample(kind, "", sample) ?? formatSystemClock(kind, "");
 }
 
 function resolveStepParam(step, graph, rowIndex, opts = {}) {

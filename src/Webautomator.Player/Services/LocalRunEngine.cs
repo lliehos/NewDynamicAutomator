@@ -486,9 +486,25 @@ public sealed class LocalRunEngine
             return _memory.TryGetValue(memName, out var v) ? v : "";
         }
         if (string.Equals(srcType, "SystemDate", StringComparison.OrdinalIgnoreCase))
-            return DateTime.Now.ToString("yyyy/MM/dd");
+            return ConditionEvaluator.SystemClock("SystemDate", node.ReadExtraString("systemClockFormat"));
         if (string.Equals(srcType, "SystemTime", StringComparison.OrdinalIgnoreCase))
-            return DateTime.Now.ToString("HH:mm:ss");
+            return ConditionEvaluator.SystemClock("SystemTime", node.ReadExtraString("systemClockFormat"));
+        // A step's "system value" picker: the node may say System + a named value instead of
+        // SystemDate/SystemTime. Both spellings exist in saved graphs; honouring only one made the
+        // action capture a literal empty string.
+        if (string.Equals(srcType, "System", StringComparison.OrdinalIgnoreCase))
+        {
+            var which = node.ReadExtraString("systemValueType");
+            return which switch
+            {
+                "CurrentDate" => ConditionEvaluator.SystemClock("SystemDate", node.ReadExtraString("systemClockFormat")),
+                "CurrentTime" => ConditionEvaluator.SystemClock("SystemTime", node.ReadExtraString("systemClockFormat")),
+                "CurrentDateTime" => $"{ConditionEvaluator.SystemClock("SystemDate", node.ReadExtraString("systemClockFormat"))} " +
+                                     $"{ConditionEvaluator.SystemClock("SystemTime", node.ReadExtraString("systemClockFormat"))}",
+                "Guid" => Guid.NewGuid().ToString(),
+                _ => node.ConstantValue ?? ""
+            };
+        }
 
         return node.ConstantValue ?? node.NavigateUrl ?? "";
     }

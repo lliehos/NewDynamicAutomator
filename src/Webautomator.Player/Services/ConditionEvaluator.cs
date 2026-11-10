@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using Webautomator.Player.Models;
 using OpenQA.Selenium;
 
@@ -15,8 +17,11 @@ namespace Webautomator.Player.Services;
 /// branch:
 ///   * "could not check" is NOT "the condition is false" for a page that failed to answer — but a
 ///     condition that genuinely cannot be evaluated still reports fail, with the reason logged;
-///   * comparison is string-based, matching the extension, so a source cell holding "01" and a
-///     constant "1" are not silently treated as equal.
+///   * equality also accepts a numeric match ("1" equals "01"), while ordering needs BOTH sides to
+///     be numbers or both to be clock/date values — see <see cref="ConditionCompare"/>.
+///
+/// The comparison itself lives in <see cref="ConditionCompare"/> so the browser engine and this
+/// runner share one rule set (operator spelling, clock ordering, numeric-vs-text ordering).
 /// </remarks>
 public sealed class ConditionEvaluator
 {
@@ -44,7 +49,7 @@ public sealed class ConditionEvaluator
                 case "Url":
                 {
                     var actual = driver.Url ?? "";
-                    var expected = ResolveOperand(node, memory, readCell, rowIndex, graph);
+                    var expected = ResolveOperand(node, memory, readCell, rowIndex, graph, actual);
                     return ConditionResult.Of(Compare(actual, expected, node.ReadExtraString("equalityType")));
                 }
 
@@ -67,15 +72,19 @@ public sealed class ConditionEvaluator
                     var selector = node.Selector ?? "";
                     var count = string.IsNullOrWhiteSpace(selector)
                         ? 0
-                        : driver.FindElements(By.CssSelector(selector)).Count;
-                    var expected = NodeNumber(node);
-                    return ConditionResult.Of(Compare(count.ToString(), expected.ToString(), node.ReadExtraString("equalityType")));
+                        : CountElements(driver, selector);
+                    // The operand is compared as TEXT, not re-parsed into a number: the author may
+                    // have chosen a memory or a source cell, and NodeNumber only ever saw the
+                    // constant. Parsing it here made "count > {memory}" compare against 0 always.
+                    var countText = count.ToString(CultureInfo.InvariantCulture);
+                    var expected = ResolveOperand(node, memory, readCell, rowIndex, graph, countText);
+                    return ConditionResult.Of(Compare(countText, expected, node.ReadExtraString("equalityType")));
                 }
 
                 case "ElementValue":
                 {
                     var left = ReadElementText(driver, node);
-                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph);
+                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph, left);
                     return ConditionResult.Of(Compare(left, right, node.ReadExtraString("equalityType")));
                 }
 
@@ -86,7 +95,7 @@ public sealed class ConditionEvaluator
                     var dsId = node.DataSourceId;
                     var col = node.DynamicSourceColumnName ?? "";
                     var left = readCell(dsId, rowIndex, col);
-                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph);
+                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph, left);
                     return ConditionResult.Of(Compare(left, right, node.ReadExtraString("equalityType")));
                 }
 
@@ -94,7 +103,7 @@ public sealed class ConditionEvaluator
                 {
                     var name = node.MemoryVariableName ?? "";
                     var left = memory.TryGetValue(name, out var v) ? v : "";
-                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph);
+                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph, left);
                     return ConditionResult.Of(Compare(left, right, node.ReadExtraString("equalityType")));
                 }
 
@@ -102,19 +111,30 @@ public sealed class ConditionEvaluator
                 {
                     // This runner is one browser per run, so the meaningful count is its windows.
                     var count = driver.WindowHandles.Count;
-                    return ConditionResult.Of(Compare(count.ToString(), NodeNumber(node).ToString(), node.ReadExtraString("equalityType")));
+                    var countText = count.ToString(CultureInfo.InvariantCulture);
+                    return ConditionResult.Of(Compare(
+                        countText,
+                        ResolveOperand(node, memory, readCell, rowIndex, graph, countText),
+                        node.ReadExtraString("equalityType")));
                 }
 
                 case "SystemDate":
-                {
-                    var today = DateTime.Now.ToString("yyyy-MM-dd");
-                    return ConditionResult.Of(Compare(today, ResolveOperand(node, memory, readCell, rowIndex, graph), node.ReadExtraString("equalityType")));
-                }
-
                 case "SystemTime":
                 {
-                    var now = DateTime.Now.ToString("HH:mm:ss");
-                    return ConditionResult.Of(Compare(now, ResolveOperand(node, memory, readCell, rowIndex, graph), node.ReadExtraString("equalityType")));
+                    // The subject clock is formatted with the node's OWN format: comparing a
+                    // "yyyy/MM/dd" clock against a "yyyy-MM-dd" literal can never be equal, and
+                    // ordering a "HH:mm" clock against "14:05:09" was a silent mismatch too.
+                    var clock = SystemClock(ct, node.ReadExtraString("systemClockFormat"));
+                    var operand = ResolveOperand(node, memory, readCell, rowIndex, graph, clock);
+                    // The author may have typed the literal in a different shape than the node's
+                    // format. Re-formatting the clock to the operand's shape keeps an ordering
+                    // comparison honest instead of silently answering false.
+                    if (!ConditionCompare.Compare(clock, operand, ConditionCompare.Equal))
+                    {
+                        var adapted = AdaptClockToSample(ct, operand);
+                        if (adapted is not null) clock = adapted;
+                    }
+                    return ConditionResult.Of(Compare(clock, operand, node.ReadExtraString("equalityType")));
                 }
 
                 default:
@@ -162,11 +182,32 @@ public sealed class ConditionEvaluator
                 ? By.XPath(node.Selector ?? "")
                 : By.CssSelector(node.Selector ?? "");
             var el = driver.FindElement(by);
+            // WHICH part of the element is the subject. `equalElementValueMode` is what the
+            // condition inspector writes (the same vocabulary the capture actions use); reading
+            // only the text made "value of a link" silently compare an empty string. `Auto` keeps
+            // the historic behaviour for every node that never carried the field.
+            var mode = (node.ReadExtraString("equalElementValueMode") ?? "").Trim();
+            if (string.IsNullOrEmpty(mode)) mode = (node.ReadExtraString("elementValueMode") ?? "").Trim();
+            if (string.IsNullOrEmpty(mode)) mode = "Auto";
+            var attr = (node.ReadExtraString("equalElementValueAttribute") ?? "").Trim();
+            if (string.IsNullOrEmpty(attr)) attr = (node.ReadExtraString("elementValueAttribute") ?? "").Trim();
+
             return ((IJavaScriptExecutor)driver).ExecuteScript(
-                "const el=arguments[0];" +
-                "if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT')return el.value||'';" +
-                "return (el.innerText||el.textContent||'').trim();",
-                el) as string ?? "";
+                "const el=arguments[0], m=String(arguments[1]||'auto').toLowerCase(), a=arguments[2];" +
+                "if(m==='value')return el.value!=null?String(el.value):'';" +
+                "if(m==='attribute'){if(!a)return '';const v=el.getAttribute(a);return v==null?'':String(v);}" +
+                "if(m==='innerhtml')return el.innerHTML||'';" +
+                "if(m==='outerhtml')return el.outerHTML||'';" +
+                "if(m==='innertext')return (el.innerText||'').trim();" +
+                "if(m==='text')return (el.textContent||'').trim();" +
+                "if(m==='href'){const v=el.getAttribute('href')||el.href;return v==null?'':String(v);}" +
+                "if(m==='src'){const v=el.getAttribute('src')||el.src;return v==null?'':String(v);}" +
+                "if(m==='title'){const v=el.getAttribute('title');return v==null?'':String(v);}" +
+                "if(m==='auto'){const t=(el.tagName||'').toUpperCase();" +
+                "if(t==='INPUT'||t==='TEXTAREA'||t==='SELECT')return el.value||'';" +
+                "return (el.innerText||el.textContent||'').trim();}" +
+                "const v=el.getAttribute(m);return v==null?'':String(v);",
+                el, mode, attr) as string ?? "";
         }
         catch
         {
@@ -174,72 +215,193 @@ public sealed class ConditionEvaluator
         }
     }
 
-    /// <summary>The right-hand side of the comparison, from a constant, memory or source cell.</summary>
+    /// <summary>
+    /// The right-hand side of the comparison, from a constant, memory, source cell or the clock.
+    /// </summary>
+    /// <param name="subjectValue">
+    /// The value being checked. Only the user-system clock sources read it: their shape is taken
+    /// from it when the node names no format, so an element showing "14:05" is compared against a
+    /// "HH:mm" clock instead of a "HH:mm:ss" one that could never match.
+    /// </param>
     private static string ResolveOperand(
         GraphNode node, IReadOnlyDictionary<string, string> memory,
-        Func<int?, int, string, string> readCell, int rowIndex, ProcessGraph graph)
+        Func<int?, int, string, string> readCell, int rowIndex, ProcessGraph graph,
+        string? subjectValue = null)
     {
-        var src = node.ReadExtraString("compareValueSourceType");
+        // The editor stores the operand's source in `contentSourceType` (the same field a step uses
+        // for its value) and the operand's own fields in `memoryVariableName` / `dataSourceId` +
+        // `dynamicSourceColumnName`. This used to read a `compare*` set that nothing ever wrote, so
+        // every operand source but «ثابت» silently compared against the constant instead.
+        var src = node.ContentSourceType ?? "";
+        if (src.Length == 0) src = node.ReadExtraString("compareValueSourceType");
+        if (string.Equals(src, "UserSystemDate", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(src, "UserSystemTime", StringComparison.OrdinalIgnoreCase))
+        {
+            var kind = string.Equals(src, "UserSystemDate", StringComparison.OrdinalIgnoreCase)
+                ? "SystemDate"
+                : "SystemTime";
+            return UserSystemClock(kind, node.ReadExtraString("userSystemClockFormat"), subjectValue);
+        }
         if (string.Equals(src, "Memory", StringComparison.OrdinalIgnoreCase))
         {
-            var name = node.ReadExtraString("compareMemoryVariableName");
+            var name = node.MemoryVariableName ?? "";
+            if (name.Length == 0) name = node.ReadExtraString("sourceMemoryVariableName");
             return memory.TryGetValue(name, out var v) ? v : "";
         }
-        if (string.Equals(src, "DataSource", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(src, "DataSource", StringComparison.OrdinalIgnoreCase)
+            && !SubjectIsSource(node.ReadExtraString("conditionType")))
         {
-            var dsId = node.ReadExtraString("compareDataSourceId");
-            var col = node.ReadExtraString("compareDynamicColumn");
-            return readCell(int.TryParse(dsId, out var id) ? id : null, rowIndex, col);
+            // A source-subject condition cannot take a data-source operand: the cell would be
+            // compared with itself, which is always true. Mirrors the engine's guard.
+            return readCell(node.DataSourceId, rowIndex, node.DynamicSourceColumnName ?? "");
         }
         return node.ReadExtraString("constantEqualValue").Length > 0
             ? node.ReadExtraString("constantEqualValue")
             : node.ConstantValue ?? "";
     }
 
-    private static decimal NodeNumber(GraphNode node)
+    /// <summary>
+    /// Compare two values, using the shared rule set in <see cref="ConditionCompare"/>.
+    /// </summary>
+    /// <remarks>
+    /// Kept as a thin delegate so every call site reads the same way it used to; the rules — and the
+    /// reasons behind them — live in one place, matched against <c>compareConditionValues</c> in
+    /// engine.js.
+    /// </remarks>
+    public static bool Compare(string left, string right, string equality)
+        => ConditionCompare.Compare(left, right, equality);
+
+    /// <summary>Whether the condition's own subject is a data-source cell, column or row.</summary>
+    private static bool SubjectIsSource(string conditionType)
+        => conditionType is "SourceValue" or "SourceColumnValue" or "SourceRowValue";
+
+    /// <summary>Count the elements a selector matches, tolerating XPath and a malformed selector.</summary>
+    private static int CountElements(IWebDriver driver, string selector)
     {
-        var raw = node.ReadExtraString("constantEqualValue");
-        if (string.IsNullOrWhiteSpace(raw)) raw = node.ConstantValue ?? "";
-        return decimal.TryParse(raw, out var d) ? d : 0;
+        try
+        {
+            var by = selector.TrimStart().StartsWith("//") ? By.XPath(selector) : By.CssSelector(selector);
+            return driver.FindElements(by).Count;
+        }
+        catch (WebDriverException)
+        {
+            return 0;
+        }
+        catch (InvalidOperationException)
+        {
+            return 0;
+        }
     }
 
     /// <summary>
-    /// Compare two values the way the extension does.
+    /// The machine clock formatted the way the condition node asked for.
     /// </summary>
     /// <remarks>
-    /// String comparison by default, and numeric only when BOTH sides parse as numbers. Comparing
-    /// everything numerically would make "01" equal "1", which is wrong for a source cell holding a
-    /// code; comparing everything as strings would make "10" less than "9", which is wrong for a
-    /// count. Requiring both to be numeric is the only rule that gets both right.
+    /// Mirrors <c>formatSystemClock</c> in engine.js, including its ASCII-only digits: compared
+    /// against a constant typed in the editor, a localised numeral would never match. The date
+    /// separators follow the chosen format so a "yyyy/MM/dd" node and its literal agree.
     /// </remarks>
-    public static bool Compare(string left, string right, string equality)
+    /// <summary>
+    /// The user's own clock as a compare operand (<c>UserSystemDate</c>/<c>UserSystemTime</c>).
+    /// </summary>
+    /// <remarks>
+    /// The node's optional format wins; on "Auto" (or no format) the shape follows the value being
+    /// checked. Mirrors <c>formatUserSystemClock</c> in engine.js — the source used to hand back a
+    /// literal the author had typed, which made it behave exactly like a constant.
+    /// </remarks>
+    internal static string UserSystemClock(string kind, string? format, string? sample)
     {
-        left ??= "";
-        right ??= "";
-        var leftNumeric = decimal.TryParse(left, out var ln);
-        var rightNumeric = decimal.TryParse(right, out var rn);
-        var bothNumeric = leftNumeric && rightNumeric;
-        // Guarded so the compiler can see rn is definitely assigned when it is used.
-        var cmp = bothNumeric ? ln.CompareTo(rn) : string.Compare(left, right, StringComparison.Ordinal);
-        var numericEqual = bothNumeric && cmp == 0;
-        var textEq = string.Equals(left, right, StringComparison.Ordinal);
+        var fmt = (format ?? "").Trim();
+        if (fmt.Length > 0 && !string.Equals(fmt, "Auto", StringComparison.OrdinalIgnoreCase))
+            return SystemClock(kind, fmt);
+        return AdaptClockToSample(kind, sample) ?? SystemClock(kind, "");
+    }
 
-        return equality switch
+    internal static string SystemClock(string kind, string format)
+    {
+        var now = DateTime.Now;
+        var fmt = (format ?? "").Trim();
+        if (string.Equals(kind, "SystemDate", StringComparison.OrdinalIgnoreCase))
         {
-            "equal" or "" => textEq || numericEqual,
-            "notEqual" => !(textEq || numericEqual),
-            "contains" => left.Contains(right, StringComparison.Ordinal),
-            "notContains" => !left.Contains(right, StringComparison.Ordinal),
-            "startsWith" => left.StartsWith(right, StringComparison.Ordinal),
-            "endsWith" => left.EndsWith(right, StringComparison.Ordinal),
-            "greaterThan" => bothNumeric && cmp > 0,
-            "lessThan" => bothNumeric && cmp < 0,
-            "greaterOrEqual" => bothNumeric && cmp >= 0,
-            "lessOrEqual" => bothNumeric && cmp <= 0,
-            "hasValue" => !string.IsNullOrWhiteSpace(left),
-            "hasNotValue" => string.IsNullOrWhiteSpace(left),
-            _ => textEq
+            // Any of "-", "/" and "." between the parts, so a literal typed with another separator
+            // (or produced by AdaptClockToSample) still has a matching clock format.
+            var ymd = Regex.Match(fmt, @"^yyyy([-/\.])MM\1dd$");
+            if (ymd.Success)
+            {
+                var sep = ymd.Groups[1].Value;
+                return now.ToString($"yyyy'{sep}'MM'{sep}'dd", CultureInfo.InvariantCulture);
+            }
+            var dmy = Regex.Match(fmt, @"^dd([-/\.])MM\1yyyy$");
+            if (dmy.Success)
+            {
+                var sep = dmy.Groups[1].Value;
+                return now.ToString($"dd'{sep}'MM'{sep}'yyyy", CultureInfo.InvariantCulture);
+            }
+            return fmt switch
+            {
+                "yyyyMMdd" => now.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+                "Timestamp" => new DateTimeOffset(now).ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
+                _ => now.ToString("yyyy'-'MM'-'dd", CultureInfo.InvariantCulture)
+            };
+        }
+        return fmt switch
+        {
+            "HH:mm" => now.ToString("HH':'mm", CultureInfo.InvariantCulture),
+            "HHmmss" => now.ToString("HHmmss", CultureInfo.InvariantCulture),
+            "Timestamp" => new DateTimeOffset(now).ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
+            _ => now.ToString("HH':'mm':'ss", CultureInfo.InvariantCulture)
         };
+    }
+
+    /// <summary>
+    /// Re-format the machine clock to the shape of the compare literal.
+    /// </summary>
+    /// <remarks>
+    /// Only a fallback for when the node's own format does not match the literal at all — the
+    /// literal is what the author actually typed, so it wins. Returns <c>null</c> when no safe guess
+    /// exists, leaving the caller's format alone. Mirrors <c>matchFormatToSample</c> in engine.js.
+    /// </remarks>
+    internal static string? AdaptClockToSample(string kind, string? sample)
+    {
+        var s = (sample ?? "").Trim();
+        if (s.Length == 0) return null;
+
+        // A subject that shows the whole moment ("2026-11-10 08:45:00") needs a date AND a time: a
+        // date-only clock could never equal it, no matter which side is right.
+        var stamp = Regex.Match(s, @"^(\d{4})([-/\.])(\d{1,2})\2(\d{1,2})[ T](\d{1,2}):(\d{2})(:(\d{2}))?$");
+        if (stamp.Success)
+        {
+            var sep = stamp.Groups[2].Value;
+            var datePart = SystemClock("SystemDate", $"yyyy{sep}MM{sep}dd");
+            var timePart = SystemClock("SystemTime", stamp.Groups[8].Success ? "HH:mm:ss" : "HH:mm");
+            return datePart + (s.Contains('T') ? "T" : " ") + timePart;
+        }
+
+        var isDate = string.Equals(kind, "SystemDate", StringComparison.OrdinalIgnoreCase);
+
+        if (isDate)
+        {
+            var ymd = Regex.Match(s, @"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$");
+            if (ymd.Success)
+            {
+                var sep = s.FirstOrDefault(c => c is '-' or '/' or '.');
+                return SystemClock(kind, $"yyyy{sep}MM{sep}dd");
+            }
+            var dmy = Regex.Match(s, @"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$");
+            if (dmy.Success)
+            {
+                var sep = s.FirstOrDefault(c => c is '-' or '/' or '.');
+                return SystemClock(kind, $"dd{sep}MM{sep}yyyy");
+            }
+            if (Regex.IsMatch(s, @"^\d{8}$")) return SystemClock(kind, "yyyyMMdd");
+            return null;
+        }
+
+        if (Regex.IsMatch(s, @"^\d{8,}$")) return SystemClock(kind, "Timestamp");
+        if (Regex.IsMatch(s, @"^\d{2}:\d{2}:\d{2}$")) return SystemClock(kind, "HH:mm:ss");
+        if (Regex.IsMatch(s, @"^\d{2}:\d{2}$")) return SystemClock(kind, "HH:mm");
+        if (Regex.IsMatch(s, @"^\d{6}$")) return SystemClock(kind, "HHmmss");
+        return null;
     }
 }
 

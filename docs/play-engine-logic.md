@@ -369,11 +369,27 @@ effectiveRow = moveLoop ? gRow : parentRow
 | وابسته به المان | `FindElement`، `NotFindElement`، `ElementVisible`، `ElementHidden`، `FindElements`، `ElementValue` |
 | وابسته به تب | موارد المان + `Url` + `DriverTabs` |
 
-- عملگرها (`compareConditionValues`): `equal`، `Contain`، `HasValue`، `HasNotValue`،
-  `BiggerThan`، `SmallerThan`.
+- عملگرها (`compareConditionValues` در `engine.js` و `ConditionCompare.cs` در اجراکنندهٔ محلی، با
+  قواعد یکسان): `equal`، `notEqual`، `contains`، `notContains`، `startsWith`، `endsWith`،
+  `HasValue`، `HasNotValue`، `BiggerThan`، `SmallerThan`، `BiggerOrEqual`، `SmallerOrEqual`.
+  املاهای مختلف یک عملگر (`BiggerThan`، `greaterThan`، `gt`، `>`) **اول نرمال می‌شوند**؛ پیش‌تر
+  فقط املاهای خاصی شناخته می‌شد و بقیه بی‌صدا به «مساوی» می‌افتاد.
+- ترتیب (`BiggerThan`/`SmallerThan` و معادل‌های ≥/≤): اگر هر دو طرف عدد باشند مقایسهٔ عددی، اگر هر دو
+  ساعت/تاریخ هم‌شکل باشند مقایسهٔ ترتیبی زمانی (`09:10` > `08:45`)، وگرنه مقایسهٔ متنی. مقدار خالی
+  دیگر صفر حساب نمی‌شود.
 - `resolveConditionCompareValue` در صورت خطا **`""`** برمی‌گرداند و هرگز اجرا را نمی‌شکند.
 - تاریخ/زمان سیستم با `formatSystemClock` و قالب `systemClockFormat` تولید می‌شود؛ مقدار مقایسه
-  باید **دقیقاً** هم‌شکل باشد (ارقام ASCII).
+  باید **دقیقاً** هم‌شکل باشد (ارقام ASCII). اگر قالب نود با شکل مقداری که نویسنده تایپ کرده یکی نباشد،
+  ساعت به شکل همان مقدار بازقالب‌بندی می‌شود (`matchFormatToSample` / `AdaptClockToSample`) و
+  اعتبارسنجی قبل از اجرا (`cond.clockFormatMismatch`) ناسازگاری را گزارش می‌کند.
+- «تاریخ/زمان سیستم کاربر» در سمت **مقدار مقایسه**، کلاک واقعی سیستم در لحظهٔ اجراست، نه یک مقدار
+  تایپی؛ ورودی دستی لازم نیست و مقدار قدیمیِ ذخیره‌شده نادیده گرفته می‌شود. قالبش اختیاری است
+  (`userSystemClockFormat`): خالی/`Auto` یعنی شکل از مقدار مورد بررسی گرفته شود
+  (`formatUserSystemClock` در موتور، `UserSystemClock` در اجراکنندهٔ محلی). شکلی مثل
+  `2026-11-10 08:45:09` هم پشتیبانی می‌شود و تاریخ+زمان ساخته می‌شود.
+- منبع مقدار مقایسه (`contentSourceType`) در اجراکنندهٔ محلی: ثابت، حافظه (`memoryVariableName`)،
+  سلول منبع (`dataSourceId` + `dynamicSourceColumnName`) و کلاک کاربر. پیش‌تر کلیدهای `compare*`
+  خوانده می‌شد که هیچ‌جا نوشته نمی‌شوند و همهٔ منابع بی‌صدا به «ثابت» می‌افتادند.
 - `ElementVisible`/`ElementHidden` علاوه بر وجود، **مرئی‌بودن** را هم می‌خواهند
   (`requireVisible`: نه `display:none`، نه `visibility:hidden`، نه `opacity:0`، و دارای ابعاد).
 

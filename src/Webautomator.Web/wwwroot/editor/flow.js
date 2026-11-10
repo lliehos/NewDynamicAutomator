@@ -8546,20 +8546,12 @@
         } else if (k === "contentSourceType") {
           n[k] = inp.value;
           n.valueFromSource = inp.value === "DataSource";
-          if (inp.value === "UserSystemDate") {
-            n.constantEqualValue = normalizeUserSystemDateInput(n.constantEqualValue || "");
-          } else if (inp.value === "UserSystemTime") {
-            n.constantEqualValue = normalizeUserSystemTimeInput(n.constantEqualValue || "");
+          if (inp.value === "UserSystemDate" || inp.value === "UserSystemTime") {
+            // The compare value is the machine clock at play time; a leftover literal would be
+            // ignored at run time, so it must not linger in the saved graph.
+            delete n.constantEqualValue;
           }
         } else n[k] = inp.value;
-
-        if (k === "constantEqualValue" && n.kind === "condition") {
-          if (n.contentSourceType === "UserSystemDate") {
-            n.constantEqualValue = normalizeUserSystemDateInput(inp.value) || String(inp.value || "").trim();
-          } else if (n.contentSourceType === "UserSystemTime") {
-            n.constantEqualValue = normalizeUserSystemTimeInput(inp.value) || String(inp.value || "").trim();
-          }
-        }
 
         if (k === "navigation" && n.kind === "condition") {
           n.constantEqualValue = n.navigation;
@@ -8930,51 +8922,6 @@
     ["Uuid", "شناسه یکتا (UUID)"],
     ["RandomInt", "عدد تصادفی"]
   ];
-
-  /** Allowed: YYYY-MM-DD */
-  const USER_SYSTEM_DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-  /** Allowed: HH:mm or HH:mm:ss */
-  const USER_SYSTEM_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
-
-  function isValidUserSystemDate(v) {
-    const s = String(v || "").trim();
-    if (!USER_SYSTEM_DATE_RE.test(s)) return false;
-    const [y, m, d] = s.split("-").map(Number);
-    const dt = new Date(y, m - 1, d);
-    return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
-  }
-
-  function isValidUserSystemTime(v) {
-    return USER_SYSTEM_TIME_RE.test(String(v || "").trim());
-  }
-
-  function normalizeUserSystemDateInput(raw) {
-    const s = String(raw || "").trim();
-    if (isValidUserSystemDate(s)) return s;
-    const m = s.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})$/);
-    if (m) {
-      const y = m[1];
-      const mo = String(m[2]).padStart(2, "0");
-      const d = String(m[3]).padStart(2, "0");
-      const norm = `${y}-${mo}-${d}`;
-      return isValidUserSystemDate(norm) ? norm : "";
-    }
-    return "";
-  }
-
-  function normalizeUserSystemTimeInput(raw) {
-    const s = String(raw || "").trim();
-    if (isValidUserSystemTime(s)) return s;
-    const m = s.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
-    if (m) {
-      const hh = String(m[1]).padStart(2, "0");
-      const mm = String(m[2]).padStart(2, "0");
-      const ss = m[3] != null ? String(m[3]).padStart(2, "0") : null;
-      const norm = ss != null ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`;
-      return isValidUserSystemTime(norm) ? norm : "";
-    }
-    return "";
-  }
 
   function systemValueOptionsHtml(cur) {
     const c = cur || "CurrentDateTime";
@@ -9609,19 +9556,15 @@
             reasons.push(`مقدار مقایسه با قالب «${fmt}» هم‌شکل نیست`);
           }
         }
-      } else if (src === "UserSystemDate") {
-        const val = String(n.constantEqualValue ?? n.userSystemDateValue ?? "").trim();
-        if (!val) {
-          reasons.push("تاریخ سیستم کاربر مشخص نیست");
-        } else if (!isValidUserSystemDate(val)) {
-          reasons.push("فرمت تاریخ سیستم کاربر نامعتبر است (مجاز: YYYY-MM-DD)");
-        }
-      } else if (src === "UserSystemTime") {
-        const val = String(n.constantEqualValue ?? n.userSystemTimeValue ?? "").trim();
-        if (!val) {
-          reasons.push("زمان سیستم کاربر مشخص نیست");
-        } else if (!isValidUserSystemTime(val)) {
-          reasons.push("فرمت زمان سیستم کاربر نامعتبر است (مجاز: HH:mm یا HH:mm:ss)");
+      } else if (src === "UserSystemDate" || src === "UserSystemTime") {
+        // Nothing to type: the compare value is the machine clock at play time, so only a
+        // hand-edited format can be wrong.
+        const userFormats = src === "UserSystemDate"
+          ? ["Auto", "yyyy-MM-dd", "yyyy/MM/dd", "dd-MM-yyyy", "yyyyMMdd", "Timestamp"]
+          : ["Auto", "HH:mm:ss", "HH:mm", "HHmmss", "Timestamp"];
+        const fmt = String(n.userSystemClockFormat || "Auto").trim();
+        if (!userFormats.some((f) => f.toLowerCase() === fmt.toLowerCase())) {
+          reasons.push(`قالب «${fmt}» برای مقدار سیستم کاربر مجاز نیست`);
         }
       } else if (src === "Elements") {
         const v = validateSelectorBlock(n, {
@@ -11168,11 +11111,34 @@
     return ["Url", "ElementValue", "SourceValue", "SourceColumnValue", "SourceRowValue", "MemoryValue", "FindElements", "DriverTabs", "SystemDate", "SystemTime"].includes(ct);
   }
 
+  /** Canonical operator name — mirrors normalizeCompareOperator in the player engine. */
+  function normalizeCompareOperator(raw) {
+    const k = String(raw || "").trim().toLowerCase().replace(/[_\s-]+/g, "");
+    if (!k) return "equal";
+    switch (k) {
+      case "equal": case "equals": case "==": case "=": case "eq": return "equal";
+      case "notequal": case "not": case "!=": case "<>": case "ne": return "notequal";
+      case "biggerthan": case "greaterthan": case "gt": case ">": return "greater";
+      case "smallerthan": case "lessthan": case "lt": case "<": return "less";
+      case "biggerorequal": case "greaterthanorequal": case "greaterorequal": case "gte": case ">=":
+        return "greaterorequal";
+      case "smallerorequal": case "lessthanorequal": case "lessorequal": case "lte": case "<=":
+        return "lessorequal";
+      case "contain": case "contains": return "contains";
+      case "notcontain": case "notcontains": return "notcontains";
+      case "startwith": case "startswith": return "startswith";
+      case "endwith": case "endswith": return "endswith";
+      case "hasvalue": return "hasvalue";
+      case "hasnotvalue": case "novalue": return "hasnotvalue";
+      default: return "equal";
+    }
+  }
+
   /** Whether a compare operand (constant / element / DS) is needed. */
   function conditionNeedsCompareOperand(ct, eq) {
     if (!conditionNeedsCompare(ct)) return false;
-    if (eq === "HasValue" || eq === "HasNotValue") return false;
-    return true;
+    const op = normalizeCompareOperator(eq);
+    return op !== "hasvalue" && op !== "hasnotvalue";
   }
 
   function conditionInspectorHtml(n) {
@@ -11371,19 +11337,20 @@
             placeholder="${esc(placeholder)}" />
           ${isClock ? `<p class="palette-hint" style="margin:4px 0 0;line-height:1.55">${esc(t("editor.cond.clockCompareHint", { fmt: clockFmt }))}</p>` : ""}
         </div>`;
-      } else if (src === "UserSystemDate") {
-        const dateVal = normalizeUserSystemDateInput(n.constantEqualValue || n.userSystemDateValue || "");
+      } else if (src === "UserSystemDate" || src === "UserSystemTime") {
+        // The compare value is the machine clock at play time, so there is nothing to type. The
+        // format is optional: "خودکار" takes the shape from the value being checked.
+        const isDate = src === "UserSystemDate";
+        const formats = isDate
+          ? ["Auto", "yyyy-MM-dd", "yyyy/MM/dd", "dd-MM-yyyy", "yyyyMMdd", "Timestamp"]
+          : ["Auto", "HH:mm:ss", "HH:mm", "HHmmss", "Timestamp"];
+        const cur = formats.includes(n.userSystemClockFormat) ? n.userSystemClockFormat : "Auto";
+        const formatOpts = formats.map((f) =>
+          `<option value="${f}" ${f === cur ? "selected" : ""}>${f === "Auto" ? "خودکار (از شکل مقدار مورد بررسی)" : esc(f)}</option>`).join("");
         html += `<div class="insp-field">
-          <label>تاریخ (فرمت مجاز: YYYY-MM-DD)</label>
-          <input type="date" data-k="constantEqualValue" value="${esc(dateVal)}" />
-          <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">مقدار مقایسه به‌صورت تاریخ سیستم کاربر با فرمت <code>YYYY-MM-DD</code> ذخیره می‌شود.</p>
-        </div>`;
-      } else if (src === "UserSystemTime") {
-        const timeVal = normalizeUserSystemTimeInput(n.constantEqualValue || n.userSystemTimeValue || "");
-        html += `<div class="insp-field">
-          <label>زمان (فرمت مجاز: HH:mm یا HH:mm:ss)</label>
-          <input type="time" step="1" data-k="constantEqualValue" value="${esc(timeVal)}" />
-          <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">مقدار مقایسه به‌صورت زمان سیستم کاربر با فرمت <code>HH:mm</code> یا <code>HH:mm:ss</code> ذخیره می‌شود.</p>
+          <label>قالب ${isDate ? "تاریخ" : "زمان"} (اختیاری)</label>
+          <select data-k="userSystemClockFormat">${formatOpts}</select>
+          <p class="palette-hint" style="margin:4px 0 0;line-height:1.55">مقدار مقایسه، ${isDate ? "تاریخ" : "زمان"} واقعی سیستم کاربر در لحظهٔ اجراست؛ ورودی دستی لازم نیست. با «خودکار»، شکلِ مقدار از سمت مورد بررسی گرفته می‌شود.</p>
         </div>`;
       } else if (src === "Elements") {
         html += selectorFieldHtml(n, "سلکتور المان (مقدار مقایسه)", {
