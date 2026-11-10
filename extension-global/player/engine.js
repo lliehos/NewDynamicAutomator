@@ -2748,19 +2748,23 @@ function flowEdge(edges, fromId, preferredKinds) {
   return null;
 }
 
-/** Bounds the per-condition loop budget; must agree with the editor's clamp. */
+/**
+ * Bounds the per-condition loop budget; must agree with the editor's clamp.
+ *
+ * Only the lower bound is enforced: the budget is a plain "how many rounds may this loop take", and
+ * a ceiling turned a legitimate long-running loop into one that stopped at an arbitrary 1000.
+ */
 const LOOP_BACK_MIN = 1;
-const LOOP_BACK_MAX = 1000;
 const LOOP_BACK_DEFAULT = 100;
 
 function clampLoopBackLimit(value, fallback) {
   const f = Number(fallback);
   const fb = Number.isFinite(f) && f > 0
-    ? Math.min(LOOP_BACK_MAX, Math.max(LOOP_BACK_MIN, Math.floor(f)))
+    ? Math.max(LOOP_BACK_MIN, Math.floor(f))
     : LOOP_BACK_DEFAULT;
   const raw = Number(value);
   if (!Number.isFinite(raw) || raw <= 0) return fb;
-  return Math.min(LOOP_BACK_MAX, Math.max(LOOP_BACK_MIN, Math.floor(raw)));
+  return Math.max(LOOP_BACK_MIN, Math.floor(raw));
 }
 
 /**

@@ -55,9 +55,8 @@ public sealed class DiagramDefaultsDto
 /// <summary>Reads and validates the diagram defaults.</summary>
 public sealed class DiagramSettingsService
 {
-    /// <summary>Loop-back ceiling the engine itself clamps to; must agree with resolveLoopBackLimit.</summary>
+    /// <summary>Loop-back bounds the engine shares; only a positive floor, no ceiling.</summary>
     public const int MinLoopBackLimit = 1;
-    public const int MaxLoopBackLimit = 1000;
     public const int DefaultLoopBackLimit = 100;
     public const double MinSelectorLineWidth = 1;
     public const double MaxSelectorLineWidth = 12;
@@ -193,7 +192,7 @@ public sealed class DiagramSettingsService
 
     /// <summary>Clamp to the range the engine honours, so the UI never promises a value it will not use.</summary>
     public static int ClampLoopBackLimit(int value) =>
-        Math.Clamp(value, MinLoopBackLimit, MaxLoopBackLimit);
+        Math.Max(value, MinLoopBackLimit);
 
     private static bool IsTrue(string? raw) =>
         string.Equals(raw?.Trim(), "true", StringComparison.OrdinalIgnoreCase) || raw?.Trim() == "1";

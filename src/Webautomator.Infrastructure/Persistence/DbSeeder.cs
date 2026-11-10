@@ -465,8 +465,8 @@ public static class DbSeeder
             "Diagram",
             "حداکثر بازگشت حلقه",
             "Max loop-back visits",
-            "پیش‌فرض سقف بازگشت حلقه در فرآیندهای جدید (۱ تا ۱۰۰۰).",
-            "Default loop-back ceiling for new processes (1 to 1000).");
+            "پیش‌فرض سقف بازگشت حلقه در فرآیندهای جدید (هر عدد صحیح بزرگ‌تر از صفر).",
+            "Default loop-back ceiling for new processes (any positive whole number).");
 
         await Upsert(
             SystemSettingKeys.DiagramIgnorePlayError,

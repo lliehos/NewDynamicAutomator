@@ -278,7 +278,7 @@
       mutedLabel: hex(raw.mutedLabel),
       selectorLineWidth: num(raw.selectorLineWidth, 1, 12),
       stepDelayMs: int(raw.stepDelayMs, 0, 60000),
-      loopBackLimit: int(raw.loopBackLimit, 1, 1000),
+      loopBackLimit: int(raw.loopBackLimit, 1, Number.MAX_SAFE_INTEGER),
       ignorePlayError: bool(raw.ignorePlayError),
       // A new INNER node's own "ignore this step's error" — a different switch from the start
       // node's, even though the two share a label in the inspector.
@@ -297,17 +297,16 @@
   }
 
   /**
-   * Upper bound on how many times the play engine may re-enter a single node, so a
-   * "wait until the condition is true" loop can never spin forever. Kept in step with the
-   * engine's own clamp (resolveLoopBackLimit) so the UI never promises a value the engine
-   * would refuse.
+   * Budget for how many times the play engine may re-enter a single node, so a
+   * "wait until the condition is true" loop can never spin forever. Any positive whole number is
+   * accepted — there is no ceiling — and the editor stays in step with the engine's own clamp
+   * (clampLoopBackLimit) so the UI never promises a value the engine would refuse.
    */
   const DEFAULT_LOOP_BACK_LIMIT = diagramDefaults.loopBackLimit ?? 100;
-  const MAX_LOOP_BACK_LIMIT = 1000;
   function clampLoopBackLimit(raw) {
     const n = Number(raw);
     if (!Number.isFinite(n) || n <= 0) return DEFAULT_LOOP_BACK_LIMIT;
-    return Math.min(MAX_LOOP_BACK_LIMIT, Math.max(1, Math.floor(n)));
+    return Math.max(1, Math.floor(n));
   }
 
   /**
@@ -11412,7 +11411,7 @@
     const loopBackLimit = clampLoopBackLimit(n.loopBackLimit ?? graph.loopBackLimit);
     html += `<div class="insp-section-title">تنظیمات حلقه</div>
       <div class="insp-field"><label>${esc(t("editor.insp.loopBackLimit") || "حداکثر بازگشت حلقه")}</label>
-        <input type="number" min="1" max="1000" step="1" data-k="loopBackLimit" value="${esc(loopBackLimit)}" />
+        <input type="number" min="1" step="1" data-k="loopBackLimit" value="${esc(loopBackLimit)}" />
         <p class="palette-hint" style="margin:4px 0 0;line-height:1.6">${esc(t("editor.insp.loopBackLimitHint") || "این شرط حداکثر این تعداد بار ارزیابی می‌شود؛ اگر شاخهٔ خروج تا آن زمان برقرار نشود، اجرا با پیام روشن متوقف می‌شود.")}</p>
       </div>`;
 

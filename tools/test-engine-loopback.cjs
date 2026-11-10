@@ -97,7 +97,7 @@ function check(name, actual, expected) {
 
 check("clamp: 0 falls back to default", clampLoopBackLimit(0), 100);
 check("clamp: negative falls back to default", clampLoopBackLimit(-5), 100);
-check("clamp: above max is capped", clampLoopBackLimit(5000), 1000);
+check("clamp: large value is kept (no ceiling)", clampLoopBackLimit(5000), 5000);
 check("clamp: fraction is floored", clampLoopBackLimit("12.9"), 12);
 check("clamp: missing value uses explicit fallback", clampLoopBackLimit(undefined, 250), 250);
 check("clamp: bad fallback uses 100", clampLoopBackLimit(undefined, "x"), 100);

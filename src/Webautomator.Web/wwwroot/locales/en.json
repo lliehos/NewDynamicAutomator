@@ -574,7 +574,7 @@
       "updatesManual": "Manual update check for online servers. Offline servers show the last cached result.",
       "diagramSelectorWidth": "Thickness of the box drawn around the selected element while running (1 to 12).",
       "diagramStepDelay": "Default pause after each step in a new process, in milliseconds (0 to 60000).",
-      "diagramLoopBackLimit": "Most times a node may be revisited before a loop is treated as stuck (1 to 1000).",
+      "diagramLoopBackLimit": "Most times a node may be revisited before a loop is treated as stuck (any positive whole number).",
       "planCurrency": "Currency both prices are stated in. A standard three-letter code, such as IRR or USD.",
       "monthlyPrice": "Amount charged for one month. Leave blank if the plan has no monthly option.",
       "yearlyPrice": "Amount charged for one year. Leave blank if the plan has no yearly option.",

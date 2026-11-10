@@ -373,7 +373,9 @@ public sealed class LocalRunEngine
                     && limitEl.TryGetInt32(out var conditionLimit)
                     && conditionLimit > 0)
                 {
-                    loopLimit = Math.Clamp(conditionLimit, 1, 1000);
+                    // Any positive budget the author chose: a ceiling here cut a legitimate long
+                    // loop short at 1000 rounds.
+                    loopLimit = Math.Max(1, conditionLimit);
                 }
 
                 visited.TryGetValue(currentId, out var hits);
