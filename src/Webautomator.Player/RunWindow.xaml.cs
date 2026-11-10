@@ -27,6 +27,12 @@ public partial class RunWindow : Window, INotifyPropertyChanged
     private ProcessGraph? _graph;
     private List<int> _rowIndices = new();
 
+    /// <summary>
+    /// How many log lines the engine had already dropped from the front when the list was last
+    /// rendered. A change means the list no longer starts where the ListBox does, so it is rebuilt.
+    /// </summary>
+    private int _renderedLogOffset;
+
     private string _statusLabel = DsStrings.RunReady;
     public string StatusLabel
     {
@@ -126,15 +132,22 @@ public partial class RunWindow : Window, INotifyPropertyChanged
         if (s.Running) StatusLabel = s.Paused ? "توقف موقت" : DsStrings.RunInProgress;
         PlayPauseButton.Content = s.Paused ? "ادامه" : "توقف موقت";
 
-        // Rebuild the log only when it grew: a full reset every tick would fight the user's selection.
-        if (LogList.Items.Count != s.Log.Count)
+        // Append only the lines that arrived since the last tick. Rebuilding the whole list on every
+        // new line made a chatty run quadratic in its own log length, and a loop with a WaitTime in
+        // it produces exactly that kind of run. The engine trims the front in blocks and tracks the
+        // total, so a moved front is the only case that still needs a rebuild.
+        var log = s.Log;
+        var offset = (int)(s.LogTotal - log.Count);
+        var shown = LogList.Items.Count;
+        if (offset != _renderedLogOffset || shown > log.Count)
         {
             LogList.Items.Clear();
-            foreach (var line in s.Log)
-                LogList.Items.Add($"[{line.AtUtc.ToLocalTime():HH:mm:ss}] {line.Text}");
-            if (LogList.Items.Count > 0)
-                LogList.ScrollIntoView(LogList.Items[^1]);
+            _renderedLogOffset = offset;
+            shown = 0;
         }
+        for (var i = shown; i < log.Count; i++)
+            LogList.Items.Add($"[{log[i].AtUtc.ToLocalTime():HH:mm:ss}] {log[i].Text}");
+        if (log.Count > shown) LogList.ScrollIntoView(LogList.Items[^1]);
 
         ElapsedText.Text = s.Running
             ? $"زمان: {(DateTime.UtcNow - s.StartedAtUtc).TotalSeconds:0} ثانیه"
@@ -159,8 +172,9 @@ public partial class RunWindow : Window, INotifyPropertyChanged
     private void Clear_Click(object sender, RoutedEventArgs e)
     {
         if (Engine is null) return;
-        Engine.State.Log.Clear();
+        Engine.State.ResetLog();
         LogList.Items.Clear();
+        _renderedLogOffset = 0;
     }
 
     /// <summary>

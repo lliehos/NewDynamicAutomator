@@ -19,6 +19,44 @@ public sealed class RunState
     public bool Paused { get; set; }
     public DateTime StartedAtUtc { get; set; } = DateTime.UtcNow;
     public List<RunLogLine> Log { get; } = new();
+
+    /// <summary>How many log lines a run keeps; older lines are dropped in blocks by <see cref="AppendLog"/>.</summary>
+    public const int LogLimit = 500;
+
+    /// <summary>
+    /// Lines ever appended in this run, including the ones <see cref="Log"/> no longer holds.
+    /// </summary>
+    /// <remarks>
+    /// The window uses <c>LogTotal - Log.Count</c> as the number of lines trimmed from the front, so
+    /// it can tell "four more lines arrived" from "the front moved" without comparing contents.
+    /// </remarks>
+    public long LogTotal { get; private set; }
+
+    /// <summary>
+    /// Append one line, dropping the oldest block once the list is full.
+    /// </summary>
+    /// <remarks>
+    /// The list used to grow without limit while the run window rebuilt its whole ListBox from it on
+    /// every new line, so a long run paid O(n) per line and kept every line it ever wrote in memory.
+    /// A loop with a <c>WaitTime</c> in it is the usual way to produce one of those runs. Trimming a
+    /// block at a time (not one line per append) keeps memory bounded AND keeps the window's
+    /// incremental append valid: the front only moves once per block.
+    /// </remarks>
+    public void AppendLog(RunLogLine line)
+    {
+        Log.Add(line);
+        LogTotal++;
+        if (Log.Count > LogLimit)
+            Log.RemoveRange(0, LogLimit / 2);
+    }
+
+    /// <summary>Start a fresh log, resetting the counter the window uses to append incrementally.</summary>
+    public void ResetLog()
+    {
+        Log.Clear();
+        LogTotal = 0;
+    }
+
     /// <summary>Cells written locally, ready to be pushed by Sync.</summary>
     public List<LocalCellWrite> Writes { get; } = new();
 }
@@ -187,7 +225,7 @@ public sealed class LocalRunEngine
         State.LastError = null;
         State.ProcessTitle = graph.Title ?? "";
         State.StartedAtUtc = DateTime.UtcNow;
-        State.Log.Clear();
+        State.ResetLog();
         State.Writes.Clear();
         _localCells.Clear();
         if (!State.RunOnServer && _seedCells.Count > 0)
@@ -670,7 +708,7 @@ public sealed class LocalRunEngine
 
     private void Log(string kind, string text)
     {
-        State.Log.Add(new RunLogLine(DateTime.UtcNow, kind, text));
+        State.AppendLog(new RunLogLine(DateTime.UtcNow, kind, text));
         Changed?.Invoke();
     }
 }

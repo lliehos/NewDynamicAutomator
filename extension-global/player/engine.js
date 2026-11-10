@@ -1616,7 +1616,27 @@ function wakePlaySleepers() {
 /** setTimeout's ceiling: a larger delay overflows the 32-bit field and fires immediately. */
 const MAX_TIMER_MS = 2147483647;
 
-/** Sleep until `deadline` (ms since epoch), or until pause/stop wakes us. */
+/**
+ * Longest a single sleep tick lasts.
+ *
+ * A wait is not one five-minute timer: it is a chain of ticks no longer than this, each of which
+ * re-reads the clock. That keeps a long `WaitTime` observable (a suspended service worker resumes
+ * on the next tick instead of losing the whole wait), and it costs 10 wake-ups for five minutes —
+ * against 1500 for the old fixed 200 ms tick. Below this cap the tick IS the remaining time, so a
+ * 1 ms wait is one 1 ms timer and there is never a tick shorter than the browser's own floor
+ * (there is no sub-millisecond timer to ask for).
+ */
+const SLEEP_CHUNK_MAX_MS = 30000;
+
+/** The browser's practical timer floor; a shorter request cannot be honoured anyway. */
+const SLEEP_CHUNK_MIN_MS = 1;
+
+/** How long the next single tick may last: the remaining time, capped at one chunk. */
+function sleepChunkMs(remaining) {
+  return Math.max(SLEEP_CHUNK_MIN_MS, Math.min(remaining, SLEEP_CHUNK_MAX_MS, MAX_TIMER_MS));
+}
+
+/** Sleep until `deadline` (ms since epoch) or the end of one chunk, or until pause/stop wakes us. */
 function sleepUntil(deadline) {
   const remaining = deadline - Date.now();
   if (remaining <= 0) return Promise.resolve();
@@ -1629,7 +1649,9 @@ function sleepUntil(deadline) {
       playSleepWaiters.delete(done);
       resolve();
     };
-    const timer = setTimeout(done, Math.min(remaining, MAX_TIMER_MS));
+    // One tick only. The caller's loop re-reads the deadline and arms the next one, so the tick size
+    // follows the time actually left rather than a fixed cadence.
+    const timer = setTimeout(done, sleepChunkMs(remaining));
     playSleepWaiters.add(done);
   });
 }
@@ -1637,16 +1659,15 @@ function sleepUntil(deadline) {
 /**
  * Wait that a pause or a stop can cut short.
  *
- * One timer for the whole remaining duration, not a fixed 200 ms tick. The old tick existed only to
- * notice pause/stop, and it cost two things: a 10-minute `WaitTime` woke 3000 times for a decision
- * that changes at most twice, and every wakeup was a timer plus a promise the service worker had to
- * schedule. It also made the tick unrelated to the requested delay, while adding a floor of its own
- * to sub-200 ms waits (they went through one extra loop iteration).
+ * Ticks follow the requested delay instead of a fixed 200 ms cadence: five minutes sleeps as ten
+ * 30-second ticks, 900 ms as one 900 ms tick, 1 ms as one 1 ms tick (that is the browser's floor —
+ * there is no sub-millisecond timer). The old fixed tick existed only to notice pause/stop, and it
+ * cost two things: a 10-minute `WaitTime` woke 3000 times for a decision that changes at most twice,
+ * and it put a floor of its own under short waits.
  *
- * Now the sleep lasts exactly as long as asked (`setTimeout` resolution, so 1 ms is honoured as
- * closely as a browser can) and pause/stop call `wakePlaySleepers()` to resolve it immediately. The
- * deadline is absolute, so time spent paused still counts against the wait — the behaviour this had
- * before, kept deliberately.
+ * Pause and stop do not wait for a tick: they call `wakePlaySleepers()` and resolve the current one
+ * immediately. The deadline is absolute, so time spent paused still counts against the wait — the
+ * behaviour this had before, kept deliberately.
  */
 async function sleepInterruptible(ms) {
   const deadline = Date.now() + Math.max(0, Number(ms) || 0);
@@ -1842,10 +1863,7 @@ async function stopPlay(reason) {
   // The run ended on purpose, so its liveness record goes with it. Leaving it behind would make a
   // later worker start read a stale timestamp and report a phantom interruption.
   await clearPlayHeartbeat();
-  if (playAbortPoll) {
-    clearInterval(playAbortPoll);
-    playAbortPoll = null;
-  }
+  stopPlayAbortWatch();
   const tid = String(playStatus.taskId || "").trim();
   appendPlayLog("warn", reason === "canvas_changed"
     ? "اجرا به‌خاطر تغییر فرآیند متوقف شد"
@@ -2531,10 +2549,7 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     playStatus.paused = false;
     playPaused = false;
     appendPlayLog("error", playStatus.lastError);
-    if (playAbortPoll) {
-      clearInterval(playAbortPoll);
-      playAbortPoll = null;
-    }
+    stopPlayAbortWatch();
     // Local state first (see stopPlay): the UI must not keep claiming a run while the portal
     // round-trip is in flight — most visibly on a failure, when the user is waiting for it.
     await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
@@ -2735,10 +2750,7 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
     // this is skipped is the worker being killed, which is exactly the case the heartbeat exists
     // to catch, so clearing it here is what makes the two distinguishable.
     await clearPlayHeartbeat();
-    if (playAbortPoll) {
-      clearInterval(playAbortPoll);
-      playAbortPoll = null;
-    }
+    stopPlayAbortWatch();
     // Local state first (see stopPlay): publish "finished" before the portal round-trip so the
     // HUD flips immediately instead of waiting on a network call to agree.
     await chrome.storage.local.set({ playing: false, playTabId: null, playPaused: false });
@@ -6852,7 +6864,7 @@ function collectWrittenCells(results) {
 }
 
 function startPlayAbortWatch(taskId, register) {
-  if (playAbortPoll) clearInterval(playAbortPoll);
+  stopPlayAbortWatch();
   // Registering is what makes this a SERVER-side run; a local run must not create a session.
   if (register !== false) {
     registerPlayOnServerTracked(taskId).then((refused) => {
@@ -6862,11 +6874,18 @@ function startPlayAbortWatch(taskId, register) {
       }
     }).catch(() => {});
   }
-  playAbortPoll = setInterval(async () => {
+
+  let heartbeatDue = 0;
+  const tick = async () => {
+    playAbortPoll = null;
     if (!playStatus.playing) return;
-    // Refresh liveness on the tick we already pay for. This is what lets detectOrphanedPlay tell a
-    // worker that was killed from one that is merely in a long step — see PLAY_HEARTBEAT_KEY.
-    markPlayHeartbeat(taskId, playStatus.stepIndex);
+    // Liveness is refreshed less often than the poll itself. The stale window is 30 s, so every
+    // other tick (~3 s) is still five times inside it, while the storage write — the only thing here
+    // that touches the disk — drops to a third of its old rate.
+    if (heartbeatDue-- <= 0) {
+      heartbeatDue = 1;
+      markPlayHeartbeat(taskId, playStatus.stepIndex);
+    }
     try {
       const command = await fetchRunCommand(taskId);
       if (command === SESSION_CLOSED) {
@@ -6876,18 +6895,34 @@ function startPlayAbortWatch(taskId, register) {
         await stopPlay("session_closed");
         return;
       }
-      if (!command) return;
-      if (command.stopAll) {
+      if (command && command.stopAll) {
         appendPlayLog("error", "همهٔ اجراهای سروری توسط مدیر نظارت متوقف شدند.");
         await stopPlay("stop_all");
         return;
       }
-      if (command.abort) {
+      if (command && command.abort) {
         appendPlayLog("error", "اجرا به‌خاطر تغییر فرآیند متوقف شد");
         await stopPlay("canvas_changed");
+        return;
       }
     } catch { /* ignore */ }
-  }, 1500);
+    // The next tick is armed AFTER this one settles, never on a fixed cadence: with setInterval a
+    // slow or unreachable portal (each request may take up to its 8 s ceiling) stacked overlapping
+    // polls — and a long WaitTime is exactly when nothing else is running to notice. This also
+    // keeps the run alive across a wait, because the chain never stops ticking while playing.
+    if (playStatus.playing) playAbortPoll = setTimeout(tick, 1500);
+  };
+  playAbortPoll = setTimeout(tick, 1500);
+}
+
+/** Stop the abort watch, whichever kind of timer is currently armed. */
+function stopPlayAbortWatch() {
+  if (playAbortPoll) {
+    // clearInterval and clearTimeout share one id space, so both calls are safe whichever armed it.
+    clearInterval(playAbortPoll);
+    clearTimeout(playAbortPoll);
+    playAbortPoll = null;
+  }
 }
 
 /** Returned by fetchRunCommand when the server says this session is no longer valid. */
