@@ -867,6 +867,11 @@ const ENGINE_MSG = {
     "act.tabAliasUnknown": "تبی با نام «{alias}» در این فرآیند تعریف نشده است؛ ابتدا با «رفتن به آدرس» و گزینهٔ «تب جدید» آن را بسازید",
     "act.closeTabAliasMissing": "نام تب موردنظر برای بستن مشخص نیست",
 
+    "preTab.actionNeedsBrowser": "اقدام «{action}» به تب مرورگر نیاز دارد ولی اجرا هنوز هیچ تبی ندارد؛ پیش از آن یک «رفتن به آدرس» بگذارید (تب جدید یا تب جاری)",
+    "preTab.conditionNeedsBrowser": "این شرط به صفحهٔ مرورگر وابسته است ولی اجرا هنوز هیچ تبی ندارد؛ پیش از آن یک «رفتن به آدرس» بگذارید (تب جدید یا تب جاری)",
+    "preTab.singleNeedsBrowser": "این گره به تب مرورگر نیاز دارد؛ برای اجرای بدون تب هدف، پیش از آن یک «رفتن به آدرس» قرار دهید",
+    "run.noTabYet": "اجرا هنوز تبی در مرورگر ندارد. پیش از این مرحله یک «رفتن به آدرس» بگذارید تا تب ساخته شود.",
+
     "cond.typeMissing": "نوع شرط انتخاب نشده",
     "cond.srcDsMissing": "منبع مورد بررسی انتخاب نشده",
     "cond.srcColMissing": "ستون مورد بررسی انتخاب نشده",
@@ -968,6 +973,11 @@ const ENGINE_MSG = {
     "act.switchTabTargetBad": "The switch-tab target type is invalid",
     "act.tabAliasUnknown": "No tab named \"{alias}\" is defined in this process; create it first with Go to URL + \"open in a new tab\"",
     "act.closeTabAliasMissing": "The name of the tab to close is not set",
+
+    "preTab.actionNeedsBrowser": "The «{action}» action needs a browser tab, but the run has not opened one yet; put a Go to URL step (new tab or current tab) before it",
+    "preTab.conditionNeedsBrowser": "This condition depends on a browser page, but the run has not opened a tab yet; put a Go to URL step (new tab or current tab) before it",
+    "preTab.singleNeedsBrowser": "This node needs a browser tab; to run without a target tab, put a Go to URL step before it",
+    "run.noTabYet": "The run has no browser tab yet. Put a Go to URL step before this one so a tab is created.",
 
     "cond.typeMissing": "Condition type is not selected",
     "cond.srcDsMissing": "No data source selected to check",
@@ -1111,6 +1121,105 @@ function nodeGroupLabel(n, graph) {
   if (!gid) return "بیرون از گروه (سطح فرآیند)";
   const g = (graph?.nodes || []).find((x) => x.id === gid);
   return g ? (g.title || "گروه بدون عنوان") : `گروه نامشخص (${gid})`;
+}
+
+/**
+ * Does reaching this node give the run a browser tab?
+ *
+ * GoToUrl always does, and a SwitchTab that names its target (alias / URL / title) resolves a real
+ * live tab. See `stepOpensTabTarget` in action-specs.js — the same rule the editor's no-tab check
+ * uses, so the two halves cannot disagree about what counts as "the tab is open now".
+ */
+function nodeOpensBrowserTab(node) {
+  if (!node || !isActionNode(node)) return false;
+  const at = node.actionType || "Click";
+  if (typeof stepOpensTabTarget === "function") return stepOpensTabTarget(at, node);
+  return at === "GoToUrl";
+}
+
+/** Does this node need an already-open tab to run at all? */
+function nodeNeedsBrowserTab(node) {
+  if (!node) return false;
+  if (node.kind === "condition") return conditionNeedsBrowserTab(node);
+  // A repeat driven by page ELEMENTS reads its iterations from the current page, so the group's
+  // start node needs a tab just as much as a Click does. Data-source / fixed-count repeats do not.
+  if (node.kind === "start") return String(node.repeatSourceType || "None") === "Elements";
+  if (!isActionNode(node)) return false;
+  const at = node.actionType || "Click";
+  if (typeof stepNeedsBrowser === "function") return stepNeedsBrowser(at, node);
+  return false;
+}
+
+/**
+ * Nodes that would run BEFORE the run has any browser tab and yet depend on one.
+ *
+ * A run may start with no target tab on purpose: the first check can be a condition that has
+ * nothing to do with the page (system date, source cell, memory), and the process opens its own tab
+ * later with GoToUrl. That is only sound while every browser-dependent node is reachable ONLY after
+ * such a step — so this walk starts at the entry node with "no tab", flips to "tab available" at
+ * each GoToUrl (and at a named SwitchTab), and reports any page action or page-dependent condition
+ * it meets while still tab-less.
+ *
+ * The walk is state-aware (`tab|<id>`): a node reached both with and without a tab is judged on the
+ * tab-less path, because that is the one that would fail at run time.
+ */
+function collectPreTabBrowserNodesForPlay(graph, opts = {}) {
+  const entryId = resolvePlayEntryId(graph, opts);
+  if (!entryId) return [];
+  const nodes = new Map((graph?.nodes || []).map((n) => [n.id, n]));
+  const edges = graph?.edges || [];
+  const out = [];
+  const seen = new Set();
+  const queue = [{ id: entryId, hasTab: false }];
+  while (queue.length) {
+    const { id, hasTab } = queue.shift();
+    const key = `${hasTab ? 1 : 0}|${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const node = nodes.get(id);
+    if (!node) continue;
+    if (node.kind !== "group" && node.isActive !== false && !hasTab && nodeNeedsBrowserTab(node) && !nodeOpensBrowserTab(node)) {
+      out.push({
+        node,
+        id: node.id,
+        title: node.title || nodeKindLabel(node),
+        kind: nodeKindLabel(node),
+        group: nodeGroupLabel(node, graph),
+        reasons: [node.kind === "condition"
+          ? tv("preTab.conditionNeedsBrowser")
+          : (isActionNode(node)
+            ? tv("preTab.actionNeedsBrowser", { action: node.actionType || "Click" })
+            : tv("preTab.singleNeedsBrowser"))]
+      });
+    }
+    const nextHasTab = hasTab || nodeOpensBrowserTab(node);
+    for (const e of edges) {
+      if (e.from !== id || sameNodeId(e.to, id)) continue;
+      // Only control flow, plus a group's entry edge — a `parent` edge is structural, not a path.
+      if (e.kind !== "next" && e.kind !== "success" && e.kind !== "fail" && e.kind !== "contains") continue;
+      queue.push({ id: e.to, hasTab: nextHasTab });
+    }
+  }
+  return out;
+}
+
+/** Same shape as buildInvalidNodesError, for the pre-tab rules above. */
+function buildPreTabBrowserError(items, lang) {
+  if (!items.length) return "";
+  const en = lang === "en";
+  const lines = items.map((it, i) => {
+    const head = en
+      ? `${i + 1}) ${it.kind} «${it.title}» — in group: ${it.group}`
+      : `${i + 1}) ${it.kind} «${it.title}» — در گروه: ${it.group}`;
+    return `${head}\n${it.reasons.map((r) => `   • ${r}`).join("\n")}`;
+  });
+  const title = en
+    ? `Cannot start without a target tab: ${items.length} node(s) run before any tab is opened.`
+    : `اجرای بدون تب هدف ممکن نیست: ${items.length} نود پیش از باز شدن تب به مرورگر نیاز دارد.`;
+  const tail = en
+    ? "Put a \"Go to URL\" step before them (new tab or current tab), or pick a target tab instead."
+    : "پیش از آن‌ها یک مرحلهٔ «رفتن به آدرس» بگذارید (تب جدید یا تب جاری)، یا در عوض یک تب هدف انتخاب کنید.";
+  return `${title}\n\n${lines.join("\n\n")}\n\n${tail}`;
 }
 
 /**
@@ -1304,6 +1413,33 @@ async function resetPlayTabs(initialTabId) {
     registerPlayTab(PLAY_TAB_MAIN, initialTabId);
     await protectPlayTab(initialTabId);
   }
+}
+
+/**
+ * Create the run's `main` tab on demand.
+ *
+ * A run may start with NO target tab (the process opens its own tab after its page-independent
+ * checks). The first GoToUrl that navigates the "current tab" then has no tab to navigate, so one is
+ * created here and becomes `main` — exactly the tab a normal run would have been given at start.
+ * It is registered under the reserved alias, protected from discard, recorded as the HUD/session tab
+ * and armed for browser dialogs, so nothing downstream can tell it apart from an initially chosen tab.
+ */
+async function openMainRunTab() {
+  let created = null;
+  try {
+    created = await chrome.tabs.create({ url: "about:blank", active: true });
+  } catch { created = null; }
+  if (!created?.id) return null;
+  registerPlayTab(PLAY_TAB_MAIN, created.id);
+  await protectPlayTab(created.id);
+  playTabId = created.id;
+  try {
+    await chrome.storage.local.set({ playTabId: created.id, playSessionTabId: created.id });
+  } catch { /* storage is best-effort here; the run continues */ }
+  if (created.windowId != null) {
+    try { await chrome.windows.update(created.windowId, { focused: true }); } catch { /* ignore */ }
+  }
+  return created.id;
 }
 
 /** End-of-run cleanup: release the discard guard but LEAVE the pages open for the operator. */
@@ -2313,6 +2449,28 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     };
   }
 
+  // A run started with NO target tab is a deliberate shape: the process is expected to open its own
+  // tab (GoToUrl with "new tab" or "current tab") after the page-independent checks at the top.
+  // Every browser-dependent node reachable BEFORE that point would fail at run time, so it is
+  // refused here — with the same node/group detail the regular validator reports. The check is
+  // scoped exactly like the run: a single-node test only judges the node under test.
+  if (opts.startWithoutTab === true) {
+    const preTabIssues = collectPreTabBrowserNodesForPlay(graph, opts);
+    if (preTabIssues.length) {
+      return {
+        ok: false,
+        error: buildPreTabBrowserError(preTabIssues, playUiCulture()),
+        invalidNodes: preTabIssues.map((it) => ({
+          id: it.id,
+          title: it.title,
+          kind: it.kind,
+          group: it.group,
+          reasons: it.reasons
+        }))
+      };
+    }
+  }
+
   clearPlayCellReadInflight();
 
   const entryId = resolvePlayEntryId(graph, opts);
@@ -2370,7 +2528,10 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   }
   const requestedTabId = tabId;
   const condNode = singleCond || (singleStep && singleStep.kind === "condition" ? singleStep : null);
-  tabId = await resolveExecutionTabId(tabId, opts);
+  const startWithoutTab = opts.startWithoutTab === true;
+  // "No target tab" means exactly that: do not resolve, and above all do NOT borrow the portal tab
+  // or whatever happens to be active. The first GoToUrl will create the run's tab on demand.
+  tabId = startWithoutTab ? null : await resolveExecutionTabId(tabId, opts);
   if (!tabId && condNode && !conditionNeedsBrowserTab(condNode)) {
     // DriverTabs / SystemDate / SystemTime / MemoryValue / a constant operand — evaluable with no
     // tab at all, so do not block here and do not borrow someone else's tab.
@@ -2384,7 +2545,7 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
       error: "این شرط به صفحه وابسته است و نیاز به یک تب هدف دارد. در منوی راست‌کلیک یک تب انتخاب کنید."
     };
   }
-  if (!tabId && !(condNode && !conditionNeedsBrowserTab(condNode))) {
+  if (!tabId && !startWithoutTab && !(condNode && !conditionNeedsBrowserTab(condNode))) {
     const wanted = Number(requestedTabId);
     return {
       ok: false,
@@ -2426,6 +2587,10 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     title: graph.title || null,
     tabId: tabId != null ? tabId : null,
     openNewTab: opts.openNewTab === true,
+    // Remembered so the HUD's restart button repeats the SAME kind of run — including one that
+    // started with no target tab (the tab is created by the first GoToUrl).
+    startWithoutTab: opts.startWithoutTab === true,
+    nextFromNodeId: opts.nextFromNodeId || null,
     // Remembered so the HUD's restart button repeats the SAME kind of run (a local run stays local).
     runOnServer
   };
@@ -2528,8 +2693,13 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     // with a click that reloads the page (a submit/confirm button), and the fresh document must
     // re-mount the HUD from this marker instead of reading as "no session". Overwritten by the next
     // run's tab; cleared by the HUD's close button or the tab's own close.
-    await chrome.storage.local.set({ playSessionTabId: tabId });
-    await injectPlayFab(tabId);
+    //
+    // A no-target-tab run has no tab YET: the HUD is mounted on the tab the first GoToUrl creates
+    // (see openMainRunTab), and setting the marker to null here would simply clear the previous run's.
+    if (tabId != null) {
+      await chrome.storage.local.set({ playSessionTabId: tabId });
+      await injectPlayFab(tabId);
+    }
   }
   appendPlayLog("info", `شروع اجرا: ${graph.title || taskId}`);
   appendPlayLog("info", `تکرار فرآیند: ${iterations.label}`);
@@ -4434,6 +4604,13 @@ async function runHistoryStep(tabId, direction, step) {
 
 async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   const actionType = step.actionType || "Click";
+  // A no-target-tab run creates its tab at the first GoToUrl. Reaching a page action before that
+  // cannot work, so it is reported as one clear step failure instead of an exception from a null
+  // tab id. Validation refuses this before the run anyway; this is the runtime backstop for graphs
+  // edited by hand or reached through a branch the static check could not see.
+  if (!tabId && !nodeOpensBrowserTab(step) && nodeNeedsBrowserTab(step)) {
+    return { ok: false, error: tv("run.noTabYet"), reason: "no_target_tab" };
+  }
   const framePath = parseFramePath(step.framePathJson);
   const resolvedSelector = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0);
   // The step's URL is resolved INSIDE the GoToUrl branch below, not here. This used to run for
@@ -4532,6 +4709,12 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
             try { await chrome.windows.update(existingTab.windowId, { focused: true }); } catch { /* ignore */ }
           }
           appendPlayLog("info", `تب «${existing.name}» دوباره استفاده شد (#${existing.id})`);
+          if (tabId == null) {
+            // The run had no tab of its own; the reused alias tab becomes the one it works on,
+            // otherwise `switchToNewTab=false` would leave the run with no page at all.
+            await armAlertDialogsIfNeeded(graph, existing.id);
+            return { ok: true, tabId: existing.id, navigated: true, tabAlias: existing.name };
+          }
           return { ok: true, tabId: shouldSwitch ? existing.id : tabId, navigated: true, tabAlias: existing.name };
         }
         playTabs.delete(key);
@@ -4549,12 +4732,25 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
         try { await chrome.windows.update(created.windowId, { focused: true }); } catch { /* ignore */ }
       }
       appendPlayLog("info", `تب «${alias}» باز شد (#${created.id})`);
-      return { ok: true, tabId: shouldSwitch ? created.id : tabId, navigated: true, tabAlias: alias };
+      if (tabId == null) await armAlertDialogsIfNeeded(graph, created.id);
+      return { ok: true, tabId: shouldSwitch ? created.id : (tabId ?? created.id), navigated: true, tabAlias: alias };
     }
 
+    // "Current tab" navigation with NO tab to navigate: this is the first step of a no-target-tab
+    // run, so create the run's main tab now and navigate it. Everything downstream sees a normal
+    // run with `main` bound to this tab.
+    if (tabId == null) {
+      const createdId = await openMainRunTab();
+      if (!createdId) {
+        return { ok: false, error: tv("run.newTabFailed"), reason: "new_tab_failed" };
+      }
+      tabId = createdId;
+      await armAlertDialogsIfNeeded(graph, tabId);
+      appendPlayLog("info", `تب اجرا ساخته شد (#${tabId})`);
+    }
     await chrome.tabs.update(tabId, { url });
     await waitTabComplete(tabId, resolveNavigationWaitMs(step));
-    return { ok: true };
+    return { ok: true, tabId };
   }
 
   if (actionType === "WaitTime") {

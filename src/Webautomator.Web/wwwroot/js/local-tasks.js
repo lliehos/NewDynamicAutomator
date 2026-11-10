@@ -3957,6 +3957,10 @@ function dataSourceSafeFileName(ds) {
         <span class="da-play-target-title">${escapeHtml(t("tasks.runTypeNewTab") || "تب جدید")}</span>
         <span class="da-play-target-sub">${escapeHtml(t("tasks.runTypeNewTabSub") || "صفحهٔ خالی در مرورگر")}</span>
       </button>
+      <button type="button" class="da-play-target-item" data-no-tab="1" role="menuitem">
+        <span class="da-play-target-title">${escapeHtml(t("tasks.runTypeNoTab") || "بدون تب هدف")}</span>
+        <span class="da-play-target-sub">${escapeHtml(t("tasks.runTypeNoTabSub") || "تب با اولین «رفتن به آدرس» ساخته می‌شود")}</span>
+      </button>
       <div class="da-play-target-sep"></div>
       <div class="da-play-target-loading">${escapeHtml(t("tasks.runTypeOpenTabs") || "تب‌های باز")}</div>
     `;
@@ -3965,6 +3969,14 @@ function dataSourceSafeFileName(ds) {
       e.preventDefault();
       e.stopPropagation();
       startPlay({ openNewTab: true });
+    });
+    // Deliberately NO tab: conditions that do not need the page can run first, and the process
+    // opens its own tab at its first GoToUrl. The engine refuses the run if a browser-dependent
+    // node sits before that point.
+    menu.querySelector('[data-no-tab="1"]')?.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      startPlay({ startWithoutTab: true, openNewTab: false });
     });
 
     const tabs = await requestOpenTabs();

@@ -1516,6 +1516,8 @@
     "runTypeTitleLocalOnly": "نوع اجرا — فقط محلی",
     "runTypeNewTab": "تب جدید",
     "runTypeNewTabSub": "صفحهٔ خالی در مرورگر",
+    "runTypeNoTab": "بدون تب هدف",
+    "runTypeNoTabSub": "تب با اولین «رفتن به آدرس» ساخته می‌شود؛ شرط‌های ابتدایی بدون تب اجرا می‌شوند",
     "runTypeOpenTabs": "تب‌های باز",
     "runTypePickTab": "تب هدف",
     "runTypeNoTabs": "تب باز http(s) پیدا نشد — صفحهٔ هدف را باز کنید",

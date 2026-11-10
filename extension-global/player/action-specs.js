@@ -16,6 +16,9 @@
  *   readsCell  — reads a data-source cell as its input value
  *   writesSrc  — writes into a data-source cell (so it picks a destination source + column)
  *   writesMem  — writes into a memory variable (so it names the variable)
+ *   browser    — acts on the page of a tab, so the run must ALREADY own a tab when it starts.
+ *                GoToUrl is deliberately NOT marked: it is what opens/creates the run's tab, which
+ *                is exactly how a run that starts with no target tab (startWithoutTab) begins.
  *
  * Adding an action to the ActionType enum without an entry here is safe (an unknown action gets an
  * empty spec) but means the editor will offer it no settings and the player no validation, so every
@@ -26,19 +29,19 @@
 
   var ACTION_SPECS = {
     // --- element interactions -------------------------------------------------
-    Click:          { selector: true },
-    DoubleClick:    { selector: true },
-    RightClick:     { selector: true },
-    Hover:          { selector: true },
+    Click:          { selector: true, browser: true },
+    DoubleClick:    { selector: true, browser: true },
+    RightClick:     { selector: true, browser: true },
+    Hover:          { selector: true, browser: true },
     // Hold is a click held down for a while, so beyond the element it needs a duration.
-    Hold:           { selector: true, value: true },
-    ClearContent:   { selector: true },
-    SelectOption:   { selector: true, value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true },
+    Hold:           { selector: true, value: true, browser: true },
+    ClearContent:   { selector: true, browser: true },
+    SelectOption:   { selector: true, value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true, browser: true },
 
     // --- writing into a page element -----------------------------------------
     // InputContent fills a page element. It also carries a typing mode (all at once, or one key at a
     // time) which the page-side code reads from the same payload.
-    InputContent:   { selector: true, value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true },
+    InputContent:   { selector: true, value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true, browser: true },
 
     // LoadContent reads one source cell and puts it into a TARGET that is either a page element or a
     // memory variable. Its value comes from the source, so it takes no separate input value.
@@ -59,39 +62,77 @@
     // GoToUrl navigates the run's current tab by default. Its own fields can instead send it to a
     // named NEW tab (`openInNewTab` + `newTabAlias`), which stays alive for later SwitchTab steps.
     GoToUrl:        { value: true, elementVal: true, memoryVal: true, systemVal: true, readsCell: true },
-    GoBack:         {},
-    GoForward:      {},
-    Refresh:        {},
+    GoBack:         { browser: true },
+    GoForward:      { browser: true },
+    Refresh:        { browser: true },
     // ScrollPage's selector only applies when its type is "to element", so the editor asks
     // stepShowsTargetSelector, which narrows this by the step's own scrollType.
-    ScrollPage:     { value: true, selector: true },
+    ScrollPage:     { value: true, selector: true, browser: true },
     // Which tab to close is a step field, not a value and not a selector.
-    CloseTab:       {},
+    CloseTab:       { browser: true },
     // SwitchTab only changes which live tab the run works on. The target (alias / URL / title /
-    // positional) is chosen on the step, so it needs neither a selector nor a value.
-    SwitchTab:      {},
+    // positional) is chosen on the step, so it needs neither a selector nor a value. It is not a
+    // plain page step: an alias/URL/title target finds a live tab and can therefore SUPPLY one
+    // (see stepOpensTabTarget), while a positional target is measured from the run's current tab.
+    SwitchTab:      { browser: true },
     // PressKey sends a keyboard event. Its key is a step field (`pressKeyName`), not a value — the
     // value plumbing would let it read a source cell, which makes no sense for "press Enter". The
     // selector is optional: with none it acts on whatever is focused.
-    PressKey:       {},
+    PressKey:       { browser: true },
 
     // --- timing / flow -------------------------------------------------------
     WaitTime:       { value: true, memoryVal: true, systemVal: true, readsCell: true },
-    WaitForLoading: { value: true },
+    WaitForLoading: { value: true, browser: true },
     NoAction:       {},
 
     // --- page surgery --------------------------------------------------------
     // RemoveElements deletes the matched element(s) from the DOM; the selector picks which ones.
-    RemoveElements: { selector: true },
+    RemoveElements: { selector: true, browser: true },
     // AlertAccept answers a browser dialog. It needs no selector and no value: a JS dialog blocks
     // the page, so there is no element to point at, and what it answers (accept or dismiss, plus
     // optional prompt text) comes from the step's own fields rather than the value plumbing.
-    AlertAccept:    {}
+    AlertAccept:    { browser: true }
   };
 
   /** Spec for an action, or an empty spec so an unknown action never crashes a run or a render. */
   function actionSpec(actionType) {
     return ACTION_SPECS[actionType] || {};
+  }
+
+  /**
+   * Does running this action require a browser tab that the run ALREADY owns?
+   *
+   * Used by the "start with no target tab" validation: such a run begins with no tab at all, so a
+   * page action before the first GoToUrl could only fail. GoToUrl is not browser-dependent — it is
+   * the step that creates/navigates the run's tab. LoadContent is special: it only touches the page
+   * when its destination is an element (a Memory destination is pure bookkeeping). And any action
+   * that takes its VALUE from a page element needs the page even if it writes elsewhere.
+   */
+  function stepNeedsBrowser(at, step) {
+    if (at === "GoToUrl") return false;
+    if (at === "LoadContent") {
+      var dest = String((step && (step.saveTargetType || step.loadTargetType)) || "Elements");
+      return dest !== "Memory";
+    }
+    var spec = actionSpec(at);
+    if (spec.browser === true) return true;
+    // A value read from a page element (SetMemory / InsertContent) still needs the page.
+    return spec.elementVal === true && String((step && step.contentSourceType) || "") === "Elements";
+  }
+
+  /**
+   * Does this action itself give the run a usable tab?
+   *
+   * GoToUrl always does: with "new tab" it creates the alias tab, with "current tab" the engine
+   * creates the run's main tab on demand. SwitchTab does too when it names its target (alias / URL /
+   * title) because that lookup returns a real live tab; a POSITIONAL switch is measured from the
+   * run's current tab and therefore cannot be the first step of a tab-less run.
+   */
+  function stepOpensTabTarget(at, step) {
+    if (at === "GoToUrl") return true;
+    if (at !== "SwitchTab") return false;
+    var target = String((step && step.switchTabTarget) || "Alias");
+    return ["Alias", "Url", "Title"].indexOf(target) >= 0;
   }
 
   function stepNeedsSelector(at) { return actionSpec(at).selector === true; }
@@ -116,7 +157,9 @@
     stepWritesToSource: stepWritesToSource,
     stepWritesToMemory: stepWritesToMemory,
     stepReadsCell: stepReadsCell,
-    stepIsUrlAction: stepIsUrlAction
+    stepIsUrlAction: stepIsUrlAction,
+    stepNeedsBrowser: stepNeedsBrowser,
+    stepOpensTabTarget: stepOpensTabTarget
   };
 
   global.ActionSpecs = api;
@@ -131,4 +174,6 @@
   global.stepWritesToMemory = stepWritesToMemory;
   global.stepReadsCell = stepReadsCell;
   global.stepIsUrlAction = stepIsUrlAction;
+  global.stepNeedsBrowser = stepNeedsBrowser;
+  global.stepOpensTabTarget = stepOpensTabTarget;
 })(typeof globalThis !== "undefined" ? globalThis : this);

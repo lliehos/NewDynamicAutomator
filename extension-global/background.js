@@ -2936,11 +2936,15 @@ async function startPlayWithAutoReload(message, sender) {
   // "from this node onward" walks the graph like a whole-task run, so it must not be forced onto a
   // sender tab the way a condition check is, and a fresh tab has to stay possible.
   const isNextFrom = !!message.nextFromNodeId;
+  // A deliberate "no target tab" run: the process opens its own tab with GoToUrl after its
+  // page-independent checks. It must NOT inherit the sender (portal) tab — that would silently
+  // turn it into a run against the editor's own page.
+  const isStartWithoutTab = message.startWithoutTab === true;
   const pendingPlay = {
     taskId: message.taskId,
     tabId: hasExplicitTab
       ? rawTab
-      : (isConditionCheck ? null : (sender.tab?.id ?? null)),
+      : (isConditionCheck || isStartWithoutTab ? null : (sender.tab?.id ?? null)),
     runMode: message.runMode || null,
     groupNodeId: message.groupNodeId || null,
     stepNodeId: message.stepNodeId || null,
@@ -2952,7 +2956,8 @@ async function startPlayWithAutoReload(message, sender) {
           : message.stepNodeId ? "step"
             : message.groupNodeId ? "group"
               : "task"),
-    openNewTab: hasExplicitTab || isConditionCheck ? false : (message.openNewTab === true),
+    openNewTab: hasExplicitTab || isConditionCheck || isStartWithoutTab ? false : (message.openNewTab === true),
+    startWithoutTab: isStartWithoutTab,
     // Per-run choice from the portal's run-type menu. Absent (editor menus, legacy callers) = server.
     runOnServer: message.runOnServer !== false
   };
@@ -2964,6 +2969,7 @@ async function startPlayWithAutoReload(message, sender) {
     nextFromNodeId: pendingPlay.nextFromNodeId,
     playScope: pendingPlay.playScope,
     openNewTab: pendingPlay.openNewTab,
+    startWithoutTab: pendingPlay.startWithoutTab,
     activateTab: isConditionCheck ? false : undefined,
     runOnServer: pendingPlay.runOnServer
   };
@@ -3098,6 +3104,7 @@ async function resumePendingPlayAfterReload() {
         nextFromNodeId: pendingPlayRequest.nextFromNodeId || null,
         playScope: pendingPlayRequest.playScope || null,
         openNewTab: pendingPlayRequest.openNewTab === true,
+        startWithoutTab: pendingPlayRequest.startWithoutTab === true,
         // The choice must survive the dev-reload resume too, or a local run would resume as server.
         runOnServer: pendingPlayRequest.runOnServer !== false
       }

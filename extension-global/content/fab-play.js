@@ -546,9 +546,12 @@
             groupNodeId: lastPlayRequest?.groupNodeId || null,
             stepNodeId: lastPlayRequest?.stepNodeId || null,
             conditionNodeId: lastPlayRequest?.conditionNodeId || null,
+            nextFromNodeId: lastPlayRequest?.nextFromNodeId || null,
             playScope: lastPlayRequest?.playScope || null,
             tabId: lastPlayRequest?.tabId ?? null,
             openNewTab: lastPlayRequest?.openNewTab === true,
+            // A no-target-tab run restarts the same way — its tab is recreated by GoToUrl.
+            startWithoutTab: lastPlayRequest?.startWithoutTab === true,
             // Repeat the SAME kind of run the HUD belongs to: a local run restarts locally.
             runOnServer: lastPlayRequest?.runOnServer
           }).catch((err) => ({ ok: false, error: err?.message || String(err) }));

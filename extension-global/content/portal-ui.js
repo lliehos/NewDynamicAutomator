@@ -269,6 +269,8 @@
     const rawTab = scope?.tabId != null && scope.tabId !== "" ? Number(scope.tabId) : NaN;
     const hasTargetTab = Number.isFinite(rawTab);
     const isConditionCheck = !!scope?.conditionNodeId;
+    // The operator chose "no target tab": the process opens its own tab after its early checks.
+    const startWithoutTab = scope?.startWithoutTab === true && !hasTargetTab;
     const payload = {
       type: "startPlay",
       // Keep UUID/string ids — Number(uuid) becomes NaN and breaks play.
@@ -286,7 +288,9 @@
                 : "task"),
       tabId: hasTargetTab ? rawTab : null,
       // Portal Start → new blank tab; ctx check/run → never open a new tab.
-      openNewTab: hasTargetTab ? false : (isConditionCheck ? false : (scope?.openNewTab !== false)),
+      openNewTab: hasTargetTab || startWithoutTab ? false : (isConditionCheck ? false : (scope?.openNewTab !== false)),
+      // Start with NO tab at all: the first GoToUrl creates it. Mutually exclusive with openNewTab.
+      startWithoutTab,
       // Per-run choice from the run-type menu. Unset means the default: a server run.
       runOnServer: scope?.runOnServer !== false
     };
@@ -304,7 +308,9 @@
           ? (scope?.groupNodeId
             ? `اجرای گروه در تب انتخاب‌شده شروع شد — ${res.stepTotal || "?"} مرحله`
             : `اجرا در تب انتخاب‌شده شروع شد — ${res.stepTotal || "?"} مرحله`)
-          : `اجرا شروع شد — ${res.stepTotal || "?"} مرحله`);
+          : (startWithoutTab
+            ? `اجرا بدون تب هدف شروع شد — تب با اولین «رفتن به آدرس» ساخته می‌شود (${res.stepTotal || "?"} مرحله)`
+            : `اجرا شروع شد — ${res.stepTotal || "?"} مرحله`));
       // For condition checks avoid green "started" toast — poll for the real pass/fail.
       if (isConditionCheck) {
         if (status) status.textContent = msg;
@@ -566,6 +572,7 @@
         playScope: d.playScope || null,
         tabId: d.tabId,
         openNewTab: d.openNewTab,
+        startWithoutTab: d.startWithoutTab === true,
         task: d.task || null,
         graph: d.graph || null,
         // Editor context menus never set this: a run started with the diagram open is a server run.
@@ -650,6 +657,7 @@
       playScope: d.playScope || null,
       tabId: d.tabId,
       openNewTab: d.openNewTab,
+      startWithoutTab: d.startWithoutTab === true,
       task: d.task || null,
       graph: d.graph || null,
       // The processes list's run-type menu sends this; the editor's own menu leaves it unset.

@@ -1516,6 +1516,8 @@
     "runTypeTitleLocalOnly": "Run type — local only",
     "runTypeNewTab": "New tab",
     "runTypeNewTabSub": "A blank page in the browser",
+    "runTypeNoTab": "No target tab",
+    "runTypeNoTabSub": "The tab is created by the first Go to URL; early checks run without a tab",
     "runTypeOpenTabs": "Open tabs",
     "runTypePickTab": "Target tab",
     "runTypeNoTabs": "No open http(s) tab found — open the target page",

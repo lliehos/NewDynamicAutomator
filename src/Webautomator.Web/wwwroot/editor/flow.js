@@ -6909,9 +6909,9 @@
       // make the user pick one: offer the check directly and let a blank tab be the target.
       if (mode === "condition" && !conditionNeedsBrowser(n)) {
         sub.innerHTML =
-          `<li data-tab-id="__new__" class="ctx-new-tab" title="بدون نیاز به تب مشخص">`
-          + `بررسی همین‌جا (بدون نیاز به تب)</li>`
-          + `<li class="disabled">این شرط به صفحه وابسته نیست؛ در تب جدید بررسی می‌شود</li>`;
+          `<li data-tab-id="__notab__" class="ctx-new-tab" title="این شرط به هیچ صفحه‌ای نیاز ندارد">`
+          + `بررسی همین‌جا (بدون تب)</li>`
+          + `<li data-tab-id="__new__" class="ctx-new-tab" title="about:blank">➕ تب جدید خالی</li>`;
         wireTabRows(li, mode);
         return;
       }
@@ -6923,6 +6923,12 @@
       // URL and no elements, so every such check would come back false. Offering "new blank tab" there
       // is not a convenience, it is a guaranteed wrong answer — so the row is withheld entirely.
       const needsTab = mode === "condition" && conditionNeedsBrowser(n);
+      // "No target tab": the run starts with no tab at all, runs its page-independent checks, and
+      // creates its own tab at the first GoToUrl. Withheld for a page-dependent condition, which
+      // could never produce a real answer without a page (the engine refuses it too).
+      const noTabRow = needsTab
+        ? ""
+        : `<li data-tab-id="__notab__" class="ctx-new-tab" title="فرآیند خودش تب را با «رفتن به آدرس» باز می‌کند">🚫 بدون تب هدف (تب با اولین «رفتن به آدرس» ساخته می‌شود)</li>`;
       const newTabRow = needsTab
         ? ""
         : `<li data-tab-id="__new__" class="ctx-new-tab" title="about:blank">➕ تب جدید خالی (ایجاد خودکار)</li>`;
@@ -6930,19 +6936,19 @@
         // The extension never answered. Say so, rather than rendering "no tabs are open" — that
         // wording blamed the user's browser for a missing extension and sent them looking in the
         // wrong place.
-        sub.innerHTML = newTabRow
+        sub.innerHTML = noTabRow + newTabRow
           + `<li class="disabled">افزونه پاسخ نداد — در chrome://extensions افزونه را Reload کنید</li>`;
       } else if (!tabs.length) {
         // No tab is open. The condition DOES need a page to supply the URL/element, so there is
-        // nothing to offer it; otherwise the blank-tab row is still the way forward.
+        // nothing to offer it; otherwise the blank-tab / no-tab rows are still the way forward.
         sub.innerHTML = needsTab
           ? `<li class="disabled">این شرط به صفحه وابسته است — ابتدا تب موردنظر را باز کنید</li>`
-          : newTabRow + `<li class="disabled">تب دیگری باز نیست</li>`;
+          : noTabRow + newTabRow + `<li class="disabled">تب دیگری باز نیست</li>`;
       } else {
         const tabRows = tabs.map((t) =>
           `<li data-tab-id="${esc(String(t.id))}" title="${esc(t.url || "")}">${esc(t.label || t.title || String(t.id))}</li>`
         ).join("");
-        sub.innerHTML = newTabRow + (tabRows || `<li class="disabled">تب دیگری باز نیست</li>`);
+        sub.innerHTML = noTabRow + newTabRow + (tabRows || `<li class="disabled">تب دیگری باز نیست</li>`);
       }
 
       // Wire the rows after the HTML is set, whatever branch produced it.
@@ -6978,6 +6984,18 @@
           // START node's id is the start — passing that as groupNodeId would resolve to no group at
           // all. Resolved once here so both the fresh-tab and the existing-tab branch agree.
           const groupTargetId = n.kind === "group" ? n.id : (n.groupNodeId || null);
+          if (raw === "__notab__") {
+            // Start with no tab: the engine walks the graph and refuses the run if a
+            // browser-dependent node comes before the first GoToUrl.
+            if (isNext) requestPlayInTab({ nextFromNodeId: n.id, startWithoutTab: true });
+            else if (mode === "group" && groupTargetId) requestPlayInTab({ groupNodeId: groupTargetId, startWithoutTab: true });
+            else if (mode === "action") requestPlayInTab({ stepNodeId: n.id, startWithoutTab: true });
+            else if (mode === "task") {
+              if (n.groupNodeId) requestPlayInTab({ groupNodeId: n.groupNodeId, startWithoutTab: true });
+              else requestPlayInTab({ startWithoutTab: true });
+            } else requestPlayInTab({ conditionNodeId: n.id, startWithoutTab: true });
+            return;
+          }
           if (raw === "__new__") {
             if (isNext) requestPlayInTab({ nextFromNodeId: n.id, openNewTab: true });
             else if (mode === "group" && groupTargetId) requestPlayInTab({ groupNodeId: groupTargetId, openNewTab: true });
@@ -7381,11 +7399,13 @@
     // شرط‌های غیرالمنتی بدون tabId هم مجازند؛ شرط المانی حتماً tab می‌خواهد.
     if (!hasTab && scope?.conditionNodeId) {
       const cond = nodeById(scope.conditionNodeId);
-      if (conditionNeedsBrowser(cond) && scope?.openNewTab !== true) {
+      // A no-tab run goes through the engine, whose validation names WHY a page-dependent condition
+      // cannot be checked without a tab (and points at the missing GoToUrl).
+      if (conditionNeedsBrowser(cond) && scope?.openNewTab !== true && scope?.startWithoutTab !== true) {
         setStatus("برای این شرط یک تب صفحه انتخاب کنید.", "warn");
         return;
       }
-    } else if (!hasTab && !scope?.conditionNodeId && scope?.openNewTab !== true) {
+    } else if (!hasTab && !scope?.conditionNodeId && scope?.openNewTab !== true && scope?.startWithoutTab !== true) {
       setStatus("شناسهٔ تب نامعتبر است.", "warn");
       return;
     }
@@ -7420,6 +7440,9 @@
                 : "task",
         tabId: hasTab ? rawTab : null,
         openNewTab: scope?.openNewTab === true,
+        // "No target tab": the process opens its own tab at its first GoToUrl. The engine validates
+        // that no browser-dependent node runs before that point.
+        startWithoutTab: scope?.startWithoutTab === true && !hasTab,
         // The run TYPE is chosen on the process list's row switch (the work-machine design), not
         // inside the diagram; an editor-launched run therefore uses the server default.
         task: cached,
@@ -7433,13 +7456,14 @@
           window.dispatchEvent(new CustomEvent("da-play", { detail }));
         }
         const newTab = scope?.openNewTab === true;
+        const noTab = scope?.startWithoutTab === true && !hasTab;
         const msg = scope?.conditionNodeId
           ? (hasTab ? `بررسی شرط در تب #${rawTab}…` : "بررسی شرط…")
           : scope?.groupNodeId
-            ? (newTab ? "اجرای گروه در تب جدید…" : `اجرای گروه در تب #${rawTab}…`)
+            ? (noTab ? "اجرای گروه بدون تب هدف…" : (newTab ? "اجرای گروه در تب جدید…" : `اجرای گروه در تب #${rawTab}…`))
             : scope?.stepNodeId
-              ? (newTab ? "اجرای اقدام در تب جدید…" : `اجرای اقدام در تب #${rawTab}…`)
-              : (newTab ? "اجرای فرآیند در تب جدید خالی…" : `اجرای فرآیند در تب #${rawTab}…`);
+              ? (noTab ? "اجرای اقدام بدون تب هدف…" : (newTab ? "اجرای اقدام در تب جدید…" : `اجرای اقدام در تب #${rawTab}…`))
+              : (noTab ? "اجرای فرآیند بدون تب هدف…" : (newTab ? "اجرای فرآیند در تب جدید خالی…" : `اجرای فرآیند در تب #${rawTab}…`));
         setStatus(msg, "info");
         // Show pause/stop on diagram for any play (including condition checks).
         playSessionActive = true;
