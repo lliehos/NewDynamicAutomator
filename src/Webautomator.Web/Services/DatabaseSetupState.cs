@@ -102,6 +102,46 @@ public sealed class DatabaseSetupState
         _log.LogInformation("Startup: {Step}", message);
     }
 
+    /// <summary>
+    /// Waits until startup settles — <c>Ready</c> or <c>Blocked</c> — or the timeout elapses, then
+    /// reports the phase reached.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The first request after a restart arrives while the background initialiser is still running, and
+    /// that is the whole reason a single refresh always "fixed" the not-ready answer: by the time the
+    /// visitor pressed F5 the initialiser had finished. Rather than answering that first request with a
+    /// waiting page, the middleware holds it here for a few seconds, so in the normal case the visitor
+    /// simply gets the page they asked for.
+    /// </para>
+    /// <para>
+    /// Polling rather than a completion source, deliberately: the phase is not a one-shot signal — a
+    /// blocked deployment can go Blocked → Preparing (retry) → Ready — and a single-shot task would
+    /// have to be reset at every transition, which is exactly the kind of state that goes stale. A
+    /// 100 ms poll over a volatile field has no such failure mode and costs nothing.
+    /// </para>
+    /// </remarks>
+    public async Task<DatabaseSetupPhase> WaitForSettledAsync(
+        TimeSpan timeout, CancellationToken ct = default)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (_phase == DatabaseSetupPhase.Preparing && clock.Elapsed < timeout)
+        {
+            try
+            {
+                await Task.Delay(100, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                // The visitor navigated away. Report the phase as it stands; the caller decides
+                // whether that answer is still worth writing to a connection nobody is reading.
+                break;
+            }
+        }
+
+        return _phase;
+    }
+
     /// <summary>Records a failure detected during startup, moving the application to <c>Blocked</c>.</summary>
     public void RecordStartupFailure(DatabaseSetupResult result)
     {

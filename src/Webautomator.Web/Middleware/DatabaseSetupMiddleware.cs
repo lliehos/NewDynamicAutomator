@@ -30,6 +30,13 @@ public sealed class DatabaseSetupMiddleware
     /// <summary>The dedicated setup page, matched against <see cref="HttpRequest.Path"/>.</summary>
     private const string SetupPathValue = "/setup/database";
 
+    /// <summary>
+    /// How long a first page request is held open while initialisation finishes. Long enough to cover
+    /// the normal warm start (a second or two), short enough that a genuinely stuck initialiser still
+    /// reaches the waiting page quickly rather than looking like a hung site.
+    /// </summary>
+    private static readonly TimeSpan FirstRequestWait = TimeSpan.FromSeconds(10);
+
     private readonly RequestDelegate _next;
     private readonly DatabaseSetupState _state;
     private readonly ILogger<DatabaseSetupMiddleware> _log;
@@ -75,6 +82,26 @@ public sealed class DatabaseSetupMiddleware
         }
 
         if (_state.Phase == DatabaseSetupPhase.Ready)
+        {
+            await _next(context);
+            return;
+        }
+
+        // Every first request after a restart or a publish recycle lands in this window: the host is
+        // listening, but the background initialiser has not finished. That is precisely why the white
+        // "not ready" page always disappeared on a single refresh — by then the initialiser was done.
+        // So hold that request for a few seconds instead of answering it. In every deployment seen so
+        // far the initialiser finishes almost immediately once the database is warm, and the visitor
+        // gets the page they asked for; if it is genuinely slow, the waiting page below is still the
+        // answer, and it polls.
+        //
+        // Only complete pages and assets wait: the status probe must answer at once (the waiting page
+        // already on screen polls it), and holding an API call or a websocket upgrade only delays the
+        // client's own retry.
+        if (_state.Phase == DatabaseSetupPhase.Preparing
+            && ShouldWaitForInitialisation(context)
+            && await _state.WaitForSettledAsync(FirstRequestWait, context.RequestAborted)
+                == DatabaseSetupPhase.Ready)
         {
             await _next(context);
             return;
@@ -178,6 +205,28 @@ public sealed class DatabaseSetupMiddleware
     /// <summary>JSON endpoint the progress page polls to learn when initialisation has finished.</summary>
     private static bool IsStatusProbe(PathString path) =>
         path.StartsWithSegments("/setup/status", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True for the requests worth holding open until startup settles: a page or an asset a browser
+    /// is waiting on. Anything that a client retries on its own — an API call, a hub upgrade, a stream,
+    /// a mutating verb — is answered immediately by the phase branches instead.
+    /// </summary>
+    private static bool ShouldWaitForInitialisation(HttpContext context)
+    {
+        if (!HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method))
+            return false;
+
+        var path = context.Request.Path;
+        if (IsStatusProbe(path)
+            || path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWithSegments("/hubs", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // A long-lived stream would be held for the whole wait and then answered with a page it cannot
+        // read; leaving it to the phase branches keeps its own reconnect logic in charge.
+        var accept = context.Request.Headers.Accept.ToString();
+        return !accept.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// True when the caller is asking for a page a person can look at, rather than for an asset, an
