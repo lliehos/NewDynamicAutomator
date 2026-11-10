@@ -2958,6 +2958,10 @@ async function startPlayWithAutoReload(message, sender) {
               : "task"),
     openNewTab: hasExplicitTab || isConditionCheck || isStartWithoutTab ? false : (message.openNewTab === true),
     startWithoutTab: isStartWithoutTab,
+    // The page that asked for the run. A no-target-tab run (and any run that ends up in another
+    // tab) leaves this page outside the play tabs, so the engine needs it by name to keep sending
+    // per-step progress — otherwise the diagram cannot show which node is running.
+    originTabId: sender?.tab?.id ?? null,
     // Per-run choice from the portal's run-type menu. Absent (editor menus, legacy callers) = server.
     runOnServer: message.runOnServer !== false
   };
@@ -2970,6 +2974,7 @@ async function startPlayWithAutoReload(message, sender) {
     playScope: pendingPlay.playScope,
     openNewTab: pendingPlay.openNewTab,
     startWithoutTab: pendingPlay.startWithoutTab,
+    originTabId: pendingPlay.originTabId,
     activateTab: isConditionCheck ? false : undefined,
     runOnServer: pendingPlay.runOnServer
   };
@@ -3105,6 +3110,8 @@ async function resumePendingPlayAfterReload() {
         playScope: pendingPlayRequest.playScope || null,
         openNewTab: pendingPlayRequest.openNewTab === true,
         startWithoutTab: pendingPlayRequest.startWithoutTab === true,
+        // Same page gets the progress again after the dev reload.
+        originTabId: pendingPlayRequest.originTabId ?? null,
         // The choice must survive the dev-reload resume too, or a local run would resume as server.
         runOnServer: pendingPlayRequest.runOnServer !== false
       }

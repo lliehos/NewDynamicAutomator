@@ -351,6 +351,11 @@
   // outstanding when it was sent, so a slow reply cannot clear a run that started in the meantime.
   let playReconcileSeq = 0;
   let reconcileSeqAtSend = -1;
+  // The engine said a run is live. Kept apart from playSessionActive because the START can be the
+  // one message this page never received (a run that opened its own tab, or one started from the
+  // processes list): without this the reconciler would never ask again and the diagram would stay
+  // blank for a run that is very much stepping.
+  let playStateSawPlaying = false;
   const PLAY_PAUSE_ICO = `<svg class="btn-play-ctrl-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>`;
   const PLAY_RESUME_ICO = `<svg class="btn-play-ctrl-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>`;
   /** Stack of parent group ids when drilling into nested group designers. */
@@ -3708,8 +3713,11 @@
    * mismatch is confusing and the Stop button then does nothing. This is the cheap way to make the
    * extension the single source of truth on demand, instead of guessing from the last event seen.
    */
-  function reconcilePlayState() {
-    if (!playSessionActive) return;
+  function reconcilePlayState(force) {
+    // A hidden page has nothing to redraw, so the question is only worth asking once it is visible
+    // again (or when a run is already known to be live, which the caller decides). `force` is the
+    // "the operator is looking at the diagram again" path.
+    if (!force && !playSessionActive && !playStateSawPlaying && document.hidden) return;
     reconcileSeqAtSend = playReconcileSeq;
     try {
       window.postMessage({ source: "da-editor", type: "get-play-state" }, "*");
@@ -7505,11 +7513,26 @@
       return;
     }
     if (d.type === "play-state") {
-      // Authoritative answer to reconcilePlayState(): the engine is the source of truth, so the
-      // diagram's Stop button is cleared the moment the engine says it is idle — however the terminal
-      // broadcast was lost. Guarded by playSessionActive so a stale reply cannot clobber a NEW run
-      // that started while this request was in flight.
-      if (playReconcileSeq === reconcileSeqAtSend && playSessionActive && !d.playing) {
+      // The engine is the source of truth, in BOTH directions: a live run this page never heard
+      // start must light up the diagram (and the pause/stop bar), and a finished one must clear it
+      // however the terminal broadcast was lost.
+      const runningTask = d.taskId != null ? String(d.taskId) : null;
+      // Never paint another process's node ids into this diagram: they would not resolve and the
+      // canvas would dim with nothing highlighted.
+      const isThisTask = !runningTask || !graph.taskId || runningTask === String(graph.taskId);
+      if (d.playing) {
+        playStateSawPlaying = true;
+        if (isThisTask) {
+          setPlayFocusFromProgress({
+            playing: true,
+            paused: !!d.paused,
+            nodeId: d.currentNodeId || null
+          });
+        }
+        return;
+      }
+      playStateSawPlaying = false;
+      if (playReconcileSeq === reconcileSeqAtSend && playSessionActive) {
         playSessionActive = false;
         playSessionPaused = false;
         playFocusNodeId = null;
@@ -7794,9 +7817,16 @@
   // run that already ended is exactly when the stuck Stop button is noticed), and on a slow heartbeat
   // so a background tab still recovers. Both are no-ops while no run is marked active.
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) reconcilePlayState();
+    if (!document.hidden) reconcilePlayState(true);
   });
-  setInterval(reconcilePlayState, 5000);
+  // A live run is worth a frequent check; an idle page only needs the occasional one, so a run that
+  // started elsewhere (with no target tab, from the processes list) still lights up this diagram.
+  setInterval(() => {
+    if (playSessionActive || playStateSawPlaying) reconcilePlayState();
+  }, 5000);
+  setInterval(() => {
+    if (!playSessionActive && !playStateSawPlaying) reconcilePlayState();
+  }, 20000);
   window.addEventListener("click", () => { if (ctxMenu) { cancelSubmenuClose(); ctxMenu.hidden = true; } });
 
   document.getElementById("btn-play-pause")?.addEventListener("click", (ev) => {

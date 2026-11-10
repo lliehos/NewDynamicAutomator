@@ -1322,6 +1322,23 @@ let playLogs = [];
 let playTabId = null;
 
 /**
+ * The tab that ASKED for this run — the portal/diagram page, when the request came from one.
+ *
+ * A run started with no target tab creates its own tab, so the page that started it belongs to no
+ * play tab any more and the only channel left to it is notifyPortalTabs(), which recognises a
+ * portal by its URL. That recognition can fail (a portal served under a URL the stored base does not
+ * match), and then the diagram showed no live highlight at all while the run was stepping. Keeping
+ * the requesting tab makes the editor's updates independent of that heuristic: whoever started the
+ * run always hears back about it.
+ */
+let playOriginTabId = null;
+
+function setPlayOriginTabId(tabId) {
+  const n = Number(tabId);
+  playOriginTabId = Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
  * Named tabs of the CURRENT run.
  *
  * A run used to have exactly one tab (`playTabId`), so a process that needed a second system had
@@ -1660,6 +1677,9 @@ function broadcastPlayState() {
   // a stale "playing" state after the run switched away from them.
   const targets = new Set();
   if (playTabId) targets.add(playTabId);
+  // The editor that started the run is not a play tab when the run opened its own tab; it must
+  // still get every step so the diagram can show which node is executing.
+  if (playOriginTabId) targets.add(playOriginTabId);
   for (const entry of playTabs.values()) targets.add(entry.id);
   for (const tabId of targets) notifyTab(tabId, message);
   // Popup / extension pages
@@ -2529,6 +2549,8 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   const requestedTabId = tabId;
   const condNode = singleCond || (singleStep && singleStep.kind === "condition" ? singleStep : null);
   const startWithoutTab = opts.startWithoutTab === true;
+  // The page that requested this run hears back on every step, whatever shape the run takes.
+  if (opts.originTabId != null) setPlayOriginTabId(opts.originTabId);
   // "No target tab" means exactly that: do not resolve, and above all do NOT borrow the portal tab
   // or whatever happens to be active. The first GoToUrl will create the run's tab on demand.
   tabId = startWithoutTab ? null : await resolveExecutionTabId(tabId, opts);
