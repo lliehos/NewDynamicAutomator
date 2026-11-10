@@ -528,3 +528,6 @@ _webautomator*.bak
 _webautomator*.bak
 *.bak
 /.vscode
+
+# ASP.NET Data Protection keys (per-machine secrets, never commit)
+src/DataProtection-Keys/
