@@ -485,9 +485,51 @@ public partial class MainWindow : Window
 
     // ---- Row actions ----------------------------------------------------------------------------
 
+    /// <summary>
+    /// Make sure this runner is on the server's current build before a run starts.
+    /// </summary>
+    /// <remarks>
+    /// The launch/after-login check is only a banner the user can ignore. Running is the point where
+    /// an old engine actually matters, so this check is a gate: when the server has a newer build the
+    /// update page opens and applies it, and the app restarts — the run never starts on the stale
+    /// build. Cancelling or failing the update cancels the run. An unreachable server does NOT block
+    /// the run: local mode must keep working offline, and the version check is not a licence check.
+    /// </remarks>
+    private async Task<bool> EnsureLatestVersionBeforeRunAsync()
+    {
+        var serverBase = _client?.BaseUrl ?? ServerAddress.BaseUrl;
+        if (string.IsNullOrWhiteSpace(serverBase)) return true;
+
+        UpdateInfo? info;
+        try { info = await UpdateService.CheckAsync(serverBase); }
+        catch { return true; }
+
+        if (info is null || !info.Available) return true;
+        if (!UpdateService.IsNewer(info.Version, UpdateService.CurrentVersion)) return true;
+
+        // A newer build exists. Go straight to the update page instead of asking a question whose
+        // "no" answer would mean running code the server has already replaced.
+        var update = new UpdateWindow(serverBase, info) { Owner = this };
+        update.ShowDialog();
+
+        // A successful update shuts this process down and starts the new build, so reaching here
+        // means the update was closed, cancelled or failed — either way the run must not start.
+        // During a real shutdown there is no window left to warn; skip the message then.
+        if (Application.Current.Dispatcher.HasShutdownStarted) return false;
+        MessageBox.Show(this,
+            $"نسخهٔ جدید {info.Version} روی سرور موجود است. برای اجرا ابتدا برنامه را به‌روزرسانی کنید.",
+            "به‌روزرسانی لازم است", MessageBoxButton.OK, MessageBoxImage.Warning);
+        return false;
+    }
+
     private async void RowRun_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: ProcessRow row } || _client is null) return;
+
+        // A run is where a stale runner does its damage: it drives the pages with the old engine and
+        // the old rules while the server may already expect the new build. The startup check only
+        // raises a dismissible banner, so the gate is repeated here, right before the run starts.
+        if (!await EnsureLatestVersionBeforeRunAsync()) return;
 
         if (!_license.AllowsLocalRun && !row.RunOnServer)
         {
