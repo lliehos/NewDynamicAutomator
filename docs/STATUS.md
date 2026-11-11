@@ -4,7 +4,34 @@
 
 برنچ فعال توسعه: `feature/named-tabs` (از `stabilize/night-2026-10-18`)
 
+## قاعدهٔ نسخه‌گذاری کلاینت‌ها (الزامی)
+
+هر تغییری در یک کلاینت باید نسخهٔ همان کلاینت را بالا ببرد؛ در غیر این صورت تشخیص «بیلد کهنه»،
+به‌روزرسانی افزونه و آپدیت خودکار پلیر کار نمی‌کند.
+
+| کلاینت | محل نسخه | اثر تغییر |
+|--------|-----------|-----------|
+| افزونهٔ گلوبال | `extension-global/manifest.json` → `version` | مهر نسخه در اجرا (`playerDevStamp`) و تشخیص نسخهٔ کهنه |
+| افزونهٔ Smart Recorder | `extension-smart-recorder/manifest.json` → `version` | همان قاعده برای آن افزونه |
+| پلیر ویندوزی | `src/Webautomator.Player/Webautomator.Player.csproj` → `<Version>` | نسخه از اسمبلیِ منتشرشده خوانده می‌شود و در `desktop/version.txt`، پاسخ `/desktop/version` و نام فایل دانلود (`webautomator-player-<version>.zip`) می‌نشیند |
+
+- **پلیر ویندوزی:** فقط `<Version>` را در csproj پلیر بالا ببرید. در `Webautomator.Web.csproj`
+  هیچ عدد نسخهٔ ثابتی برای پلیر وجود ندارد؛ پیش‌تر `DesktopPlayerVersion` روی `1.0.0` قفل بود و
+  همهٔ بیلدها با همان نسخه دانلود می‌شدند. حالا هدف `PublishDesktopPlayer` بعد از publish،
+  `AssemblyVersion` واقعی `Webautomator.Player.dll` را می‌خواند و
+  `version.txt` را می‌نویسد. برای هات‌فیکس می‌توان موقتاً
+  `-p:DesktopPlayerVersion=x.y.z` را به publish داد.
+- **مستندات:** با هر تغییر محتوا، نسخهٔ سربرگ همان سند (`> **نسخه سند:** …`) و
+  `docs/doc-versions.json` هم بالا برود.
+
 ## حالت فعلی
+
+- **پلیر ویندوزی (۱.۰.۲):** ورود با نام کاربری/رمز (`POST /api/auth/login`) و ورود با مرورگر.
+  اصلاح دو مانع هندشیک مرورگر: حساب `admin` و کاربر با پروفایل ناقص دیگر از
+  `Panel/DesktopAuth` به `/Admin` یا صفحهٔ تنظیمات ریدایرکت نمی‌شوند (قبلاً اجراکننده تا انقضا
+  Poll می‌کرد و توکنی نمی‌گرفت). اندپوینت `GET /api/license/document` اضافه شد تا لایسنس واقعی
+  خوانده شود (قبلاً مسیری که اجراکننده صدا می‌زد وجود نداشت و همه‌چیز «لایسنس یافت نشد» می‌شد).
+  نسخهٔ پکیج انتشار از `<Version>` خود پروژهٔ پلیر خوانده می‌شود.
 
 - **پلن‌ها (ادمین‌قابل‌ویرایش):** `MaxTasks` / `MaxDataSources` / `MaxProcessSteps` (خالی = ∞)
   - Local ۱/۱/۳۰ — Free ۳/۳/۸۰ — Pro/Gold نامحدود (پیش‌فرض seed)

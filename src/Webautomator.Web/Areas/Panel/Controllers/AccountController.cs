@@ -238,8 +238,12 @@ public class AccountController : Controller
         var isAdmin = string.Equals(result.Role, "Admin", StringComparison.OrdinalIgnoreCase);
 
         if (!string.IsNullOrWhiteSpace(returnUrl) && Url.IsLocalUrl(returnUrl)
+            // The owner account is sent to /Admin instead of the Panel, with one exception: the
+            // desktop sign-in handshake lives under /Panel/DesktopAuth and must be allowed to
+            // complete, otherwise the Player's browser login never returns a token.
             && !(isAdmin && returnUrl.Contains("/Panel", StringComparison.OrdinalIgnoreCase)
-                 && !returnUrl.Contains("/Panel/Account", StringComparison.OrdinalIgnoreCase)))
+                 && !returnUrl.Contains("/Panel/Account", StringComparison.OrdinalIgnoreCase)
+                 && !returnUrl.Contains("/Panel/DesktopAuth", StringComparison.OrdinalIgnoreCase)))
             return Redirect(returnUrl);
 
         if (isAdmin)

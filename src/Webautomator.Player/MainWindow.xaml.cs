@@ -33,7 +33,7 @@ public partial class MainWindow : Window
         ProcessGrid.ItemsSource = _rows;
         ApplyProductName();
         Loaded += async (_, _) => await BootstrapAsync();
-        LicenseText.Text = DsStrings.LicenseMissing;
+        LicenseText.Text = DsStrings.LicenseCheckAfterLogin;
     }
 
     /// <summary>
@@ -60,6 +60,20 @@ public partial class MainWindow : Window
         ResolveServerAddress();
         ServerLabel.Text = ServerAddress.BaseUrl ?? "";
         ApplyServerFooter();
+
+        // Before sign-in the server has not handed us a licence yet, but a previous sign-in may
+        // have mirrored one. Show THAT instead of a false "no valid licence": the old text made a
+        // correctly licensed deployment look unlicensed until the user got past the login card.
+        var cachedLicense = LicenseGate.ReadLocalPayload();
+        if (cachedLicense is not null)
+        {
+            LicenseText.Text = cachedLicense.AllowLocalRun
+                ? DsStrings.LicenseLocalRunOn
+                : DsStrings.LicenseBlocked;
+            LicenseText.Foreground = cachedLicense.AllowLocalRun
+                ? (System.Windows.Media.Brush)FindResource("DsSuccessBrush")
+                : (System.Windows.Media.Brush)FindResource("DsDangerBrush");
+        }
 
         // Now that the key is known, adopt any pre-per-server state so an upgrade keeps the cached
         // licence and remembered user instead of appearing to log out.

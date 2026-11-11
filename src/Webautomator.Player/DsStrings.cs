@@ -93,6 +93,8 @@ internal static class DsStrings
 
     // ---- License gate ----
     public const string LicenseBlocked = "این نسخه اجازهٔ اجرای محلی ندارد";
+    public const string LicenseCheckAfterLogin = "وضعیت لایسنس پس از ورود بررسی می‌شود.";
+    public const string LicenseLocalRunOn = "لایسنس: اجرای محلی فعال";
     public const string LicenseBlockedBody =
         "قابلیت اجرای محلی در لایسنس این نصب فعال نشده است. برای فعال‌سازی با فروشنده تماس بگیرید.";
     public const string LicenseMissing = "لایسنس معتبری برای این سرور یافت نشد.";

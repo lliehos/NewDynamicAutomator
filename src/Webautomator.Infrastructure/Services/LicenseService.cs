@@ -249,6 +249,20 @@ public sealed class LicenseService
         return result;
     }
 
+    /// <summary>
+    /// The deployment's stored signed licence document, for clients that must honour the same gate.
+    /// </summary>
+    /// <remarks>
+    /// Returned verbatim: the desktop Player verifies the signature itself with the same public keys
+    /// as the server. Re-serializing it here would invalidate that signature. <c>null</c> means no
+    /// licence has been imported yet (a trial deployment).
+    /// </remarks>
+    public async Task<string?> GetCurrentLicenseJsonAsync(CancellationToken ct = default)
+    {
+        var stored = await GetStoredLicenseAsync(ct);
+        return string.IsNullOrWhiteSpace(stored?.RawJson) ? null : stored.RawJson;
+    }
+
     public async Task<LicenseDisplayDto> GetDisplayAsync(CancellationToken ct = default)
     {
         var (anchor, trial) = await EnsureDeploymentAsync(ct);

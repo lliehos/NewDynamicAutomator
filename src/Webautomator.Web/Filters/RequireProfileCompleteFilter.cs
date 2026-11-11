@@ -33,6 +33,14 @@ public sealed class RequireProfileCompleteFilter : IAsyncActionFilter
         var controller = context.RouteData.Values["controller"]?.ToString() ?? "";
         var action = context.RouteData.Values["action"]?.ToString() ?? "";
 
+        // Desktop sign-in is machinery, not a Panel surface: an incomplete profile must not stop the
+        // browser half of the handshake, or the Player would poll until it expired.
+        if (string.Equals(controller, "DesktopAuth", StringComparison.OrdinalIgnoreCase))
+        {
+            await next();
+            return;
+        }
+
         var allowed =
             string.Equals(controller, "Account", StringComparison.OrdinalIgnoreCase)
             || (string.Equals(controller, "Settings", StringComparison.OrdinalIgnoreCase)

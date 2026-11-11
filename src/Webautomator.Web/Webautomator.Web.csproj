@@ -122,11 +122,14 @@
   <PropertyGroup>
     <DesktopPlayerProject>$(MSBuildThisFileDirectory)..\Webautomator.Player\Webautomator.Player.csproj</DesktopPlayerProject>
     <!--
-      The player's version in the package. Kept as a property rather than read from the project file
-      so an operator can ship a specific build with -p:DesktopPlayerVersion=1.2.0 without editing
-      anything, which is what a hotfix needs.
+      The player's version in the package. Deliberately NOT a hardcoded default: the value is
+      resolved after the publish from the published Webautomator.Player.dll (its assembly version,
+      which comes from <Version> in Webautomator.Player.csproj). That keeps one source of truth —
+      bumping the player's <Version> is enough for /desktop/version, the download file name and the
+      staged version.txt to all move together. An operator can still override a hotfix build with
+      -p:DesktopPlayerVersion=1.2.0 without editing anything.
     -->
-    <DesktopPlayerVersion Condition="'$(DesktopPlayerVersion)' == ''">1.0.0</DesktopPlayerVersion>
+    <DesktopPlayerVersion Condition="'$(DesktopPlayerVersion)' == ''"></DesktopPlayerVersion>
   </PropertyGroup>
 
   <!--
@@ -180,7 +183,7 @@
       <DesktopPlayerPublishDir>$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine($(MSBuildProjectDirectory), $(_DesktopPublishRoot), 'desktop'))))\</DesktopPlayerPublishDir>
     </PropertyGroup>
 
-    <Message Importance="high" Text="Publishing desktop player $(DesktopPlayerVersion) → $(DesktopPlayerPublishDir)" />
+    <Message Importance="high" Text="Publishing desktop player → $(DesktopPlayerPublishDir)" />
 
     <!--
       PublishProfile is cleared (passed as empty) to the nested build on purpose. Without this the
@@ -207,6 +210,25 @@
     <MSBuild Projects="$(DesktopPlayerProject)"
              Targets="Publish"
              Properties="Configuration=$(Configuration);TargetFramework=net8.0-windows;RuntimeIdentifier=win-x64;SelfContained=false;PublishDir=$(DesktopPlayerPublishDir);PublishProfile=" />
+
+    <!--
+      Resolve the package version from the PUBLISHED assembly unless the operator passed an explicit
+      -p:DesktopPlayerVersion. This is what makes a version bump in the player project reach every
+      consumer: /desktop/version, the staged version.txt, and the download's file name
+      (webautomator-player-<version>.zip). A hardcoded 1.0.0 here is how earlier player changes
+      shipped as "1.0.0" no matter what <Version> said.
+    -->
+    <GetAssemblyIdentity AssemblyFiles="$(DesktopPlayerPublishDir)Webautomator.Player.dll"
+                         Condition="'$(DesktopPlayerVersion)' == ''">
+      <Output TaskParameter="Assemblies" ItemName="_DesktopPlayerAssembly" />
+    </GetAssemblyIdentity>
+    <PropertyGroup Condition="'$(DesktopPlayerVersion)' == ''">
+      <_DesktopPlayerAssemblyVersion>@(_DesktopPlayerAssembly->'%(Version)')</_DesktopPlayerAssemblyVersion>
+      <DesktopPlayerVersion Condition="'$(_DesktopPlayerAssemblyVersion)' != ''">$([System.Version]::Parse('$(_DesktopPlayerAssemblyVersion)').ToString(3))</DesktopPlayerVersion>
+    </PropertyGroup>
+    <Error Condition="'$(DesktopPlayerVersion)' == ''"
+           Text="Desktop player version could not be resolved from $(DesktopPlayerPublishDir)Webautomator.Player.dll. Set &lt;Version&gt; in Webautomator.Player.csproj or pass -p:DesktopPlayerVersion=x.y.z." />
+    <Message Importance="high" Text="Desktop player package version: $(DesktopPlayerVersion)" />
 
     <!--
       version.txt is what DesktopSyncService reads to know what it is serving. Written AFTER the

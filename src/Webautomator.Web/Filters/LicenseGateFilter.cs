@@ -104,6 +104,11 @@ public sealed class LicenseGateFilter : IAsyncActionFilter
         if (path.StartsWith("/api/auth", StringComparison.OrdinalIgnoreCase))
             return true;
 
+        // The signed licence document is not a secret (it is signed, and clients verify it), and the
+        // desktop Player needs it to honour the same gate. The API still requires a bearer token.
+        if (path.StartsWith("/api/license", StringComparison.OrdinalIgnoreCase))
+            return true;
+
         if (path.StartsWith("/checkupdate", StringComparison.OrdinalIgnoreCase))
             return true;
 

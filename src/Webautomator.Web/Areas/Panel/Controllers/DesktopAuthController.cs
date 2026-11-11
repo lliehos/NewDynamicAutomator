@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Webautomator.Infrastructure.Identity;
+using Webautomator.Web.Filters;
 
 namespace Webautomator.Web.Areas.Panel.Controllers;
 
@@ -19,6 +20,10 @@ namespace Webautomator.Web.Areas.Panel.Controllers;
 /// otherwise be registered with the OS as a scheme handler — an installer change we do not want.
 /// </remarks>
 [Area("Panel")]
+// The owner account is normally kept out of Panel surfaces, but this controller is not a Panel
+// surface: it is the browser half of the desktop sign-in. Blocking it sent the owner to /Admin
+// before the handshake could be approved, so the Player polled until it expired with no error.
+[SkipOwnerPanelBlock]
 public class DesktopAuthController : Controller
 {
     private readonly AuthService _auth;
