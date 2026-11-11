@@ -1353,50 +1353,15 @@ async function handleRecordTabClosedLocked(tabId) {
 }
 
 /**
- * The tab a PLAY was running in went away — stop the run.
+ * Closing the tab a PLAY was running in no longer ends the run.
  *
- * Play drives a real browser tab: every step acts on the page in it. Once that tab is closed there
- * is nothing left to act on, so continuing would either error on every remaining step or silently
- * "succeed" against nothing. Stopping is the only honest outcome, and it also releases the
- * `playing` flag so the next Run is not refused.
- *
- * Step- and group-scoped plays are included: they act on a tab too, and used to leave `playing`
- * set for the same reason.
+ * Play drives a real browser tab, and losing it ends the run at the first step that needs a page
+ * (`run.tabClosedNoPage`, not ignorable) — but the STOP decision stays with the operator: the HUD's
+ * stop button, the diagram's stop button, the process list, or the end of the process itself. All of
+ * the run's tab bookkeeping therefore lives with the engine, which also knows which closes the
+ * process itself asked for (`CloseTab`) — see `chrome.tabs.onRemoved` / `handlePlayTabDetachedFromRun`
+ * in player/engine.js.
  */
-async function handlePlayTabClosed(tabId) {
-  const st = await chrome.storage.local.get(["playing", "playTabId", "playSessionTabId"]);
-  // Closing the tab ends its HUD session — one of the only two ways the marker may go.
-  if (st.playSessionTabId != null && Number(st.playSessionTabId) === Number(tabId)) {
-    await chrome.storage.local.remove("playSessionTabId");
-  }
-  const knownTab = Number(st.playTabId);
-  const sessionTab = typeof playTabId !== "undefined" ? Number(playTabId) : NaN;
-  if (Number(tabId) !== knownTab && Number(tabId) !== sessionTab) return;
-
-  const wasPlaying = !!st.playing || !!(typeof playStatus !== "undefined" && playStatus?.playing);
-  if (!wasPlaying) return;
-
-  // The tab is gone, so there is nothing left to disarm — but the tracking map must not keep the
-  // dead tab id, or a later run reusing that id would inherit a stale arming record.
-  try { WebautomatorAlerts.clearAllAlertArming(); } catch { /* module may not be loaded yet */ }
-
-  await chrome.storage.local.set({ playing: false, playPaused: false, playTabId: null });
-  if (typeof playStatus !== "undefined" && playStatus) {
-    playStatus.playing = false;
-    playStatus.paused = false;
-    // Say why, so the HUD/portal does not read as a crash. The tab is gone, so there is nowhere
-    // left to show it in the page itself — this surfaces in the portal's status line.
-    playStatus.lastError = "تب اجرا بسته شد؛ اجرا متوقف گردید.";
-  }
-  try {
-    if (typeof broadcastPlayState === "function") broadcastPlayState();
-  } catch { /* best effort */ }
-  try {
-    if (typeof notifyPortalTabs === "function" && typeof getPlayStatus === "function") {
-      notifyPortalTabs({ type: "playStateChanged", ...getPlayStatus() });
-    }
-  } catch { /* the portal page may not be open */ }
-}
 
 /** Discard current batch and continue recording on the same process/tab. */
 async function resumeRecord() {
@@ -2978,6 +2943,8 @@ async function startPlayWithAutoReload(message, sender) {
               : "task"),
     openNewTab: hasExplicitTab || isConditionCheck || wantsNoTab ? false : (message.openNewTab === true),
     startWithoutTab: wantsNoTab,
+    // The operator accepted the "no target tab" warning (see the pre-tab validation in the engine).
+    confirmNoTab: message.confirmNoTab === true,
     // The page that asked for the run. A no-target-tab run (and any run that ends up in another
     // tab) leaves this page outside the play tabs, so the engine needs it by name to keep sending
     // per-step progress — otherwise the diagram cannot show which node is running.
@@ -2994,6 +2961,7 @@ async function startPlayWithAutoReload(message, sender) {
     playScope: pendingPlay.playScope,
     openNewTab: pendingPlay.openNewTab,
     startWithoutTab: pendingPlay.startWithoutTab,
+    confirmNoTab: pendingPlay.confirmNoTab === true,
     originTabId: pendingPlay.originTabId,
     activateTab: isConditionCheck ? false : undefined,
     runOnServer: pendingPlay.runOnServer
@@ -3130,6 +3098,7 @@ async function resumePendingPlayAfterReload() {
         playScope: pendingPlayRequest.playScope || null,
         openNewTab: pendingPlayRequest.openNewTab === true,
         startWithoutTab: pendingPlayRequest.startWithoutTab === true,
+        confirmNoTab: pendingPlayRequest.confirmNoTab === true,
         // Same page gets the progress again after the dev reload.
         originTabId: pendingPlayRequest.originTabId ?? null,
         // The choice must survive the dev-reload resume too, or a local run would resume as server.
@@ -3240,7 +3209,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   // resume), so both answers are re-evaluated here.
   applyDevPollCadence();
   handleRecordTabClosed(tabId).catch((err) => console.warn("[Webautomator Global] record tab close", err));
-  handlePlayTabClosed(tabId).catch((err) => console.warn("[Webautomator Global] play tab close", err));
 });
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   scheduleOpenTabsBroadcast("activated");

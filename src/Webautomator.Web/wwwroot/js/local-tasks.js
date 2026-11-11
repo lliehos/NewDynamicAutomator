@@ -251,6 +251,7 @@
   }
 
   const ICO_PLAY = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5L8 5.5z"/></svg>`;
+  const ICO_STOP = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 7h10v10H7V7z"/></svg>`;
   const ICO_REC = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="currentColor"/></svg>`;
   /** Robot head only (not brand mark / browser chrome). */
   const ICO_SMART = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="10.5" y="2.5" width="3" height="3.2" rx="1" fill="currentColor"/><circle cx="12" cy="2.2" r="1.4" fill="currentColor"/><rect x="5" y="6.5" width="14" height="13" rx="3.5" fill="currentColor"/><circle cx="9.2" cy="12" r="1.7" fill="#fff"/><circle cx="14.8" cy="12" r="1.7" fill="#fff"/><rect x="9" y="15.8" width="6" height="1.6" rx="0.8" fill="#fff" opacity="0.9"/></svg>`;
@@ -295,6 +296,72 @@
   function iconLink(cls, title, href, iconHtml) {
     return `<a class="ds-icon-btn ${cls}" href="${href}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${iconHtml}</a>`;
   }
+
+  /**
+   * Which process is PLAYING right now, per the player extension.
+   *
+   * The row's single run button becomes that process's STOP button. Stopping is one of the ways a
+   * run ends (the HUD's stop, the diagram's stop, this one) — closing the run's tab deliberately
+   * does NOT end a run any more — so the list must be able to stop a run whose tab is gone.
+   *
+   * The extension is the only source of truth: `da-play-state` answers "who is running", and
+   * `da-play-progress` says when the run stops (including runs someone started elsewhere).
+   */
+  const livePlay = { taskId: null, playing: false };
+  let pendingPlayTaskId = null;
+  let livePlayStateAskedAt = 0;
+
+  function setLivePlay(taskId, playing) {
+    livePlay.taskId = taskId != null ? String(taskId) : null;
+    livePlay.playing = !!playing;
+    paintRunButtons();
+  }
+
+  /** Re-render just the run buttons — a full list render on every step would be wasteful. */
+  function paintRunButtons() {
+    document.querySelectorAll('[data-run-toggle="1"]').forEach((btn) => {
+      const tid = btn.getAttribute("data-task-id");
+      const running = livePlay.playing && livePlay.taskId != null
+        && String(livePlay.taskId) === String(tid);
+      const want = running ? "stop-task" : "play-task-menu";
+      if (btn.getAttribute("data-da-action") === want) return;
+      btn.setAttribute("data-da-action", want);
+      btn.classList.toggle("is-stop-run", running);
+      btn.classList.toggle("is-play", !running);
+      btn.innerHTML = running ? ICO_STOP : ICO_PLAY;
+      btn.title = running
+        ? (t("tasks.stopRunTitle") || "توقف اجرا")
+        : (t("tasks.play") || "اجرا");
+      btn.setAttribute("aria-label", btn.title);
+      if (running) btn.removeAttribute("aria-haspopup");
+      else btn.setAttribute("aria-haspopup", "menu");
+    });
+  }
+
+  /** Ask the extension who is playing. Throttled: step progress also reaches us. */
+  function requestLivePlayState(force) {
+    const now = Date.now();
+    if (!force && now - livePlayStateAskedAt < 3000) return;
+    livePlayStateAskedAt = now;
+    try { window.postMessage({ source: "da-editor", type: "get-play-state" }, "*"); } catch { /* ignore */ }
+  }
+
+  window.addEventListener("da-play-state", (ev) => {
+    const d = ev.detail || {};
+    setLivePlay(d.taskId != null ? d.taskId : livePlay.taskId, !!d.playing);
+  });
+  window.addEventListener("da-play-progress", (ev) => {
+    const d = ev.detail || {};
+    if (!d.playing) {
+      if (livePlay.playing) setLivePlay(livePlay.taskId, false);
+      return;
+    }
+    if (!livePlay.playing) requestLivePlayState();
+  });
+  // A page reload loses the run's button state; ask once the list is up, and once more shortly
+  // after — the extension bridge is injected at document_start and may not be listening yet.
+  requestLivePlayState(true);
+  setTimeout(() => requestLivePlayState(true), 1200);
   function isServerBackedTaskId(id) {
     return /^\d+$/.test(String(id ?? "").trim());
   }
@@ -815,7 +882,7 @@
       ${editBtn}
       ${iconBtn("is-info", t("tasks.details"), ICO_INFO, `data-da-details="${tid}"`)}
       ${templateBtn}
-      ${iconBtn("is-play", t("tasks.play"), ICO_PLAY, `data-da-action="play-task-menu" data-task-id="${tid}" aria-haspopup="menu"`)}
+      ${iconBtn("is-play is-run-toggle", t("tasks.play"), ICO_PLAY, `data-run-toggle="1" data-da-action="play-task-menu" data-task-id="${tid}" aria-haspopup="menu"`)}
       ${iconBtn("is-rec", recTip, ICO_REC, recExtra)}
       ${smartBtn}
       ${dataBtns}
@@ -3240,6 +3307,9 @@ function dataSourceSafeFileName(ds) {
       </tr>`;
             }).join("");
             bindTaskActions(body);
+            // A re-render rebuilds every row, so the running process's row must get its Stop
+            // button back (the run outlives the render).
+            paintRunButtons();
           }
         } catch (err) {
           console.error("[local-tasks] rows render failed", err);
@@ -3252,6 +3322,8 @@ function dataSourceSafeFileName(ds) {
       } catch (err) {
         console.warn("[local-tasks] renderCards", err);
       }
+      // Cards render their own action buttons; paint AFTER them so both views agree.
+      paintRunButtons();
     } finally {
       rendering = false;
       if (pendingRenderTasks !== undefined) {
@@ -3811,6 +3883,20 @@ function dataSourceSafeFileName(ds) {
       return;
     }
 
+    // The same run button turns into "stop" while ITS process is the one playing.
+    const stopBtn = ev.target instanceof Element
+      ? ev.target.closest('[data-da-action="stop-task"]')
+      : null;
+    if (stopBtn) {
+      if (!document.getElementById("da-tasks-panel")) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      pendingPlayTaskId = null;
+      setLivePlay(livePlay.taskId, false);
+      window.dispatchEvent(new CustomEvent("da-stop-play"));
+      return;
+    }
+
     // The single play button opens the target menu. The run TYPE is not a click-time question —
     // it is the row switch's standing state — so the menu only asks which tab to drive.
     const runBtn = ev.target instanceof Element
@@ -3949,6 +4035,9 @@ function dataSourceSafeFileName(ds) {
           runOnServer
         }
       }));
+      // Until the page-world confirms, remember WHICH process we asked to run, so the first
+      // "started" event can flip this row's button to Stop.
+      pendingPlayTaskId = String(taskId);
     };
 
     menu.innerHTML = `
@@ -4193,12 +4282,27 @@ function dataSourceSafeFileName(ds) {
     }
     if (d.phase === "error") {
       const msg = d.text || "خطا در اجرا";
+      pendingPlayTaskId = null;
+      if (livePlay.playing) setLivePlay(livePlay.taskId, false);
       setTasksBusy(true, msg, { kind: "error" });
       notifyHome(msg, "error");
       setTimeout(() => setTasksBusy(false), 3500);
       return;
     }
-    if (d.phase === "started" || d.phase === "done") {
+    if (d.phase === "started") {
+      if (pendingPlayTaskId != null) {
+        setLivePlay(pendingPlayTaskId, true);
+        pendingPlayTaskId = null;
+      } else {
+        // A run started from somewhere else (the HUD, the editor, another page).
+        requestLivePlayState(true);
+      }
+      setTasksBusy(false);
+      return;
+    }
+    if (d.phase === "done") {
+      pendingPlayTaskId = null;
+      if (livePlay.playing) setLivePlay(livePlay.taskId, false);
       setTasksBusy(false);
     }
   });

@@ -1456,6 +1456,7 @@
     "emptyGroup": "Empty group",
     "start": "Start",
     "play": "Play",
+    "stopRunTitle": "Stop this process's run",
     "record": "Record",
     "smart": "Smart learn",
     "clone": "Clone process",

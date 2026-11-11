@@ -291,10 +291,25 @@
       openNewTab: hasTargetTab || startWithoutTab ? false : (isConditionCheck ? false : (scope?.openNewTab !== false)),
       // Start with NO tab at all: the first GoToUrl creates it. Mutually exclusive with openNewTab.
       startWithoutTab,
+      // Set only on the second attempt, after the operator accepted the pre-tab warning below.
+      confirmNoTab: false,
       // Per-run choice from the run-type menu. Unset means the default: a server run.
       runOnServer: scope?.runOnServer !== false
     };
-    const res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
+    let res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
+    // The engine refuses a no-target-tab run whose browser-dependent nodes run before the first
+    // GoToUrl — but the operator may know the path will not reach them. Ask once, then start anyway;
+    // at run time the first page step without a tab still stops the run with a clear error.
+    if (res?.code === "noTabNeedsConfirm") {
+      const proceed = window.confirm(`${res.error}\n\nادامه می‌دهید؟`);
+      if (!proceed) {
+        setPortalStatus("اجرا شروع نشد — وابستگی به تب پیش از باز شدن تب.", "error");
+        emitPlayUi("error", "اجرا شروع نشد (وابستگی به تب پیش از باز شدن تب).");
+        return { ok: false, cancelled: true, error: res.error };
+      }
+      payload.confirmNoTab = true;
+      res = await chrome.runtime.sendMessage(payload).catch((e) => ({ ok: false, error: e.message }));
+    }
     if (res?.reloading) {
       const msg = res.message || "افزونه در حال Reload است — اجرا خودکار شروع می‌شود…";
       setPortalStatus(msg, "info");

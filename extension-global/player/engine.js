@@ -871,6 +871,7 @@ const ENGINE_MSG = {
     "preTab.conditionNeedsBrowser": "این شرط به صفحهٔ مرورگر وابسته است ولی اجرا هنوز هیچ تبی ندارد؛ پیش از آن یک «رفتن به آدرس» بگذارید (تب جدید یا تب جاری)",
     "preTab.singleNeedsBrowser": "این گره به تب مرورگر نیاز دارد؛ برای اجرای بدون تب هدف، پیش از آن یک «رفتن به آدرس» قرار دهید",
     "run.noTabYet": "اجرا هنوز تبی در مرورگر ندارد. پیش از این مرحله یک «رفتن به آدرس» بگذارید تا تب ساخته شود.",
+    "run.tabClosedNoPage": "تب اجرا بسته شده و این مرحله به صفحهٔ مرورگر نیاز دارد؛ اجرا متوقف شد. برای ادامه، اجرا را دوباره شروع کنید.",
 
     "cond.typeMissing": "نوع شرط انتخاب نشده",
     "cond.srcDsMissing": "منبع مورد بررسی انتخاب نشده",
@@ -978,6 +979,7 @@ const ENGINE_MSG = {
     "preTab.conditionNeedsBrowser": "This condition depends on a browser page, but the run has not opened a tab yet; put a Go to URL step (new tab or current tab) before it",
     "preTab.singleNeedsBrowser": "This node needs a browser tab; to run without a target tab, put a Go to URL step before it",
     "run.noTabYet": "The run has no browser tab yet. Put a Go to URL step before this one so a tab is created.",
+    "run.tabClosedNoPage": "The run's tab was closed and this step needs the page, so the run stopped. Start the run again to continue.",
 
     "cond.typeMissing": "Condition type is not selected",
     "cond.srcDsMissing": "No data source selected to check",
@@ -1214,11 +1216,11 @@ function buildPreTabBrowserError(items, lang) {
     return `${head}\n${it.reasons.map((r) => `   • ${r}`).join("\n")}`;
   });
   const title = en
-    ? `Cannot start without a target tab: ${items.length} node(s) run before any tab is opened.`
-    : `اجرای بدون تب هدف ممکن نیست: ${items.length} نود پیش از باز شدن تب به مرورگر نیاز دارد.`;
+    ? `Warning — running without a target tab: ${items.length} node(s) run before any tab is opened.`
+    : `هشدار اجرای بدون تب هدف: ${items.length} نود پیش از باز شدن تب به مرورگر نیاز دارد.`;
   const tail = en
-    ? "Put a \"Go to URL\" step before them (new tab or current tab), or pick a target tab instead."
-    : "پیش از آن‌ها یک مرحلهٔ «رفتن به آدرس» بگذارید (تب جدید یا تب جاری)، یا در عوض یک تب هدف انتخاب کنید.";
+    ? "If you continue, the run stops with an error at the first step that needs the tab. To avoid it, put a \"Go to URL\" step before them (new tab or current tab), or pick a target tab instead."
+    : "اگر ادامه دهید، اجرا در اولین مرحله‌ای که به تب نیاز داشته باشد با خطا متوقف می‌شود. برای جلوگیری، پیش از آن‌ها یک مرحلهٔ «رفتن به آدرس» بگذارید (تب جدید یا تب جاری)، یا در عوض یک تب هدف انتخاب کنید.";
   return `${title}\n\n${lines.join("\n\n")}\n\n${tail}`;
 }
 
@@ -1352,6 +1354,18 @@ const PLAY_TAB_ALIAS_MAX = 24;
 let playTabs = new Map(); // normalized alias -> { id, name }
 let playTabAutoDiscard = new Map(); // tabId -> previous autoDiscardable value
 let playTabAutoAliasSeq = 0;
+/**
+ * The run lost its page because the tab was closed — set when the OPERATOR closes it, cleared as
+ * soon as the run owns a tab again. It changes only the wording of the refusal a page step gets
+ * ("the run's tab was closed" vs "this run never had a tab"), never the run's policy.
+ */
+let playTabLostToClose = false;
+/**
+ * Tab ids the ENGINE is about to close itself (the CloseTab action). `chrome.tabs.onRemoved` cannot
+ * say who closed a tab, so without this set a legitimate `CloseTab` on the run's own tab would look
+ * exactly like the operator closing it.
+ */
+const expectedPlayTabCloses = new Set();
 
 function normalizePlayTabAlias(raw) {
   return String(raw == null ? "" : raw).trim().toLowerCase();
@@ -1470,6 +1484,7 @@ async function openMainRunTab() {
   registerPlayTab(PLAY_TAB_MAIN, created.id);
   await protectPlayTab(created.id);
   playTabId = created.id;
+  playTabLostToClose = false;
   try {
     await chrome.storage.local.set({ playTabId: created.id, playSessionTabId: created.id });
   } catch { /* storage is best-effort here; the run continues */ }
@@ -1489,9 +1504,54 @@ async function finalizePlayTabs() {
 // naming it has to fail with "that tab is closed", not switch to a reused tab id.
 if (chrome?.tabs?.onRemoved?.addListener) {
   chrome.tabs.onRemoved.addListener((tabId) => {
+    const closedByEngine = expectedPlayTabCloses.delete(tabId);
     forgetPlayTabByTabId(tabId);
     playTabAutoDiscard.delete(tabId);
+    // The engine closed this tab on purpose (CloseTab) and already knows which tab the run
+    // continues in, so there is nothing to detach.
+    if (closedByEngine) return;
+    handlePlayTabDetachedFromRun(tabId).catch((err) => {
+      console.warn("[DA Player] tab close handling failed", err?.message || err);
+    });
   });
+}
+
+/**
+ * The run's own tab went away without the engine asking for it.
+ *
+ * Closing the tab does NOT end the run any more: stopping is the operator's decision (the HUD's stop
+ * button, the diagram's stop button, the process list) or the end of the process itself. The run only
+ * loses its PAGE, so the walk continues and the first step that actually needs a page reports a
+ * clear, non-ignorable error ("the run's tab was closed") and ends the run there. A tab-opening step
+ * (`GoToUrl`, named `SwitchTab`) can still create/attach a tab and carry on.
+ *
+ * The HUD marker must never outlive its tab: Chrome reuses tab ids, and a stale `playSessionTabId`
+ * would put a Player HUD on whatever unrelated page inherits that id later.
+ */
+async function handlePlayTabDetachedFromRun(tabId) {
+  const st = await chrome.storage.local
+    .get(["playing", "playTabId", "playSessionTabId"])
+    .catch(() => ({}));
+  if (st.playSessionTabId != null && Number(st.playSessionTabId) === Number(tabId)) {
+    try { await chrome.storage.local.remove("playSessionTabId"); } catch { /* ignore */ }
+  }
+  const playing = !!st.playing || !!(typeof playStatus !== "undefined" && playStatus?.playing);
+  if (!playing) return;
+  const known = st.playTabId != null ? Number(st.playTabId) : NaN;
+  const inMemory = playTabId != null ? Number(playTabId) : NaN;
+  // A named tab that is not the run's current page is just forgotten (above); only losing the page
+  // the run is working on detaches the run.
+  if (Number(tabId) !== known && Number(tabId) !== inMemory) return;
+
+  playTabId = null;
+  playTabLostToClose = true;
+  try { WebautomatorAlerts.clearAllAlertArming(); } catch { /* module may not be loaded */ }
+  try { await chrome.storage.local.set({ playTabId: null }); } catch { /* ignore */ }
+  appendPlayLog(
+    "warn",
+    "تب اجرا بسته شد. اجرا متوقف نشد؛ تا اولین مرحله‌ای که به صفحهٔ مرورگر نیاز دارد ادامه می‌دهد."
+  );
+  broadcastPlayState();
 }
 
 async function findTabByUrlPattern(pattern) {
@@ -2491,14 +2551,17 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
 
   // A run started with NO target tab is a deliberate shape: the process is expected to open its own
   // tab (GoToUrl with "new tab" or "current tab") after the page-independent checks at the top.
-  // Every browser-dependent node reachable BEFORE that point would fail at run time, so it is
-  // refused here — with the same node/group detail the regular validator reports. The check is
-  // scoped exactly like the run: a single-node test only judges the node under test.
+  // Every browser-dependent node reachable BEFORE that point would fail at run time, so the run is
+  // reported here — with the same node/group detail the regular validator reports — and the operator
+  // decides whether to start it anyway (`confirmNoTab`). The run then ends at the first page step
+  // that really has no tab, with an error instead of a silently skipped step.
+  // The check is scoped exactly like the run: a single-node test only judges the node under test.
   if (opts.startWithoutTab === true) {
     const preTabIssues = collectPreTabBrowserNodesForPlay(graph, opts);
-    if (preTabIssues.length) {
+    if (preTabIssues.length && opts.confirmNoTab !== true) {
       return {
         ok: false,
+        code: "noTabNeedsConfirm",
         error: buildPreTabBrowserError(preTabIssues, playUiCulture()),
         invalidNodes: preTabIssues.map((it) => ({
           id: it.id,
@@ -2666,6 +2729,7 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
   clearPlayLogs();
   await resetPlayTabs(tabId);
   playTabId = tabId;
+  playTabLostToClose = false;
   // nextFromNodeId is excluded here too: it is a full walk from a different entry point, so it keeps
   // the process-level repeat (a spreadsheet source still drives one iteration per row).
   const limited = !opts.nextFromNodeId
@@ -2801,6 +2865,9 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
   try {
     for (let li = 0; li < iters.indices.length; li++) {
       if (playAbort) break;
+      // Keep the loop's tab in step with the engine's: it becomes null when the operator closes the
+      // run's tab (see handlePlayTabDetachedFromRun) and is set again by the next tab-opening step.
+      if (activeTabId != null && playTabId == null) activeTabId = null;
       const rowIndex = iters.indices[li];
       playStatus.loopIndex = li + 1;
       playStatus.loopTotal = iters.total;
@@ -2826,6 +2893,14 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
         playStatus.currentNodeId = step.id;
         broadcastPlayState();
         if (step.kind === "condition" || opts.playScope === "condition") {
+          // No page: a no-tab run that has not reached its first GoToUrl yet, or the operator closed
+          // the run's tab. A page-dependent condition cannot be checked then, and reporting a
+          // confident `false` would silently change the diagram's path — stop with the real reason.
+          if (!activeTabId && conditionNeedsBrowserTab(step)) {
+            playStatus.lastError = tv(playTabLostToClose ? "run.tabClosedNoPage" : "run.noTabYet");
+            appendPlayLog("error", playStatus.lastError);
+            break;
+          }
           const title = step.title || step.conditionType || step.id;
           const checkId = Date.now();
           appendPlayLog("info", `بررسی شرط «${title}»…`);
@@ -2901,8 +2976,16 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
         } else if (isActionNode(step)) {
           appendPlayLog("info", `اجرای تک‌اقدام «${step.title || step.actionType || step.id}» (بدون ادامهٔ دیاگرام)`);
           const outcome = await runOneAction(activeTabId, graph, { ...step, _processRow: rowIndex, _ordinalBase: li }, rowIndex, li + 1, iters.total, 1, 1);
-          if (outcome.tabId) activeTabId = outcome.tabId;
+          if (outcome.tabId) {
+            activeTabId = outcome.tabId;
+            playTabLostToClose = false;
+          }
           if (!outcome.ok) {
+            if (outcome.fatal === true) {
+              playStatus.lastError = outcome.error || tv("run.tabClosedNoPage");
+              appendPlayLog("error", playStatus.lastError);
+              break;
+            }
             const decision = handleStepFailureForLoop(graph, outcome.error, {
               authFailure: outcome.authFailure === true
             });
@@ -2919,6 +3002,13 @@ async function runPlayLoop(tabId, graph, steps, iterations, options) {
         const walked = await executeFlow(activeTabId, graph, entryId, rowIndex, li + 1, iters.total, opts);
         activeTabId = walked.tabId || activeTabId;
         if (walked.stepFailed) {
+          // A lost page is fatal even with "ignore process errors" on: continuing would only produce
+          // a long list of failures against no page at all.
+          if (walked.fatal === true) {
+            playStatus.lastError = walked.error || tv("run.tabClosedNoPage");
+            appendPlayLog("error", playStatus.lastError);
+            break;
+          }
           const decision = handleStepFailureForLoop(graph, walked.error, {
             authFailure: walked.authFailure === true
           });
@@ -3202,6 +3292,10 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
   }];
 
   while (stack.length && !playAbort && !playStatus.lastError && guard++ < WALK_STEP_GUARD) {
+    // The operator closed the run's tab: the walk goes on, but this walker's own `activeTabId` still
+    // names the dead tab. Drop it here so page steps report "no tab" (and a GoToUrl can create a
+    // fresh one) instead of acting on a tab id that does not exist any more.
+    if (activeTabId != null && playTabId == null) activeTabId = null;
     await waitIfPaused();
     if (playAbort) break;
 
@@ -3336,6 +3430,7 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
       if (outcome.tabId) {
         activeTabId = outcome.tabId;
         playTabId = activeTabId;
+        playTabLostToClose = false;
       }
       if (!outcome.ok) {
         // Non-ignored step error → end the whole run; the outer loop's policy decides whether to
@@ -3345,7 +3440,8 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
           tabId: activeTabId,
           stepFailed: true,
           error: outcome.error || "خطای مرحله",
-          authFailure: outcome.authFailure === true
+          authFailure: outcome.authFailure === true,
+          fatal: outcome.fatal === true
         };
       }
       const nextId = flowEdge(edges, node.id, ["next"])?.to || null;
@@ -3383,6 +3479,27 @@ async function executeFlow(tabId, graph, entryId, rowIndex, loopIndex, loopTotal
         ...(condSelectorRow != null ? { _selectorRow: condSelectorRow } : {}),
         _rowScope: condCtx
       };
+      // A condition that reads the page cannot be evaluated once the run has no tab (either it
+      // started without one or the operator closed the tab). Reporting it as `false` would quietly
+      // take the fail branch and change what the run does, so this ends the run with a real error.
+      if (activeTabId == null && conditionNeedsBrowserTab(condNode)) {
+        playStatus.lastError = tv(playTabLostToClose ? "run.tabClosedNoPage" : "run.noTabYet");
+        appendPlayLog("error", playStatus.lastError);
+        appendPlayResult({
+          t: Date.now(),
+          loop: loopIndex,
+          loopTotal,
+          rowIndex: condRow,
+          step: stepOrdinal,
+          stepTotal: playStatus.stepTotal,
+          title: node.title || "شرط",
+          actionType: "Condition",
+          ok: false,
+          severity: "error",
+          detail: playStatus.lastError
+        });
+        break;
+      }
       try {
         pass = await evaluateCondition(activeTabId, condNode, graph, condRow);
       } catch (err) {
@@ -3671,7 +3788,11 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
   // An auth failure must never be swallowed by ignoreError (step) / ignorePlayError (process).
   // See isAuthFailure(): continuing against a dead session fails everything downstream.
   const authFailure = failed && isAuthFailure(outcome);
-  const ignored = failed && !authFailure && step.ignoreError !== false;
+  // Losing the PAGE is a session-level failure too: the run's tab was closed, so no later page step
+  // can work. The per-step "ignore error" switch exists for flaky steps, not for "there is no page",
+  // and swallowing this one walked the rest of the diagram doing nothing.
+  const noTabFailure = failed && outcome?.reason === "no_target_tab";
+  const ignored = failed && !authFailure && !noTabFailure && step.ignoreError !== false;
   const errMsg = authFailure
     ? AUTH_FAILURE_MESSAGE
     : (outcome?.error || "توقف به‌خاطر واگرایی");
@@ -3712,13 +3833,14 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
     appendPlayLog("error", `خطا در مرحله «${label}»: ${errDetail}`);
     // End current iteration (caller / loop decides continue vs abort). `authFailure` rides along
     // so the loop can refuse to continue even when its own ignore policy is switched on.
-    return { ok: false, stepFailed: true, error: errDetail, authFailure, tabId };
+    return { ok: false, stepFailed: true, error: errMsg, authFailure, fatal: noTabFailure, tabId };
   }
 
   let activeTabId = tabId;
   if (outcome.tabId && outcome.tabId !== tabId) {
     activeTabId = outcome.tabId;
     playTabId = activeTabId;
+    playTabLostToClose = false;
     // The HUD follows the tab the run is ACTUALLY working on. Without this, a process that
     // switched to another tab kept a session marker on the first one, so the new tab's fresh
     // document could not re-mount the HUD after a navigation.
@@ -4551,6 +4673,11 @@ async function closeWindowTab(currentTabId, target, alias, step) {
   // neighbour for us, which is not necessarily the one the diagram expects, so the caller is told
   // explicitly which tab to continue in.
   const next = ordered.find((t) => t.id !== victim.id) || null;
+  // Tell the tab-close handler this removal is OURS: `chrome.tabs.onRemoved` cannot distinguish a
+  // step that closes a tab from the operator closing it, and treating the two the same ended runs
+  // that a CloseTab step had deliberately moved to a neighbour tab.
+  expectedPlayTabCloses.add(victim.id);
+  setTimeout(() => expectedPlayTabCloses.delete(victim.id), 10000);
   await chrome.tabs.remove(victim.id);
   if (closedAliasKey) playTabs.delete(closedAliasKey);
   const continueId = victim.id === currentTabId ? (next ? next.id : null) : currentTabId;
@@ -4646,12 +4773,21 @@ async function runHistoryStep(tabId, direction, step) {
 
 async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   const actionType = step.actionType || "Click";
+  // The operator closed the tab the run was working on. The run itself is deliberately NOT ended by
+  // that (stopping is the operator's call), but the walk no longer has a page: report it as "no tab"
+  // instead of hammering a dead tab id, so the step fails with the real reason and the run ends
+  // there with a message the operator can act on.
+  if (tabId != null && playTabId == null) tabId = null;
   // A no-target-tab run creates its tab at the first GoToUrl. Reaching a page action before that
   // cannot work, so it is reported as one clear step failure instead of an exception from a null
   // tab id. Validation refuses this before the run anyway; this is the runtime backstop for graphs
   // edited by hand or reached through a branch the static check could not see.
   if (!tabId && !nodeOpensBrowserTab(step) && nodeNeedsBrowserTab(step)) {
-    return { ok: false, error: tv("run.noTabYet"), reason: "no_target_tab" };
+    return {
+      ok: false,
+      error: tv(playTabLostToClose ? "run.tabClosedNoPage" : "run.noTabYet"),
+      reason: "no_target_tab"
+    };
   }
   const framePath = parseFramePath(step.framePathJson);
   const resolvedSelector = await resolveDynamicSelectorAsync(step, graph, rowIndex ?? 0);

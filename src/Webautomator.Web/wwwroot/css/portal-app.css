@@ -1036,6 +1036,14 @@ html.light-style {
   background: var(--webautomator-soft, var(--webautomator-soft-default));
 }
 
+/* The row's run button while THIS process is playing: a red stop square, so "there is a run" and
+   "press here to end it" are the same control. */
+.da-task-actions .ds-icon-btn.is-stop-run,
+.da-task-actions-desk .ds-icon-btn.is-stop-run {
+  color: #ea5455;
+  background: #fdeaea;
+}
+
 .da-play-target-menu {
   position: absolute;
   z-index: 1100;
