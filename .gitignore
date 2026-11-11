@@ -537,8 +537,7 @@ docs/video/render/
 docs/video/.edgeprof/
 docs/video/audio/*.txt
 # Tutorial video media: the MP4 is ~60 MB and belongs in a release asset, not in git history.
-# docs/video/README.md says how to rebuild it; the panel player picks it up from wwwroot/media.
+# docs/video/README.md says how to rebuild it; the panel guide carries the text edition instead.
 docs/video/*.mp4
 docs/video/audio/*.mp3
 docs/video/audio/*.json
-src/Webautomator.Web/wwwroot/media/tutorial/*.mp4

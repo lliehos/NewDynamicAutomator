@@ -267,69 +267,12 @@
   }
 }
 
-/* ---- Video walkthrough + quick path (g-video) ----------------------------
-   The film is optional media (it is not in the repository) but the eight-chapter path under it
-   is not: it is the shortest route from "no extension" to "first run", and every chapter links
-   into the long-form section that explains it. Cards stay in a 2-column grid on wide screens so
-   the whole path is visible without scrolling past a wall of text. */
+/* ---- Text walkthrough (g-walk) ------------------------------------------
+   The written edition of the tutorial: eight chapters in working order, each a card with a short
+   lead, four steps and one tip. Two columns keep the whole path visible; the cards are the same
+   surface as the rest of the page, so the section reads as part of the guide, not a widget. */
 
-.da-guide-player {
-  display: block;
-  inline-size: 100%;
-  aspect-ratio: 16 / 9;
-  border: 1px solid var(--webautomator-border-subtle, #e4e4ee);
-  border-radius: 12px;
-  background: #0b1b2b;
-  object-fit: contain;
-}
-
-.da-guide-player-missing {
-  position: relative;
-  overflow: hidden;
-  border: 2px dashed var(--webautomator-border-subtle, #d8d8e6);
-  border-radius: 12px;
-  background: #0b1b2b;
-  aspect-ratio: 16 / 9;
-}
-
-/* Poster is decorative here: it sets the frame's proportions and tone, the note explains the
-   state. Dimming it keeps the note readable over the artwork. */
-.da-guide-player-missing img {
-  position: absolute;
-  inset: 0;
-  inline-size: 100%;
-  block-size: 100%;
-  object-fit: cover;
-  opacity: 0.35;
-}
-
-.da-guide-player-missing-body {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  block-size: 100%;
-  padding: 24px;
-  text-align: center;
-  color: #cfd8e3;
-}
-
-.da-guide-player-missing-body .ti {
-  font-size: 1.9rem;
-  opacity: 0.75;
-}
-
-.da-guide-player-missing-body .da-guide-shot-title {
-  color: #f1f5f9;
-}
-
-.da-guide-player-missing-body .da-guide-shot-file code {
-  color: #5eead4;
-}
-
-.da-guide-vchapters {
+.da-guide-wchapters {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -338,23 +281,23 @@
   gap: 14px;
 }
 
-.da-guide-vchapter {
+.da-guide-wchapter {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 14px 16px;
+  padding: 16px 18px;
   border: 1px solid var(--webautomator-border-subtle, #e7e7f1);
   border-radius: 12px;
   background: #fff;
 }
 
-.da-guide-vchapter-head {
+.da-guide-wchapter-head {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.da-guide-vnum {
+.da-guide-wnum {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -368,27 +311,43 @@
   font-weight: 700;
 }
 
-.da-guide-vchapter-title {
-  font-size: 0.92rem;
+.da-guide-wchapter-title {
+  font-size: 0.95rem;
   font-weight: 700;
   color: var(--webautomator-ink, #2f2f45);
 }
 
-.da-guide-vmore {
+.da-guide-wmore {
   margin-inline-start: auto;
   font-size: 0.76rem;
 }
 
-.da-guide-vsteps {
+/* The lead sets the chapter's promise; slightly darker than body text so the eye stops on it. */
+.da-guide-wlead {
+  margin: 0;
+  font-size: 0.87rem;
+  line-height: 1.85;
+  color: var(--webautomator-ink, #3f3f57);
+}
+
+.da-guide-wsteps {
   margin: 0;
   padding-inline-start: 1.05rem;
-  font-size: 0.85rem;
-  line-height: 1.75;
-  gap: 4px;
+  font-size: 0.84rem;
+  line-height: 1.8;
+  gap: 5px;
+}
+
+/* Tips sit inside the card: the shared callout margins would pull the card apart. */
+.da-guide-wtip {
+  margin: 2px 0 0;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  line-height: 1.8;
 }
 
 @media (max-width: 767.98px) {
-  .da-guide-vchapters {
+  .da-guide-wchapters {
     grid-template-columns: minmax(0, 1fr);
   }
 }

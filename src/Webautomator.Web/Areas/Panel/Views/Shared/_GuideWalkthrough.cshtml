@@ -1,0 +1,56 @@
+@{
+  // Text edition of the operator walkthrough that the tutorial video narrates: the same eight
+  // chapters, in the same order, but readable — no player, no media files, nothing to supply.
+  // The panel is often opened on locked-down machines where a 60 MB video is not an option, and a
+  // written path can be skimmed while the operator works.
+  var faDigits = new[] { "۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹" };
+
+  // Chapter -> the long-form section that explains it in detail. An empty target means the chapter
+  // has no dedicated section (troubleshooting reads as part of play), so no "read more" link shows.
+  var chapters = new (int N, string Target)[]
+  {
+    (1, "#g-7"), (2, "#g-3"), (3, "#g-8"), (4, "#g-4"),
+    (5, "#g-5"), (6, "#g-6"), (7, "#g-9"), (8, "")
+  };
+}
+
+<section class="da-guide-section da-guide-walk" id="g-walk">
+  <h5>
+    <span class="da-guide-num"><i class="ti ti-route" aria-hidden="true"></i></span>
+    <span data-i18n="panel.guide.walk.title">@L["panel.guide.walk.title"]</span>
+  </h5>
+  <p data-i18n="panel.guide.walk.body">@L["panel.guide.walk.body"]</p>
+
+  <h6 data-i18n="panel.guide.walk.chaptersTitle">@L["panel.guide.walk.chaptersTitle"]</h6>
+
+  <ol class="da-guide-wchapters">
+    @foreach (var (n, target) in chapters)
+    {
+      var titleKey = $"panel.guide.walk.c{n}Title";
+      var leadKey = $"panel.guide.walk.c{n}Lead";
+      var tipKey = $"panel.guide.walk.c{n}Tip";
+      <li class="da-guide-wchapter">
+        <div class="da-guide-wchapter-head">
+          <span class="da-guide-wnum" aria-hidden="true">@faDigits[n]</span>
+          <span class="da-guide-wchapter-title" data-i18n="@titleKey">@L[titleKey]</span>
+          @if (!string.IsNullOrEmpty(target))
+          {
+            <a class="da-guide-open da-guide-wmore" href="@target">
+              <i class="ti ti-arrow-down" aria-hidden="true"></i>
+              <span data-i18n="panel.guide.walk.more">@L["panel.guide.walk.more"]</span>
+            </a>
+          }
+        </div>
+        <p class="da-guide-wlead" data-i18n="@leadKey">@L[leadKey]</p>
+        <ul class="da-guide-list da-guide-wsteps">
+          @for (var b = 1; b <= 4; b++)
+          {
+            var bulletKey = $"panel.guide.walk.c{n}B{b}";
+            <li data-i18n="@bulletKey">@L[bulletKey]</li>
+          }
+        </ul>
+        <div class="da-guide-callout da-guide-wtip" data-i18n="@tipKey">@L[tipKey]</div>
+      </li>
+    }
+  </ol>
+</section>

@@ -79,20 +79,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build\make_video.ps1
   (`mov_text`) داخل MP4 قرار می‌گیرد.
 - خروجی `render/` قابل حذف است؛ فقط برای بازسازی لازم است.
 
-## نمایش در پنل (بخش «راهنمای سامانه»)
+## رابطه با راهنمای پنل
 
-همین ویدیو و مسیر هشت‌فصلی‌اش در صفحهٔ راهنمای پنل هم هست
-(`Areas/Panel/Views/Shared/_GuideVideo.cshtml`). برای فعال شدن پخش‌کننده، دو فایل را
-با همین نام‌ها در وب قرار دهید:
+ویدیو در پنل وب پخش نمی‌شود. صفحهٔ «راهنمای سامانه» (`/Panel/Home/Guide`) همین مسیر را
+به‌صورت **متنی** دارد: بخش «مسیر گام‌به‌گام» با هشت فصل، هر فصل یک مقدمهٔ کوتاه، چهار قدم و
+یک نکته (`Areas/Panel/Views/Shared/_GuideWalkthrough.cshtml` + کلیدهای `panel.guide.walk.*`).
+متن فصل‌ها از همین `script.json` گرفته شده است، پس اگر روایت ویدیو را عوض کردید، همان
+تغییر را در فایل زبان هم اعمال کنید تا دو نسخه از هم دور نشوند.
 
-```powershell
-copy docs\video\Webautomator-Tutorial-FA.mp4 src\Webautomator.Web\wwwroot\media\tutorial\
-copy docs\video\Webautomator-Tutorial-FA.srt src\Webautomator.Web\wwwroot\media\tutorial\
-```
-
-- SRT و پوستر ویدیو در مخزن هستند؛ MP4 (حدود ۶۰ مگابایت) عمداً کامیت نمی‌شود
-  (در `.gitignore` هست) و از همین پوشه در محل نصب کپی می‌شود.
-- اگر فایل نباشد، راهنما به‌جای پخش‌کنندهٔ خراب، همان قاب پوستر با پیام «قرار داده نشده»
-  و مسیر دقیق فایل را نشان می‌دهد — همان قاعده‌ای که جای اسکرین‌شات‌ها دارد.
 > `build/_ref_drm.py` از مخزن [rany2/edge-tts](https://github.com/rany2/edge-tts) (MIT) گرفته شده و
 > فقط برای محاسبهٔ توکن `Sec-MS-GEC` سرویس Read-Aloud استفاده می‌شود؛ بقیهٔ کد ساخت ویدیو مال همین پروژه است.
