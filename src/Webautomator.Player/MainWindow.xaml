@@ -99,11 +99,34 @@
         </Border>
 
         <StackPanel Grid.Row="1" Margin="24,22,24,24">
-          <TextBlock Style="{StaticResource DsHint}" TextAlignment="Center" Margin="0,0,0,18"
-                     Text="برای ورود، مرورگر باز می‌شود و پس از احراز هویت به این برنامه بازمی‌گردید."/>
+          <TextBlock Style="{StaticResource DsHint}" TextAlignment="Center" Margin="0,0,0,14"
+                     Text="با نام کاربری و رمز عبور وارد شوید، یا از طریق مرورگر احراز هویت کنید."/>
 
-          <Button x:Name="BrowserLoginButton" Style="{StaticResource DsBrandButton}"
-                  Click="BrowserLogin_Click" Margin="0,0,0,12">
+          <!-- Username/password sign-in. -->
+          <TextBlock Style="{StaticResource DsHint}" FontSize="11" Text="نام کاربری" Margin="0,0,0,4"/>
+          <TextBox x:Name="LoginUserBox" Style="{StaticResource DsTextBox}" Margin="0,0,0,10"
+                   KeyDown="LoginField_KeyDown"/>
+
+          <TextBlock Style="{StaticResource DsHint}" FontSize="11" Text="رمز عبور" Margin="0,0,0,4"/>
+          <PasswordBox x:Name="LoginPasswordBox" Style="{StaticResource DsPasswordBox}" Margin="0,0,0,14"
+                       KeyDown="LoginField_KeyDown"/>
+
+          <Button x:Name="PasswordLoginButton" Style="{StaticResource DsBrandButton}"
+                  Click="PasswordLogin_Click" Margin="0,0,0,14" Content="ورود"/>
+
+          <Grid Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Height="1" Background="{StaticResource DsBorderBrush}" VerticalAlignment="Center"/>
+            <TextBlock Grid.Column="1" Style="{StaticResource DsHint}" FontSize="11" Text="یا" Margin="10,0"/>
+            <Border Grid.Column="2" Height="1" Background="{StaticResource DsBorderBrush}" VerticalAlignment="Center"/>
+          </Grid>
+
+          <Button x:Name="BrowserLoginButton" Style="{StaticResource DsButtonSecondary}"
+                  Click="BrowserLogin_Click" Margin="0,0,0,14">
             <StackPanel Orientation="Horizontal">
               <TextBlock Text="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="16"
                          VerticalAlignment="Center" Margin="0,0,8,0"/>

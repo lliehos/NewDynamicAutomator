@@ -5067,7 +5067,7 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   // in the editor's validateActionNode — the two sides must agree about which steps read a source.
   const needsAsyncValue = stepReceivesValue(actionType) && (
     stepUsesDataSourceValue(step)
-    || cst === "Memory" || cst === "Elements" || cst === "System"
+    || cst === "Memory" || cst === "Elements" || cst === "System" || cst === "PageUrl"
     || (actionType === "InputContent" || actionType === "SelectOption" || actionType === "Hold")
   );
 
@@ -5710,7 +5710,22 @@ async function resolveStepParamAsync(step, graph, rowIndex, opts = {}) {
   const cst = step.contentSourceType || "";
   if (cst === "System") {
     return resolveSystemValue(step.systemValueType || "CurrentDateTime", step.systemClockFormat);
-  }  if (stepUsesDataSourceValue(step)) {
+  }
+  // «آدرس صفحه»: the value is the URL the run's tab is on WHEN THIS STEP RUNS, not the address the
+  // process started from. A navigation earlier in the flow therefore changes what gets stored.
+  if (cst === "PageUrl") {
+    const tabId = opts.tabId;
+    if (!tabId) return "";
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      return tab?.url || "";
+    } catch {
+      // A tab that went away cannot supply a URL; the step's own value is the empty string and the
+      // surrounding action decides what to do with it (like every other unreadable value).
+      return "";
+    }
+  }
+  if (stepUsesDataSourceValue(step)) {
     const ds = findDataSourceForValue(step, graph);
     const v = await readDataSourceCellForPlay(
       ds, step.dynamicSourceColumnName, rowIndex ?? 0, step, graph

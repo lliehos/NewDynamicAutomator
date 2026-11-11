@@ -208,6 +208,77 @@ public partial class MainWindow : Window
 
     // ---- Login ----------------------------------------------------------------------------------
 
+    /// <summary>Enter in either sign-in field submits the password form.</summary>
+    private void LoginField_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) PasswordLogin_Click(sender, e);
+    }
+
+    /// <summary>
+    /// Sign in with the panel's own username and password.
+    /// </summary>
+    /// <remarks>
+    /// This is the same endpoint the panel's own form uses, so the deployment's provider rules
+    /// (local accounts, the directory, single-session, device binding) apply unchanged. Browser
+    /// sign-in remains available underneath for accounts that prefer it or need a second factor.
+    /// </remarks>
+    private async void PasswordLogin_Click(object sender, RoutedEventArgs e)
+    {
+        var baseUrl = ServerAddress.BaseUrl;
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsDangerBrush");
+            LoginStatus.Text = DsStrings.ErrServerUrl;
+            return;
+        }
+
+        var userName = (LoginUserBox.Text ?? "").Trim();
+        var password = LoginPasswordBox.Password ?? "";
+        if (userName.Length == 0 || password.Length == 0)
+        {
+            LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsDangerBrush");
+            LoginStatus.Text = DsStrings.LoginFieldsRequired;
+            return;
+        }
+
+        PasswordLoginButton.IsEnabled = false;
+        BrowserLoginButton.IsEnabled = false;
+        LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsMutedBrush");
+        LoginStatus.Text = DsStrings.LoggingInPassword;
+        try
+        {
+            _client = new PanelClient(baseUrl);
+            var res = await _client.LoginAsync(userName, password);
+            if (!res.Ok)
+            {
+                LoginStatus.Foreground = (System.Windows.Media.Brush)FindResource("DsDangerBrush");
+                LoginStatus.Text = res.Error ?? DsStrings.LoginFailed;
+                return;
+            }
+
+            LoginStatus.Text = "";
+            LoginPasswordBox.Clear();
+            SaveLoginState(baseUrl, res.Value, _client.AccessToken);
+            await AfterLoginAsync();
+        }
+        finally
+        {
+            PasswordLoginButton.IsEnabled = true;
+            BrowserLoginButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>Remember the session token (never the password) for the next launch.</summary>
+    private static void SaveLoginState(string baseUrl, string? userName, string? token)
+    {
+        var saved = AppSettings.Load();
+        saved.ServerUrl = baseUrl;
+        saved.UserName = userName;
+        saved.Token = token;
+        saved.Remember = true;
+        AppSettings.Save(saved);
+    }
+
     /// <summary>
     /// Sign in through the browser.
     /// </summary>
@@ -246,12 +317,7 @@ public partial class MainWindow : Window
             LoginStatus.Text = "";
             // The token is kept so a restart does not force a browser round-trip; it is the same
             // kind of token the extension stores, and it expires on the server's own schedule.
-            var saved = AppSettings.Load();
-            saved.ServerUrl = baseUrl;
-            saved.UserName = res.Value;
-            saved.Token = _client.AccessToken;
-            saved.Remember = true;
-            AppSettings.Save(saved);
+            SaveLoginState(baseUrl, res.Value, _client.AccessToken);
 
             await AfterLoginAsync();
         }

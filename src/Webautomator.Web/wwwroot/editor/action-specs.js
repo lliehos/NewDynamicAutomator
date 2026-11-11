@@ -13,6 +13,7 @@
  *   elementVal — may read that input value from a page element
  *   memoryVal  — may read that input value from a memory variable
  *   systemVal  — may use a system-generated value (date / time / guid / random)
+ *   pageUrlVal — may use the current page URL as its input value
  *   readsCell  — reads a data-source cell as its input value
  *   writesSrc  — writes into a data-source cell (so it picks a destination source + column)
  *   writesMem  — writes into a memory variable (so it names the variable)
@@ -49,9 +50,10 @@
 
     // --- data source ---------------------------------------------------------
     // InsertContent writes a value INTO a source cell. The value may come from a constant, a page
-    // element, a memory variable or the system — but NOT from a data source: writing a cell by
-    // reading another cell of the same table is a copy, which this action does not offer.
-    InsertContent:  { value: true, elementVal: true, memoryVal: true, systemVal: true, writesSrc: true },
+    // element, a memory variable, the system or the current page URL — but NOT from a data source:
+    // writing a cell by reading another cell of the same table is a copy, which this action does not
+    // offer.
+    InsertContent:  { value: true, elementVal: true, memoryVal: true, systemVal: true, pageUrlVal: true, writesSrc: true },
     // Which row is chosen on the step (first / last / the loop's row), so no value and no selector.
     DeleteRow:      {},
     // Adds a blank row at a chosen position. The columns come from the source, so nothing to pick.
@@ -116,8 +118,11 @@
     }
     var spec = actionSpec(at);
     if (spec.browser === true) return true;
-    // A value read from a page element (SetMemory / InsertContent) still needs the page.
-    return spec.elementVal === true && String((step && step.contentSourceType) || "") === "Elements";
+    // A value read from a page element (SetMemory / InsertContent) still needs the page, and so
+    // does the current page URL (InsertContent's «آدرس صفحه» value source).
+    var cst = String((step && step.contentSourceType) || "");
+    return (spec.elementVal === true && cst === "Elements")
+      || (spec.pageUrlVal === true && cst === "PageUrl");
   }
 
   /**
@@ -140,6 +145,7 @@
   function stepAllowsElementValue(at) { return actionSpec(at).elementVal === true; }
   function stepAllowsMemoryValue(at) { return actionSpec(at).memoryVal === true; }
   function stepAllowsSystemValue(at) { return actionSpec(at).systemVal === true; }
+  function stepAllowsPageUrlValue(at) { return actionSpec(at).pageUrlVal === true; }
   function stepWritesToSource(at) { return actionSpec(at).writesSrc === true; }
   function stepWritesToMemory(at) { return actionSpec(at).writesMem === true; }
   function stepReadsCell(at) { return actionSpec(at).readsCell === true; }
@@ -154,6 +160,7 @@
     stepAllowsElementValue: stepAllowsElementValue,
     stepAllowsMemoryValue: stepAllowsMemoryValue,
     stepAllowsSystemValue: stepAllowsSystemValue,
+    stepAllowsPageUrlValue: stepAllowsPageUrlValue,
     stepWritesToSource: stepWritesToSource,
     stepWritesToMemory: stepWritesToMemory,
     stepReadsCell: stepReadsCell,
@@ -170,6 +177,7 @@
   global.stepAllowsElementValue = stepAllowsElementValue;
   global.stepAllowsMemoryValue = stepAllowsMemoryValue;
   global.stepAllowsSystemValue = stepAllowsSystemValue;
+  global.stepAllowsPageUrlValue = stepAllowsPageUrlValue;
   global.stepWritesToSource = stepWritesToSource;
   global.stepWritesToMemory = stepWritesToMemory;
   global.stepReadsCell = stepReadsCell;

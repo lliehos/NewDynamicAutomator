@@ -40,6 +40,29 @@ public class AuthApiController : ControllerBase
         return Ok(result);
     }
 
+    [HttpPost("login")]
+    [AllowAnonymous]
+    public async Task<ActionResult<LoginResponse>> Login([FromBody] LoginRequest request, CancellationToken ct)
+    {
+        // The desktop Player signs in here. Keeping it on the same service as the panel form means
+        // the provider rules (local / directory), session version, device binding and single-session
+        // enforcement are enforced once, not reimplemented for the desktop client.
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var (result, errorKey) = await _auth.LoginAsync(request, ip, ct);
+        if (result is null)
+            return Unauthorized(new { message = errorKey ?? "login.errorInvalid", code = errorKey });
+
+        Response.Cookies.Append(AuthService.CookieName, result.Token, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = Request.IsHttps,
+            SameSite = SameSiteMode.Lax,
+            Path = "/",
+            Expires = DateTimeOffset.UtcNow.AddDays(30)
+        });
+        return Ok(result);
+    }
+
     [HttpPost("upgrade")]
     [Authorize]
     public async Task<ActionResult<LoginResponse>> Upgrade([FromBody] UpgradePlanRequest request, CancellationToken ct)

@@ -161,6 +161,20 @@ const walkGraph = {
 };
 
 async function main() {
+  // --- «آدرس صفحه» value source (InsertContent) ------------------------------------------------
+  // The editor offers the page URL as a value source for InsertContent; the engine must resolve
+  // it from the run's tab at execution time, and the tab-less start validation must count it as a
+  // browser-dependent value.
+  check("spec: InsertContent allows the page-URL value", stepAllowsPageUrlValue("InsertContent"), true);
+  check("spec: page-URL value needs a tab", stepNeedsBrowser("InsertContent", { contentSourceType: "PageUrl" }), true);
+  const realTabGet = globalThis.chrome.tabs.get;
+  globalThis.chrome.tabs.get = async () => ({ id: 7, url: "https://example.test/landing" });
+  const pageUrl = await resolveStepParamAsync(
+    { actionType: "InsertContent", contentSourceType: "PageUrl" },
+    { nodes: [], edges: [], dataSources: [] }, 0, { tabId: 7 });
+  globalThis.chrome.tabs.get = realTabGet;
+  check("value: page URL read from the run tab", pageUrl, "https://example.test/landing");
+
   let condCalls = 0;
   let round = 0;
   // Stub the page-side check: false twice, then true (round 3), resetting for the next iteration.

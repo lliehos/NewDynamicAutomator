@@ -8834,6 +8834,7 @@
         allowsElement: g.stepAllowsElementValue,
         allowsMemory: g.stepAllowsMemoryValue,
         allowsSystem: g.stepAllowsSystemValue,
+        allowsPageUrl: g.stepAllowsPageUrlValue,
         writesSource: g.stepWritesToSource,
         writesMemory: g.stepWritesToMemory,
         readsCell: g.stepReadsCell
@@ -8965,6 +8966,13 @@
     const h = specHelpers();
     if (h) return h.allowsSystem(actionType) === true;
     return stepReceivesValue(actionType) && actionType !== "WaitTime";
+  }
+
+  /** True when the step may use the current page URL as its input value (InsertContent). */
+  function stepAllowsPageUrlValue(actionType) {
+    const h = specHelpers();
+    if (h) return h.allowsPageUrl(actionType) === true;
+    return actionType === "InsertContent";
   }
 
   const SYSTEM_VALUE_OPTIONS = [
@@ -9836,6 +9844,7 @@
     if (stepAllowsElementValue(at)) allowed.add("Elements");
     if (stepAllowsMemoryValue(at)) allowed.add("Memory");
     if (stepAllowsSystemValue(at)) allowed.add("System");
+    if (stepAllowsPageUrlValue(at)) allowed.add("PageUrl");
     if (!allowed.has(src)) src = "Constant";
     n.contentSourceType = src;
     n.valueFromSource = src === "DataSource";
@@ -10261,6 +10270,7 @@
         <select data-k="contentSourceType">
           <option value="Constant" ${src === "Constant" ? "selected" : ""}>ثابت</option>
           ${stepAllowsElementValue(at) ? `<option value="Elements" ${src === "Elements" ? "selected" : ""}>عنصر صفحه</option>` : ""}
+          ${stepAllowsPageUrlValue(at) ? `<option value="PageUrl" ${src === "PageUrl" ? "selected" : ""}>آدرس صفحه</option>` : ""}
           ${stepReadsCell(at) ? `<option value="DataSource" ${src === "DataSource" ? "selected" : ""}>منبع داده</option>` : ""}
           ${stepAllowsMemoryValue(at) ? `<option value="Memory" ${src === "Memory" ? "selected" : ""}>حافظه (متغیر)</option>` : ""}
           ${stepAllowsSystemValue(at) ? `<option value="System" ${src === "System" ? "selected" : ""}>پیش‌فرض سیستم</option>` : ""}
@@ -10315,6 +10325,13 @@
         ${nodeNeedsNodeRowPointer(n) ? rowPointerSectionHtml(n, "node") : ""}
         ${emptyDs}
         <p class="palette-hint">در اجرا مقدار سلول ردیف جاری خوانده می‌شود.</p>`;
+    } else if (src === "PageUrl") {
+      // The value is read from the tab the run is on at the moment this step executes, so there is
+      // nothing to type: a navigation earlier in the flow changes it.
+      html += `<p class="palette-hint" style="margin:4px 0 0;line-height:1.7">
+        آدرس کامل صفحهٔ تبِ جاری در لحظهٔ اجرا خوانده و در سلول نوشته می‌شود؛ اگر مرحلهٔ قبل به
+        آدرس دیگری رفته باشد، همان آدرس جدید ثبت می‌شود.
+      </p>`;
     } else if (src === "Memory") {
       html += `<div class="insp-field"><label>متغیر حافظه</label>
         <input data-k="memoryVariableName" list="mem-var-list" value="${esc(n.memoryVariableName || "")}" placeholder="نام متغیر" />

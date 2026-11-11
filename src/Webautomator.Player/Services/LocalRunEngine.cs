@@ -483,12 +483,24 @@ public sealed class LocalRunEngine
             if (!string.IsNullOrWhiteSpace(name)) _memory[name] = value ?? "";
             return StepOutcome.Success;
         }
-        if (action is "InsertContent" or "LoadContent")
+        if (action is "InsertContent")
         {
-            var read = _actions.ReadElementValue(_browser.Driver, node, TimeSpan.FromSeconds(15));
-            var text = action == "LoadContent" ? (value ?? "") : (read.Value ?? "");
-            if (action == "InsertContent" && !read.Ok) return StepOutcome.Fail(read.Error ?? "مقدار از صفحه خوانده نشد.");
-            return WriteCell(graph, node, rowIndex, text);
+            // The value source decides where the value comes from, exactly as the editor's picker
+            // says. «عنصر صفحه» reads the page; constant / memory / system / page-URL were already
+            // resolved above. This mirrors the extension's resolveStepParamAsync, which used to be
+            // diverged here: every InsertContent read the page regardless of the chosen source.
+            var source = node.ContentSourceType ?? node.ReadExtraString("valueSourceType");
+            if (string.Equals(source, "Elements", StringComparison.OrdinalIgnoreCase))
+            {
+                var read = _actions.ReadElementValue(_browser.Driver, node, TimeSpan.FromSeconds(15));
+                if (!read.Ok) return StepOutcome.Fail(read.Error ?? "مقدار از صفحه خوانده نشد.");
+                return WriteCell(graph, node, rowIndex, read.Value ?? "");
+            }
+            return WriteCell(graph, node, rowIndex, value ?? "");
+        }
+        if (action is "LoadContent")
+        {
+            return WriteCell(graph, node, rowIndex, value ?? "");
         }
 
         // Row-level actions change the SHAPE of a source's content, so they are not a page action and
@@ -514,6 +526,10 @@ public sealed class LocalRunEngine
         var srcType = node.ContentSourceType ?? node.ReadExtraString("valueSourceType");
         var memName = node.MemoryVariableName ?? "";
 
+        // «آدرس صفحه»: the current URL of the run's browser, read at the moment this step runs.
+        if (string.Equals(srcType, "PageUrl", StringComparison.OrdinalIgnoreCase))
+            return _browser.IsOpen ? _browser.Driver.Url : "";
+
         if (string.Equals(srcType, "DataSource", StringComparison.OrdinalIgnoreCase))
         {
             var dsId = node.DataSourceId ?? node.SaveDataSourceId;
@@ -535,13 +551,17 @@ public sealed class LocalRunEngine
         if (string.Equals(srcType, "System", StringComparison.OrdinalIgnoreCase))
         {
             var which = node.ReadExtraString("systemValueType");
+            var fmt = node.ReadExtraString("systemClockFormat");
             return which switch
             {
-                "CurrentDate" => ConditionEvaluator.SystemClock("SystemDate", node.ReadExtraString("systemClockFormat")),
-                "CurrentTime" => ConditionEvaluator.SystemClock("SystemTime", node.ReadExtraString("systemClockFormat")),
-                "CurrentDateTime" => $"{ConditionEvaluator.SystemClock("SystemDate", node.ReadExtraString("systemClockFormat"))} " +
-                                     $"{ConditionEvaluator.SystemClock("SystemTime", node.ReadExtraString("systemClockFormat"))}",
-                "Guid" => Guid.NewGuid().ToString(),
+                "CurrentDate" => ConditionEvaluator.SystemClock("SystemDate", fmt),
+                "CurrentTime" => ConditionEvaluator.SystemClock("SystemTime", fmt),
+                "CurrentDateTime" => $"{ConditionEvaluator.SystemClock("SystemDate", fmt)} " +
+                                     $"{ConditionEvaluator.SystemClock("SystemTime", fmt)}",
+                // The editor's picker names these exactly; «Guid» is kept for older saved graphs.
+                "Timestamp" => DateTimeOffset.Now.ToUnixTimeMilliseconds().ToString(),
+                "Uuid" or "Guid" => Guid.NewGuid().ToString(),
+                "RandomInt" => Random.Shared.Next(0, 1_000_000_000).ToString(),
                 _ => node.ConstantValue ?? ""
             };
         }

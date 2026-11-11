@@ -17,6 +17,11 @@ internal static class DsStrings
     public const string LoginTitle = "ورود به سرور";
     public const string Login = "ورود";
     public const string LoginWithBrowser = "ورود با مرورگر";
+    public const string LoginWithPassword = "ورود با نام کاربری و رمز";
+    public const string UserName = "نام کاربری";
+    public const string Password = "رمز عبور";
+    public const string LoginFieldsRequired = "نام کاربری و رمز عبور را وارد کنید.";
+    public const string LoggingInPassword = "در حال ورود…";
     public const string LoggingIn = "منتظر تکمیل ورود در مرورگر…";
     public const string Logout = "خروج";
     public const string LoginFailed = "ورود انجام نشد.";
