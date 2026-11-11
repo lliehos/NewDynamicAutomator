@@ -153,7 +153,9 @@ public class DesktopAuthController : Controller
             return Unauthorized(new { message = "کاربر یافت نشد." });
 
         // Minted fresh rather than replayed, so the Player never holds a token the browser ever saw.
-        var token = await _auth.CreateTokenAsync(user, ct: ct);
+        // It is a DESKTOP session: the browser sign-in that approved this handshake already took the
+        // panel's session slot, and the player must not be evicted by the next panel sign-in.
+        var token = await _auth.IssueDesktopTokenAsync(user, ct);
         _log.LogInformation("Desktop token issued for user {UserId}", userId);
         return Json(new { token, userName = user.UserName, displayName = AuthService.FormatDisplayName(user) });
     }

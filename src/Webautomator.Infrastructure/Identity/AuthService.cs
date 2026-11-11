@@ -383,7 +383,8 @@ public class AuthService
         return user;
     }
 
-    public async Task<(LoginResponse? ok, string? errorKey)> LoginAsync(LoginRequest request, string? ip = null, CancellationToken ct = default)
+    public async Task<(LoginResponse? ok, string? errorKey)> LoginAsync(
+        LoginRequest request, string? ip = null, bool desktopClient = false, CancellationToken ct = default)
     {
         var user = await _db.Users
             .Include(u => u.Plan)
@@ -486,14 +487,20 @@ public class AuthService
         // token issued before this moment, so the sign-in that just happened wins and the other
         // machine is signed out on its next request. Only done here, on a successful password/LDAP
         // verification — never on a failed attempt, which must not be able to log anyone out.
+        //
+        // The counter is PER CLIENT KIND (panel / desktop): the panel and the Windows player are used
+        // by the same person on the same machine, and sharing one counter made each of them evict the
+        // other on every sign-in. A sign-in still evicts the other session of its own kind.
+        var kind = desktopClient ? SessionKindDesktop : SessionKindWeb;
         if (await EnforcesSingleSessionAsync(ct))
         {
-            user.SessionVersion += 1;
+            if (desktopClient) user.DesktopSessionVersion += 1;
+            else user.SessionVersion += 1;
             await _db.SaveChangesAsync(ct);
         }
 
         var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
-        var token = await CreateTokenAsync(user, entitlements, ct);
+        var token = await CreateTokenAsync(user, entitlements, ct, kind);
         if (mode != AuthMode.Ldap)
         {
             await _events.LogAsync(
@@ -513,6 +520,46 @@ public class AuthService
             Role = user.Role.ToString(),
             Entitlements = entitlements
         }, null);
+    }
+
+    /// <summary>
+    /// Which counter a token belongs to: the browser panel, or the Windows player.
+    /// </summary>
+    /// <remarks>
+    /// The two clients coexist for one account on one machine, so they must not share the single
+    /// session counter — see <see cref="AppUser.DesktopSessionVersion"/>. Old tokens carry no kind
+    /// claim; they are read as <see cref="SessionKindWeb"/>, which is what they were.
+    /// </remarks>
+    public const string ClaimSessionKind = "session_kind";
+    public const string SessionKindWeb = "web";
+    public const string SessionKindDesktop = "desktop";
+
+    public static bool IsDesktopKind(string? sessionKind)
+        => string.Equals(sessionKind, SessionKindDesktop, StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeKind(string? sessionKind)
+        => IsDesktopKind(sessionKind) ? SessionKindDesktop : SessionKindWeb;
+
+    /// <summary>
+    /// Issue a token for the Windows player, evicting any OTHER player session when the deployment
+    /// enforces one session per account.
+    /// </summary>
+    /// <remarks>
+    /// Kept separate from <see cref="LoginAsync"/> because the desktop has two sign-in routes (the
+    /// browser handshake, which never sees a password, and the password form). Both must bump the
+    /// DESKTOP counter, and neither may touch the panel's.
+    /// </remarks>
+    public async Task<string> IssueDesktopTokenAsync(AppUser user, CancellationToken ct = default)
+    {
+        if (await EnforcesSingleSessionAsync(ct))
+        {
+            // The desktop routes read the user with AsNoTracking, so attach it before the bump.
+            if (_db.Entry(user).State == EntityState.Detached) _db.Users.Attach(user);
+            user.DesktopSessionVersion += 1;
+            await _db.SaveChangesAsync(ct);
+        }
+        var entitlements = await _entitlements.ResolveForUserAsync(user, ct);
+        return await CreateTokenAsync(user, entitlements, ct, SessionKindDesktop);
     }
 
     /// <summary>
@@ -632,7 +679,8 @@ public class AuthService
     /// silently start or stop gating users. Use <see cref="CreateTokenAsync"/> when the field set has
     /// not been read yet.
     /// </remarks>
-    public string CreateToken(AppUser user, EntitlementsDto? entitlements, ProfileFieldSet profileFields)
+    public string CreateToken(AppUser user, EntitlementsDto? entitlements, ProfileFieldSet profileFields,
+        string sessionKind = SessionKindWeb)
     {
         entitlements ??= EntitlementService.LocalDefaults();
         var key = _config["Jwt:Key"] ?? throw new InvalidOperationException("Jwt:Key missing");
@@ -667,8 +715,11 @@ public class AuthService
             new("password_change_required", user.PasswordChangeRequired ? "1" : "0"),
             // The single-session check compares this against the user row, so a superseded token is
             // rejected without an extra table. Carried in the token for the same reason as the
-            // password flag: the check must not cost a query on every request.
-            new("session_version", user.SessionVersion.ToString())
+            // password flag: the check must not cost a query on every request. WHICH row value it
+            // is compared with follows `session_kind`, so the panel and the player keep separate
+            // counters (see AppUser.DesktopSessionVersion).
+            new("session_version", (IsDesktopKind(sessionKind) ? user.DesktopSessionVersion : user.SessionVersion).ToString()),
+            new(ClaimSessionKind, NormalizeKind(sessionKind))
         };
         // One ClaimTypes.Role claim per flag: IsInRole("Admin") has to answer for a single privilege,
         // and a combined value like "Admin, Monitor" would never match a role name. The custom
@@ -696,8 +747,9 @@ public class AuthService
 
     /// <summary>Mint a token, reading the profile-field switches first.</summary>
     public async Task<string> CreateTokenAsync(
-        AppUser user, EntitlementsDto? entitlements = null, CancellationToken ct = default) =>
-        CreateToken(user, entitlements, await _settings.GetProfileFieldsAsync(ct));
+        AppUser user, EntitlementsDto? entitlements = null, CancellationToken ct = default,
+        string sessionKind = SessionKindWeb) =>
+        CreateToken(user, entitlements, await _settings.GetProfileFieldsAsync(ct), sessionKind);
 
     public async Task<AppUser?> GetUserAsync(int userId, CancellationToken ct = default)
         => await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);

@@ -177,8 +177,14 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 var userIdClaim = ctx.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
                 if (!int.TryParse(userIdClaim, out var userId)) return;
 
+                // Which counter this token belongs to: the panel or the Windows player. They keep
+                // separate counters on the user row, so a sign-in on one never evicts the other.
+                // A token minted before the kinds existed carries no claim and is a panel session.
+                var sessionKind = ctx.Principal?.FindFirst(Webautomator.Infrastructure.Identity.AuthService.ClaimSessionKind)?.Value
+                    ?? Webautomator.Infrastructure.Identity.AuthService.SessionKindWeb;
+
                 var guard = ctx.HttpContext.RequestServices.GetRequiredService<SessionGuard>();
-                var verdict = await guard.EvaluateAsync(userId, tokenVersion, ctx.HttpContext.RequestAborted);
+                var verdict = await guard.EvaluateAsync(userId, tokenVersion, sessionKind, ctx.HttpContext.RequestAborted);
                 if (verdict == SessionVerdict.Superseded)
                 {
                     ctx.Fail("این حساب روی دستگاه دیگری وارد شده است.");

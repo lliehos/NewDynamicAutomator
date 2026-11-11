@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Webautomator.Domain.Entities;
+using Webautomator.Infrastructure.Identity;
 using Webautomator.Infrastructure.Persistence;
 using Webautomator.Web.Hubs;
 
@@ -49,6 +50,11 @@ public sealed class SessionGuard
 
     private const string VersionKeyPrefix = "session-version:";
 
+    /// <summary>The cache key of one client kind's counter.</summary>
+    private static string VersionKey(int userId, string sessionKind)
+        => VersionKeyPrefix + (AuthService.IsDesktopKind(sessionKind) ? AuthService.SessionKindDesktop : AuthService.SessionKindWeb)
+           + ":" + userId;
+
     private readonly IServiceScopeFactory _scopes;
     private readonly IMemoryCache _cache;
     private readonly IHubContext<CatalogHub> _catalog;
@@ -70,11 +76,16 @@ public sealed class SessionGuard
     }
 
     /// <summary>Decide whether a token is still good for this account.</summary>
-    public async Task<SessionVerdict> EvaluateAsync(int userId, int tokenVersion, CancellationToken ct = default)
+    /// <param name="sessionKind">
+    /// Which counter the token belongs to (<c>web</c> panel or <c>desktop</c> player). The panel and
+    /// the Windows player on one machine must not evict each other, so each kind has its own counter.
+    /// </param>
+    public async Task<SessionVerdict> EvaluateAsync(
+        int userId, int tokenVersion, string sessionKind, CancellationToken ct = default)
     {
         if (userId <= 0) return SessionVerdict.Valid;
 
-        var stored = await StoredVersionAsync(userId, ct);
+        var stored = await StoredVersionAsync(userId, sessionKind, ct);
         if (stored is null || stored.Value == tokenVersion) return SessionVerdict.Valid;
 
         // A cached value BELOW the token's version is not a stale token — it is a stale CACHE.
@@ -87,7 +98,7 @@ public sealed class SessionGuard
         // because a valid token never reaches this line.
         if (stored.Value < tokenVersion)
         {
-            var fresh = await StoredVersionAsync(userId, ct, bypassCache: true);
+            var fresh = await StoredVersionAsync(userId, sessionKind, ct, bypassCache: true);
             if (fresh is null || fresh.Value == tokenVersion) return SessionVerdict.Valid;
             stored = fresh;
         }
@@ -117,7 +128,9 @@ public sealed class SessionGuard
             var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
             if (user is null) return 0;
 
+            // BOTH counters: closing a session means "stop this account", not "stop one window".
             user.SessionVersion += 1;
+            user.DesktopSessionVersion += 1;
             bumped = user.SessionVersion;
 
             db.EventLogs.Add(new AppEventLog
@@ -137,7 +150,8 @@ public sealed class SessionGuard
 
         // The cache holds the OLD version on purpose (it was valid a moment ago); dropping it is what
         // makes this node reject the very next request rather than up to a TTL later.
-        _cache.Remove(VersionKeyPrefix + userId);
+        _cache.Remove(VersionKey(userId, AuthService.SessionKindWeb));
+        _cache.Remove(VersionKey(userId, AuthService.SessionKindDesktop));
         _closed[userId] = DateTime.UtcNow;
 
         try
@@ -155,16 +169,18 @@ public sealed class SessionGuard
         return bumped;
     }
 
-    private async Task<int?> StoredVersionAsync(int userId, CancellationToken ct, bool bypassCache = false)
+    private async Task<int?> StoredVersionAsync(
+        int userId, string sessionKind, CancellationToken ct, bool bypassCache = false)
     {
-        var key = VersionKeyPrefix + userId;
+        var key = VersionKey(userId, sessionKind);
         if (!bypassCache && _cache.TryGetValue(key, out int cached)) return cached;
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var desktop = AuthService.IsDesktopKind(sessionKind);
         var stored = await db.Users.AsNoTracking()
             .Where(u => u.Id == userId)
-            .Select(u => (int?)u.SessionVersion)
+            .Select(u => (int?)(desktop ? u.DesktopSessionVersion : u.SessionVersion))
             .FirstOrDefaultAsync(ct);
 
         if (stored is int version) _cache.Set(key, version, VersionTtl);

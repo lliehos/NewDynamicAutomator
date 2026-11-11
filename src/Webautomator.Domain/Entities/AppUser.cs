@@ -51,6 +51,20 @@ public class AppUser
     /// </remarks>
     public int SessionVersion { get; set; }
 
+    /// <summary>
+    /// The same counter for the DESKTOP player's sessions.
+    /// </summary>
+    /// <remarks>
+    /// The panel and the Windows player are used by the same person on the same machine, and they
+    /// are different clients rather than two browsers fighting over a seat. Sharing one counter made
+    /// every panel sign-in sign the player out and vice versa — one of the two was always being
+    /// evicted. Keeping a counter per client kind means a sign-in still evicts the OTHER session of
+    /// its own kind (which is what the single-session rule is for), while the panel and the player
+    /// coexist. An administrator's "close session" bumps BOTH, because that action means "stop this
+    /// account", not "stop one window".
+    /// </remarks>
+    public int DesktopSessionVersion { get; set; }
+
     public Plan? Plan { get; set; }
     public ICollection<Process> CreatedProcesses { get; set; } = new List<Process>();
     public ICollection<ProcessShare> ProcessShares { get; set; } = new List<ProcessShare>();

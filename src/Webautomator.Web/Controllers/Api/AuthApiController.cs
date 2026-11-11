@@ -47,8 +47,12 @@ public class AuthApiController : ControllerBase
         // The desktop Player signs in here. Keeping it on the same service as the panel form means
         // the provider rules (local / directory), session version, device binding and single-session
         // enforcement are enforced once, not reimplemented for the desktop client.
+        //
+        // `desktopClient: true` marks the token as the PLAYER's session: it is counted against the
+        // account's desktop session slot, not the panel's, so signing in here no longer signs the
+        // browser panel out (and a later panel sign-in no longer signs this player out).
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-        var (result, errorKey) = await _auth.LoginAsync(request, ip, ct);
+        var (result, errorKey) = await _auth.LoginAsync(request, ip, desktopClient: true, ct);
         if (result is null)
             return Unauthorized(new { message = errorKey ?? "login.errorInvalid", code = errorKey });
 

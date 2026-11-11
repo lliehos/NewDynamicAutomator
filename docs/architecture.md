@@ -8,7 +8,7 @@
 پروژهٔ `Webautomator.Api` حذف شده است؛ همهٔ API روی Web است. مسیرهای `/api/*` فقط روی Webautomator.Web هستند.
 
 ```
-ورود → JWT (plan + role + max_tasks/sources/steps) → EF/SQL
+ورود → JWT (plan + role + max_tasks/sources/steps + session_kind) → EF/SQL
   Processes.GraphJson  +  DataSources library  +  ProcessDataSources links
 افزونه REC (Pro) → POST /api/recordings → merge به GraphJson
 ویرایش → /Panel/Tasks/Editor/{id}
@@ -19,6 +19,10 @@
 ادمین → /Admin (Role=Admin) incl. Migrate / Plans caps / Sources library
   SignalR `/hubs/catalog` → JoinAdminCatalog → taskChanged / sourceChanged / playState
 ```
+
+`session_version` هر توکن با شمارندهٔ **هم‌نوع خودش** سنجیده می‌شود: `SessionVersion` برای پنل/افزونه
+(`session_kind=web`) و `DesktopSessionVersion` برای پلیر ویندوزی (`session_kind=desktop`). پس ورود در پنل،
+پلیر ویندوزی روی همان سیستم را بیرون نمی‌کند و برعکس؛ «بستن سشن» مدیر هر دو شمارنده را بالا می‌برد.
 
 بدون Selenium. منابع اکسل موجودیت مستقل‌اند؛ حذف فرآیند لینک را می‌بُرد نه کتابخانه را.
 

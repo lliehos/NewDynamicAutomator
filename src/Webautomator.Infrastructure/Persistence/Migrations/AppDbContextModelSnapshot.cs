@@ -106,6 +106,9 @@ namespace Webautomator.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("DeploymentInstanceId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int>("DesktopSessionVersion")
+                        .HasColumnType("int");
+
                     b.Property<string>("Email")
                         .HasMaxLength(120)
                         .HasColumnType("nvarchar(120)");
