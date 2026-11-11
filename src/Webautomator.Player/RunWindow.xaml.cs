@@ -28,6 +28,17 @@ public partial class RunWindow : Window, INotifyPropertyChanged
     private List<int> _rowIndices = new();
 
     /// <summary>
+    /// The browser this window's run drives.
+    /// </summary>
+    /// <remarks>
+    /// It outlives the run on purpose: the extension leaves its tab open when play ends, and a
+    /// window that quits Firefox the moment the last step finishes takes away exactly the page an
+    /// operator wants to look at after a failure. It is closed when this window closes (or when a
+    /// new run replaces it).
+    /// </remarks>
+    private FirefoxRunner? _browser;
+
+    /// <summary>
     /// How many log lines the engine had already dropped from the front when the list was last
     /// rendered. A change means the list no longer starts where the ListBox does, so it is rebuilt.
     /// </summary>
@@ -72,7 +83,11 @@ public partial class RunWindow : Window, INotifyPropertyChanged
     public void StartRun()
     {
         if (_graph is null) return;
+        // A previous run in this window left its browser open; it belongs to that run's page, which
+        // this one is about to replace.
+        try { _browser?.Dispose(); } catch { /* the browser may already be gone */ }
         var browser = new FirefoxRunner();
+        _browser = browser;
         Engine = _engineFactory(browser);
         // The engine owns the highlight colour; the window just shows the current value.
         Engine.HighlightColor = ReadStartHighlightColor(_graph);
@@ -92,7 +107,9 @@ public partial class RunWindow : Window, INotifyPropertyChanged
             }
             finally
             {
-                try { browser.Dispose(); } catch { /* the browser may already be gone */ }
+                // The browser is deliberately NOT closed here — see _browser. Its window is what an
+                // operator inspects after a run (especially a failed one), so it stays up until this
+                // window is closed.
                 Dispatcher.Invoke(() =>
                 {
                     _timer.Stop();
@@ -246,6 +263,13 @@ public partial class RunWindow : Window, INotifyPropertyChanged
     protected override void OnClosing(CancelEventArgs e)
     {
         _timer.Stop();
+        // Closing the window (including with the X) ends the run, so the worker stops walking the
+        // graph and the server registration is released instead of being left behind.
+        Engine?.Stop();
+        // Closing the run window is the moment the browser it owns goes away, so a run never leaves
+        // a Firefox/geckodriver pair behind.
+        try { _browser?.Dispose(); } catch { /* the browser may already be gone */ }
+        _browser = null;
         base.OnClosing(e);
     }
 

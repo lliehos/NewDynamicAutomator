@@ -7,10 +7,15 @@ using OpenQA.Selenium.Support.UI;
 namespace Webautomator.Player.Services;
 
 /// <summary>Outcome of one action, in the same shape the engine uses.</summary>
-public sealed record StepOutcome(bool Ok, string? Error = null, string? Value = null, bool Navigated = false)
+/// <param name="Retryable">
+/// The step found nothing to act on, so nothing ran and a retry is safe. Only a MISS is retried —
+/// an action that already executed must never be dispatched twice by the wait loop.
+/// </param>
+public sealed record StepOutcome(
+    bool Ok, string? Error = null, string? Value = null, bool Navigated = false, bool Retryable = false)
 {
     public static readonly StepOutcome Success = new(true);
-    public static StepOutcome Fail(string error) => new(false, error);
+    public static StepOutcome Fail(string error, bool retryable = false) => new(false, error, Retryable: retryable);
     public static StepOutcome Read(string value) => new(true, Value: value);
 }
 
@@ -29,12 +34,16 @@ public sealed record StepOutcome(bool Ok, string? Error = null, string? Value = 
 /// </remarks>
 public sealed class ActionExecutor
 {
+    private readonly RunTabs _tabs;
+
+    public ActionExecutor(RunTabs tabs) => _tabs = tabs;
+
     /// <summary>
     /// Run one action. <paramref name="value"/> is the already-resolved value for actions that take
     /// one; the caller resolves source/memory indirection.
     /// </summary>
     public async Task<StepOutcome> RunAsync(
-        IWebDriver driver, GraphNode step, string? value, TimeSpan timeout, CancellationToken ct)
+        IWebDriver driver, GraphNode step, string? value, CancellationToken ct)
     {
         var action = step.ActionType ?? "";
         try
@@ -49,8 +58,7 @@ public sealed class ActionExecutor
                     return StepOutcome.Success;
 
                 case "GoToUrl":
-                    driver.Navigate().GoToUrl(value ?? step.NavigateUrl ?? step.ConstantValue ?? "about:blank");
-                    return new StepOutcome(true, Navigated: true);
+                    return DoGoToUrl(driver, step, value, _tabs);
 
                 case "GoBack":
                     driver.Navigate().Back();
@@ -76,31 +84,37 @@ public sealed class ActionExecutor
                 case "Click":
                 case "DoubleClick":
                 case "RightClick":
-                    return DoClick(driver, step, action, timeout);
+                    return DoClick(driver, step, action);
 
                 case "Hover":
-                    return DoHover(driver, step, timeout);
+                    return DoHover(driver, step);
+
+                case "Hold":
+                    return await DoHoldAsync(driver, step, value ?? "", ct);
 
                 case "InputContent":
-                    return DoInput(driver, step, value ?? "", timeout);
+                case "LoadContent":
+                    // LoadContent types a source cell into the target, exactly as InputContent does;
+                    // the extension sends it through the same page-side branch for that reason.
+                    return await DoInputAsync(driver, step, value ?? "", ct);
 
                 case "ClearContent":
-                    return DoClear(driver, step, timeout);
+                    return DoClear(driver, step);
 
                 case "SelectOption":
-                    return DoSelectOption(driver, step, value ?? "", timeout);
+                    return DoSelectOption(driver, step, value ?? "");
 
                 case "ScrollPage":
-                    return DoScroll(driver, step);
+                    return DoScroll(driver, step, value);
 
                 case "AlertAccept":
-                    return DoAlertAccept(driver);
+                    return await DoAlertAcceptAsync(driver, step, ct);
 
                 case "WaitForLoading":
-                    return await DoWaitForLoadingAsync(driver, step, timeout, ct);
+                    return await DoWaitForLoadingAsync(driver, step, ct);
 
                 case "RemoveElements":
-                    return DoRemoveElements(driver, step, timeout);
+                    return DoRemoveElements(driver, step);
 
                 default:
                     // An action this runner does not implement must stop the step rather than be
@@ -111,7 +125,8 @@ public sealed class ActionExecutor
         }
         catch (NoSuchElementException)
         {
-            return StepOutcome.Fail("المنت موردنظر در صفحه پیدا نشد.");
+            // A miss is the one failure the caller's wait loop may repeat: nothing was done.
+            return StepOutcome.Fail("المنت موردنظر در صفحه پیدا نشد.", retryable: true);
         }
         catch (WebDriverTimeoutException)
         {
@@ -139,40 +154,48 @@ public sealed class ActionExecutor
     /// <remarks>
     /// The editor records CSS by default; XPath is supported because a recorded step may carry one.
     /// A bare selector with no recorded type is treated as CSS, which is what the recorder writes.
+    /// An EMPTY selector is refused here rather than handed to the browser: WebDriver would answer
+    /// with an opaque "Document.querySelector: '' is not a valid selector" that says nothing about
+    /// the actual problem (the node has no target element recorded).
     /// </remarks>
-    private static By BuildBy(GraphNode step)
+    private static By BuildBy(GraphNode step, bool valueSide = false)
     {
-        var selector = step.Selector ?? "";
+        var selector = (valueSide ? (step.EqualSelector ?? step.Selector) : step.Selector)?.Trim() ?? "";
+        if (selector.Length == 0)
+            throw new InvalidOperationException(
+                valueSide
+                    ? "سلکتور عنصر منبع مقدار برای این مرحله تنظیم نشده است."
+                    : "سلکتور المان هدف برای این مرحله تنظیم نشده است؛ در ویرایشگر نود، المان را انتخاب کنید.");
         var type = (step.SelectorType ?? "").Trim();
         if (type.Equals("XPath", StringComparison.OrdinalIgnoreCase)) return By.XPath(selector);
         if (type.Equals("Id", StringComparison.OrdinalIgnoreCase)) return By.Id(selector);
         if (type.Equals("Name", StringComparison.OrdinalIgnoreCase)) return By.Name(selector);
-        if (selector.TrimStart().StartsWith("//") || selector.TrimStart().StartsWith("(/")) return By.XPath(selector);
+        if (selector.StartsWith("//") || selector.StartsWith("(/")) return By.XPath(selector);
         return By.CssSelector(selector);
     }
 
-    /// <summary>Find the element, honouring an optional index when several match.</summary>
-    private static IWebElement FindElement(IWebDriver driver, GraphNode step, TimeSpan timeout)
+    /// <summary>Find the element with ONE lookup, honouring an optional index.</summary>
+    /// <remarks>
+    /// Deliberately single-attempt: the caller owns the wait budget and retries "resolve the frame
+    /// chain + look up the element" every 200ms, which is the extension's contract. Waiting here
+    /// instead would hide a late IFRAME (the frame itself may not exist at the first attempt) and
+    /// would make a retry unable to re-resolve it.
+    /// </remarks>
+    private static IWebElement FindElement(IWebDriver driver, GraphNode step, bool valueSide = false)
     {
-        var by = BuildBy(step);
+        var by = BuildBy(step, valueSide);
         var index = step.SelectorIndex ?? 0;
-        var wait = new WebDriverWait(driver, timeout);
-        if (index <= 0)
-            return wait.Until(d => d.FindElement(by));
-
-        var all = wait.Until(d =>
-        {
-            var found = d.FindElements(by);
-            return found.Count > index ? found : null;
-        }) ?? throw new NoSuchElementException($"المنت با اندیس {index} پیدا نشد.");
-        return all[index];
+        // The visible / enabled / clickable filters are part of the author's selector: a page can
+        // carry a hidden template copy before the real row, and acting on the template "works"
+        // while doing nothing.
+        return ElementState.FindFirst(driver, by, ElementRequirements.For(step, valueSide), index);
     }
 
     // ---- Actions --------------------------------------------------------------------------------
 
-    private static StepOutcome DoClick(IWebDriver driver, GraphNode step, string action, TimeSpan timeout)
+    private static StepOutcome DoClick(IWebDriver driver, GraphNode step, string action)
     {
-        var el = FindElement(driver, step, timeout);
+        var el = FindElement(driver, step);
         try
         {
             // Scroll first: a click on an element that is out of view is a common, confusing failure.
@@ -182,6 +205,13 @@ public sealed class ActionExecutor
 
         try
         {
+            // RealMouse replays a full pointer/mouse press-release pair instead of a bare click —
+            // the bypass for frameworks that ignore a single synthetic click. Selenium's native
+            // click already carries real coordinates, so the mode only changes WHICH native gesture
+            // is sent.
+            var realMouse = string.Equals(
+                step.ReadExtraString("clickMode"), "RealMouse", StringComparison.OrdinalIgnoreCase);
+
             switch (action)
             {
                 case "DoubleClick":
@@ -191,7 +221,8 @@ public sealed class ActionExecutor
                     new Actions(driver).ContextClick(el).Perform();
                     break;
                 default:
-                    el.Click();
+                    if (realMouse) new Actions(driver).MoveToElement(el).Click().Perform();
+                    else el.Click();
                     break;
             }
             return StepOutcome.Success;
@@ -228,7 +259,7 @@ public sealed class ActionExecutor
         {
             if (!string.IsNullOrWhiteSpace(step.Selector))
             {
-                var el = FindElement(driver, step, TimeSpan.FromSeconds(15));
+                var el = FindElement(driver, step);
                 try { el.SendKeys(keys); }
                 catch (ElementNotInteractableException)
                 {
@@ -297,8 +328,78 @@ public sealed class ActionExecutor
         return prefix + named;
     }
 
+    /// <summary>
+    /// Navigate, or open/reuse a NAMED tab when the step asks for one.
+    /// </summary>
+    /// <remarks>
+    /// A named tab is created on first use and REUSED afterwards: opening a second tab under a live
+    /// alias would make every loop iteration grow the browser, and «return to system B» would stop
+    /// meaning the page that is already logged in. «رفتن به تب جدید» off opens it in the background
+    /// and the run keeps working on the tab it was on.
+    /// </remarks>
+    private static StepOutcome DoGoToUrl(IWebDriver driver, GraphNode step, string? value, RunTabs tabs)
+    {
+        var url = string.IsNullOrWhiteSpace(value)
+            ? (step.NavigateUrl ?? step.ConstantValue ?? "")
+            : value!;
+        if (string.IsNullOrWhiteSpace(url))
+            return StepOutcome.Fail("آدرس مقصد برای رفتن به آدرس مشخص نیست.");
+
+        if (step.ReadExtraBool("openInNewTab", false))
+        {
+            var alias = step.ReadExtraString("newTabAlias").Trim();
+            if (alias.Length == 0) alias = tabs.NextAutoAlias();
+            var switchToNew = step.ReadExtraBool("switchToNewTab", true);
+
+            var existing = tabs.HandleFor(alias);
+            if (existing is not null)
+            {
+                var previousHandle = driver.CurrentWindowHandle;
+                try
+                {
+                    driver.SwitchTo().Window(existing);
+                    driver.Navigate().GoToUrl(url);
+                    // «رفتن به تب جدید» off: the author wants the page opened WITHOUT leaving the
+                    // tab the run was working on.
+                    if (!switchToNew)
+                    {
+                        try { driver.SwitchTo().Window(previousHandle); } catch { /* the old tab may be gone */ }
+                    }
+                    return new StepOutcome(true, Navigated: true);
+                }
+                catch (NoSuchWindowException)
+                {
+                    // The author closed it by hand; open a fresh one under the same name.
+                    tabs.ForgetHandle(existing);
+                }
+            }
+
+            var previous = driver.CurrentWindowHandle;
+            driver.SwitchTo().NewWindow(WindowType.Tab);
+            var handle = driver.CurrentWindowHandle;
+            tabs.Register(alias, handle);
+            try
+            {
+                driver.Navigate().GoToUrl(url);
+            }
+            catch
+            {
+                tabs.ForgetHandle(handle);
+                throw;
+            }
+            if (!switchToNew)
+            {
+                try { driver.SwitchTo().Window(previous); } catch { /* the old tab may be gone */ }
+            }
+            return new StepOutcome(true, Navigated: true);
+        }
+
+        driver.Navigate().GoToUrl(url);
+        return new StepOutcome(true, Navigated: true);
+    }
+
     /// <summary>Move the driver to the tab a SwitchTab step names.</summary>
-    private static StepOutcome DoSwitchTab(IWebDriver driver, GraphNode step)
+    private StepOutcome DoSwitchTab(IWebDriver driver, GraphNode step)
     {
         var handles = driver.WindowHandles.ToList();
         if (handles.Count == 0) return StepOutcome.Fail("تبی برای سوئیچ پیدا نشد.");
@@ -313,9 +414,9 @@ public sealed class ActionExecutor
             "Last" => handles[^1],
             "Next" => NeighbourHandle(driver, handles, +1),
             "Previous" => NeighbourHandle(driver, handles, -1),
-            // The desktop player has one window per run, so an alias has no separate handle to find:
-            // everything lives in the single window it opened.
-            _ => driver.CurrentWindowHandle
+            // A named tab is one this run opened with «رفتن به آدرس» + «تب جدید». `main` is the
+            // window the run started in; an alias nobody opened cannot be found.
+            _ => _tabs.HandleFor(step.ReadExtraString("switchTabAlias")) ?? driver.CurrentWindowHandle
         };
         if (handle is null) return StepOutcome.Fail("تب مقصد پیدا نشد.");
         if (!string.Equals(handle, driver.CurrentWindowHandle, StringComparison.Ordinal))
@@ -324,7 +425,7 @@ public sealed class ActionExecutor
     }
 
     /// <summary>Close the tab a CloseTab step names. The last tab of the session is never closed.</summary>
-    private static StepOutcome DoCloseTab(IWebDriver driver, GraphNode step)
+    private StepOutcome DoCloseTab(IWebDriver driver, GraphNode step)
     {
         var handles = driver.WindowHandles.ToList();
         if (handles.Count <= 1) return StepOutcome.Fail("فقط یک تب باز است؛ قابل بستن نیست.");
@@ -340,8 +441,8 @@ public sealed class ActionExecutor
             "Next" => NeighbourHandle(driver, handles, +1),
             "Previous" => NeighbourHandle(driver, handles, -1),
             "Current" => current,
-            // A named tab is the run's own single window in the desktop player.
-            "Alias" => current,
+            // A named tab is one this run opened under that alias.
+            "Alias" => _tabs.HandleFor(step.ReadExtraString("closeTabAlias")),
             _ => handles[^1]
         };
         if (victim is null) return StepOutcome.Fail("تب موردنظر برای بستن پیدا نشد.");
@@ -353,6 +454,9 @@ public sealed class ActionExecutor
 
         driver.SwitchTo().Window(victim);
         driver.Close();
+        // The alias (if any) pointed at a window that is now gone; a later SwitchTab must say so
+        // instead of switching to a reclaimed handle.
+        _tabs.ForgetHandle(victim);
         try { driver.SwitchTo().Window(continueIn); }
         catch (NoSuchWindowException)
         {
@@ -398,42 +502,82 @@ public sealed class ActionExecutor
         return next >= 0 && next < handles.Count ? handles[next] : null;
     }
 
-    private static StepOutcome DoHover(IWebDriver driver, GraphNode step, TimeSpan timeout)
+    private static StepOutcome DoHover(IWebDriver driver, GraphNode step)
     {
-        var el = FindElement(driver, step, timeout);
+        var el = FindElement(driver, step);
         new Actions(driver).MoveToElement(el).Perform();
         return StepOutcome.Success;
     }
 
-    private static StepOutcome DoInput(IWebDriver driver, GraphNode step, string value, TimeSpan timeout)
+    private static async Task<StepOutcome> DoInputAsync(
+        IWebDriver driver, GraphNode step, string value, CancellationToken ct)
     {
-        var el = FindElement(driver, step, timeout);
+        var el = FindElement(driver, step);
         var perChar = string.Equals(step.ReadExtraString("typeMode"), "PerCharacter", StringComparison.OrdinalIgnoreCase);
-        try { el.Clear(); } catch { /* some fields refuse Clear; SendKeys below still writes */ }
         if (perChar)
         {
             // Keystroke by keystroke, for a field the page watches as the user types (live search,
             // autocomplete, a masked input). Setting the value in one shot never fires those.
-            el.SendKeys(value);
+            // Typing APPENDS, so the field is emptied first — the same thing ClearContent would do.
+            try { el.Clear(); } catch { /* some fields refuse Clear; the native setter below still writes */ }
+            var keystrokeDelay = Math.Max(0, step.ReadExtraInt("typeDelayMs") ?? 0);
+            try
+            {
+                foreach (var ch in value)
+                {
+                    el.SendKeys(ch.ToString());
+                    if (keystrokeDelay > 0) await Task.Delay(keystrokeDelay, ct);
+                }
+            }
+            catch (ElementNotInteractableException)
+            {
+                return StepOutcome.Fail("المان هدف قابل تایپ نیست (غیرفعال یا فقط‌خواندنی).");
+            }
+            return StepOutcome.Success;
         }
-        else
-        {
-            // One-shot: fast, and what a plain text field actually needs.
-            ((IJavaScriptExecutor)driver).ExecuteScript(
-                "const el=arguments[0],v=arguments[1];" +
-                "const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;" +
-                "const d=Object.getOwnPropertyDescriptor(proto,'value');" +
-                "if(d&&d.set){d.set.call(el,v);}else{el.value=v;}" +
-                "el.dispatchEvent(new Event('input',{bubbles:true}));" +
-                "el.dispatchEvent(new Event('change',{bubbles:true}));",
-                el, value);
-        }
+        // One-shot: fast, and what a plain text field actually needs.
+        ((IJavaScriptExecutor)driver).ExecuteScript(
+            "const el=arguments[0],v=arguments[1];" +
+            "const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;" +
+            "const d=Object.getOwnPropertyDescriptor(proto,'value');" +
+            "if(d&&d.set){d.set.call(el,v);}else{el.value=v;}" +
+            "el.dispatchEvent(new Event('input',{bubbles:true}));" +
+            "el.dispatchEvent(new Event('change',{bubbles:true}));",
+            el, value);
         return StepOutcome.Success;
     }
 
-    private static StepOutcome DoClear(IWebDriver driver, GraphNode step, TimeSpan timeout)
+    /// <summary>
+    /// Press the element and keep the button down for the step's duration, then release.
+    /// </summary>
+    /// <remarks>
+    /// A page that reacts to a long press listens across the whole down..up window, so a plain
+    /// click (down and up in the same tick) is never seen as one. Holding the real mouse button open
+    /// is exactly that window.
+    /// </remarks>
+    private static async Task<StepOutcome> DoHoldAsync(
+        IWebDriver driver, GraphNode step, string value, CancellationToken ct)
     {
-        var el = FindElement(driver, step, timeout);
+        var el = FindElement(driver, step);
+        var holdMs = int.TryParse(value.Trim(), out var parsed) ? Math.Max(0, parsed) : 500;
+        try
+        {
+            new Actions(driver).MoveToElement(el).ClickAndHold(el).Perform();
+            if (holdMs > 0) await Task.Delay(holdMs, ct);
+            new Actions(driver).Release(el).Perform();
+            return StepOutcome.Success;
+        }
+        catch (Exception ex)
+        {
+            // Release best-effort: a stuck pressed button would corrupt every later step.
+            try { new Actions(driver).Release().Perform(); } catch { /* ignore */ }
+            return StepOutcome.Fail($"نگه‌داشتن ماوس ناموفق بود: {Shorten(ex.Message)}");
+        }
+    }
+
+    private static StepOutcome DoClear(IWebDriver driver, GraphNode step)
+    {
+        var el = FindElement(driver, step);
         try { el.Clear(); }
         catch
         {
@@ -446,59 +590,134 @@ public sealed class ActionExecutor
         return StepOutcome.Success;
     }
 
-    private static StepOutcome DoSelectOption(IWebDriver driver, GraphNode step, string value, TimeSpan timeout)
+    private static StepOutcome DoSelectOption(IWebDriver driver, GraphNode step, string value)
     {
-        var el = FindElement(driver, step, timeout);
+        var el = FindElement(driver, step);
         var select = new SelectElement(el);
+        // The author chooses HOW the option is matched. Value is exact by design; a label typed
+        // into the value field is a common slip, so the Value mode falls back to the text.
+        var mode = step.ReadExtraString("selectBy");
+        if (mode.Length == 0) mode = "Value";
         try
         {
-            // Prefer the visible text; a recorded step usually carries what the user saw.
-            select.SelectByText(value);
+            if (string.Equals(mode, "Index", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!int.TryParse(value.Trim(), out var index) || index < 0)
+                    return StepOutcome.Fail($"اندیس گزینهٔ «{value}» معتبر نیست.");
+                select.SelectByIndex(index);
+            }
+            else if (string.Equals(mode, "Text", StringComparison.OrdinalIgnoreCase))
+            {
+                select.SelectByText(value);
+            }
+            else
+            {
+                try { select.SelectByValue(value); }
+                catch (NoSuchElementException) { select.SelectByText(value); }
+            }
+            return StepOutcome.Success;
         }
         catch (NoSuchElementException)
         {
-            try { select.SelectByValue(value); }
-            catch (NoSuchElementException) { return StepOutcome.Fail($"گزینهٔ «{value}» در فهرست پیدا نشد."); }
+            return StepOutcome.Fail($"گزینهٔ «{value}» در فهرست پیدا نشد.");
         }
-        return StepOutcome.Success;
     }
 
-    private static StepOutcome DoScroll(IWebDriver driver, GraphNode step)
+    private static StepOutcome DoScroll(IWebDriver driver, GraphNode step, string? value)
     {
         var mode = step.ReadExtraString("scrollType");
-        if (mode.Equals("ToElement", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(step.Selector))
+        if (mode.Length == 0) mode = "Amount";
+
+        if (string.Equals(mode, "ToElement", StringComparison.OrdinalIgnoreCase))
         {
-            var el = FindElement(driver, step, TimeSpan.FromSeconds(10));
-            ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView({block:'center'});", el);
+            if (string.IsNullOrWhiteSpace(step.Selector))
+                return StepOutcome.Fail("برای اسکرول تا المان، ابتدا المان مقصد را انتخاب کنید.");
+            var el = FindElement(driver, step);
+            try
+            {
+                ((IJavaScriptExecutor)driver).ExecuteScript(
+                    "arguments[0].scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});", el);
+            }
+            catch
+            {
+                try { ((IJavaScriptExecutor)driver).ExecuteScript("arguments[0].scrollIntoView();", el); }
+                catch { /* a detached node cannot be scrolled to */ }
+            }
             return StepOutcome.Success;
         }
-        var amount = step.WaitMs ?? 500;
-        // The extension scrolls the page by a pixel amount; "Bottom" asks for the end.
-        if (mode.Equals("Bottom", StringComparison.OrdinalIgnoreCase))
-            ((IJavaScriptExecutor)driver).ExecuteScript("window.scrollTo(0, document.body.scrollHeight);");
-        else
-            ((IJavaScriptExecutor)driver).ExecuteScript($"window.scrollBy(0, {amount});");
+
+        // Amount: the step's own value, or about one screenful when it is blank.
+        var dy = int.TryParse((value ?? "").Trim(), out var amount) && amount != 0 ? amount : 600;
+        try
+        {
+            ((IJavaScriptExecutor)driver).ExecuteScript(
+                "window.scrollBy({top:arguments[0],left:0,behavior:'instant'});", dy);
+        }
+        catch
+        {
+            try { ((IJavaScriptExecutor)driver).ExecuteScript("window.scrollBy(0, arguments[0]);", dy); }
+            catch { /* a page that refuses to scroll is not a failure */ }
+        }
         return StepOutcome.Success;
     }
 
-    private static StepOutcome DoAlertAccept(IWebDriver driver)
+    /// <summary>
+    /// Answer the browser dialog the previous step raised.
+    /// </summary>
+    /// <remarks>
+    /// Finding NO dialog is a failure, not a quiet pass: the step exists to answer one, so its
+    /// absence means the page did not do what the diagram expected. The step's own switch decides
+    /// whether that failure stops the run.
+    /// </remarks>
+    private static async Task<StepOutcome> DoAlertAcceptAsync(
+        IWebDriver driver, GraphNode step, CancellationToken ct)
     {
-        try
+        var waitMs = Math.Max(0, step.ReadExtraInt("alertWaitMs") ?? 0);
+        if (waitMs == 0) waitMs = 400;
+        var deadline = DateTime.UtcNow.AddMilliseconds(waitMs);
+
+        IAlert? alert = null;
+        while (true)
         {
-            driver.SwitchTo().Alert().Accept();
+            ct.ThrowIfCancellationRequested();
+            try { alert = driver.SwitchTo().Alert(); break; }
+            catch (NoAlertPresentException)
+            {
+                if (DateTime.UtcNow >= deadline) break;
+                await Task.Delay(100, ct);
+            }
+        }
+        if (alert is null) return StepOutcome.Fail("دیالوگ مرورگر پیدا نشد.");
+
+        var dismissing = string.Equals(step.ReadExtraString("alertType"), "Dismiss", StringComparison.OrdinalIgnoreCase);
+        if (dismissing)
+        {
+            alert.Dismiss();
             return StepOutcome.Success;
         }
-        catch (NoAlertPresentException)
+
+        var promptText = step.ReadExtraString("alertPromptText");
+        if (promptText.Length > 0)
         {
-            // No dialog is not a failure: the action is often used defensively after a save.
-            return StepOutcome.Success;
+            // A prompt dialog needs its text before Accept; any other kind refuses SendKeys.
+            try { alert.SendKeys(promptText); } catch { /* not a prompt dialog */ }
         }
+        alert.Accept();
+        return StepOutcome.Success;
     }
 
     private static async Task<StepOutcome> DoWaitForLoadingAsync(
-        IWebDriver driver, GraphNode step, TimeSpan timeout, CancellationToken ct)
+        IWebDriver driver, GraphNode step, CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        // Mirrors the extension: the step's OWN value is the budget (`constantValue`), a step-level
+        // `waitMaxMs` is the fallback, and a blank value means fifteen seconds. Reaching the budget
+        // is NOT a step failure — the page merely said it was still loading.
+        var maxMs = 0;
+        if (int.TryParse((step.ConstantValue ?? "").Trim(), out var fromValue) && fromValue > 0)
+            maxMs = fromValue;
+        if (maxMs == 0) maxMs = Math.Max(0, step.ReadExtraInt("waitMaxMs") ?? 0);
+        if (maxMs == 0) maxMs = 15_000;
+        var deadline = DateTime.UtcNow.AddMilliseconds(maxMs);
         while (DateTime.UtcNow < deadline)
         {
             ct.ThrowIfCancellationRequested();
@@ -519,8 +738,7 @@ public sealed class ActionExecutor
                             await Task.Delay(200, ct);
                             continue;
                         }
-                    }
-                    return StepOutcome.Success;
+                    }                    return StepOutcome.Success;
                 }
             }
             catch { /* a navigating document throws; wait and retry */ }
@@ -539,23 +757,18 @@ public sealed class ActionExecutor
     /// success — the step existed to remove something, and a run that silently skipped it would
     /// carry on against a page it did not actually change.
     /// </remarks>
-    private static StepOutcome DoRemoveElements(IWebDriver driver, GraphNode step, TimeSpan timeout)
+    private static StepOutcome DoRemoveElements(IWebDriver driver, GraphNode step)
     {
         if (string.IsNullOrWhiteSpace(step.Selector))
             return StepOutcome.Fail("برای حذف المنت، انتخابگر لازم است.");
 
         var by = BuildBy(step);
-        var wait = new WebDriverWait(driver, timeout);
-        try
-        {
-            wait.Until(d => d.FindElements(by).Count > 0);
-        }
-        catch (WebDriverTimeoutException)
-        {
-            return StepOutcome.Fail("المنتی برای حذف پیدا نشد.");
-        }
+        // One lookup: a miss is retryable, so the engine's wait budget may repeat it. Removing
+        // nothing is an ERROR rather than a quiet success — the step existed to remove something.
+        if (driver.FindElements(by).Count == 0)
+            return StepOutcome.Fail("المنتی برای حذف پیدا نشد.", retryable: true);
 
-        var removeAll = !step.ReadExtraBool("removeAllMatchesFalse");
+        var removeAll = step.ReadExtraBool("removeAllMatches", true);
         var removedRaw = ((IJavaScriptExecutor)driver).ExecuteScript(
             "const all=Array.from(document.querySelectorAll(arguments[0]));" +
             "const wanted=arguments[1]?all:all.slice(0,1);" +
@@ -574,17 +787,22 @@ public sealed class ActionExecutor
     /// <summary>
     /// Read a value out of the page, for the actions that capture one (field value or text).
     /// </summary>
-    public StepOutcome ReadElementValue(IWebDriver driver, GraphNode step, TimeSpan timeout)
+    public StepOutcome ReadElementValue(IWebDriver driver, GraphNode step)
     {
         try
         {
-            var el = FindElement(driver, step, timeout);
+            // The value an «عنصر صفحه» source reads lives on the VALUE side of the node
+            // (`equalSelectorValue`), not on the target side: that is where the editor's picker puts
+            // it, and reading the target made a step capture the element it was meant to act on.
+            var el = FindElement(driver, step, valueSide: true);
             // WHICH part of the element is the value. `Auto` keeps the historic guess (a form
             // field's value, otherwise its text); the other modes read exactly what was authored —
             // a link's href, a named attribute, the markup.
             var mode = (step.ReadExtraString("elementValueMode") ?? "").Trim();
+            if (mode.Length == 0) mode = (step.ReadExtraString("equalElementValueMode") ?? "").Trim();
             if (mode.Length == 0) mode = "Auto";
             var attr = (step.ReadExtraString("elementValueAttribute") ?? "").Trim();
+            if (attr.Length == 0) attr = (step.ReadExtraString("equalElementValueAttribute") ?? "").Trim();
             const string js =
                 "const el=arguments[0], m=String(arguments[1]||'auto').toLowerCase(), a=arguments[2];" +
                 "if(m==='value')return el.value!=null?String(el.value):'';" +
@@ -599,6 +817,10 @@ public sealed class ActionExecutor
                 "const v=el.getAttribute(m);return v==null?'':String(v);";
             var text = ((IJavaScriptExecutor)driver).ExecuteScript(js, el, mode, attr) as string;
             return StepOutcome.Read(text ?? "");
+        }
+        catch (NoSuchElementException)
+        {
+            return StepOutcome.Fail("المنت منبع مقدار در صفحه پیدا نشد.", retryable: true);
         }
         catch (Exception ex)
         {

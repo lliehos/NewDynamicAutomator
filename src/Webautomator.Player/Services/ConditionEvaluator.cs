@@ -35,7 +35,7 @@ public sealed class ConditionEvaluator
 
     /// <summary>Evaluate, reporting why when it could not be decided.</summary>
     public ConditionResult Evaluate(
-        IWebDriver driver, ProcessGraph graph, GraphNode node, int rowIndex,
+        IWebDriver? driver, ProcessGraph graph, GraphNode node, int rowIndex,
         IReadOnlyDictionary<string, string> memory,
         Func<int?, int, string, string> readCell)
     {
@@ -48,8 +48,8 @@ public sealed class ConditionEvaluator
             {
                 case "Url":
                 {
-                    var actual = driver.Url ?? "";
-                    var expected = ResolveOperand(node, memory, readCell, rowIndex, graph, actual);
+                    var actual = driver?.Url ?? "";
+                    var expected = ResolveOperand(node, memory, readCell, rowIndex, graph, actual, driver);
                     return ConditionResult.Of(Compare(actual, expected, node.ReadExtraString("equalityType")));
                 }
 
@@ -63,28 +63,36 @@ public sealed class ConditionEvaluator
                     if (string.IsNullOrWhiteSpace(selector)) return ConditionResult.Of(negate);
                     var wantVisible = ct is "ElementVisible" or "ElementHidden";
 
-                    var found = Exists(driver, selector, wantVisible);
+                    var by = ToBy(selector);
+                    var req = ElementRequirements.For(node, valueSide: false);
+                    // "Visible" itself is a requirement; the node's enabled/clickable filters add to it.
+                    if (wantVisible) req = req with { Visible = true };
+
+                    // The element's wait switch applies here too: "does it exist" asked once, a
+                    // millisecond after the click that creates it, answers the wrong thing.
+                    var found = ExistsWithWait(driver!, by, req, WaitBudgetMs(node));
                     return ConditionResult.Of(negate ? !found : found);
                 }
 
                 case "FindElements":
                 {
                     var selector = node.Selector ?? "";
-                    var count = string.IsNullOrWhiteSpace(selector)
-                        ? 0
-                        : CountElements(driver, selector);
                     // The operand is compared as TEXT, not re-parsed into a number: the author may
                     // have chosen a memory or a source cell, and NodeNumber only ever saw the
                     // constant. Parsing it here made "count > {memory}" compare against 0 always.
-                    var countText = count.ToString(CultureInfo.InvariantCulture);
-                    var expected = ResolveOperand(node, memory, readCell, rowIndex, graph, countText);
-                    return ConditionResult.Of(Compare(countText, expected, node.ReadExtraString("equalityType")));
+                    var expected = ResolveOperand(node, memory, readCell, rowIndex, graph, null, driver);
+                    var countReq = ElementRequirements.For(node, valueSide: false);
+                    return ConditionResult.Of(CountMatchesWithWait(driver!, string.IsNullOrWhiteSpace(selector) ? null : ToBy(selector),
+                        countReq, expected, node.ReadExtraString("equalityType"), WaitBudgetMs(node)));
                 }
 
                 case "ElementValue":
                 {
-                    var left = ReadElementText(driver, node);
-                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph, left);
+                    // The SUBJECT of this condition is the node's TARGET element (`selectorValue`);
+                    // its compare operand may be read from the value-side element
+                    // (`equalSelectorValue`) when the author picked «عنصر صفحه» for it.
+                    var left = ReadElementText(driver!, node, equalSide: false);
+                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph, left, driver);
                     return ConditionResult.Of(Compare(left, right, node.ReadExtraString("equalityType")));
                 }
 
@@ -92,10 +100,12 @@ public sealed class ConditionEvaluator
                 case "SourceColumnValue":
                 case "SourceRowValue":
                 {
-                    var dsId = node.DataSourceId;
+                    // The SUBJECT source is `sourceId`; `dataSourceId` on a condition belongs to the
+                    // COMPARE operand, so reading it here could compare a cell with itself.
+                    var dsId = node.SourceId ?? node.DataSourceId;
                     var col = node.DynamicSourceColumnName ?? "";
                     var left = readCell(dsId, rowIndex, col);
-                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph, left);
+                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph, left, driver);
                     return ConditionResult.Of(Compare(left, right, node.ReadExtraString("equalityType")));
                 }
 
@@ -103,18 +113,20 @@ public sealed class ConditionEvaluator
                 {
                     var name = node.MemoryVariableName ?? "";
                     var left = memory.TryGetValue(name, out var v) ? v : "";
-                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph, left);
+                    var right = ResolveOperand(node, memory, readCell, rowIndex, graph, left, driver);
                     return ConditionResult.Of(Compare(left, right, node.ReadExtraString("equalityType")));
                 }
 
                 case "DriverTabs":
                 {
-                    // This runner is one browser per run, so the meaningful count is its windows.
-                    var count = driver.WindowHandles.Count;
+                    // This runner is one browser per run, so the meaningful count is its windows —
+                    // and a run that never opened a browser has none, which is a real answer rather
+                    // than a reason to fail the check.
+                    var count = driver?.WindowHandles.Count ?? 0;
                     var countText = count.ToString(CultureInfo.InvariantCulture);
                     return ConditionResult.Of(Compare(
                         countText,
-                        ResolveOperand(node, memory, readCell, rowIndex, graph, countText),
+                        ResolveOperand(node, memory, readCell, rowIndex, graph, countText, driver),
                         node.ReadExtraString("equalityType")));
                 }
 
@@ -125,7 +137,7 @@ public sealed class ConditionEvaluator
                     // "yyyy/MM/dd" clock against a "yyyy-MM-dd" literal can never be equal, and
                     // ordering a "HH:mm" clock against "14:05:09" was a silent mismatch too.
                     var clock = SystemClock(ct, node.ReadExtraString("systemClockFormat"));
-                    var operand = ResolveOperand(node, memory, readCell, rowIndex, graph, clock);
+                    var operand = ResolveOperand(node, memory, readCell, rowIndex, graph, clock, driver);
                     // The author may have typed the literal in a different shape than the node's
                     // format. Re-formatting the clock to the operand's shape keeps an ordering
                     // comparison honest instead of silently answering false.
@@ -153,15 +165,13 @@ public sealed class ConditionEvaluator
         }
     }
 
-    private static bool Exists(IWebDriver driver, string selector, bool requireVisible)
+    private static bool Exists(IWebDriver driver, By by, ElementRequirements req)
     {
-        var by = selector.TrimStart().StartsWith("//") ? By.XPath(selector) : By.CssSelector(selector);
         try
         {
             var elements = driver.FindElements(by);
             if (elements.Count == 0) return false;
-            if (!requireVisible) return true;
-            return elements.Any(e => e.Displayed);
+            return elements.Any(el => ElementState.Matches(driver, el, req));
         }
         catch (WebDriverException)
         {
@@ -174,23 +184,73 @@ public sealed class ConditionEvaluator
         }
     }
 
-    private static string ReadElementText(IWebDriver driver, GraphNode node)
+    /// <summary>XPath when the selector looks like it, CSS otherwise — the recorder's own rule.</summary>
+    private static By ToBy(string selector)
+        => selector.TrimStart().StartsWith("//") ? By.XPath(selector) : By.CssSelector(selector);
+
+    /// <summary>Ask whether the element exists, retrying while the node's wait budget lasts.</summary>
+    private static bool ExistsWithWait(IWebDriver driver, By by, ElementRequirements req, int budgetMs)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(budgetMs);
+        while (true)
+        {
+            if (Exists(driver, by, req)) return true;
+            if (budgetMs <= 0 || DateTime.UtcNow >= deadline) return false;
+            Thread.Sleep(200);
+        }
+    }
+
+    /// <summary>
+    /// Poll the element count until the comparison holds (or the wait budget ends).
+    /// </summary>
+    /// <remarks>
+    /// "Wait until 3 rows are there" is what the author means when the switch is on; a one-shot count
+    /// made the switch inert for exactly this condition type.
+    /// </remarks>
+    private static bool CountMatchesWithWait(
+        IWebDriver driver, By? by, ElementRequirements req, string expected, string equality, int budgetMs)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(budgetMs);
+        while (true)
+        {
+            var count = by is null ? 0 : CountElements(driver, by, req);
+            var countText = count.ToString(CultureInfo.InvariantCulture);
+            if (Compare(countText, expected, equality)) return true;
+            if (budgetMs <= 0 || DateTime.UtcNow >= deadline) return false;
+            Thread.Sleep(200);
+        }
+    }
+
+    /// <summary>The node's selector wait budget in milliseconds (0 = one attempt).</summary>
+    private static int WaitBudgetMs(GraphNode node)
+    {
+        if (node.SelectorWaitEnabled != true) return 0;
+        var raw = node.SelectorWaitMs ?? 0;
+        return Math.Max(200, raw > 0 ? raw : 1000);
+    }
+
+    /// <summary>
+    /// Read the text/value of a condition's element.
+    /// </summary>
+    /// <param name="equalSide">
+    /// <c>false</c> for the condition's SUBJECT (the target selector, <c>selectorValue</c>), which is
+    /// what an ElementValue check inspects; <c>true</c> for a compare operand read from the page
+    /// (<c>equalSelectorValue</c>).
+    /// </param>
+    private static string ReadElementText(IWebDriver driver, GraphNode node, bool equalSide)
     {
         try
         {
-            var by = (node.Selector ?? "").TrimStart().StartsWith("//")
-                ? By.XPath(node.Selector ?? "")
-                : By.CssSelector(node.Selector ?? "");
-            var el = driver.FindElement(by);
-            // WHICH part of the element is the subject. `equalElementValueMode` is what the
-            // condition inspector writes (the same vocabulary the capture actions use); reading
-            // only the text made "value of a link" silently compare an empty string. `Auto` keeps
-            // the historic behaviour for every node that never carried the field.
-            var mode = (node.ReadExtraString("equalElementValueMode") ?? "").Trim();
-            if (string.IsNullOrEmpty(mode)) mode = (node.ReadExtraString("elementValueMode") ?? "").Trim();
-            if (string.IsNullOrEmpty(mode)) mode = "Auto";
-            var attr = (node.ReadExtraString("equalElementValueAttribute") ?? "").Trim();
-            if (string.IsNullOrEmpty(attr)) attr = (node.ReadExtraString("elementValueAttribute") ?? "").Trim();
+            var selector = ((equalSide ? node.EqualSelector : node.Selector) ?? "").Trim();
+            if (selector.Length == 0) return "";
+            var el = ElementState.FindFirst(
+                driver, ToBy(selector), ElementRequirements.For(node, equalSide), index: 0);
+
+            // WHICH part of the element is read: the condition inspector writes
+            // `equalElementValueMode` for the compare element and `elementValueMode` for the subject.
+            var mode = (node.ReadExtraString(equalSide ? "equalElementValueMode" : "elementValueMode") ?? "").Trim();
+            if (mode.Length == 0) mode = "Auto";
+            var attr = (node.ReadExtraString(equalSide ? "equalElementValueAttribute" : "elementValueAttribute") ?? "").Trim();
 
             return ((IJavaScriptExecutor)driver).ExecuteScript(
                 "const el=arguments[0], m=String(arguments[1]||'auto').toLowerCase(), a=arguments[2];" +
@@ -223,10 +283,14 @@ public sealed class ConditionEvaluator
     /// from it when the node names no format, so an element showing "14:05" is compared against a
     /// "HH:mm" clock instead of a "HH:mm:ss" one that could never match.
     /// </param>
+    /// <param name="driver">
+    /// Needed only when the operand itself lives on the page («عنصر صفحه»); a node that names no
+    /// page operand never touches it.
+    /// </param>
     private static string ResolveOperand(
         GraphNode node, IReadOnlyDictionary<string, string> memory,
         Func<int?, int, string, string> readCell, int rowIndex, ProcessGraph graph,
-        string? subjectValue = null)
+        string? subjectValue = null, IWebDriver? driver = null)
     {
         // The editor stores the operand's source in `contentSourceType` (the same field a step uses
         // for its value) and the operand's own fields in `memoryVariableName` / `dataSourceId` +
@@ -241,6 +305,12 @@ public sealed class ConditionEvaluator
                 ? "SystemDate"
                 : "SystemTime";
             return UserSystemClock(kind, node.ReadExtraString("userSystemClockFormat"), subjectValue);
+        }
+        if (string.Equals(src, "Elements", StringComparison.OrdinalIgnoreCase))
+        {
+            // The compare element is the VALUE-side selector: reading the target here compared the
+            // subject with itself (or with an empty expression, when the node had no target).
+            return driver is null ? "" : ReadElementText(driver, node, equalSide: true);
         }
         if (string.Equals(src, "Memory", StringComparison.OrdinalIgnoreCase))
         {
@@ -276,12 +346,11 @@ public sealed class ConditionEvaluator
         => conditionType is "SourceValue" or "SourceColumnValue" or "SourceRowValue";
 
     /// <summary>Count the elements a selector matches, tolerating XPath and a malformed selector.</summary>
-    private static int CountElements(IWebDriver driver, string selector)
+    private static int CountElements(IWebDriver driver, By by, ElementRequirements req)
     {
         try
         {
-            var by = selector.TrimStart().StartsWith("//") ? By.XPath(selector) : By.CssSelector(selector);
-            return driver.FindElements(by).Count;
+            return driver.FindElements(by).Count(el => ElementState.Matches(driver, el, req));
         }
         catch (WebDriverException)
         {

@@ -92,11 +92,52 @@ public sealed class GraphNode
     [JsonPropertyName("isActive")] public bool? IsActive { get; set; }
 
     [JsonPropertyName("actionType")] public string? ActionType { get; set; }
-    [JsonPropertyName("selector")] public string? Selector { get; set; }
+
+    /// <summary>
+    /// The TARGET element's selector, as the editor stores it.
+    /// </summary>
+    /// <remarks>
+    /// The canvas field is <c>selectorValue</c> — that is the name the editor writes and the
+    /// extension's engine reads (<c>step.selectorValue</c>). This runner used to bind a
+    /// <c>selector</c> property instead, which no canvas ever carries, so every selector-bearing
+    /// step ran with an EMPTY selector: Firefox answered "Document.querySelector: '' is not a valid
+    /// selector" and element conditions silently reported "not met".
+    /// </remarks>
+    [JsonPropertyName("selectorValue")] public string? SelectorValue { get; set; }
+
+    /// <summary>
+    /// The VALUE-side selector (<c>equalSelectorValue</c>): the element a step or condition reads its
+    /// value from when the value source is «عنصر صفحه».
+    /// </summary>
+    [JsonPropertyName("equalSelectorValue")] public string? EqualSelectorValue { get; set; }
+
     [JsonPropertyName("selectorType")] public string? SelectorType { get; set; }
     [JsonPropertyName("selectorIndex")] public int? SelectorIndex { get; set; }
     [JsonPropertyName("selectorWaitEnabled")] public bool? SelectorWaitEnabled { get; set; }
     [JsonPropertyName("selectorWaitMs")] public int? SelectorWaitMs { get; set; }
+
+    /// <summary>The target selector, falling back to a legacy <c>selector</c> field when present.</summary>
+    public string? Selector =>
+        ResolvedSelector ?? (!string.IsNullOrWhiteSpace(SelectorValue) ? SelectorValue : ReadExtraString("selector"));
+
+    /// <summary>The value-side selector, falling back to the target selector when the node has none.</summary>
+    public string? EqualSelector =>
+        ResolvedEqualSelector ?? (!string.IsNullOrWhiteSpace(EqualSelectorValue)
+            ? EqualSelectorValue
+            : ReadExtraString("equalSelector"));
+
+    /// <summary>
+    /// The target selector after this run resolved it (dynamic placeholders, attribute filter).
+    /// </summary>
+    /// <remarks>
+    /// Set before each execution and left over between loops, exactly as engine.js keeps the
+    /// resolved selector beside the template: the template must stay untouched so the next row can
+    /// resolve it again. <c>null</c> means "not resolved yet".
+    /// </remarks>
+    public string? ResolvedSelector { get; set; }
+
+    /// <summary>The value-side selector after this run resolved it; see <see cref="ResolvedSelector"/>.</summary>
+    public string? ResolvedEqualSelector { get; set; }
     [JsonPropertyName("constantValue")] public string? ConstantValue { get; set; }
     [JsonPropertyName("navigateUrl")] public string? NavigateUrl { get; set; }
     [JsonPropertyName("waitMs")] public int? WaitMs { get; set; }
@@ -104,6 +145,17 @@ public sealed class GraphNode
 
     // Data source addressing
     [JsonPropertyName("dataSourceId")] public int? DataSourceId { get; set; }
+
+    /// <summary>
+    /// A CONDITION's subject source.
+    /// </summary>
+    /// <remarks>
+    /// A condition keeps two sources: <c>sourceId</c> is the subject it checks, while
+    /// <c>dataSourceId</c> is the COMPARE operand's source. Reading only <c>dataSourceId</c> made a
+    /// source-subject condition read (and resolve its row pointer against) the wrong source.
+    /// </remarks>
+    [JsonPropertyName("sourceId")] public int? SourceId { get; set; }
+
     [JsonPropertyName("saveDataSourceId")] public int? SaveDataSourceId { get; set; }
     [JsonPropertyName("saveColumnName")] public string? SaveColumnName { get; set; }
     [JsonPropertyName("dynamicSourceColumnName")] public string? DynamicSourceColumnName { get; set; }
@@ -127,6 +179,39 @@ public sealed class GraphNode
 
     public bool ReadExtraBool(string name)
         => Extra.TryGetValue(name, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False && v.GetBoolean();
+
+    /// <summary>
+    /// Read a boolean flag, accepting the shapes a saved canvas actually contains.
+    /// </summary>
+    /// <remarks>
+    /// The editor writes real JSON booleans, but a hand-edited or legacy graph may carry "true" or
+    /// 1. Reading only the boolean kind silently turned such a flag OFF — the kind of divergence
+    /// that makes a switch look ignored.
+    /// </remarks>
+    public bool ReadExtraBool(string name, bool fallback)
+    {
+        if (!Extra.TryGetValue(name, out var v)) return fallback;
+        return v.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Number => v.TryGetInt32(out var n) ? n != 0 : fallback,
+            JsonValueKind.String => bool.TryParse(v.GetString(), out var b) ? b : fallback,
+            _ => fallback
+        };
+    }
+
+    /// <summary>Read an integer field, accepting a numeric string as well.</summary>
+    public int? ReadExtraInt(string name)
+    {
+        if (!Extra.TryGetValue(name, out var v)) return null;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n)) return n;
+        if (v.ValueKind == JsonValueKind.String
+            && int.TryParse(v.GetString(), System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+            return parsed;
+        return null;
+    }
 }
 
 public sealed class GraphEdge

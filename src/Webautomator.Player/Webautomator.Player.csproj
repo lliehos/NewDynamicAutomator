@@ -9,7 +9,7 @@
     <RootNamespace>Webautomator.Player</RootNamespace>
     <AssemblyName>Webautomator.Player</AssemblyName>
     <ApplicationIcon>Assets\webautomator-icon.ico</ApplicationIcon>
-    <Version>1.0.3</Version>
+    <Version>1.0.4</Version>
     <!--
       The player is published for win-x64 by the web publish (see PublishDesktopPlayer in
       Webautomator.Web.csproj). Listing the RID here is what lets restore produce a win-x64 asset target —

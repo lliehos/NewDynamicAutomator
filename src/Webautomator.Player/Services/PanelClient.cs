@@ -211,6 +211,22 @@ public sealed class PanelClient : IDisposable
     /// <summary>Error text meaning "the session is gone", so the window can sign out instead of showing it.</summary>
     public const string AuthError = "auth";
 
+    /// <summary>
+    /// Raised when the server rejected this client's token (401) on any call.
+    /// </summary>
+    /// <remarks>
+    /// The extension treats an auth failure as a run-stopping error that no «چشم‌پوشی از خطا» switch
+    /// may swallow: nothing downstream can succeed against a dead session, so continuing only buries
+    /// the real cause under follow-on failures. A step can discover the dead session BEFORE the
+    /// 2-second directive poll does, so every data call reports it here.
+    /// </remarks>
+    public event Action? AuthRejected;
+
+    private void NoteStatus(System.Net.HttpStatusCode code)
+    {
+        if (code == System.Net.HttpStatusCode.Unauthorized) AuthRejected?.Invoke();
+    }
+
     /// <summary>The process list, in the shape the desktop list shows.</summary>
     public async Task<ApiResult<List<ProcessRow>>> ListProcessesAsync(CancellationToken ct = default)
     {
@@ -439,6 +455,7 @@ public sealed class PanelClient : IDisposable
             var url = $"{BaseUrl}/api/datasources/{dataSourceId}/cells" +
                       $"?rowIndex={rowIndex}&columnKey={Uri.EscapeDataString(columnKey)}";
             var res = await _http.GetAsync(url, ct);
+            NoteStatus(res.StatusCode);
             if (!res.IsSuccessStatusCode) return null;
             var doc = await res.Content.ReadFromJsonAsync<JsonElement>(JsonOpts, ct);
             return ReadString(doc, "cellValue") ?? "";
@@ -485,8 +502,14 @@ public sealed class PanelClient : IDisposable
     }
 
     /// <summary>Write one cell of a SHARED source — the only source a local run writes remotely.</summary>
+    /// <param name="insertMode">
+    /// <c>Replace</c>/<c>Prepend</c>/<c>Append</c>: the server joins the incoming value with the
+    /// cell's current value under its row lock, so two writers cannot lose each other's addition.
+    /// </param>
+    /// <param name="insertSeparator">Text placed between the incoming and the previous value.</param>
     public async Task<bool> PatchCellAsync(
-        int dataSourceId, int rowIndex, string columnKey, string? value, CancellationToken ct = default)
+        int dataSourceId, int rowIndex, string columnKey, string? value,
+        string? insertMode = null, string? insertSeparator = null, CancellationToken ct = default)
     {
         try
         {
@@ -495,8 +518,10 @@ public sealed class PanelClient : IDisposable
                 rowIndex,
                 columnKey,
                 cellValue = value ?? "",
-                insertMode = "auto"
+                insertMode = string.IsNullOrWhiteSpace(insertMode) ? "auto" : insertMode,
+                insertSeparator = insertSeparator ?? ""
             }, JsonOpts, ct);
+            NoteStatus(res.StatusCode);
             return res.IsSuccessStatusCode;
         }
         catch { return false; }
@@ -512,6 +537,7 @@ public sealed class PanelClient : IDisposable
         try
         {
             var res = await _http.DeleteAsync($"{BaseUrl}/api/datasources/{dataSourceId}/rows/{rowIndex}", ct);
+            NoteStatus(res.StatusCode);
             return res.IsSuccessStatusCode
                 ? ApiResult<string>.Success("ok")
                 : ApiResult<string>.Fail(await ReadErrorAsync(res, ct) ?? "حذف ردیف ناموفق بود.");
@@ -527,6 +553,7 @@ public sealed class PanelClient : IDisposable
         try
         {
             var res = await _http.PostAsJsonAsync(url, body, JsonOpts, ct);
+            NoteStatus(res.StatusCode);
             return res.IsSuccessStatusCode
                 ? ApiResult<string>.Success("ok")
                 : ApiResult<string>.Fail(await ReadErrorAsync(res, ct) ?? "تغییر ردیف‌های منبع ناموفق بود.");
