@@ -32,3 +32,8 @@ docs/                                  معماری و فازها
 ```
 
 جزئیات رکورد/پخش: [docs/record-play.md](docs/record-play.md) — ویرایشگر: [docs/visual-editor.md](docs/visual-editor.md)
+
+## ویدیوی آموزشی فارسی
+
+ویدیوی ۷ دقیقه‌ای «ساخت و اجرای سناریو» برای اپراتور (روایت فارسی، زیرنویس، اسکرین‌شات پنل):
+[docs/video](docs/video/README.md) — خروجی: `docs/video/Webautomator-Tutorial-FA.mp4`

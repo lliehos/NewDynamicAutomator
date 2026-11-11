@@ -1,0 +1,305 @@
+﻿{
+    "total":  429.498,
+    "beats":  [
+                  {
+                      "id":  "01-cover",
+                      "kind":  "cover",
+                      "audio":  14.64,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  15.59,
+                      "zoom":  "in",
+                      "chars":  189
+                  },
+                  {
+                      "id":  "02-section-why",
+                      "kind":  "section",
+                      "audio":  3.172,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  4.122,
+                      "zoom":  "in",
+                      "chars":  50
+                  },
+                  {
+                      "id":  "03-idea",
+                      "kind":  "points",
+                      "audio":  17.599,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  18.549,
+                      "zoom":  "in",
+                      "chars":  249
+                  },
+                  {
+                      "id":  "04-section-setup",
+                      "kind":  "section",
+                      "audio":  6.004,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  6.954,
+                      "zoom":  "in",
+                      "chars":  79
+                  },
+                  {
+                      "id":  "05-steps-install",
+                      "kind":  "steps",
+                      "audio":  19.882,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  20.832,
+                      "zoom":  "in",
+                      "chars":  256
+                  },
+                  {
+                      "id":  "06-extension-ok",
+                      "kind":  "points",
+                      "audio":  18.339,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  19.289,
+                      "zoom":  "in",
+                      "chars":  227
+                  },
+                  {
+                      "id":  "07-section-panel",
+                      "kind":  "section",
+                      "audio":  3.338,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  4.288,
+                      "zoom":  "in",
+                      "chars":  53
+                  },
+                  {
+                      "id":  "08-panel-home",
+                      "kind":  "shot",
+                      "audio":  16.834,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  17.784,
+                      "zoom":  "pan",
+                      "chars":  209
+                  },
+                  {
+                      "id":  "09-processes",
+                      "kind":  "shot",
+                      "audio":  15.086,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  16.036,
+                      "zoom":  "pan",
+                      "chars":  177
+                  },
+                  {
+                      "id":  "10-section-record",
+                      "kind":  "section",
+                      "audio":  2.981,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  3.931,
+                      "zoom":  "in",
+                      "chars":  34
+                  },
+                  {
+                      "id":  "11-steps-record",
+                      "kind":  "steps",
+                      "audio":  17.701,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  18.651,
+                      "zoom":  "in",
+                      "chars":  228
+                  },
+                  {
+                      "id":  "12-what-recorded",
+                      "kind":  "chips",
+                      "audio":  19.653,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  20.603,
+                      "zoom":  "in",
+                      "chars":  250
+                  },
+                  {
+                      "id":  "13-save-to-source",
+                      "kind":  "points",
+                      "audio":  15.864,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  16.814,
+                      "zoom":  "in",
+                      "chars":  214
+                  },
+                  {
+                      "id":  "14-section-editor",
+                      "kind":  "section",
+                      "audio":  4.001,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  4.951,
+                      "zoom":  "in",
+                      "chars":  48
+                  },
+                  {
+                      "id":  "15-shapes",
+                      "kind":  "shapes",
+                      "audio":  18.645,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  19.595,
+                      "zoom":  "in",
+                      "chars":  247
+                  },
+                  {
+                      "id":  "16-edges",
+                      "kind":  "edges",
+                      "audio":  15.724,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  16.674,
+                      "zoom":  "in",
+                      "chars":  209
+                  },
+                  {
+                      "id":  "17-inside-group",
+                      "kind":  "flow",
+                      "audio":  13.466,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  14.416,
+                      "zoom":  "in",
+                      "chars":  179
+                  },
+                  {
+                      "id":  "18-inspector",
+                      "kind":  "points",
+                      "audio":  19.525,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  20.475,
+                      "zoom":  "in",
+                      "chars":  244
+                  },
+                  {
+                      "id":  "19-section-data",
+                      "kind":  "section",
+                      "audio":  4.664,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  5.614,
+                      "zoom":  "in",
+                      "chars":  70
+                  },
+                  {
+                      "id":  "20-datasource",
+                      "kind":  "points",
+                      "audio":  17.676,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  18.626,
+                      "zoom":  "in",
+                      "chars":  220
+                  },
+                  {
+                      "id":  "21-loop-dynamic",
+                      "kind":  "pipeline",
+                      "audio":  18.581,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  19.531,
+                      "zoom":  "in",
+                      "chars":  252
+                  },
+                  {
+                      "id":  "22-timing",
+                      "kind":  "points",
+                      "audio":  13.873,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  14.823,
+                      "zoom":  "in",
+                      "chars":  188
+                  },
+                  {
+                      "id":  "23-section-run",
+                      "kind":  "section",
+                      "audio":  1.259,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  2.209,
+                      "zoom":  "in",
+                      "chars":  11
+                  },
+                  {
+                      "id":  "24-run-flow",
+                      "kind":  "pipeline",
+                      "audio":  16.094,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  17.044,
+                      "zoom":  "in",
+                      "chars":  214
+                  },
+                  {
+                      "id":  "25-hud",
+                      "kind":  "points",
+                      "audio":  16.987,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  17.937,
+                      "zoom":  "in",
+                      "chars":  220
+                  },
+                  {
+                      "id":  "26-debug",
+                      "kind":  "points",
+                      "audio":  16.03,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  16.98,
+                      "zoom":  "in",
+                      "chars":  216
+                  },
+                  {
+                      "id":  "27-section-errors",
+                      "kind":  "section",
+                      "audio":  2.483,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  3.433,
+                      "zoom":  "in",
+                      "chars":  29
+                  },
+                  {
+                      "id":  "28-errors",
+                      "kind":  "checklist",
+                      "audio":  23.811,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  24.761,
+                      "zoom":  "in",
+                      "chars":  293
+                  },
+                  {
+                      "id":  "29-recap",
+                      "kind":  "recap",
+                      "audio":  18.441,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  19.391,
+                      "zoom":  "in",
+                      "chars":  229
+                  },
+                  {
+                      "id":  "30-end",
+                      "kind":  "end",
+                      "audio":  8.645,
+                      "lead":  0.45,
+                      "tail":  0.5,
+                      "segment":  9.595,
+                      "zoom":  "out",
+                      "chars":  92
+                  }
+              ]
+}

@@ -1,0 +1,104 @@
+@inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Env
+@{
+  // Same rule as the screenshot slots: the deployment supplies the media, the view supplies the
+  // frame. The MP4 is ~60 MB, so it is deliberately NOT in the repository — an operator copies it
+  // from docs/video/ (or the build output) into wwwroot/media/tutorial/, and the player appears on
+  // the next request. Until then the reader still gets the written eight-step path below, which is
+  // the part of the video that carries the instructions anyway.
+  const string videoRel = "/media/tutorial/Webautomator-Tutorial-FA.mp4";
+  const string subsRel = "/media/tutorial/Webautomator-Tutorial-FA.srt";
+  const string posterRel = "/img/guide/00-video-poster.png";
+
+  string Physical(string webPath) =>
+    System.IO.Path.Combine(Env.WebRootPath, webPath.TrimStart('/').Replace('/', System.IO.Path.DirectorySeparatorChar));
+
+  var hasVideo = System.IO.File.Exists(Physical(videoRel));
+  var hasSubs = System.IO.File.Exists(Physical(subsRel));
+
+  var faDigits = new[] { "۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹" };
+
+  // Chapter -> the long-form section that explains it in detail. An empty target means the chapter
+  // has no dedicated section (troubleshooting reads as part of play), so no "read more" link shows.
+  var chapters = new (int N, string Target)[]
+  {
+    (1, "#g-7"), (2, "#g-3"), (3, "#g-8"), (4, "#g-4"),
+    (5, "#g-5"), (6, "#g-6"), (7, "#g-9"), (8, "")
+  };
+}
+
+<section class="da-guide-section da-guide-vwalk" id="g-video">
+  <h5>
+    <span class="da-guide-num"><i class="ti ti-player-play" aria-hidden="true"></i></span>
+    <span data-i18n="panel.guide.video.title">@L["panel.guide.video.title"]</span>
+  </h5>
+  <p data-i18n="panel.guide.video.body">@L["panel.guide.video.body"]</p>
+
+  <figure class="da-guide-figure">
+    @if (hasVideo)
+    {
+      <video class="da-guide-player" controls preload="metadata" poster="@posterRel" playsinline>
+        <source src="@videoRel" type="video/mp4" />
+        @if (hasSubs)
+        {
+          <track kind="subtitles" src="@subsRel" srclang="fa" label="@L["panel.guide.video.subsLabel"]" default />
+        }
+      </video>
+    }
+    else
+    {
+      @* Not an empty <video> element: a player that cannot start looks broken. The poster with an
+         explicit "not supplied" note reads as a to-do for whoever deploys the panel. *@
+      <div class="da-guide-player-missing" role="img" aria-label="@L["panel.guide.video.missingTitle"]">
+        <img src="@posterRel" alt="" />
+        <div class="da-guide-player-missing-body">
+          <i class="ti ti-video-off" aria-hidden="true"></i>
+          <p class="da-guide-shot-title">@L["panel.guide.video.missingTitle"]</p>
+          <p class="da-guide-shot-file">
+            <span data-i18n="panel.guide.video.missingHint">@L["panel.guide.video.missingHint"]</span>
+            <code dir="ltr">wwwroot@(videoRel)</code>
+            <code dir="ltr">wwwroot@(subsRel)</code>
+          </p>
+        </div>
+      </div>
+    }
+    <figcaption class="da-guide-caption">
+      <span data-i18n="panel.guide.video.meta">@L["panel.guide.video.meta"]</span>
+      @if (hasVideo)
+      {
+        <a class="da-guide-open" href="@videoRel" download>
+          <i class="ti ti-download" aria-hidden="true"></i>
+          <span data-i18n="panel.guide.video.download">@L["panel.guide.video.download"]</span>
+        </a>
+      }
+    </figcaption>
+  </figure>
+
+  <h6 data-i18n="panel.guide.video.chaptersTitle">@L["panel.guide.video.chaptersTitle"]</h6>
+
+  <ol class="da-guide-vchapters">
+    @foreach (var (n, target) in chapters)
+    {
+      var titleKey = $"panel.guide.video.c{n}Title";
+      <li class="da-guide-vchapter">
+        <div class="da-guide-vchapter-head">
+          <span class="da-guide-vnum" aria-hidden="true">@faDigits[n]</span>
+          <span class="da-guide-vchapter-title" data-i18n="@titleKey">@L[titleKey]</span>
+          @if (!string.IsNullOrEmpty(target))
+          {
+            <a class="da-guide-open da-guide-vmore" href="@target">
+              <i class="ti ti-arrow-down" aria-hidden="true"></i>
+              <span data-i18n="panel.guide.video.more">@L["panel.guide.video.more"]</span>
+            </a>
+          }
+        </div>
+        <ul class="da-guide-list da-guide-vsteps">
+          @for (var s = 1; s <= 3; s++)
+          {
+            var stepKey = $"panel.guide.video.c{n}S{s}";
+            <li data-i18n="@stepKey">@L[stepKey]</li>
+          }
+        </ul>
+      </li>
+    }
+  </ol>
+</section>

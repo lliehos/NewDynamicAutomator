@@ -19,6 +19,7 @@
     <nav class="da-guide-toc" aria-labelledby="da-guide-toc-title">
       <h5 class="da-guide-toc-title" id="da-guide-toc-title" data-i18n="panel.guide.toc">@L["panel.guide.toc"]</h5>
       <ol>
+        <li><a href="#g-video" data-i18n="panel.guide.video.toc">@L["panel.guide.video.toc"]</a></li>
         @for (var i = 1; i <= 12; i++)
         {
           var key = $"panel.guide.s{i}Title";
@@ -30,6 +31,9 @@
     </nav>
 
     <div class="da-guide-body">
+
+      @* ── 0. Video walkthrough + quick path ─────────────────────────────────── *@
+      <partial name="_GuideVideo" />
 
       @* ── 1. Overview ───────────────────────────────────────────────────────── *@
       <section class="da-guide-section" id="g-1">
