@@ -6,23 +6,18 @@
   if (document.getElementById("da-recorder-fab")) return;
   if (window.__daFabInit || document.getElementById("da-player-fab")) return;
 
-  // Content script runs on every http(s) load; only mount while a play session is active.
+  // Content script runs on every http(s) load; only mount while THIS tab belongs to a play session.
   // If play starts later, storage/message wake us (or background re-injects this file).
+  //
+  // The old check asked storage/canvas whether *any* run was live. That flag is browser-wide, so
+  // every tab opened during a run mounted a Player HUD of its own — with a working Pause and Stop
+  // that would talk to the run it does not own. Ownership is the question to ask: the background
+  // answers `here` (this tab is the session's HUD owner, which also survives a finished run) and
+  // `owns` (this tab is one of the run's tabs, e.g. a named tab the process switched to).
   async function isPlaySessionActive() {
     try {
-      const st = await chrome.storage.local.get(["playing"]);
-      if (st.playing) return true;
-    } catch { /* ignore */ }
-    try {
-      const state = await chrome.runtime.sendMessage({ type: "getState" }).catch(() => null);
-      if (state?.playing || state?.play?.playing) return true;
-    } catch { /* ignore */ }
-    // The run may have FINISHED while this page was navigating (the last click reloads the page),
-    // and the HUD still belongs to this tab until it is closed by hand or the tab closes — so ask
-    // the background whether this tab owns the open play session and re-mount from that.
-    try {
       const here = await chrome.runtime.sendMessage({ type: "playSessionHere" }).catch(() => null);
-      return here?.here === true;
+      return here?.here === true || here?.owns === true;
     } catch {
       return false;
     }
@@ -548,10 +543,14 @@
             conditionNodeId: lastPlayRequest?.conditionNodeId || null,
             nextFromNodeId: lastPlayRequest?.nextFromNodeId || null,
             playScope: lastPlayRequest?.playScope || null,
+            // Fallback only: ignored while `reuseCurrentTab` can name the sender tab.
             tabId: lastPlayRequest?.tabId ?? null,
-            openNewTab: lastPlayRequest?.openNewTab === true,
-            // A no-target-tab run restarts the same way — its tab is recreated by GoToUrl.
-            startWithoutTab: lastPlayRequest?.startWithoutTab === true,
+            // Run in THIS tab. The HUD is already on a page the process works on, so replaying the
+            // original `openNewTab` / `startWithoutTab` would open a second tab and leave this one
+            // untouched. The background turns this into "target = sender tab".
+            reuseCurrentTab: true,
+            openNewTab: false,
+            startWithoutTab: false,
             // Repeat the SAME kind of run the HUD belongs to: a local run restarts locally.
             runOnServer: lastPlayRequest?.runOnServer
           }).catch((err) => ({ ok: false, error: err?.message || String(err) }));

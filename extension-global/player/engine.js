@@ -1421,6 +1421,26 @@ function forgetPlayTabByTabId(tabId) {
   }
 }
 
+/**
+ * Does this tab belong to the run in progress?
+ *
+ * `content/fab-play.js` is a content script on every http(s) page, so it decides on every page load
+ * whether a HUD belongs there. It used to decide from the global `playing` flag, which is shared by
+ * the whole browser: every tab the operator opened while a run was live mounted a Player HUD (with a
+ * working Pause and Stop) as if it were part of the run. Ownership is the only honest answer — the
+ * run's current tab and the tabs it opened under a name. The engine injects the HUD into those tabs
+ * itself; this is the check the content script re-mounts from after a navigation.
+ */
+function playOwnsTab(tabId) {
+  const id = Number(tabId);
+  if (!Number.isFinite(id) || id <= 0) return false;
+  if (playTabId != null && Number(playTabId) === id) return true;
+  for (const entry of playTabs.values()) {
+    if (Number(entry.id) === id) return true;
+  }
+  return false;
+}
+
 /** Start-of-run reset: the initial tab is always reachable as `main`. */
 async function resetPlayTabs(initialTabId) {
   await releaseAllPlayTabProtection();

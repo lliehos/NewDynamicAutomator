@@ -467,9 +467,20 @@ async function handleMessage(message, sender) {
     // click that reloads the page, and the fresh document would otherwise look like "no session"
     // and the HUD would vanish. It asks which tab owns the open play session; the marker is
     // cleared only by closing the HUD by hand or by closing the tab — the owner's rule.
+    //
+    // `owns` is the narrower question asked DURING a run: the content script runs on every http(s)
+    // page, so answering "yes, something is playing" put a HUD — Pause and Stop included — into
+    // every tab the operator opened mid-run. A live run owns its current tab and the tabs it opened
+    // under a name; anything else must not get a HUD.
     case "playSessionHere": {
       const { playSessionTabId } = await chrome.storage.local.get("playSessionTabId");
-      return { ok: true, here: playSessionTabId != null && sender?.tab?.id === Number(playSessionTabId) };
+      const tabId = sender?.tab?.id;
+      const here = playSessionTabId != null && tabId === Number(playSessionTabId);
+      const live = (() => {
+        try { return getPlayStatus().playing === true; } catch { return false; }
+      })();
+      const owned = live && typeof playOwnsTab === "function" && playOwnsTab(tabId);
+      return { ok: true, here, owns: here || owned };
     }
     case "closePlayHud": {
       const { playSessionTabId } = await chrome.storage.local.get("playSessionTabId");
@@ -2931,7 +2942,14 @@ const PLAYER_DEV_STAMP_FALLBACK_URLS = [
  */
 async function startPlayWithAutoReload(message, sender) {
   const rawTab = message.tabId != null && message.tabId !== "" ? Number(message.tabId) : NaN;
-  const hasExplicitTab = Number.isFinite(rawTab);
+  // A restart from the Player HUD: the HUD lives on a page the process is already working on, so the
+  // run must reuse THAT tab. Replaying the original request verbatim opened yet another tab — either
+  // because the first run was started with `openNewTab`, or because a no-target-tab run lazily
+  // created its tab and only remembered `tabId: null`. The operator was left with a second copy of
+  // the same page and a run working on the one they were not looking at.
+  const reuseCurrentTab = message.reuseCurrentTab === true && sender?.tab?.id != null;
+  const targetTab = reuseCurrentTab ? Number(sender.tab.id) : rawTab;
+  const hasExplicitTab = Number.isFinite(targetTab);
   const isConditionCheck = !!message.conditionNodeId;
   // "from this node onward" walks the graph like a whole-task run, so it must not be forced onto a
   // sender tab the way a condition check is, and a fresh tab has to stay possible.
@@ -2940,11 +2958,13 @@ async function startPlayWithAutoReload(message, sender) {
   // page-independent checks. It must NOT inherit the sender (portal) tab — that would silently
   // turn it into a run against the editor's own page.
   const isStartWithoutTab = message.startWithoutTab === true;
+  // …except on a HUD restart, where the sender tab IS the run's tab and must be the target.
+  const wantsNoTab = isStartWithoutTab && !reuseCurrentTab;
   const pendingPlay = {
     taskId: message.taskId,
     tabId: hasExplicitTab
-      ? rawTab
-      : (isConditionCheck || isStartWithoutTab ? null : (sender.tab?.id ?? null)),
+      ? targetTab
+      : (isConditionCheck || wantsNoTab ? null : (sender.tab?.id ?? null)),
     runMode: message.runMode || null,
     groupNodeId: message.groupNodeId || null,
     stepNodeId: message.stepNodeId || null,
@@ -2956,8 +2976,8 @@ async function startPlayWithAutoReload(message, sender) {
           : message.stepNodeId ? "step"
             : message.groupNodeId ? "group"
               : "task"),
-    openNewTab: hasExplicitTab || isConditionCheck || isStartWithoutTab ? false : (message.openNewTab === true),
-    startWithoutTab: isStartWithoutTab,
+    openNewTab: hasExplicitTab || isConditionCheck || wantsNoTab ? false : (message.openNewTab === true),
+    startWithoutTab: wantsNoTab,
     // The page that asked for the run. A no-target-tab run (and any run that ends up in another
     // tab) leaves this page outside the play tabs, so the engine needs it by name to keep sending
     // per-step progress — otherwise the diagram cannot show which node is running.
