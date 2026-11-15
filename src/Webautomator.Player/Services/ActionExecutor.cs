@@ -54,8 +54,7 @@ public sealed class ActionExecutor
                     return StepOutcome.Success;
 
                 case "WaitTime":
-                    await Task.Delay(Math.Max(0, step.WaitMs ?? 0), ct);
-                    return StepOutcome.Success;
+                    return await DoWaitTimeAsync(step, value, ct);
 
                 case "GoToUrl":
                     return DoGoToUrl(driver, step, value, _tabs);
@@ -84,7 +83,7 @@ public sealed class ActionExecutor
                 case "Click":
                 case "DoubleClick":
                 case "RightClick":
-                    return DoClick(driver, step, action);
+                    return await DoClickAsync(driver, step, action, ct);
 
                 case "Hover":
                     return DoHover(driver, step);
@@ -193,7 +192,111 @@ public sealed class ActionExecutor
 
     // ---- Actions --------------------------------------------------------------------------------
 
-    private static StepOutcome DoClick(IWebDriver driver, GraphNode step, string action)
+    /// <summary>
+    /// WaitTime, in both of its modes.
+    /// </summary>
+    /// <remarks>
+    /// «مدت» is a millisecond count («تا زمان»'s counterpart is the same field with another unit, which
+    /// is why the MODE is explicit rather than guessed from the text). «تا زمان» names a wall-clock
+    /// instant the step must END at — a duration cannot express that, and a loop of short waits costs
+    /// far more than one timer while being less precise, because every pass is subject to whatever
+    /// pacing the engine applies between steps.
+    /// </remarks>
+    private static async Task<StepOutcome> DoWaitTimeAsync(GraphNode step, string? value, CancellationToken ct)
+    {
+        if (string.Equals(step.ReadExtraString("waitMode"), "UntilTime", StringComparison.OrdinalIgnoreCase))
+        {
+            var clockText = ClockTarget.NormalizeDigits(value).Trim();
+            var target = ClockTarget.Parse(clockText);
+            if (target is null)
+                return StepOutcome.Fail($"ساعت هدف نامعتبر است ({clockText}) — قالب درست: HH:mm:ss.SSS");
+
+            // A time that has already passed today means "now": the step is due, not a day away.
+            await DelayUntilAsync(target.Value, ct);
+            return StepOutcome.Success;
+        }
+
+        var ms = Math.Max(0, int.TryParse(value, out var parsed) ? parsed : step.WaitMs ?? 0);
+        if (ms == 0 && (value ?? "").Contains(':'))
+        {
+            // A clock typed while the node is on «مدت»: waiting 0 silently is the worst answer —
+            // the run would fly past the step and the missed second would surface later.
+            return StepOutcome.Fail(
+                $"مقدار «{ClockTarget.NormalizeDigits(value).Trim()}» ساعت است، نه میلی‌ثانیه — حالت انتظار را روی «تا زمان» بگذارید");
+        }
+        if (ms > 0) await Task.Delay(ms, ct);
+        return StepOutcome.Success;
+    }
+
+    /// <summary>
+    /// Sleep until an absolute instant.
+    /// </summary>
+    /// <remarks>
+    /// <c>Task.Delay</c> alone cannot promise this: the Windows timer granularity is about 15.6 ms, so
+    /// a delay that ends near the target can overshoot it by that much. The last stretch is therefore
+    /// spun — the same reason the extension spins its final milliseconds rather than trusting a timer.
+    /// </remarks>
+    private static async Task DelayUntilAsync(DateTime target, CancellationToken ct)
+    {
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            var left = target - DateTime.Now;
+            if (left <= TimeSpan.Zero) return;
+            if (left <= TimeSpan.FromMilliseconds(20)) break;
+            await Task.Delay(left - TimeSpan.FromMilliseconds(15), ct);
+        }
+        while (DateTime.Now < target) Thread.SpinWait(50);
+    }
+
+    /// <summary>
+    /// Page-side precise dispatch, used when a Click step turns «کلیک در زمان دقیق» on.
+    /// </summary>
+    /// <remarks>
+    /// Synchronous by necessity: WebDriver runs this inside the page and returns afterwards, so a
+    /// setTimeout (or any await) would hand control back too early. The busy loop is bounded by the
+    /// lead window the caller sleeps through (~50 ms), never by the whole wait.
+    ///
+    /// RealMouse is offset by the 10 ms gap between press and release, so the CLICK — not the
+    /// pointerdown — lands on the requested instant, exactly as the extension's engine does it.
+    /// </remarks>
+    private const string PreciseClickScript = @"
+var el = arguments[0], target = arguments[1], kind = arguments[2], real = arguments[3], sel = arguments[4], tol = arguments[5];
+var startAt = target - (real ? 10 : 0);
+while (Date.now() < startAt) { /* the final window, in the page */ }
+// STRICT: past the tolerance the click is ABANDONED, not shifted — the step reports being late,
+// while an order placed at the wrong second cannot be undone. A negative return means refused.
+var late = Date.now() - target;
+if (late > tol) { return -late; }
+var fresh = sel ? document.querySelector(sel) : null;
+if (fresh) el = fresh;
+var r = el.getBoundingClientRect();
+var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+function opts(extra) {
+  var o = { bubbles: true, cancelable: true, view: window, composed: true,
+            clientX: cx, clientY: cy, screenX: cx, screenY: cy };
+  for (var k in extra) o[k] = extra[k];
+  return o;
+}
+if (kind === 'DoubleClick') {
+  el.dispatchEvent(new MouseEvent('dblclick', opts({})));
+} else if (kind === 'RightClick') {
+  el.dispatchEvent(new MouseEvent('contextmenu', opts({ button: 2 })));
+} else if (real) {
+  el.dispatchEvent(new PointerEvent('pointerdown', opts({ button: 0, buttons: 1, detail: 1, pointerId: 1, pointerType: 'mouse', isPrimary: true })));
+  el.dispatchEvent(new MouseEvent('mousedown', opts({ button: 0, buttons: 1, detail: 1 })));
+  while (Date.now() < target) { }
+  el.dispatchEvent(new PointerEvent('pointerup', opts({ button: 0, buttons: 0, detail: 1, pointerId: 1, pointerType: 'mouse', isPrimary: true })));
+  el.dispatchEvent(new MouseEvent('mouseup', opts({ button: 0, buttons: 0, detail: 1 })));
+  el.dispatchEvent(new MouseEvent('click', opts({ button: 0, buttons: 0, detail: 1 })));
+} else {
+  el.click();
+}
+return Date.now() - target;
+";
+
+    private static async Task<StepOutcome> DoClickAsync(
+        IWebDriver driver, GraphNode step, string action, CancellationToken ct)
     {
         var el = FindElement(driver, step);
         try
@@ -211,6 +314,41 @@ public sealed class ActionExecutor
             // is sent.
             var realMouse = string.Equals(
                 step.ReadExtraString("clickMode"), "RealMouse", StringComparison.OrdinalIgnoreCase);
+
+            // «کلیک در زمان دقیق» — opt-in and OFF by default. When on, the last milliseconds are
+            // spent INSIDE the page, so the WebDriver round trip is not added to the awaited
+            // instant; without it a click aimed at 08:44:59.990 lands whenever the driver got back
+            // here, tens of milliseconds late.
+            if (step.ReadExtraBool("clickAtEnabled"))
+            {
+                var clockText = step.ReadExtraString("clickAtTime");
+                var target = ClockTarget.Parse(clockText);
+                if (target is null)
+                    return StepOutcome.Fail($"زمان کلیک نامعتبر است ({clockText}) — قالب درست: HH:mm:ss.SSS");
+
+                var targetMs = new DateTimeOffset(target.Value).ToUnixTimeMilliseconds();
+                const int leadMs = 50; // the page spins this window itself
+                var tolerance = step.ReadExtraInt("clickLateToleranceMs") is int t && t >= 0 ? t : 300;
+                var remaining = targetMs - DateTimeOffset.Now.ToUnixTimeMilliseconds();
+                if (remaining < -tolerance)
+                {
+                    // Arrived too late to be worth trying: a click placed now is exactly the mistake
+                    // this feature exists to avoid.
+                    return StepOutcome.Fail(
+                        $"زمان کلیک {ClockTarget.NormalizeDigits(clockText).Trim()} رد شده و تأخیر ({(-remaining)}ms) از حد مجاز ({tolerance}ms) بیشتر است — کلیک انجام نشد");
+                }
+                if (remaining > leadMs) await Task.Delay((int)(remaining - leadMs), ct);
+
+                var drift = ((IJavaScriptExecutor)driver).ExecuteScript(
+                    PreciseClickScript, el, targetMs, action, realMouse, step.Selector ?? "", tolerance);
+                var driftMs = drift is null ? 0L : Convert.ToInt64(drift);
+                if (driftMs < 0)
+                {
+                    return StepOutcome.Fail(
+                        $"زمان کلیک رد شده و تأخیر ({(-driftMs)}ms) از حد مجاز ({tolerance}ms) بیشتر است — کلیک انجام نشد تا سفارش با زمان اشتباه ثبت نشود");
+                }
+                return StepOutcome.Success;
+            }
 
             switch (action)
             {

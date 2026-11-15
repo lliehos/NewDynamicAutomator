@@ -8395,8 +8395,12 @@
         const k = inp.dataset.k;
         // These two selects reveal a different field set (alias / plain pattern), so the block
         // has to be rebuilt instead of leaving the old fields mounted.
-        if (k === "switchTabTarget" || k === "closeTabTarget") {
-          n[k] = inp.value;
+        if (k === "switchTabTarget" || k === "closeTabTarget" || k === "waitMode"
+            || k === "clickAtEnabled") {
+          // A CHECKBOX in this list has to store its boolean state: `inp.value` is the string "on",
+          // and the re-render below compares against `true` — which is why the switch used to snap
+          // back off the moment it was clicked.
+          n[k] = inp.type === "checkbox" ? inp.checked : inp.value;
           renderInspector();
           syncNodeValidity(n);
           return;
@@ -9393,6 +9397,17 @@
     return { ok: true };
   }
 
+  /** Is this text a usable clock target ("HH:mm[:ss[.SSS]]")? Mirrors the engine's parser. */
+  function clockTextValid(raw) {
+    const s = String(raw ?? "")
+      .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+      .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+      .trim();
+    const m = s.match(/^(\d{1,2})\s*[:.]\s*(\d{2})(?:\s*[:.]\s*(\d{2})(?:[.,](\d{1,3}))?)?$/);
+    if (!m) return false;
+    return Number(m[1]) <= 23 && Number(m[2]) <= 59 && (m[3] == null || Number(m[3]) <= 59);
+  }
+
   function validateActionNode(n) {
     const reasons = [];
     if (n.isActive === false) return { ok: true, reasons };
@@ -9406,6 +9421,15 @@
       if (!v.ok) reasons.push(v.reason);
     }
 
+    // «کلیک در زمان دقیق» is opt-in; when on, its time must be usable — otherwise the run would
+    // start and click whenever it happened to get there, silently late.
+    if (n.clickAtEnabled === true
+        && (at === "Click" || at === "DoubleClick" || at === "RightClick")) {
+      const t = String(n.clickAtTime ?? "").trim();
+      if (!t) reasons.push("زمان کلیک مشخص نیست");
+      else if (!clockTextValid(t)) reasons.push("زمان کلیک نامعتبر است (قالب: HH:mm:ss.SSS)");
+    }
+
     // Where the step's input value comes from. Every action that takes a value is checked the same
     // way, whether it writes that value into a page element, a source cell or a variable.
     if (stepReceivesValue(at)) {
@@ -9413,11 +9437,22 @@
       if (src === "Constant") {
         if (at === "WaitTime" || at === "Hold") {
           const raw = String(n.constantValue ?? "").trim();
-          const ms = Number(raw);
-          if (raw !== "" && (!Number.isFinite(ms) || ms < 0)) {
-            reasons.push(at === "Hold" ? "مدت نگه‌داشتن کلیک نامعتبر است" : "زمان انتظار مشخص نیست");
-          } else if (raw === "" && at === "WaitTime") {
-            reasons.push("زمان انتظار مشخص نیست");
+          // «تا زمان» is a clock instant, not a millisecond count: the two are validated separately
+          // so a typo in one mode can never be read as a valid value in the other.
+          if (at === "WaitTime" && n.waitMode === "UntilTime") {
+            if (!raw) reasons.push("ساعت هدف مشخص نیست");
+            else if (!clockTextValid(raw)) reasons.push("ساعت هدف نامعتبر است (قالب: HH:mm:ss.SSS)");
+          } else if (at === "WaitTime" && raw.includes(":")) {
+            // The value IS an author's clock; only the MODE is still «مدت». Say that instead of the
+            // old "wait is not set", which sent people looking for a value that was already there.
+            reasons.push("این مقدار ساعت است، نه میلی‌ثانیه — حالت انتظار را روی «تا زمان» بگذارید");
+          } else {
+            const ms = Number(raw);
+            if (raw !== "" && (!Number.isFinite(ms) || ms < 0)) {
+              reasons.push(at === "Hold" ? "مدت نگه‌داشتن کلیک نامعتبر است" : "زمان انتظار مشخص نیست");
+            } else if (raw === "" && at === "WaitTime") {
+              reasons.push("زمان انتظار مشخص نیست");
+            }
           }
         } else if (stepIsUrlAction(at)) {
           const url = String(n.navigateUrl || n.constantValue || "").trim();
@@ -10059,6 +10094,23 @@
         </select>
         <p class="palette-hint">اگر صفحه به کلیک معمولی واکنش نشان نداد (منوهای فریم‌ورک قدیمی که فقط <b>mouseup</b> را می‌خوانند، یا هندلری که به مختصات رویداد نگاه می‌کند)، «شبیه کلیک واقعی ماوس» کل توالی فشردن‌و‌رهاشدن را با مختصات واقعی می‌فرستد.</p>
       </div>`;
+      body += `<div class="insp-field">
+        <label style="display:flex;align-items:center;gap:6px;font-weight:400">
+          <input type="checkbox" data-k="clickAtEnabled" ${n.clickAtEnabled === true ? "checked" : ""}/>
+          <span>کلیک در زمان دقیق</span>
+        </label>
+        <p class="palette-hint">پیش‌فرض خاموش است. وقتی روشن باشد، کلیک دقیقاً در لحظهٔ داده‌شده و <b>داخل خود صفحه</b> انجام می‌شود (برای کارهایی که باید در میانهٔ یک ثانیه رخ بدهند). خاموش = کلیک فوری، مثل قبل.</p>
+      </div>`;
+      if (n.clickAtEnabled === true) {
+        body += `<div class="insp-field"><label>زمان کلیک (HH:mm:ss.SSS)</label>
+          <input data-k="clickAtTime" dir="ltr" value="${esc(n.clickAtTime || "")}" placeholder="08:44:59.990" />
+          <p class="palette-hint">ساعت امروز به وقت همین ماشین؛ خالی یا نامعتبر ماندنش اجازهٔ اجرا نمی‌دهد.</p>
+        </div>
+        <div class="insp-field"><label>مهلت تأخیر مجاز (میلی‌ثانیه)</label>
+          <input type="number" min="0" data-k="clickLateToleranceMs" value="${esc(n.clickLateToleranceMs == null ? 300 : n.clickLateToleranceMs)}" />
+          <p class="palette-hint">اگر تا این مقدار از لحظهٔ هدف عقب بیفتیم، کلیک انجام می‌شود؛ بیشتر از آن، مرحله با خطا متوقف می‌شود تا سفارش در زمان اشتباه ثبت نشود. ۰ = حتی یک میلی‌ثانیه تأخیر هم مجاز نیست.</p>
+        </div>`;
+      }
     }
 
     if (stepNeedsValueSource(n)) body += stepValueSourceHtml(n);
@@ -10237,6 +10289,9 @@
     const isUrl = stepIsUrlAction(at);
     const isWait = at === "WaitTime" || at === "Hold" || at === "WaitForLoading";
     const isScroll = at === "ScrollPage";
+    // «مدت» = milliseconds, «تا زمان» = a wall-clock instant. Explicit, so the value is never
+    // guessed from its shape and each mode gets its own label, placeholder and validation.
+    const waitMode = at === "WaitTime" && n.waitMode === "UntilTime" ? "UntilTime" : "Duration";
     const sectionTitle = isUrl ? "آدرس"
       : at === "WaitTime" ? "زمان انتظار"
       : at === "Hold" ? "مدت نگه‌داشتن"
@@ -10244,7 +10299,7 @@
       : isScroll ? "میزان اسکرول"
       : "مقدار";
     const constLabel = isUrl ? "آدرس ثابت"
-      : at === "WaitTime" ? "میلی‌ثانیه (ثابت)"
+      : at === "WaitTime" ? (waitMode === "UntilTime" ? "ساعت هدف (HH:mm:ss.SSS)" : "میلی‌ثانیه (ثابت)")
       : at === "Hold" ? "میلی‌ثانیه (خالی = پیش‌فرض دیاگرام)"
       : at === "WaitForLoading" ? "میلی‌ثانیه (خالی = ۱۵۰۰۰)"
       : isScroll ? "پیکسل (خالی = یک صفحه)"
@@ -10265,7 +10320,15 @@
     const memNames = knownMemoryVariableNames();
     if (!n.systemValueType) n.systemValueType = "CurrentDateTime";
 
-    let html = `<div class="insp-section-title">${sectionTitle}</div>
+    let html = (at === "WaitTime"
+      ? `<div class="insp-field"><label>حالت انتظار</label>
+        <select data-k="waitMode">
+          <option value="Duration" ${waitMode === "Duration" ? "selected" : ""}>مدت (میلی‌ثانیه)</option>
+          <option value="UntilTime" ${waitMode === "UntilTime" ? "selected" : ""}>تا زمان (HH:mm:ss.SSS)</option>
+        </select>
+        <p class="palette-hint">«مدت» عدد میلی‌ثانیه است؛ «تا زمان» یک لحظهٔ امروز (مثل <code>08:44:59.990</code>) که انتظار با یک تایمر دقیق تا آن تمام می‌شود — دقت ۱ تا ۴ میلی‌ثانیه، بدون حلقهٔ بازگشتی.</p>
+      </div>`
+      : "") + `<div class="insp-section-title">${sectionTitle}</div>
       <div class="insp-field"><label>نوع مقدار</label>
         <select data-k="contentSourceType">
           <option value="Constant" ${src === "Constant" ? "selected" : ""}>ثابت</option>
@@ -10279,8 +10342,11 @@
 
     if (src === "Constant") {
       html += `<div class="insp-field"><label>${constLabel}</label>
-        <input data-k="${constKey}" value="${esc(constVal)}" placeholder="${isUrl ? "https://..." : (isWait || isScroll ? "مثلاً 1000" : "")}" />
+        <input data-k="${constKey}" value="${esc(constVal)}" placeholder="${isUrl ? "https://..." : (at === "WaitTime" ? (waitMode === "UntilTime" ? "08:44:59.990" : "مثلاً 1000") : (isWait || isScroll ? "مثلاً 1000" : ""))}" />
       </div>`;
+      if (at === "WaitTime" && waitMode === "UntilTime") {
+        html += `<p class="palette-hint">ساعت امروز به وقت همین ماشین. اگر ساعت گذشته باشد، هشدار در لاگ ثبت و بدون انتظار ادامه می‌شود.</p>`;
+      }
       if (at === "Hold") {
         html += `<p class="palette-hint">المان هدف در بخش «هدف روی صفحه» پایین‌تر انتخاب می‌شود. دکمهٔ ماوس این مدت نگه داشته و سپس رها می‌شود.</p>`;
       }

@@ -411,6 +411,14 @@ function validateActionNodeForPlay(n, graph) {
     if (!v.ok) reasons.push(v.reason);
   }
 
+  // «کلیک در زمان دقیق» is opt-in: when the switch is on, the time it names has to be usable,
+  // otherwise the run would start and then click the moment it got there — silently late.
+  if (n.clickAtEnabled === true
+      && (at === "Click" || at === "DoubleClick" || at === "RightClick")) {
+    const clock = String(n.clickAtTime ?? "").trim();
+    if (!clock || !isClockText(clock)) reasons.push(tv("act.clickClockInvalid", { value: clock }));
+  }
+
   // Where the step's INPUT value comes from. Every action that takes a value is checked the same
   // way, whether it then writes that value into a page element, a source cell or a variable — the
   // old split between "capture" actions and "value" actions was the same question asked twice.
@@ -418,15 +426,24 @@ function validateActionNodeForPlay(n, graph) {
     const src = normalizeStepValueSource(n);
     if (src === "Constant") {
       if (at === "WaitTime" || at === "Hold") {
-        // Both are durations in milliseconds. Hold's default comes from the diagram when the step
-        // leaves the field blank, so only a clearly invalid entry (negative, or not a number) is
-        // rejected rather than an empty one.
+        // Both are durations in milliseconds — EXCEPT a WaitTime in «تا زمان» mode, whose value is a
+        // clock instant. Hold's default comes from the diagram when the step leaves the field blank,
+        // so only a clearly invalid entry (negative, or not a number) is rejected there.
         const raw = String(n.constantValue ?? "").trim();
-        const ms = Number(raw);
-        if (raw !== "" && (!Number.isFinite(ms) || ms < 0)) {
-          reasons.push(tv(at === "Hold" ? "act.holdInvalid" : "act.waitMissing"));
-        } else if (raw === "" && at === "WaitTime") {
-          reasons.push(tv("act.waitMissing"));
+        if (at === "WaitTime" && waitModeOf(n) === "UntilTime") {
+          if (!raw || !isClockText(raw)) reasons.push(tv("act.waitClockInvalid", { value: raw }));
+        } else if (at === "WaitTime" && raw.includes(":")) {
+          // A clock typed while the node is still on «مدت»: the generic "duration is not set" made
+          // the author look for a missing value when the value was right there — only the MODE was
+          // wrong. Say exactly that.
+          reasons.push(tv("act.waitLooksLikeClock", { value: raw }));
+        } else {
+          const ms = Number(raw);
+          if (raw !== "" && (!Number.isFinite(ms) || ms < 0)) {
+            reasons.push(tv(at === "Hold" ? "act.holdInvalid" : "act.waitMissing"));
+          } else if (raw === "" && at === "WaitTime") {
+            reasons.push(tv("act.waitMissing"));
+          }
         }
       } else if (stepIsUrlAction(at)) {
         const url = String(n.navigateUrl || n.constantValue || "").trim();
@@ -853,6 +870,10 @@ const ENGINE_MSG = {
     "act.saveDsMissing": "منبع مقصد ذخیره انتخاب نشده",
     "act.saveColMissing": "ستون مقصد ذخیره انتخاب نشده",
     "act.waitMissing": "زمان انتظار مشخص نیست",
+    "act.waitClockInvalid": "ساعت هدف نامعتبر است ({value}) — قالب درست: HH:mm:ss.SSS مثل 08:44:59.990",
+    "act.clickClockInvalid": "زمان کلیک نامعتبر است ({value}) — قالب درست: HH:mm:ss.SSS مثل 08:44:59.990",
+    "act.waitLooksLikeClock": "مقدار «{value}» ساعت است، نه میلی‌ثانیه — حالت انتظار را روی «تا زمان» بگذارید (یا برای مدت، عدد میلی‌ثانیه بنویسید)",
+    "act.clickTooLate": "زمان کلیک {clock} رد شده و تأخیر ({late}ms) از حد مجاز ({tol}ms) بیشتر است — کلیک انجام نشد تا سفارش با زمان اشتباه ثبت نشود",
     "act.holdInvalid": "مدت نگه‌داشتن کلیک باید عددی و بزرگ‌تر یا مساوی صفر باشد",
     "act.scrollInvalid": "میزان اسکرول باید عددی باشد",
     "act.urlEmpty": "آدرس ثابت خالی است",
@@ -961,6 +982,10 @@ const ENGINE_MSG = {
     "act.saveDsMissing": "No destination data source selected",
     "act.saveColMissing": "No destination column selected",
     "act.waitMissing": "Wait duration is not set",
+    "act.waitClockInvalid": "Target time is invalid ({value}) — use HH:mm:ss.SSS, e.g. 08:44:59.990",
+    "act.clickClockInvalid": "Click time is invalid ({value}) — use HH:mm:ss.SSS, e.g. 08:44:59.990",
+    "act.waitLooksLikeClock": "\"{value}\" is a clock time, not milliseconds — set the wait mode to \"Until time\" (or enter a millisecond count)",
+    "act.clickTooLate": "The click time {clock} passed and the delay ({late}ms) exceeds the allowed {tol}ms — the click was NOT dispatched, so nothing is placed at the wrong moment",
     "act.holdInvalid": "Hold duration must be a number greater than or equal to zero",
     "act.scrollInvalid": "Scroll amount must be a number",
     "act.urlEmpty": "Constant URL is empty",
@@ -1651,6 +1676,9 @@ async function runSwitchTabStep(currentTabId, step) {
 }
 
 let playAbortPoll = null;
+// Deadline of a clock wait in progress; while it is open the abort poll drops to 5 s (see
+// sleepWithProgress). 0 means "no quiet window".
+let playWaitQuietUntil = 0;
 let playStatus = {
   playing: false,
   paused: false,
@@ -1915,6 +1943,109 @@ async function sleepInterruptible(ms) {
     if (left <= 0) return;
     await sleepUntil(deadline);
   }
+}
+
+/**
+ * Sleep until an ABSOLUTE deadline, pause/stop aware.
+ *
+ * `sleepInterruptible` measures from "now", which is right for a DURATION. A step that has to land
+ * on a wall-clock instant cannot afford that: every millisecond spent between reading the clock and
+ * arming the timer would be added to the wait. Here the deadline is computed once and the timer is
+ * armed for exactly the time left, so the overshoot is the browser's own timer lateness
+ * (typically 1–4 ms) rather than the engine's bookkeeping.
+ */
+async function sleepInterruptibleUntil(deadline) {
+  for (;;) {
+    if (playAbort) return;
+    await waitIfPaused();
+    if (playAbort) return;
+    if (deadline - Date.now() <= 0) return;
+    await sleepUntil(deadline);
+  }
+}
+
+/**
+ * A long, absolute-deadline wait that REPORTS itself once a minute.
+ *
+ * A run can sit in a clock wait for many minutes, and a silent worker is indistinguishable from a
+ * dead one: the operator sees a frozen step and, if the service worker is killed, nothing in the log
+ * says WHEN it stopped waiting. One line a minute costs nothing and makes the difference obvious —
+ * and the line itself is an extension API call, which is what keeps an MV3 worker from being treated
+ * as idle while it waits.
+ *
+ * Ticks are capped at 15 s so a report never lags more than that behind its minute.
+ */
+async function sleepWithProgress(deadline, label) {
+  let nextReport = Date.now() + 60000;
+  // A long wait is quiet by nature: nothing is driven, so polling the stop endpoint every 1.5 s for
+  // ten minutes is pure load. Five seconds still stops the run promptly while cutting the requests
+  // (and the worker wake-ups) to a third.
+  const quiet = deadline - Date.now() > 30000;
+  if (quiet) playWaitQuietUntil = Math.max(playWaitQuietUntil, deadline);
+  try {
+    for (;;) {
+      if (playAbort) return;
+      await waitIfPaused();
+      if (playAbort) return;
+      const now = Date.now();
+      const left = deadline - now;
+      if (left <= 0) return;
+      if (now >= nextReport) {
+        const mins = Math.floor(left / 60000);
+        const secs = Math.floor((left % 60000) / 1000);
+        appendPlayLog("info", `در انتظار ${label || "زمان هدف"} — ${mins}:${String(secs).padStart(2, "0")} مانده`);
+        nextReport = now + 60000;
+      }
+      await sleepUntil(Math.min(deadline, now + 15000));
+    }
+  } finally {
+    if (quiet && playWaitQuietUntil === deadline) playWaitQuietUntil = 0;
+  }
+}
+
+/** Persian/Arabic-Indic digits → ASCII, so a clock typed in the Persian UI still parses. */
+function normalizeClockDigits(text) {
+  return String(text == null ? "" : text)
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+}
+
+/**
+ * Parse a wall-clock target ("HH:mm", "HH:mm:ss", "HH:mm:ss.SSS") into today's epoch ms.
+ *
+ * Returns null when the text is not a clock time, so a plain number keeps meaning a DURATION: a
+ * `WaitTime` of `15000` stays fifteen seconds, and only a value with a colon becomes "at this
+ * time today". A clock time that has already passed returns an epoch in the past and the caller
+ * decides what that means (this engine logs it and continues without waiting — it never silently
+ * waits a whole day).
+ */
+/**
+ * WaitTime's mode. Two DISTINCT kinds of wait, chosen explicitly instead of guessed from the value:
+ * `Duration` is a millisecond count, `UntilTime` is a wall-clock instant ("تا زمان"). Auto-detecting
+ * a colon was ambiguous (a typo silently became "wait until tomorrow morning") and could not be
+ * validated; a mode makes the intent part of the node.
+ */
+function waitModeOf(step) {
+  return String(step?.waitMode || "").trim() === "UntilTime" ? "UntilTime" : "Duration";
+}
+
+/** Whether a text is a usable clock target (after Persian-digit normalisation). */
+function isClockText(text) {
+  return parseClockTargetEpoch(text) != null;
+}
+
+function parseClockTargetEpoch(text, nowMs = Date.now()) {
+  const raw = normalizeClockDigits(text).trim();
+  const m = raw.match(/^(\d{1,2})\s*[:.]\s*(\d{2})(?:\s*[:.]\s*(\d{2})(?:[.,](\d{1,3}))?)?$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  const sec = m[3] == null ? 0 : Number(m[3]);
+  const msPart = m[4] == null ? 0 : Number((m[4] + "00").slice(0, 3));
+  if (h > 23 || min > 59 || sec > 59) return null;
+  const base = new Date(nowMs);
+  base.setHours(h, min, sec, msPart);
+  return base.getTime();
 }
 
 /** Gap after a finished node — from process start (ms). Only when there is a next node. */
@@ -2808,6 +2939,13 @@ async function startPlayInner(taskId, tabId, runMode, opts) {
     }
   }
   appendPlayLog("info", `شروع اجرا: ${graph.title || taskId}`);
+  // The LOADED engine version, not the one on disk: Chrome keeps running the code it loaded until
+  // the extension is reloaded, so a synced-but-not-reloaded extension reports a failure that its own
+  // files no longer contain ("the new option is ignored / the node looks right in the editor").
+  // One line here turns that into an obvious fact instead of a hunt.
+  try {
+    appendPlayLog("info", `موتور افزونه: نسخهٔ ${chrome.runtime.getManifest().version}`);
+  } catch { /* no manifest access in a test harness */ }
   appendPlayLog("info", `تکرار فرآیند: ${iterations.label}`);
   {
     const gap = resolveStepDelayMs(graph);
@@ -3812,7 +3950,9 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
     severity: failed ? (ignored ? "warn" : "error") : "ok",
     ignoredError: ignored,
     detail: !failed
-      ? (outcome.waitMs ? `انتظار ${outcome.waitMs}ms` : "موفق")
+      ? (outcome.waitClock
+          ? `انتظار تا ${outcome.waitClock}`
+          : (outcome.waitMs ? `انتظار ${outcome.waitMs}ms` : "موفق"))
       : (ignored ? `چشم‌پوشی از خطا: ${errDetail}` : errDetail)
   };
   appendPlayResult(result);
@@ -3851,7 +3991,18 @@ async function runOneAction(tabId, graph, step, rowIndex, loopIndex, loopTotal, 
   }
   appendPlayLog("ok", `انجام شد: ${label}`);
   // Action-specific wait (e.g. WaitTime). Inter-node gap is applied by executeFlow.
-  if (outcome.waitMs) await sleepInterruptible(outcome.waitMs);
+  //
+  // A clock-based WaitTime sleeps to an ABSOLUTE deadline, so the deviation against the requested
+  // instant is reported as it really happened — that number is what tells an operator whether the
+  // engine hit the millisecond they asked for.
+  if (outcome.waitUntil) {
+    await sleepWithProgress(outcome.waitUntil, outcome.waitClock);
+    const drift = Date.now() - outcome.waitUntil;
+    appendPlayLog("info",
+      `انتظار تا ${outcome.waitClock} انجام شد — اختلاف ${drift >= 0 ? "+" : ""}${drift}ms`);
+  } else if (outcome.waitMs) {
+    await sleepInterruptible(outcome.waitMs);
+  }
   return { ok: true, tabId: activeTabId };
 }
 
@@ -4932,15 +5083,40 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   }
 
   if (actionType === "WaitTime") {
-    let ms = 0;
-    const cst0 = step.contentSourceType || "";
-    if (cst0 === "Memory" || cst0 === "DataSource" || cst0 === "System") {
-      const v = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
-      ms = Number(v) || 0;
-    } else {
-      ms = Number(await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath })) || 0;
+    const rawWait = await resolveStepParamAsync(step, graph, rowIndex ?? 0, { tabId, framePath });
+    // «تا زمان»: the step must END at a wall-clock instant. A duration cannot express that — it
+    // would have to be recomputed on every pass through a loop, and the loop itself cannot be faster
+    // than the engine's loop-back floor. One deadline + one timer is simpler and orders of
+    // magnitude more precise.
+    if (waitModeOf(step) === "UntilTime") {
+      const clockText = normalizeClockDigits(rawWait).trim();
+      const clockDeadline = parseClockTargetEpoch(clockText);
+      if (clockDeadline == null) {
+        return {
+          ok: false,
+          error: tv("act.waitClockInvalid", { value: clockText }),
+          reason: "wait_clock_invalid"
+        };
+      }
+      const left = clockDeadline - Date.now();
+      if (left <= 0) {
+        appendPlayLog("warn",
+          `«${step.title || "انتظار"}»: زمان ${clockText} امروز گذشته است — بدون انتظار ادامه می‌یابد.`);
+        return { ok: true, waitMs: 0, waitClock: clockText };
+      }
+      return { ok: true, waitMs: left, waitUntil: clockDeadline, waitClock: clockText };
     }
-    return { ok: true, waitMs: ms };
+    // «مدت» mode with a clock in it: waiting 0 silently is the worst answer — the run would fly
+    // past the step and the operator would only notice the missed second later.
+    const rawText = normalizeClockDigits(rawWait).trim();
+    if (rawText.includes(":") && !Number.isFinite(Number(rawText))) {
+      return {
+        ok: false,
+        error: tv("act.waitLooksLikeClock", { value: rawText }),
+        reason: "wait_clock_mode_mismatch"
+      };
+    }
+    return { ok: true, waitMs: Number(rawText) || 0 };
   }
 
   // Writes a value the flow computed into the run's variable table. There is no page
@@ -5086,6 +5262,51 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     valueForAction = step.constantValue || "";
   }
 
+  // Precise click (optional, OFF by default): the author turns it on per node with «کلیک در زمان
+  // دقیق». The engine only gets the page there IN TIME — the final wait and the dispatch happen
+  // inside the tab, because the worker round trip between two steps costs more than the precision
+  // being asked for.
+  let clickAtEpoch = null;
+  let clickLateTolMs = 0;
+  if (step.clickAtEnabled === true
+      && (actionType === "Click" || actionType === "DoubleClick" || actionType === "RightClick")) {
+    const clickTarget = parseClockTargetEpoch(step.clickAtTime);
+    if (clickTarget != null) {
+      const clickClock = normalizeClockDigits(step.clickAtTime).trim();
+      const now = Date.now();
+      // Enter the page a moment early: element lookup + frame resolution have to finish before the
+      // dispatch, and they must NOT eat into the awaited instant.
+      // Enter the page EARLY. The worker's own timer is not precise in the way a click needs: a
+      // service-worker or background-tab timer can fire hundreds of milliseconds late under load,
+      // and every one of those milliseconds would land on the click. Handing the page a wide window
+      // means the worker only has to arrive "early enough"; the instant itself is kept in the page.
+      const prepMs = Math.max(100, Math.min(5000, Number(step.clickPrepMs) || 1500));
+      clickLateTolMs = Number.isFinite(Number(step.clickLateToleranceMs))
+        ? Math.max(0, Number(step.clickLateToleranceMs))
+        : 300;
+      if (clickTarget <= now) {
+        // STRICT: a click is never placed just to keep going. Arriving late means the whole point of
+        // the node failed, and a wrong-time click is worse than a visible error — it cannot be undone.
+        const late = now - clickTarget;
+        if (late > clickLateTolMs) {
+          return {
+            ok: false,
+            error: tv("act.clickTooLate", { clock: clickClock, late, tol: clickLateTolMs }),
+            reason: "click_too_late"
+          };
+        }
+        appendPlayLog("warn",
+          `زمان کلیک (${clickClock}) گذشته است (${late}ms) — در محدودهٔ مجاز، بدون انتظار کلیک می‌شود.`);
+      } else {
+        if (clickTarget - now > prepMs) {
+          appendPlayLog("info", `کلیک دقیق در ${clickClock} — انتظار در موتور تا ${prepMs}ms قبل از آن`);
+          await sleepWithProgress(clickTarget - prepMs, clickClock);
+        }
+        clickAtEpoch = clickTarget;
+      }
+    }
+  }
+
   // Frame lookup and element selection are BOTH retried inside the budget — a late iframe is as
   // much "the element is not there yet" as a late node in the current document.
   const waitTimeoutMs = selectorWaitBudget(step);
@@ -5104,6 +5325,17 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     // Click's dispatch mode: "Synthetic" (plain el.click()) or "RealMouse" (full down/up
     // sequence) — the bypass for frameworks that ignore a machine-generated click.
     clickMode: step.clickMode || "Synthetic",
+    // Absolute epoch the page must dispatch the click at (null = dispatch immediately).
+    clickAtEpoch,
+    // How long the page spins (rather than sleeps) before that epoch: setTimeout cannot promise
+    // millisecond accuracy, a bounded busy spin can. Capped so the page is never blocked for long.
+    // How long the page spins (rather than sleeps) before that epoch: setTimeout cannot promise
+    // millisecond accuracy — a background tab's timer can be delayed by hundreds of ms — while a
+    // bounded busy spin can. This is the guaranteed window, so it is not a token value.
+    clickSpinMs: Math.max(0, Math.min(500, Number(step.clickSpinMs) || 120)),
+    // How late the page may still dispatch before it refuses: the last line of defence against a
+    // click placed at the wrong second, which is worse than a step that reports failure.
+    clickLateTolMs,
     removeAllMatches: step.removeAllMatches !== false,
     highlightColor: resolveHighlightColor(graph),
     requireVisible: !!stateReq.requireVisible,
@@ -5122,6 +5354,24 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
   // so whether a step worked depended on which path won the race. The injected engine is the
   // complete one and needs no content script to be present, so it is now the only path.
   const result = await executeInFrameWithWait(tabId, framePath, payload, waitTimeoutMs);
+
+  // Precise click: report where the page's dispatch actually landed, so a drifting machine or a
+  // busy page is visible in the run log instead of being discovered as a missed second.
+  if (result && result.reason === "click_too_late") {
+    return {
+      ok: false,
+      error: tv("act.clickTooLate", {
+        clock: normalizeClockDigits(step.clickAtTime).trim(),
+        late: result.lateMs ?? "?",
+        tol: clickLateTolMs
+      }),
+      reason: "click_too_late"
+    };
+  }
+  if (result && result.clickDriftMs != null) {
+    appendPlayLog("info",
+      `کلیک در زمان دقیق انجام شد — اختلاف ${result.clickDriftMs >= 0 ? "+" : ""}${result.clickDriftMs}ms`);
+  }
 
   if (!result || !result.ok) {
     return onUnexpected(runMode, {
@@ -7324,7 +7574,7 @@ function startPlayAbortWatch(taskId, register) {
     // slow or unreachable portal (each request may take up to its 8 s ceiling) stacked overlapping
     // polls — and a long WaitTime is exactly when nothing else is running to notice. This also
     // keeps the run alive across a wait, because the chain never stops ticking while playing.
-    if (playStatus.playing) playAbortPoll = setTimeout(tick, 1500);
+    if (playStatus.playing) playAbortPoll = setTimeout(tick, Date.now() < playWaitQuietUntil ? 5000 : 1500);
   };
   playAbortPoll = setTimeout(tick, 1500);
 }
@@ -8521,7 +8771,50 @@ async function playExecuteInjected(payload) {
   // check below, which uses the per-step selector timeout and would report the element
   const found = await waitForElement(selector, waitTimeoutMs, stateReq);
   if (!found.ok) return found;
-  const el = found.el;
+  let el = found.el;
+  // Set when payload.clickAtEpoch is used: how far the page's own dispatch landed from the
+  // requested instant. Reported by the worker so the precision is visible, not assumed.
+  let clickDriftMs = null;
+  let clickTargetEpoch = null;
+
+  /**
+   * Precise dispatch time (payload.clickAtEpoch): wait HERE, in the page, and act on the spot.
+   *
+   * The worker cannot hand over the last milliseconds: returning to it, deciding the next step and
+   * coming back costs several milliseconds at best and tens under load. So the page sleeps until a
+   * bounded window before the epoch and then spins the last `clickSpinMs` — a busy loop is the only
+   * way to get sub-millisecond accuracy out of browser timers, and the window is capped (≤200 ms),
+   * so nothing is blocked for long. The element is re-queried afterwards because a page that
+   * re-renders during the wait would leave `el` detached and the click would go nowhere.
+   */
+  if (payload.clickAtEpoch) {
+    const target = Number(payload.clickAtEpoch);
+    clickTargetEpoch = target;
+    const spin = Math.max(0, Math.min(500, Number(payload.clickSpinMs) || 120));
+    // RealMouse replays down→(10 ms)→up→click, so the wait ends that much early: the author asked
+    // for the CLICK to land on the instant, not the pointerdown ten milliseconds before it.
+    const realMouse = String(payload.clickMode || "Synthetic") === "RealMouse";
+    const armed = target - (realMouse ? 10 : 0);
+    // CHUNKED, then spun. One long setTimeout can be delayed by tab throttling and would wake up
+    // after the instant with nothing left to do about it; re-reading the clock every ≤250 ms keeps
+    // the remaining time honest, and only the final `spin` window is spent in a busy loop (bounded,
+    // so the page is never blocked for long).
+    for (;;) {
+      const left = armed - spin - Date.now();
+      if (left <= 0) break;
+      await new Promise((r) => setTimeout(r, Math.min(left, 250)));
+    }
+    while (Date.now() < armed) { /* tight spin: the final milliseconds */ }
+    clickDriftMs = Date.now() - target;
+    // STRICT: past the tolerance the click is ABANDONED, not shifted. A step that reports being late
+    // is recoverable; an order placed at the wrong second is not.
+    const lateTol = Math.max(0, Number(payload.clickLateTolMs) || 0);
+    if (clickDriftMs > lateTol) {
+      return { ok: false, reason: "click_too_late", lateMs: clickDriftMs, lateTolMs: lateTol };
+    }
+    const again = selector ? document.querySelector(selector) : null;
+    if (again) el = again;
+  }
 
   highlightTarget(el, highlightColor);
 
@@ -8570,7 +8863,8 @@ async function playExecuteInjected(payload) {
       } catch (err) {
         return { ok: false, error: String(err && err.message || err), reason: "click_failed" };
       }
-      return { ok: true, clickMode: "RealMouse" };
+      if (clickTargetEpoch != null) clickDriftMs = Date.now() - clickTargetEpoch;
+      return { ok: true, clickMode: "RealMouse", clickDriftMs };
     }
     if (actionType === "DoubleClick") {
       el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window }));
@@ -8579,7 +8873,8 @@ async function playExecuteInjected(payload) {
     } else {
       el.click();
     }
-    return { ok: true };
+    if (clickTargetEpoch != null) clickDriftMs = Date.now() - clickTargetEpoch;
+    return { ok: true, clickDriftMs };
   }
 
   // Internal verb, not an ActionType: read the element's text back as a value. The actions that
