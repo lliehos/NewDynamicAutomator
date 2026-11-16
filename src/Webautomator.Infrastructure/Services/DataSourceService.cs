@@ -631,8 +631,17 @@ public class DataSourceService
             // A cell write that lands on a NEW row is exactly how "insert into the source" grows the
             // table, so the row/byte ceiling has to be checked here too — otherwise the action could
             // add rows one cell at a time past the cap the create/reload/add-rows paths enforce.
-            var (_, currentRows) = await GetDerivedCountersAsync(id, ct);
-            currentRows = Math.Max(currentRows, d.RowCount);
+            //
+            // The stored counter answers the normal case (a write into a row that already exists);
+            // the derived aggregate — which scans the source's whole cell table — is paid only when
+            // the write lands at or past that counter. Charging it on EVERY write made a long run
+            // slower as the source grew, because each of the nine writes per row re-scanned it.
+            var currentRows = Math.Max(d.RowCount, 0);
+            if (req.RowIndex >= currentRows)
+            {
+                var (_, derivedRows) = await GetDerivedCountersAsync(id, ct);
+                currentRows = Math.Max(derivedRows, currentRows);
+            }
             if (req.RowIndex >= currentRows)
             {
                 // Whoever owns the source carries its ceiling. For a public source that is the creator
@@ -1696,10 +1705,17 @@ public class DataSourceService
         if (at < 0) at = 0;
         if (at > rowCount) at = rowCount;
 
-        var existing = await _db.DataSourceCells.Where(c => c.DataSourceId == id).ToListAsync(ct);
+        var existing = at < rowCount
+            ? await _db.DataSourceCells
+                .Where(c => c.DataSourceId == id && c.RowIndex >= at)
+                .ToListAsync(ct)
+            : new List<DataSourceCell>();
         if (at < rowCount)
         {
             // Shift down from the end so no two rows collide on the (DataSourceId, RowIndex, ColumnKey) key.
+            // Only the rows that actually MOVE are loaded: appending at the end shifts nothing, and
+            // loading the whole source (and EF-tracking every cell of it) on every insert made each
+            // insert slower than the one before — the run visibly dragged once the source was large.
             foreach (var cell in existing.OrderByDescending(c => c.RowIndex))
             {
                 if (cell.RowIndex >= at) cell.RowIndex += add;

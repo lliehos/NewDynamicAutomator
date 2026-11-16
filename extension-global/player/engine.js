@@ -8677,8 +8677,14 @@ async function playExecuteInjected(payload) {
    * `outline` is used rather than `border`: a border participates in layout, so adding one would
    * shift the page by its width and could reflow the very element being clicked. An outline is drawn
    * outside the box model, so nothing on the page moves.
+   *
+   * `opts.scroll === false` keeps the page where it is. A pure READ (`ReadElementValue`) never needs
+   * the element on screen, and scrolling it into view is not harmless there: on a long table — and
+   * especially a virtualized one — the scroll makes the site render the rows below (lazy images,
+   * infinite scroll, list virtualization), so the next lookup has more DOM to walk than the one
+   * before. The run then gets slower the further down the table it goes and only a reload resets it.
    */
-  function highlightTarget(el, color) {
+  function highlightTarget(el, color, opts) {
     if (!(el instanceof Element)) return;
     const c = normalizeColor(color);
     try {
@@ -8689,7 +8695,9 @@ async function playExecuteInjected(payload) {
         n.classList.remove("da-play-hl");
       });
     } catch { /* ignore */ }
-    try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch { /* ignore */ }
+    if (!opts || opts.scroll !== false) {
+      try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch { /* ignore */ }
+    }
     try {
       el.style.setProperty("outline", `3px solid ${c}`, "important");
       // A small positive offset keeps the ring clear of an element's own border so both stay visible.
@@ -8855,7 +8863,7 @@ async function playExecuteInjected(payload) {
     if (again) el = again;
   }
 
-  highlightTarget(el, highlightColor);
+  highlightTarget(el, highlightColor, { scroll: actionType !== "ReadElementValue" });
 
   if (actionType === "Click" || actionType === "DoubleClick" || actionType === "RightClick") {
     /**
