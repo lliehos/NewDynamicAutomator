@@ -527,9 +527,15 @@ public sealed class PanelClient : IDisposable
         catch { return false; }
     }
 
-    /// <summary>Insert a blank row into a source at the given index.</summary>
+    /// <summary>Insert a blank row into a source at the given index (0-based, before that row).</summary>
+    /// <remarks>
+    /// The endpoint binds <c>beforeIndex</c> (see <c>AddDataSourceRowRequest</c>) and <c>count</c>; it
+    /// IGNORES any other property. Sending <c>rowIndex</c> therefore silently inserted at the end no
+    /// matter which row the step named — the position was lost for every pointer except «آخرین ردیف».
+    /// An index equal to the row count appends, which is what an «ردیف آخر» insert means.
+    /// </remarks>
     public Task<ApiResult<string>> InsertRowAsync(int dataSourceId, int rowIndex, CancellationToken ct = default)
-        => PostRowAsync($"{BaseUrl}/api/datasources/{dataSourceId}/rows/add", new { rowIndex }, ct);
+        => PostRowAsync($"{BaseUrl}/api/datasources/{dataSourceId}/rows/add", new { beforeIndex = rowIndex, count = 1 }, ct);
 
     /// <summary>Delete one row from a source.</summary>
     public async Task<ApiResult<string>> DeleteRowAsync(int dataSourceId, int rowIndex, CancellationToken ct = default)

@@ -5156,7 +5156,11 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     // rowIndex is the row THIS node works on: runOneAction resolved its own pointer (loop row /
     // process row / first / last / fixed) before dispatching here, so there is nothing left to
     // resolve and the old step-level lookup was a second, diverging answer to the same question.
-    const targetRow = Number(rowIndex) || 0;
+    // An INSERT's pointer is read differently though: it names where the NEW row ends up, so
+    // «ردیف آخر» means "after the last row" rather than "before it" (see insertRowTargetRow).
+    const targetRow = isInsert
+      ? insertRowTargetRow(step, graph, dsId, rowIndex)
+      : (Number(rowIndex) || 0);
     // A LOCAL run of a private source owns its rows: inserting or deleting is a repack of the copy
     // this machine loaded. Sending it to the server would create/remove a row for everyone (the
     // opposite of local mode), and its reply would then wipe the cached cells — which is what made
@@ -5165,7 +5169,13 @@ async function runStep(tabId, taskId, step, runMode, graph, rowIndex) {
     if (playStatus.runOnServer === false && rowDsLocal && !isPublicSource(rowDsLocal, graph)) {
       // The copy shifts now, the server's rows do not: remember the shift so every later write and
       // the sync payload can map a local index back to the server row it really belongs to.
-      noteLocalRowShift(dsId, targetRow, isInsert);
+      //
+      // An APPEND shifts nothing — no row moves, so there is no shift to record. Recording one
+      // anyway is not harmless: `serverRowForLocal` subtracts at the insertion point, so the new
+      // row's own writes would be mapped onto the row above it, and the sync would then patch the
+      // values of the appended row into what used to be the last row.
+      const rowCountBefore = Number(rowDsLocal.rowCount) || 0;
+      if (!isInsert || targetRow < rowCountBefore) noteLocalRowShift(dsId, targetRow, isInsert);
       applyLocalRowShift(rowDsLocal, targetRow, isInsert);
       appendPlayLog("info", isInsert
         ? `ردیف خالی در نسخهٔ محلی منبع ${dsId} در جای ${targetRow} درج شد (سرور دست‌نخورده — با سینک در همان جای سرور درج می‌شود)`
@@ -8262,6 +8272,35 @@ function resolveRowPointer(node, graph, ctx, keys) {
     default:
       return null;
   }
+}
+
+/**
+ * The position an InsertRow puts its new row at.
+ *
+ * The pointer vocabulary answers "which row?" — the right question for a read, a write or a delete.
+ * An insert asks a different one: where does the NEW row land? «ردیف آخر» therefore means "after the
+ * last row" (index = rowCount), not "before the last row": asking for rowCount - 1 inserts BEFORE
+ * the last row, which leaves the new row second-to-last and makes every following «ردیف آخر» write
+ * land on the row that used to be last — the values overwrite real data and the inserted row stays
+ * empty. A fixed index past the end is the same story, so an insert clamps to [0, rowCount] instead
+ * of to the last existing row.
+ */
+function insertRowTargetRow(step, graph, dsId, resolvedRow) {
+  const pointer = String(step?.rowIndexType || "None");
+  const ds = (graph?.dataSources || []).find((d) => Number(d.id) === Number(dsId))
+    || findRowPointerSource(step, graph);
+  const rc = Number(ds?.rowCount);
+  const total = Number.isFinite(rc) && rc > 0 ? rc : null;
+  if (pointer === "LastRow") {
+    if (total !== null) return total;
+    // The count is unknown: append after the last row the graph can actually see.
+    return Math.max(0, (Number(resolvedRow) || 0) + 1);
+  }
+  if (pointer === "SpecificRow") {
+    const raw = Number(step?.specificRowIndex);
+    if (Number.isFinite(raw) && raw >= 0) return total === null ? raw : Math.min(raw, total);
+  }
+  return Math.max(0, Number(resolvedRow) || 0);
 }
 
 /**

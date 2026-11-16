@@ -1545,17 +1545,30 @@ public sealed class LocalRunEngine
             return StepOutcome.Fail("برای این اقدام، منبع مشخص نشده است.");
 
         var isInsert = string.Equals(node.ActionType, "InsertRow", StringComparison.OrdinalIgnoreCase);
-        var targetRow = node.SpecificRowIndex ?? rowIndex;
+        // An insert's pointer names where the NEW row LANDS, which is a different question from the
+        // one the pointer vocabulary answers for a read, a write or a delete. «ردیف آخر» therefore
+        // means "after the last row" (index = RowCount): the pointer's own answer (RowCount - 1)
+        // inserts BEFORE the last row, leaving the new row second-to-last and sending every
+        // following «ردیف آخر» write into the row that used to be last — values overwrite real data
+        // while the inserted row stays empty. Mirrors insertRowTargetRow in the extension's engine.js.
+        var targetRow = isInsert ? InsertTargetRow(graph, node, rowIndex) : node.SpecificRowIndex ?? rowIndex;
         var isShared = graph.DataSources.FirstOrDefault(d => d.Id == dsId)?.IsPublic == true;
 
         // Same rule as a cell write: a server run edits the server's rows whatever the source is; a
         // local run edits its own mirror for private sources and the server for shared ones.
         if (!(_allowServerCalls || isShared))
         {
+            // The mirror is the ONLY place a local run can read this source from, so the change is
+            // applied to it: indexes from the touched row down move by one. Dropping the cache here
+            // (what a server run does, because it can re-read) made every later read of the source
+            // answer "missing" — one InsertRow turned the rest of the run into an empty source.
+            ShiftCachedCells(dsId.Value, targetRow, isInsert);
+            var localDs = graph.DataSources.FirstOrDefault(d => d.Id == dsId);
+            if (localDs is not null)
+                localDs.RowCount = Math.Max(0, localDs.RowCount + (isInsert ? 1 : -1));
             Log("info", isInsert
                 ? $"ردیف خالی در جای {targetRow} منبع #{dsId} (محلی) درج شد"
                 : $"ردیف {targetRow} از منبع #{dsId} (محلی) حذف شد");
-            DropCachedCells(dsId.Value);
             await Task.CompletedTask;
             return StepOutcome.Success;
         }
@@ -1584,6 +1597,75 @@ public sealed class LocalRunEngine
     {
         foreach (var key in _localCells.Keys.Where(k => k.StartsWith($"{dsId}|", StringComparison.Ordinal)).ToList())
             _localCells.Remove(key);
+    }
+
+    /// <summary>
+    /// The index an InsertRow puts its new row at.
+    /// </summary>
+    /// <remarks>
+    /// Port of <c>insertRowTargetRow</c>. The pointer vocabulary answers "which row?", which is the
+    /// right question for a read, a write or a delete — but an insert needs "where does the NEW row
+    /// land", and there «ردیف آخر» means one PAST the last row. The pointer's own answer
+    /// (RowCount - 1) would insert before the last row: the new row ends up second-to-last and the
+    /// step after it, writing to «ردیف آخر», overwrites the row that used to be last. A fixed index
+    /// past the end is clamped the same way — to [0, RowCount] (append), not to the last existing row.
+    /// </remarks>
+    private static int InsertTargetRow(ProcessGraph graph, GraphNode node, int resolvedRow)
+    {
+        var pointer = node.RowIndexType ?? "";
+        var source = PointerSource(graph, node);
+        var total = source is { RowCount: > 0 } ? source.RowCount : (int?)null;
+
+        if (string.Equals(pointer, "LastRow", StringComparison.Ordinal))
+            return total ?? Math.Max(0, resolvedRow + 1);
+
+        if (string.Equals(pointer, "SpecificRow", StringComparison.Ordinal))
+        {
+            var raw = node.SpecificRowIndex ?? node.ReadExtraInt("specificRowIndex");
+            if (raw is int index && index >= 0)
+                return total is int limit ? Math.Min(index, limit) : index;
+        }
+
+        return Math.Max(0, resolvedRow);
+    }
+
+    /// <summary>
+    /// Re-key the mirror's cached cells so every value stays on its own row after an insert or delete.
+    /// </summary>
+    /// <remarks>
+    /// A local run reads a private source ONLY from this mirror, so the change cannot simply drop the
+    /// cache the way a server run does (a server run can re-read; a local one would get nothing).
+    /// Indexes from the touched row MOVED — up for an insert, down for a delete — and the row that a
+    /// delete removed takes its values with it.
+    /// </remarks>
+    private void ShiftCachedCells(int dsId, int at, bool isInsert)
+    {
+        var prefix = $"{dsId}|";
+        var moved = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in _localCells)
+        {
+            if (!key.StartsWith(prefix, StringComparison.Ordinal)) { moved[key] = value; continue; }
+            var rest = key[prefix.Length..];
+            var bar = rest.IndexOf('|');
+            if (bar <= 0 || !int.TryParse(rest[..bar], out var row))
+            {
+                // Not an address this engine wrote — keep it where it is rather than lose a value.
+                moved[key] = value;
+                continue;
+            }
+            var column = rest[(bar + 1)..];
+            if (isInsert)
+            {
+                moved[row >= at ? CellKey(dsId, row + 1, column) : key] = value;
+            }
+            else
+            {
+                if (row == at) continue;
+                moved[row > at ? CellKey(dsId, row - 1, column) : key] = value;
+            }
+        }
+        _localCells.Clear();
+        foreach (var (key, value) in moved) _localCells[key] = value;
     }
 
     private static int ReadTaskId(ProcessGraph graph)

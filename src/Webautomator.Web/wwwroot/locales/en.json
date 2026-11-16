@@ -2004,7 +2004,7 @@
       "rangeHint": "The source has {count} rows; allowed range: 0 to {max}",
       "pickSourceFirst": "Pick a data source first so the allowed row range is known.",
       "deleteRowHint": "The selected row is removed from the source and the rows after it move up by one. This writes to the server-side source.",
-      "insertRowHint": "An empty row is inserted at that spot and the rows after it move down by one. Columns come from the source itself."
+      "insertRowHint": "An empty row is inserted at that spot and the rows after it move down by one. Columns come from the source itself. With «Last row» the row is added at the END of the source (not before the last row)."
     },
     "ds": {
       "emptyList": "No source (add Excel on Start node)",
